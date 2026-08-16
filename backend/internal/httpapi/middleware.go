@@ -2,8 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
 )
@@ -31,13 +35,45 @@ func (server *api) requestIDMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+func (server *api) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		writer.Header().Set("X-Frame-Options", "DENY")
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://accounts.google.com https://www.google.com https://www.gstatic.com; connect-src 'self' https://accounts.google.com https://www.google.com; frame-src https://accounts.google.com https://www.google.com; img-src 'self' data: https:; style-src 'self' https://accounts.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com")
+		if server.dependencies.Production {
+			writer.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		next.ServeHTTP(writer, request)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (recorder *statusRecorder) WriteHeader(status int) {
+	recorder.status = status
+	recorder.ResponseWriter.WriteHeader(status)
+}
+
+func (server *api) requestLogMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		started := time.Now()
+		recorder := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
+		next.ServeHTTP(recorder, request)
+		if server.dependencies.Logger == nil {
+			return
+		}
+		server.dependencies.Logger.LogAttrs(request.Context(), slog.LevelInfo, "http request",
+			slog.String("request_id", requestID(request.Context())),
+			slog.String("route_template", chi.RouteContext(request.Context()).RoutePattern()),
+			slog.String("method", request.Method),
+			slog.Int("status_code", recorder.status),
+			slog.Int64("latency_ms", time.Since(started).Milliseconds()),
+		)
 	})
 }
 

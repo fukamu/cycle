@@ -59,7 +59,10 @@ export async function requestJSON<T>(
     init.signal = options.signal;
   }
   const response = await fetch(path, init);
-  const payload: unknown = await response.json().catch(() => undefined);
+  const payload: unknown =
+    response.status === 204
+      ? undefined
+      : await response.json().catch(() => undefined);
   if (!response.ok) {
     const parsed = parseAPIError(payload);
     if (parsed.success) {

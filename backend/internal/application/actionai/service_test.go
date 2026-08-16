@@ -97,6 +97,9 @@ func (repository *fakeAIRepository) Fail(_ context.Context, input FailureInput) 
 	repository.failure = input
 	return nil
 }
+func (repository *fakeAIRepository) RecordAggregateCost(context.Context, time.Time, float64, time.Time) error {
+	return nil
+}
 
 type fakeActionProvider struct {
 	generate       []GeneratedAction

@@ -221,4 +221,5 @@ type Repository interface {
 	Start(context.Context, StartInput) (StartResult, error)
 	Succeed(context.Context, SuccessInput) (Result, error)
 	Fail(context.Context, FailureInput) error
+	RecordAggregateCost(context.Context, time.Time, float64, time.Time) error
 }

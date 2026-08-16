@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matoruru/PDCAI/backend/internal/application/account"
 	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
 	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
@@ -131,6 +132,42 @@ func TestGenerateActionMapsBudgetFailure(t *testing.T) {
 	}
 }
 
+func TestAccountDeleteExpiresCookieOnlyAfterConfirmedSuccess(t *testing.T) {
+	t.Parallel()
+	sessions := &fakeSessionService{authenticated: appsession.AuthenticatedSession{ID: "session-id", UserID: user.ID(testUserID)}}
+	accounts := &fakeAccountService{}
+	router := NewRouter(Dependencies{Sessions: sessions, Cycles: &fakeCycleService{}, Account: accounts, PublicOrigin: testOrigin})
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/account", strings.NewReader(`{"confirmed":true}`))
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session"})
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", "valid-csrf")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || !accounts.confirmed {
+		t.Fatalf("status/body/confirmed = %d/%s/%v", response.Code, response.Body.String(), accounts.confirmed)
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || cookies[0].MaxAge >= 0 {
+		t.Fatalf("cookies = %#v", cookies)
+	}
+}
+
+func TestAccountDeleteFailureKeepsCookie(t *testing.T) {
+	t.Parallel()
+	sessions := &fakeSessionService{authenticated: appsession.AuthenticatedSession{ID: "session-id", UserID: user.ID(testUserID)}}
+	accounts := &fakeAccountService{deleteErr: account.ErrAccountDeleteFailed}
+	router := NewRouter(Dependencies{Sessions: sessions, Cycles: &fakeCycleService{}, Account: accounts, PublicOrigin: testOrigin})
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/account", strings.NewReader(`{"confirmed":true}`))
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session"})
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", "valid-csrf")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError || response.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("status/cookie/body = %d/%q/%s", response.Code, response.Header().Get("Set-Cookie"), response.Body.String())
+	}
+}
+
 type fakeSessionService struct {
 	authenticated appsession.AuthenticatedSession
 	created       appsession.View
@@ -178,6 +215,24 @@ type fakeRefineActionService struct{}
 
 func (*fakeRefineActionService) Execute(context.Context, appai.RefineCommand) (appai.Result, error) {
 	return appai.Result{}, errors.New("not implemented")
+}
+
+type fakeAccountService struct {
+	confirmed bool
+	deleteErr error
+}
+
+func (*fakeAccountService) UpgradeGoogle(context.Context, user.ID, string, string) (account.View, error) {
+	return account.View{}, errors.New("not implemented")
+}
+
+func (*fakeAccountService) LoginGoogle(context.Context, string, string) (account.View, error) {
+	return account.View{}, errors.New("not implemented")
+}
+
+func (service *fakeAccountService) Delete(_ context.Context, _ user.ID, confirmed bool) error {
+	service.confirmed = confirmed
+	return service.deleteErr
 }
 
 func (service *fakeCycleService) GetActive(context.Context, user.ID) (domaincycle.PDCACycle, error) {

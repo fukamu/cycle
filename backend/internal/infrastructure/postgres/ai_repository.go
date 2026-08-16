@@ -310,6 +310,15 @@ output_tokens=$3, estimated_cost_usd=$4 WHERE generation_id=$1`, mustUUID(input.
 	return err
 }
 
+func (repository *AIRepository) RecordAggregateCost(ctx context.Context, month time.Time, cost float64, now time.Time) error {
+	_, err := repository.pool.Exec(ctx, `INSERT INTO ai_budget_monthly(month_utc,reserved_cost_usd,actual_cost_usd,updated_at)
+VALUES($1,0,$2,$3)
+ON CONFLICT(month_utc) DO UPDATE SET
+actual_cost_usd=ai_budget_monthly.actual_cost_usd+EXCLUDED.actual_cost_usd,
+updated_at=EXCLUDED.updated_at`, month, cost, now)
+	return err
+}
+
 func findGenerationByIdempotency(ctx context.Context, tx pgx.Tx, input appai.StartInput) (appai.ExistingGeneration, bool, error) {
 	var generation appai.ExistingGeneration
 	var generationID pgtype.UUID

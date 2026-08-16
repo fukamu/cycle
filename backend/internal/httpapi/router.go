@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -43,11 +44,15 @@ type RefineActionService interface {
 type Dependencies struct {
 	Sessions       SessionService
 	Cycles         CycleService
+	Account        AccountService
 	GenerateAction GenerateActionService
 	RefineAction   RefineActionService
 	RequestIDs     ports.IDGenerator
 	PublicOrigin   string
 	Ready          func(context.Context) error
+	Logger         *slog.Logger
+	Production     bool
+	TrustProxy     bool
 }
 
 type api struct {
@@ -58,7 +63,8 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	server := &api{dependencies: dependencies}
 	router := chi.NewRouter()
 	router.Use(server.requestIDMiddleware)
-	router.Use(securityHeaders)
+	router.Use(server.requestLogMiddleware)
+	router.Use(server.securityHeaders)
 	router.Get("/healthz", healthHandler)
 	router.Get("/readyz", server.readyHandler)
 	if dependencies.Sessions == nil || dependencies.Cycles == nil {
@@ -77,6 +83,11 @@ func NewRouter(dependencies Dependencies) http.Handler {
 			if dependencies.GenerateAction != nil && dependencies.RefineAction != nil {
 				protected.With(server.csrfMiddleware).Post("/cycles/{cycleId}/actions/generate", server.generateAction)
 				protected.With(server.csrfMiddleware).Post("/cycles/{cycleId}/actions/refine", server.refineAction)
+			}
+			if dependencies.Account != nil {
+				protected.With(server.csrfMiddleware).Post("/auth/google/upgrade", server.upgradeGoogle)
+				protected.With(server.csrfMiddleware).Post("/auth/google/login", server.loginGoogle)
+				protected.With(server.csrfMiddleware).Delete("/account", server.deleteAccount)
 			}
 			protected.With(server.csrfMiddleware).Post("/cycles/{cycleId}/complete", server.completeCycle)
 		})

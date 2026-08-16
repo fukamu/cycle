@@ -73,6 +73,7 @@ type CreateAnonymousInput struct {
 	BootstrapID    string
 	RecaptchaToken string
 	RemoteAddress  string
+	UserAgent      string
 }
 
 type Settings struct {
@@ -142,6 +143,7 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 	if err := service.abuse.VerifyAnonymousCreation(ctx, ports.AnonymousAbuseInput{
 		RecaptchaToken: input.RecaptchaToken,
 		RemoteAddress:  input.RemoteAddress,
+		UserAgent:      input.UserAgent,
 		BootstrapID:    input.BootstrapID,
 	}); err != nil {
 		return View{}, err

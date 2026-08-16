@@ -47,15 +47,14 @@ func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	view, err := server.dependencies.Sessions.CreateAnonymous(request.Context(), appsession.CreateAnonymousInput{
-		BootstrapID: input.BootstrapID, RecaptchaToken: input.RecaptchaToken, RemoteAddress: request.RemoteAddr,
+		BootstrapID: input.BootstrapID, RecaptchaToken: input.RecaptchaToken,
+		RemoteAddress: server.remoteIP(request), UserAgent: request.UserAgent(),
 	})
 	if err != nil {
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	http.SetCookie(writer, &http.Cookie{
-		Name: sessionCookieName, Value: view.SessionToken, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
-	})
+	setSessionCookie(writer, view.SessionToken)
 	writeJSON(writer, http.StatusCreated, mapSession(view))
 }
 

@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
+	"github.com/matoruru/PDCAI/backend/internal/application/account"
 	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
@@ -24,6 +26,14 @@ type apiError struct {
 
 func (server *api) writeError(writer http.ResponseWriter, request *http.Request, err error, details map[string]any) {
 	status, code, message := classifyError(err)
+	if server.dependencies.Logger != nil {
+		level := slog.LevelWarn
+		if status >= http.StatusInternalServerError {
+			level = slog.LevelError
+		}
+		server.dependencies.Logger.LogAttrs(request.Context(), level, "api error",
+			slog.String("request_id", requestID(request.Context())), slog.String("error_code", code), slog.Int("status_code", status))
+	}
 	writeJSON(writer, status, errorEnvelope{Error: apiError{
 		Code: code, Message: message, RequestID: requestID(request.Context()), Details: details,
 	}})
@@ -37,6 +47,22 @@ func classifyError(err error) (int, string, string) {
 		return http.StatusUnauthorized, "SESSION_EXPIRED", "セッションが切れました。入力内容は保持されています。"
 	case errors.Is(err, appsession.ErrCSRFInvalid):
 		return http.StatusForbidden, "CSRF_INVALID", "ページを再読み込みして、もう一度お試しください。"
+	case errors.Is(err, account.ErrGoogleTokenInvalid):
+		return http.StatusBadRequest, "GOOGLE_ID_TOKEN_INVALID", "Googleアカウントを確認できませんでした。"
+	case errors.Is(err, account.ErrGoogleIdentityLinked):
+		return http.StatusConflict, "GOOGLE_IDENTITY_ALREADY_LINKED", "このGoogleアカウントは別のPDCAIアカウントに接続されています。"
+	case errors.Is(err, account.ErrGoogleAccountNotLinked):
+		return http.StatusNotFound, "GOOGLE_ACCOUNT_NOT_LINKED", "このGoogleアカウントに接続されたPDCAIアカウントはありません。"
+	case errors.Is(err, account.ErrGoogleVerificationFailed):
+		return http.StatusServiceUnavailable, "GOOGLE_IDENTITY_VERIFICATION_UNAVAILABLE", "Googleアカウントを確認できません。もう一度お試しください。"
+	case errors.Is(err, account.ErrAccountUpgradeFailed):
+		return http.StatusInternalServerError, "ACCOUNT_UPGRADE_FAILED", "アカウントを接続できませんでした。匿名データは保持されています。"
+	case errors.Is(err, account.ErrGoogleLoginFailed):
+		return http.StatusInternalServerError, "GOOGLE_LOGIN_FAILED", "Googleアカウントでログインできませんでした。"
+	case errors.Is(err, account.ErrDeleteConfirmationRequired):
+		return http.StatusBadRequest, "ACCOUNT_DELETE_CONFIRMATION_REQUIRED", "アカウント削除の確認が必要です。"
+	case errors.Is(err, account.ErrAccountDeleteFailed):
+		return http.StatusInternalServerError, "ACCOUNT_DELETE_FAILED", "アカウントを削除できませんでした。データは保持されています。"
 	case errors.Is(err, appsession.ErrBootstrapID), errors.Is(err, domaincycle.ErrInvalidFrame), errors.Is(err, domaincycle.ErrInvalidText), errors.Is(err, domaincycle.ErrFrameTooLong), errors.Is(err, domaincycle.ErrInvalidTransition):
 		return http.StatusBadRequest, "VALIDATION_ERROR", "入力内容を確認してください。"
 	case errors.Is(err, ports.ErrAnonymousCreationBlocked):

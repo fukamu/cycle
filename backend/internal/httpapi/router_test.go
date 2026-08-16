@@ -21,3 +21,16 @@ func TestHealth(t *testing.T) {
 		t.Fatalf("Content-Type = %q", got)
 	}
 }
+
+func TestSecurityHeaders(t *testing.T) {
+	t.Parallel()
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response := httptest.NewRecorder()
+	NewRouter(Dependencies{Production: true}).ServeHTTP(response, request)
+	if response.Header().Get("Content-Security-Policy") == "" {
+		t.Fatal("Content-Security-Policy is missing")
+	}
+	if response.Header().Get("Strict-Transport-Security") == "" {
+		t.Fatal("Strict-Transport-Security is missing in production")
+	}
+}

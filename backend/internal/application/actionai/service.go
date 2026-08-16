@@ -121,11 +121,17 @@ func (useCase *GenerateActionUseCase) Execute(ctx context.Context, command Gener
 
 	finishContext, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelFinish()
-	return useCase.repository.Succeed(finishContext, SuccessInput{
+	cost := estimatedCost(useCase.settings, usage)
+	result, err := useCase.repository.Succeed(finishContext, SuccessInput{
 		UserID: command.UserID, CycleID: command.CycleID, GenerationID: generationID,
 		GenerationRevision: snapshot.Current.ContentRevision, Action: action, AttemptCount: attempts,
-		Usage: usage, EstimatedCostUSD: estimatedCost(useCase.settings, usage), Now: useCase.clock.Now().UTC(),
+		Usage: usage, EstimatedCostUSD: cost, Now: useCase.clock.Now().UTC(),
 	})
+	if errors.Is(err, ErrTargetGone) && cost > 0 {
+		month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		_ = useCase.repository.RecordAggregateCost(finishContext, month, cost, useCase.clock.Now().UTC())
+	}
+	return result, err
 }
 
 func (useCase *RefineActionUseCase) Execute(ctx context.Context, command RefineCommand) (Result, error) {
@@ -194,11 +200,17 @@ func (useCase *RefineActionUseCase) Execute(ctx context.Context, command RefineC
 
 	finishContext, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelFinish()
-	return useCase.repository.Succeed(finishContext, SuccessInput{
+	cost := estimatedCost(useCase.settings, usage)
+	result, err := useCase.repository.Succeed(finishContext, SuccessInput{
 		UserID: command.UserID, CycleID: command.CycleID, GenerationID: generationID,
 		GenerationRevision: snapshot.Current.ContentRevision, Action: action, AttemptCount: attempts,
-		Usage: usage, EstimatedCostUSD: estimatedCost(useCase.settings, usage), Now: useCase.clock.Now().UTC(),
+		Usage: usage, EstimatedCostUSD: cost, Now: useCase.clock.Now().UTC(),
 	})
+	if errors.Is(err, ErrTargetGone) && cost > 0 {
+		month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		_ = useCase.repository.RecordAggregateCost(finishContext, month, cost, useCase.clock.Now().UTC())
+	}
+	return result, err
 }
 
 func (useCase *GenerateActionUseCase) failDetached(generationID string, cause error, attempts int, usage Usage, now time.Time) {

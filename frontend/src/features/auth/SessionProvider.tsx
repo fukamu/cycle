@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PropsWithChildren } from "react";
 
 import { APIError, requestJSON } from "../../shared/api/client";
@@ -7,7 +7,8 @@ import {
   clearBootstrapID,
   getOrCreateBootstrapID,
 } from "./bootstrapRepository";
-import { SessionContext } from "./sessionContext";
+import { getAnonymousBootstrapToken } from "./recaptcha";
+import { ReplaceSessionContext, SessionContext } from "./sessionContext";
 
 async function loadSession(): Promise<Session> {
   try {
@@ -21,12 +22,13 @@ async function loadSession(): Promise<Session> {
     }
   }
   const bootstrapId = await getOrCreateBootstrapID();
+  const recaptchaToken = await getAnonymousBootstrapToken();
   const session = await requestJSON(
     "/api/v1/session/anonymous",
     sessionSchema,
     {
       method: "POST",
-      body: { bootstrapId, recaptchaToken: "" },
+      body: { bootstrapId, recaptchaToken },
     },
   );
   await clearBootstrapID();
@@ -34,6 +36,7 @@ async function loadSession(): Promise<Session> {
 }
 
 export function SessionProvider({ children }: PropsWithChildren) {
+  const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["session"],
     queryFn: loadSession,
@@ -55,8 +58,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
     );
   }
   return (
-    <SessionContext.Provider value={query.data}>
-      {children}
-    </SessionContext.Provider>
+    <ReplaceSessionContext.Provider
+      value={(session) => queryClient.setQueryData(["session"], session)}
+    >
+      <SessionContext.Provider value={query.data}>
+        {children}
+      </SessionContext.Provider>
+    </ReplaceSessionContext.Provider>
   );
 }

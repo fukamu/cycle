@@ -10,6 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	recaptchaclient "cloud.google.com/go/recaptchaenterprise/v2/apiv1"
+
+	"github.com/matoruru/PDCAI/backend/internal/application/account"
 	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
@@ -17,7 +20,9 @@ import (
 	"github.com/matoruru/PDCAI/backend/internal/config"
 	"github.com/matoruru/PDCAI/backend/internal/httpapi"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/aiprovider"
+	"github.com/matoruru/PDCAI/backend/internal/infrastructure/googleidentity"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/postgres"
+	recaptchainfra "github.com/matoruru/PDCAI/backend/internal/infrastructure/recaptcha"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/system"
 )
 
@@ -41,7 +46,24 @@ func main() {
 	random := system.RandomGenerator{}
 	var antiAbuse ports.AntiAbuseVerifier = system.AllowAnonymous{}
 	if settings.Recaptcha.Enabled {
-		antiAbuse = system.DenyAnonymous{}
+		recaptchaContext, cancelRecaptcha := context.WithTimeout(context.Background(), 10*time.Second)
+		recaptchaClient, recaptchaErr := recaptchaclient.NewClient(recaptchaContext)
+		cancelRecaptcha()
+		if recaptchaErr != nil {
+			logger.Error("reCAPTCHA client unavailable", "error_class", "recaptcha_startup_failed")
+			os.Exit(1)
+		}
+		defer recaptchaClient.Close()
+		antiAbuse = recaptchainfra.NewVerifier(
+			recaptchaClient,
+			postgres.NewAnonymousRateLimiter(pool, settings.RateLimit.AnonymousCreatePerIPHour, settings.RateLimit.AnonymousCreatePerIP24h),
+			system.Clock{},
+			recaptchainfra.Settings{
+				ProjectID: settings.Recaptcha.ProjectID, SiteKey: settings.Recaptcha.SiteKey,
+				ExpectedAction: settings.Recaptcha.ExpectedAction, ExpectedHost: settings.App.PublicOrigin.Hostname(),
+				ScoreThreshold: settings.Recaptcha.ScoreThreshold, RateHashKey: []byte(settings.Session.RateLimitHMACSecret),
+			},
+		)
 	}
 	sessionService := appsession.NewService(
 		postgres.NewSessionRepository(pool), system.Clock{}, random, random, antiAbuse,
@@ -86,14 +108,26 @@ func main() {
 	contextBuilder := appai.NewContextBuilder(tokenCounter, settings.AI.MaxInputTokens)
 	generateAction := appai.NewGenerateActionUseCase(aiRepository, actionProvider, contextBuilder, system.Clock{}, random, aiSettings)
 	refineAction := appai.NewRefineActionUseCase(aiRepository, actionProvider, contextBuilder, system.Clock{}, random, aiSettings)
+	accountService := account.NewService(
+		postgres.NewAccountRepository(pool), googleidentity.NewVerifier(settings.Google.WebClientID),
+		system.Clock{}, random, random,
+		account.Settings{
+			SessionHashKey: []byte(settings.Session.TokenPepper), CSRFHashKey: []byte(settings.Session.CSRFTokenPepper),
+			IdleTTL: settings.Session.IdleTTL, AbsoluteTTL: settings.Session.AbsoluteTTL,
+		},
+	)
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		Sessions:       sessionService,
 		Cycles:         cycleService,
 		GenerateAction: generateAction,
 		RefineAction:   refineAction,
+		Account:        accountService,
 		RequestIDs:     random,
 		PublicOrigin:   settings.App.PublicOrigin.String(),
 		Ready:          pool.Ping,
+		Logger:         logger,
+		Production:     settings.App.Environment == "production",
+		TrustProxy:     settings.App.Environment == "production",
 	})
 	server := &http.Server{
 		Addr:              settings.App.HTTPAddress,

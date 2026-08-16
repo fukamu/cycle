@@ -26,6 +26,7 @@ type TokenGenerator interface {
 type AnonymousAbuseInput struct {
 	RecaptchaToken string
 	RemoteAddress  string
+	UserAgent      string
 	BootstrapID    string
 }
 

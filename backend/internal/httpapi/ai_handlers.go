@@ -42,7 +42,7 @@ func (server *api) generateAction(writer http.ResponseWriter, request *http.Requ
 	result, err := server.dependencies.GenerateAction.Execute(request.Context(), appai.GenerateCommand{
 		UserID: record.UserID, CycleID: domaincycle.ID(cycleID), IdempotencyKey: idempotencyKey,
 		ExpectedContentRevision: input.ExpectedContentRevision, ConfirmReplace: input.ConfirmReplace,
-		Scope: appai.RequestScope{SessionID: record.ID, IP: remoteIP(request)},
+		Scope: appai.RequestScope{SessionID: record.ID, IP: server.remoteIP(request)},
 	})
 	if err != nil {
 		server.writeAIError(writer, request, err)
@@ -64,7 +64,7 @@ func (server *api) refineAction(writer http.ResponseWriter, request *http.Reques
 	result, err := server.dependencies.RefineAction.Execute(request.Context(), appai.RefineCommand{
 		UserID: record.UserID, CycleID: domaincycle.ID(cycleID), IdempotencyKey: idempotencyKey,
 		ExpectedContentRevision: input.ExpectedContentRevision,
-		Scope:                   appai.RequestScope{SessionID: record.ID, IP: remoteIP(request)},
+		Scope:                   appai.RequestScope{SessionID: record.ID, IP: server.remoteIP(request)},
 	})
 	if err != nil {
 		server.writeAIError(writer, request, err)
@@ -90,7 +90,13 @@ func mapAIResult(result appai.Result) aiActionResponse {
 	}
 }
 
-func remoteIP(request *http.Request) string {
+func (server *api) remoteIP(request *http.Request) string {
+	if server.dependencies.TrustProxy {
+		forwarded := strings.TrimSpace(strings.Split(request.Header.Get("X-Forwarded-For"), ",")[0])
+		if parsed := net.ParseIP(forwarded); parsed != nil {
+			return parsed.String()
+		}
+	}
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err == nil {
 		return host
