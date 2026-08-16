@@ -14,6 +14,8 @@ frontend/.npm-cache/
 # Backend
 backend/bin/
 backend/coverage.out
+backend/server.exe
+*.tsbuildinfo
 
 # Local tooling
 .tools/
