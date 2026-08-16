@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 
@@ -15,7 +15,11 @@ const mocks = vi.hoisted(() => ({
   flush: vi.fn(),
   retry: vi.fn(),
   synchronizeFrame: vi.fn(),
+  handlePlanNavigation: vi.fn(),
+  registerPlanNavigation: vi.fn(),
 }));
+
+let registeredPlanNavigationHandler: (() => void) | null = null;
 
 vi.mock("../hooks/useAutoSave", () => ({
   useAutoSave: () => ({
@@ -54,6 +58,15 @@ describe("CycleEditor", () => {
   beforeEach(() => {
     window.localStorage.clear();
     vi.clearAllMocks();
+    registeredPlanNavigationHandler = null;
+    mocks.registerPlanNavigation.mockImplementation((handler: () => void) => {
+      registeredPlanNavigationHandler = handler;
+      return () => {
+        if (registeredPlanNavigationHandler === handler) {
+          registeredPlanNavigationHandler = null;
+        }
+      };
+    });
   });
 
   it("keeps each frame's current value while moving between tabs", async () => {
@@ -108,9 +121,59 @@ describe("CycleEditor", () => {
       "保存済みのC",
     );
   });
+
+  it("moves to plan when the mounted editor receives wordmark navigation", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await user.click(screen.getByRole("tab", { name: "AAction" }));
+
+    act(() => registeredPlanNavigationHandler?.());
+
+    expect(screen.getByRole("tab", { name: "PPlan" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("textbox", { name: "P — Plan" })).toHaveValue(
+      "保存済みのP",
+    );
+    expect(mocks.flush).toHaveBeenCalled();
+  });
+
+  it("starts on plan and consumes navigation requested from another screen", () => {
+    window.localStorage.setItem(
+      "pdcai:selected-frame:v1",
+      JSON.stringify({ cycleId: cycle.id, frame: "action" }),
+    );
+
+    renderEditor({ planNavigationRequested: true });
+
+    expect(screen.getByRole("tab", { name: "PPlan" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(mocks.handlePlanNavigation).toHaveBeenCalledOnce();
+  });
 });
 
-function renderEditor() {
+type EditorOverrides = {
+  readonly planNavigationRequested?: boolean;
+};
+
+function editor({ planNavigationRequested = false }: EditorOverrides = {}) {
+  return (
+    <CycleEditor
+      cycle={cycle}
+      userId="user-1"
+      csrfToken="csrf"
+      drafts={[]}
+      planNavigationRequested={planNavigationRequested}
+      onPlanNavigationHandled={mocks.handlePlanNavigation}
+      registerPlanNavigationHandler={mocks.registerPlanNavigation}
+    />
+  );
+}
+
+function renderEditor(overrides: EditorOverrides = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -121,8 +184,5 @@ function renderEditor() {
       </AIProcessingContext.Provider>
     </QueryClientProvider>
   );
-  return render(
-    <CycleEditor cycle={cycle} userId="user-1" csrfToken="csrf" drafts={[]} />,
-    { wrapper: Wrapper },
-  );
+  return render(editor(overrides), { wrapper: Wrapper });
 }

@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
 
+import type { AppOutletContext } from "../app/AppLayout";
 import { useSession } from "../features/auth/sessionContext";
 import { AIProcessingProvider } from "../features/ai/AIProcessingProvider";
 import { CycleEditor } from "../features/cycle-editor/components/CycleEditor";
@@ -17,6 +19,11 @@ type LoadedDrafts = {
 
 export function HomePage() {
   const session = useSession();
+  const {
+    planNavigationRequested,
+    onPlanNavigationHandled,
+    registerPlanNavigationHandler,
+  } = useOutletContext<AppOutletContext>();
   const query = useQuery({
     queryKey: ["active-cycle"],
     queryFn: ({ signal }) => getActiveCycle(signal),
@@ -62,6 +69,9 @@ export function HomePage() {
         userId={session.user.id}
         csrfToken={session.csrfToken}
         drafts={drafts.items}
+        planNavigationRequested={planNavigationRequested}
+        onPlanNavigationHandled={onPlanNavigationHandled}
+        registerPlanNavigationHandler={registerPlanNavigationHandler}
       />
     </AIProcessingProvider>
   );

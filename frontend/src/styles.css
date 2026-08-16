@@ -172,6 +172,13 @@ a {
   letter-spacing: -0.04em;
 }
 
+.cycle-sequence {
+  font-family: Constantia, Cambria, Baskerville, "Times New Roman", serif;
+  font-variant-numeric: lining-nums proportional-nums;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
 .cycle-heading > div > p,
 .page-heading > p:last-child {
   margin: 0 0 5px;

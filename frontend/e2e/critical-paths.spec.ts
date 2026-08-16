@@ -97,6 +97,26 @@ test("save failure keeps input and a retry persists it", async ({ page }) => {
   await expect(plan).toHaveValue("失敗しても保持する入力");
 });
 
+test("the PDCAI wordmark opens the current cycle's plan from any screen", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("tab", { name: /C Check/ }).click();
+  await page.getByRole("link", { name: "PDCAI 現在のサイクルのPへ" }).click();
+  await expect(page.getByRole("tab", { name: /P Plan/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await page.goto("/settings");
+  await page.getByRole("link", { name: "PDCAI 現在のサイクルのPへ" }).click();
+  await expect(page.getByRole("heading", { name: "Cycle 1" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /P Plan/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
 test("AI failure leaves A unchanged and a retry can succeed", async ({
   page,
 }) => {
