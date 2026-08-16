@@ -1,9 +1,22 @@
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+
+import { HomePage } from "../pages/HomePage";
+import { PastCycleDetailPage } from "../pages/PastCycleDetailPage";
+import { PastCyclesPage } from "../pages/PastCyclesPage";
+import { SettingsPage } from "../pages/SettingsPage";
+import { AppLayout } from "./AppLayout";
+
 export function App() {
   return (
-    <main className="foundation" aria-labelledby="app-title">
-      <p className="eyebrow">継続的な改善を、ひとつずつ。</p>
-      <h1 id="app-title">PDCAI</h1>
-      <p>アプリケーションを準備しています。</p>
-    </main>
+    <BrowserRouter>
+      <Routes>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/cycles" element={<PastCyclesPage />} />
+          <Route path="/cycles/:cycleId" element={<PastCycleDetailPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   );
 }
