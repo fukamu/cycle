@@ -184,7 +184,8 @@ type ExistingGeneration struct {
 }
 
 type StartResult struct {
-	Existing *ExistingGeneration
+	Existing         *ExistingGeneration
+	BudgetUsageRatio float64
 }
 
 type SuccessInput struct {
@@ -205,6 +206,23 @@ type Result struct {
 	ContentRevision int64
 	ActionRevision  int64
 	ContextChanged  bool
+}
+
+type Observation struct {
+	Type              GenerationType
+	Result            string
+	Model             string
+	PromptVersion     string
+	Usage             Usage
+	EstimatedCostUSD  float64
+	ContextCycleCount int
+	CurrentTruncated  bool
+	BudgetUsageRatio  float64
+	Duration          time.Duration
+}
+
+type Observer interface {
+	ObserveAIGeneration(context.Context, Observation)
 }
 
 type FailureInput struct {

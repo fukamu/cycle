@@ -1,6 +1,5 @@
-dist
-coverage
-node_modules
-package-lock.json
-.tools
-.npm-cache
+dist/
+.tools/
+node_modules/
+playwright-report/
+test-results/

@@ -6,6 +6,8 @@ import (
 	"net"
 	"strings"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"google.golang.org/api/idtoken"
 
 	"github.com/matoruru/PDCAI/backend/internal/application/account"
@@ -13,18 +15,22 @@ import (
 
 type Verifier struct {
 	audience string
+	validate func(context.Context, string, string) (*idtoken.Payload, error)
 }
 
 func NewVerifier(audience string) *Verifier {
-	return &Verifier{audience: audience}
+	return &Verifier{audience: audience, validate: idtoken.Validate}
 }
 
 func (verifier *Verifier) Verify(ctx context.Context, rawToken string) (account.GoogleIdentity, error) {
+	ctx, span := otel.Tracer("pdcai/google-identity").Start(ctx, "google.identity.verify")
+	defer span.End()
 	if strings.TrimSpace(rawToken) == "" || verifier.audience == "" {
 		return account.GoogleIdentity{}, account.ErrGoogleTokenInvalid
 	}
-	payload, err := idtoken.Validate(ctx, rawToken, verifier.audience)
+	payload, err := verifier.validate(ctx, rawToken, verifier.audience)
 	if err != nil {
+		span.SetStatus(codes.Error, "identity verification failed")
 		var networkError net.Error
 		if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &networkError) {
 			return account.GoogleIdentity{}, account.ErrGoogleVerificationFailed

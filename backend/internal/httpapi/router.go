@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
@@ -41,6 +43,17 @@ type RefineActionService interface {
 	Execute(context.Context, appai.RefineCommand) (appai.Result, error)
 }
 
+type Metrics interface {
+	ObserveHTTP(context.Context, string, int, time.Duration)
+	ObserveAutosave(context.Context, string, time.Duration)
+	CycleCompleted(context.Context)
+	AccountUpgrade(context.Context, string)
+	AccountDelete(context.Context, string)
+	AnonymousCreate(context.Context, string)
+	RateLimitRejected(context.Context, string)
+	ErrorCode(context.Context, string)
+}
+
 type Dependencies struct {
 	Sessions       SessionService
 	Cycles         CycleService
@@ -53,6 +66,8 @@ type Dependencies struct {
 	Logger         *slog.Logger
 	Production     bool
 	TrustProxy     bool
+	StaticDir      string
+	Metrics        Metrics
 }
 
 type api struct {
@@ -68,7 +83,10 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Get("/healthz", healthHandler)
 	router.Get("/readyz", server.readyHandler)
 	if dependencies.Sessions == nil || dependencies.Cycles == nil {
-		return router
+		if dependencies.StaticDir != "" {
+			router.Handle("/*", newSPAHandler(dependencies.StaticDir))
+		}
+		return otelhttp.NewHandler(router, "http.request")
 	}
 
 	router.Route("/api/v1", func(v1 chi.Router) {
@@ -92,7 +110,10 @@ func NewRouter(dependencies Dependencies) http.Handler {
 			protected.With(server.csrfMiddleware).Post("/cycles/{cycleId}/complete", server.completeCycle)
 		})
 	})
-	return router
+	if dependencies.StaticDir != "" {
+		router.Handle("/*", newSPAHandler(dependencies.StaticDir))
+	}
+	return otelhttp.NewHandler(router, "http.request")
 }
 
 type healthResponse struct {

@@ -14,7 +14,7 @@ frontend/.npm-cache/
 # Backend
 backend/bin/
 backend/coverage.out
-backend/server.exe
+backend/*.exe
 *.tsbuildinfo
 
 # Local tooling
@@ -27,3 +27,4 @@ backend/server.exe
 .DS_Store
 Thumbs.db
 *.swp
+gha-creds-*.json

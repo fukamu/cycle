@@ -56,10 +56,10 @@ export function CycleEditor({
   const { control, setValue } = useForm<FrameValues>({ defaultValues });
   const watchedValues = useWatch({ control });
   const values: FrameValues = {
-    plan: watchedValues.plan ?? "",
-    do: watchedValues.do ?? "",
-    check: watchedValues.check ?? "",
-    action: watchedValues.action ?? "",
+    plan: watchedValues.plan ?? defaultValues.plan,
+    do: watchedValues.do ?? defaultValues.do,
+    check: watchedValues.check ?? defaultValues.check,
+    action: watchedValues.action ?? defaultValues.action,
   };
   const autoSave = useAutoSave({
     userId,

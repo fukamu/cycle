@@ -105,6 +105,13 @@ func (server *api) getActiveCycle(writer http.ResponseWriter, request *http.Requ
 }
 
 func (server *api) saveFrame(writer http.ResponseWriter, request *http.Request) {
+	started := time.Now()
+	metricResult := "failure"
+	defer func() {
+		if server.dependencies.Metrics != nil {
+			server.dependencies.Metrics.ObserveAutosave(request.Context(), metricResult, time.Since(started))
+		}
+	}()
 	cycleID := chi.URLParam(request, "cycleId")
 	frame, frameErr := domaincycle.ParseFrame(chi.URLParam(request, "frame"))
 	if !isCanonicalUUID(cycleID) || frameErr != nil {
@@ -132,6 +139,7 @@ func (server *api) saveFrame(writer http.ResponseWriter, request *http.Request) 
 		CycleID: string(result.Cycle.ID), Frame: string(frame), Content: result.Cycle.FrameContent(frame),
 		FrameRevision: result.Cycle.FrameRevision(frame), ContentRevision: result.Cycle.ContentRevision, SavedAt: result.SavedAt,
 	})
+	metricResult = "success"
 }
 
 func (server *api) completeCycle(writer http.ResponseWriter, request *http.Request) {
@@ -159,6 +167,9 @@ func (server *api) completeCycle(writer http.ResponseWriter, request *http.Reque
 	response.CompletedCycle.SequenceNumber = result.Completed.SequenceNumber
 	response.CompletedCycle.CompletedAt = *result.Completed.CompletedAt
 	response.NextCycle = mapActiveCycle(result.Next)
+	if server.dependencies.Metrics != nil {
+		server.dependencies.Metrics.CycleCompleted(request.Context())
+	}
 	writeJSON(writer, http.StatusOK, response)
 }
 

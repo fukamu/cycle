@@ -11,6 +11,8 @@ import (
 
 	client "cloud.google.com/go/recaptchaenterprise/v2/apiv1"
 	recaptchapb "cloud.google.com/go/recaptchaenterprise/v2/apiv1/recaptchaenterprisepb"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
 )
@@ -66,6 +68,8 @@ func NewVerifier(cloudClient *client.Client, limiter RateLimiter, clock Clock, s
 }
 
 func (verifier *Verifier) VerifyAnonymousCreation(ctx context.Context, input ports.AnonymousAbuseInput) error {
+	ctx, span := otel.Tracer("pdcai/recaptcha").Start(ctx, "recaptcha.assessment.create")
+	defer span.End()
 	if strings.TrimSpace(input.RecaptchaToken) == "" {
 		return ports.ErrAnonymousCreationBlocked
 	}
@@ -77,6 +81,7 @@ func (verifier *Verifier) VerifyAnonymousCreation(ctx context.Context, input por
 		}},
 	})
 	if err != nil {
+		span.SetStatus(codes.Error, "assessment request failed")
 		return errors.Join(ports.ErrAntiAbuseUnavailable, err)
 	}
 	properties := assessment.GetTokenProperties()

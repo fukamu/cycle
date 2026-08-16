@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE TABLE users (
     id UUID PRIMARY KEY,
     last_active_at TIMESTAMPTZ NOT NULL,
@@ -150,3 +152,5 @@ CREATE TABLE abuse_rate_buckets (
     PRIMARY KEY(scope, key_hash, window_start)
 );
 CREATE INDEX idx_abuse_bucket_expiry ON abuse_rate_buckets(expires_at);
+
+COMMIT;

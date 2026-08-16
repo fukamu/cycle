@@ -27,6 +27,7 @@ type AppConfig struct {
 	Environment  string
 	PublicOrigin *url.URL
 	HTTPAddress  string
+	StaticDir    string
 }
 
 type DatabaseConfig struct {
@@ -102,6 +103,7 @@ func Load(lookup LookupEnv) (Config, error) {
 			Environment:  reader.stringValue("APP_ENV", "development"),
 			PublicOrigin: publicOrigin,
 			HTTPAddress:  reader.stringValue("HTTP_ADDRESS", ":8080"),
+			StaticDir:    reader.stringValue("STATIC_DIR", ""),
 		},
 		Database: DatabaseConfig{
 			URL:             reader.stringValue("DATABASE_URL", ""),

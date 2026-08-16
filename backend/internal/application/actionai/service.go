@@ -20,6 +20,7 @@ type GenerateActionUseCase struct {
 	clock      Clock
 	ids        IDGenerator
 	settings   Settings
+	observer   Observer
 }
 
 type RefineActionUseCase struct {
@@ -29,6 +30,15 @@ type RefineActionUseCase struct {
 	clock      Clock
 	ids        IDGenerator
 	settings   Settings
+	observer   Observer
+}
+
+func (useCase *GenerateActionUseCase) SetObserver(observer Observer) {
+	useCase.observer = observer
+}
+
+func (useCase *RefineActionUseCase) SetObserver(observer Observer) {
+	useCase.observer = observer
 }
 
 func NewGenerateActionUseCase(repository Repository, provider ActionAI, builder *ContextBuilder, clock Clock, ids IDGenerator, settings Settings) *GenerateActionUseCase {
@@ -57,6 +67,7 @@ type RefineCommand struct {
 }
 
 func (useCase *GenerateActionUseCase) Execute(ctx context.Context, command GenerateCommand) (Result, error) {
+	started := time.Now()
 	snapshot, err := useCase.repository.LoadSnapshot(ctx, command.UserID, command.CycleID)
 	if err != nil {
 		return Result{}, err
@@ -116,6 +127,7 @@ func (useCase *GenerateActionUseCase) Execute(ctx context.Context, command Gener
 	}
 	if providerErr != nil {
 		useCase.failDetached(generationID, providerErr, attempts, usage, useCase.clock.Now().UTC())
+		useCase.observe(ctx, built, usage, estimatedCost(useCase.settings, usage), start.BudgetUsageRatio, providerErr, started)
 		return Result{}, providerErr
 	}
 
@@ -131,10 +143,12 @@ func (useCase *GenerateActionUseCase) Execute(ctx context.Context, command Gener
 		month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 		_ = useCase.repository.RecordAggregateCost(finishContext, month, cost, useCase.clock.Now().UTC())
 	}
+	useCase.observe(ctx, built, usage, cost, start.BudgetUsageRatio, err, started)
 	return result, err
 }
 
 func (useCase *RefineActionUseCase) Execute(ctx context.Context, command RefineCommand) (Result, error) {
+	started := time.Now()
 	snapshot, err := useCase.repository.LoadSnapshot(ctx, command.UserID, command.CycleID)
 	if err != nil {
 		return Result{}, err
@@ -195,6 +209,7 @@ func (useCase *RefineActionUseCase) Execute(ctx context.Context, command RefineC
 	}
 	if providerErr != nil {
 		useCase.failDetached(generationID, providerErr, attempts, usage, useCase.clock.Now().UTC())
+		useCase.observe(ctx, built, usage, estimatedCost(useCase.settings, usage), start.BudgetUsageRatio, providerErr, started)
 		return Result{}, providerErr
 	}
 
@@ -210,7 +225,41 @@ func (useCase *RefineActionUseCase) Execute(ctx context.Context, command RefineC
 		month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 		_ = useCase.repository.RecordAggregateCost(finishContext, month, cost, useCase.clock.Now().UTC())
 	}
+	useCase.observe(ctx, built, usage, cost, start.BudgetUsageRatio, err, started)
 	return result, err
+}
+
+func (useCase *GenerateActionUseCase) observe(ctx context.Context, built BuiltContext, usage Usage, cost, budgetUsageRatio float64, err error, started time.Time) {
+	if useCase.observer == nil {
+		return
+	}
+	useCase.observer.ObserveAIGeneration(ctx, Observation{
+		Type: GenerationGenerate, Result: observationResult(err), Model: useCase.settings.Model,
+		PromptVersion: useCase.settings.GeneratePromptVersion, Usage: usage, EstimatedCostUSD: cost,
+		ContextCycleCount: len(built.ContextCycleIDs), CurrentTruncated: built.CurrentTruncated,
+		BudgetUsageRatio: budgetUsageRatio,
+		Duration:         time.Since(started),
+	})
+}
+
+func (useCase *RefineActionUseCase) observe(ctx context.Context, built BuiltContext, usage Usage, cost, budgetUsageRatio float64, err error, started time.Time) {
+	if useCase.observer == nil {
+		return
+	}
+	useCase.observer.ObserveAIGeneration(ctx, Observation{
+		Type: GenerationRefine, Result: observationResult(err), Model: useCase.settings.Model,
+		PromptVersion: useCase.settings.RefinePromptVersion, Usage: usage, EstimatedCostUSD: cost,
+		ContextCycleCount: len(built.ContextCycleIDs), CurrentTruncated: built.CurrentTruncated,
+		BudgetUsageRatio: budgetUsageRatio,
+		Duration:         time.Since(started),
+	})
+}
+
+func observationResult(err error) string {
+	if err == nil {
+		return "success"
+	}
+	return failureCode(err)
 }
 
 func (useCase *GenerateActionUseCase) failDetached(generationID string, cause error, attempts int, usage Usage, now time.Time) {

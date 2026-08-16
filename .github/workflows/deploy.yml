@@ -1,0 +1,96 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  REGION: asia-northeast1
+  SERVICE: pdcai-web
+  MIGRATION_JOB: pdcai-migrate
+  IMAGE: asia-northeast1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/pdcai/pdcai-web:${{ github.event.workflow_run.head_sha }}
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Configure Artifact Registry authentication
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+      - name: Build image
+        run: >-
+          docker build
+          --build-arg VITE_GOOGLE_WEB_CLIENT_ID="${{ vars.GOOGLE_WEB_CLIENT_ID }}"
+          --build-arg VITE_RECAPTCHA_SITE_KEY="${{ vars.RECAPTCHA_SITE_KEY }}"
+          --tag "${IMAGE}" .
+      - name: Push image
+        run: docker push "${IMAGE}"
+      - name: Deploy migration job
+        run: >-
+          gcloud run jobs deploy "${MIGRATION_JOB}"
+          --image "${IMAGE}"
+          --command /app/migrate
+          --region "${REGION}"
+          --service-account "${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}"
+          --set-cloudsql-instances "${{ vars.CLOUD_SQL_INSTANCE }}"
+          --set-secrets DATABASE_URL=PDCAI_DATABASE_URL:latest
+          --max-retries 0
+          --task-timeout 10m
+      - name: Run migrations
+        run: gcloud run jobs execute "${MIGRATION_JOB}" --region "${REGION}" --wait
+      - id: deploy
+        name: Deploy service after successful migration
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          service: ${{ env.SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE }}
+          env_vars: |-
+            APP_ENV=production
+            PUBLIC_ORIGIN=${{ vars.PUBLIC_ORIGIN }}
+            GOOGLE_WEB_CLIENT_ID=${{ vars.GOOGLE_WEB_CLIENT_ID }}
+            RECAPTCHA_ENABLED=true
+            RECAPTCHA_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+            RECAPTCHA_SITE_KEY=${{ vars.RECAPTCHA_SITE_KEY }}
+            AI_MODEL=${{ vars.AI_MODEL }}
+            AI_PRICE_MODEL=${{ vars.AI_MODEL }}
+            AI_PRICE_INPUT_USD_PER_MILLION=${{ vars.AI_PRICE_INPUT_USD_PER_MILLION }}
+            AI_PRICE_OUTPUT_USD_PER_MILLION=${{ vars.AI_PRICE_OUTPUT_USD_PER_MILLION }}
+          secrets: |-
+            DATABASE_URL=PDCAI_DATABASE_URL:latest
+            OPENAI_API_KEY=PDCAI_OPENAI_API_KEY:latest
+            SESSION_TOKEN_PEPPER=PDCAI_SESSION_TOKEN_PEPPER:latest
+            CSRF_TOKEN_PEPPER=PDCAI_CSRF_TOKEN_PEPPER:latest
+            BOOTSTRAP_ID_PEPPER=PDCAI_BOOTSTRAP_ID_PEPPER:latest
+            RATE_LIMIT_HMAC_SECRET=PDCAI_RATE_LIMIT_HMAC_SECRET:latest
+          flags: >-
+            --service-account=${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+            --add-cloudsql-instances=${{ vars.CLOUD_SQL_INSTANCE }}
+            --max-instances=5
+            --min-instances=0
+            --port=8080
+      - name: Smoke test
+        run: |-
+          curl --fail --retry 5 --retry-delay 2 "${{ steps.deploy.outputs.url }}/healthz"
+          curl --fail --retry 5 --retry-delay 2 "${{ steps.deploy.outputs.url }}/readyz"

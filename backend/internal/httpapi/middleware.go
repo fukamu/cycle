@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
 )
@@ -64,15 +66,27 @@ func (server *api) requestLogMiddleware(next http.Handler) http.Handler {
 		started := time.Now()
 		recorder := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
 		next.ServeHTTP(recorder, request)
+		duration := time.Since(started)
+		route := chi.RouteContext(request.Context()).RoutePattern()
+		if route == "" {
+			route = "unmatched"
+		}
+		span := trace.SpanFromContext(request.Context())
+		span.SetName(request.Method + " " + route)
+		span.SetAttributes(attribute.String("http.route", route), attribute.Int("http.response.status_code", recorder.status))
+		if server.dependencies.Metrics != nil {
+			server.dependencies.Metrics.ObserveHTTP(request.Context(), route, recorder.status, duration)
+		}
 		if server.dependencies.Logger == nil {
 			return
 		}
 		server.dependencies.Logger.LogAttrs(request.Context(), slog.LevelInfo, "http request",
 			slog.String("request_id", requestID(request.Context())),
-			slog.String("route_template", chi.RouteContext(request.Context()).RoutePattern()),
+			slog.String("trace_id", span.SpanContext().TraceID().String()),
+			slog.String("route_template", route),
 			slog.String("method", request.Method),
 			slog.Int("status_code", recorder.status),
-			slog.Int64("latency_ms", time.Since(started).Milliseconds()),
+			slog.Int64("latency_ms", duration.Milliseconds()),
 		)
 	})
 }

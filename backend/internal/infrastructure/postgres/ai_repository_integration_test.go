@@ -159,6 +159,55 @@ func TestAIStaleLeaseRecoveryReleasesReservation(t *testing.T) {
 	}
 }
 
+func TestAIRollingLimitCombinesTypesAndExpiresOldEvents(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	record := anonymousInput(1, 2, 3, 1)
+	if _, err := NewSessionRepository(pool).CreateOrResumeAnonymous(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='p',do_text='d',check_text='c',action='a' WHERE id=$1`, record.CycleID); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewAIRepository(pool)
+	now := integrationNow()
+	for index := 0; index < 10; index++ {
+		startAndFailGeneration(t, repository, record, 100+index*3, now.Add(-25*time.Hour), index)
+	}
+	for index := 0; index < 10; index++ {
+		startAndFailGeneration(t, repository, record, 200+index*3, now, index)
+	}
+	rejected := integrationAIStart(record, 400, 401, 402, now)
+	rejected.ConfirmReplace = true
+	rejected.RatePerUserMinute = 100
+	rejected.RatePerSessionMinute = 100
+	rejected.RatePerIPMinute = 100
+	if _, err := repository.Start(context.Background(), rejected); !errors.Is(err, appai.ErrUserRollingLimit) {
+		t.Fatalf("11th current generation error = %v", err)
+	}
+}
+
+func startAndFailGeneration(t *testing.T, repository *AIRepository, record appsession.CreateAnonymousRecord, base int, now time.Time, index int) {
+	t.Helper()
+	input := integrationAIStart(record, base, base+1, base+2, now)
+	input.ConfirmReplace = true
+	input.RatePerUserMinute = 100
+	input.RatePerSessionMinute = 100
+	input.RatePerIPMinute = 100
+	if index%2 == 1 {
+		input.GenerationType = appai.GenerationRefine
+		input.PromptVersion = "refine-action-v1"
+	}
+	if _, err := repository.Start(context.Background(), input); err != nil {
+		t.Fatalf("start %d: %v", index, err)
+	}
+	if err := repository.Fail(context.Background(), appai.FailureInput{
+		GenerationID: input.GenerationID, FailureCode: "provider_unavailable", AttemptCount: 1, Now: now,
+	}); err != nil {
+		t.Fatalf("fail %d: %v", index, err)
+	}
+}
+
 // This wrapper keeps the loop values explicit without changing shared helpers.
 type appsessionRecord struct {
 	value appsession.CreateAnonymousRecord

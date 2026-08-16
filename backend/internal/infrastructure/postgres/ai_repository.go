@@ -140,6 +140,7 @@ WHERE month_utc = $1 FOR UPDATE`, input.BudgetMonthUTC).Scan(&reserved, &actual)
 	if actual+reserved+input.BudgetReservationUSD > input.MonthlyBudgetUSD {
 		return result, appai.ErrServiceBudget
 	}
+	result.BudgetUsageRatio = (actual + reserved + input.BudgetReservationUSD) / input.MonthlyBudgetUSD
 	_, err = tx.Exec(ctx, `UPDATE ai_budget_monthly
 SET reserved_cost_usd = reserved_cost_usd + $2, updated_at = $3 WHERE month_utc = $1`,
 		input.BudgetMonthUTC, input.BudgetReservationUSD, input.Now)

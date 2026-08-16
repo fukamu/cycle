@@ -26,6 +26,12 @@ type deleteAccountRequest struct {
 }
 
 func (server *api) upgradeGoogle(writer http.ResponseWriter, request *http.Request) {
+	metricResult := "failure"
+	defer func() {
+		if server.dependencies.Metrics != nil {
+			server.dependencies.Metrics.AccountUpgrade(request.Context(), metricResult)
+		}
+	}()
 	var input googleTokenRequest
 	if decodeJSON(writer, request, &input, googleTokenBodyLimit) != nil || input.IDToken == "" {
 		server.writeError(writer, request, account.ErrGoogleTokenInvalid, nil)
@@ -38,6 +44,7 @@ func (server *api) upgradeGoogle(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	setSessionCookie(writer, view.SessionToken)
+	metricResult = "success"
 	writeJSON(writer, http.StatusOK, sessionResponseFromAccount(view))
 }
 
@@ -58,6 +65,12 @@ func (server *api) loginGoogle(writer http.ResponseWriter, request *http.Request
 }
 
 func (server *api) deleteAccount(writer http.ResponseWriter, request *http.Request) {
+	metricResult := "failure"
+	defer func() {
+		if server.dependencies.Metrics != nil {
+			server.dependencies.Metrics.AccountDelete(request.Context(), metricResult)
+		}
+	}()
 	var input deleteAccountRequest
 	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil {
 		server.writeError(writer, request, account.ErrDeleteConfirmationRequired, nil)
@@ -69,6 +82,7 @@ func (server *api) deleteAccount(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	clearSessionCookie(writer)
+	metricResult = "success"
 	writer.WriteHeader(http.StatusNoContent)
 }
 

@@ -31,12 +31,19 @@ func (server *api) getSession(writer http.ResponseWriter, request *http.Request)
 }
 
 func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Request) {
+	metricResult := "failure"
+	defer func() {
+		if server.dependencies.Metrics != nil {
+			server.dependencies.Metrics.AnonymousCreate(request.Context(), metricResult)
+		}
+	}()
 	if !server.validOrigin(request) {
 		server.writeError(writer, request, appsession.ErrCSRFInvalid, nil)
 		return
 	}
 	if cookie, err := request.Cookie(sessionCookieName); err == nil {
 		if view, refreshErr := server.dependencies.Sessions.Refresh(request.Context(), cookie.Value); refreshErr == nil {
+			metricResult = "idempotent"
 			writeJSON(writer, http.StatusOK, mapSession(view))
 			return
 		}
@@ -55,6 +62,7 @@ func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	setSessionCookie(writer, view.SessionToken)
+	metricResult = "success"
 	writeJSON(writer, http.StatusCreated, mapSession(view))
 }
 

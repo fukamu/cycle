@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/matoruru/PDCAI/backend/internal/application/account"
 	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
@@ -26,13 +28,26 @@ type apiError struct {
 
 func (server *api) writeError(writer http.ResponseWriter, request *http.Request, err error, details map[string]any) {
 	status, code, message := classifyError(err)
+	if server.dependencies.Metrics != nil {
+		server.dependencies.Metrics.ErrorCode(request.Context(), code)
+		switch code {
+		case "ANONYMOUS_CREATION_BLOCKED":
+			server.dependencies.Metrics.RateLimitRejected(request.Context(), "anonymous_ip")
+		case "AI_RATE_LIMIT_EXCEEDED":
+			server.dependencies.Metrics.RateLimitRejected(request.Context(), "ai")
+		case "AI_USER_ROLLING_LIMIT_EXCEEDED":
+			server.dependencies.Metrics.RateLimitRejected(request.Context(), "ai_user_rolling_24h")
+		}
+	}
 	if server.dependencies.Logger != nil {
 		level := slog.LevelWarn
 		if status >= http.StatusInternalServerError {
 			level = slog.LevelError
 		}
 		server.dependencies.Logger.LogAttrs(request.Context(), level, "api error",
-			slog.String("request_id", requestID(request.Context())), slog.String("error_code", code), slog.Int("status_code", status))
+			slog.String("request_id", requestID(request.Context())),
+			slog.String("trace_id", trace.SpanFromContext(request.Context()).SpanContext().TraceID().String()),
+			slog.String("error_code", code), slog.Int("status_code", status))
 	}
 	writeJSON(writer, status, errorEnvelope{Error: apiError{
 		Code: code, Message: message, RequestID: requestID(request.Context()), Details: details,

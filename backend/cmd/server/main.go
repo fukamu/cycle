@@ -21,6 +21,7 @@ import (
 	"github.com/matoruru/PDCAI/backend/internal/httpapi"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/aiprovider"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/googleidentity"
+	"github.com/matoruru/PDCAI/backend/internal/infrastructure/observability"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/postgres"
 	recaptchainfra "github.com/matoruru/PDCAI/backend/internal/infrastructure/recaptcha"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/system"
@@ -31,6 +32,25 @@ func main() {
 	settings, err := config.Load(os.LookupEnv)
 	if err != nil {
 		logger.Error("invalid configuration", "error_class", "configuration_invalid", "error", err)
+		os.Exit(1)
+	}
+	telemetryContext, cancelTelemetrySetup := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownTelemetry, err := observability.Setup(telemetryContext, settings.App.Environment == "production")
+	cancelTelemetrySetup()
+	if err != nil {
+		logger.Error("telemetry unavailable", "error_class", "telemetry_startup_failed")
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if shutdownErr := shutdownTelemetry(shutdownContext); shutdownErr != nil {
+			logger.Error("telemetry shutdown failed", "error_class", "telemetry_shutdown_failed")
+		}
+	}()
+	metrics, err := observability.NewMetrics(settings.AI.WarningThresholds)
+	if err != nil {
+		logger.Error("metrics unavailable", "error_class", "metrics_startup_failed")
 		os.Exit(1)
 	}
 
@@ -108,8 +128,14 @@ func main() {
 	contextBuilder := appai.NewContextBuilder(tokenCounter, settings.AI.MaxInputTokens)
 	generateAction := appai.NewGenerateActionUseCase(aiRepository, actionProvider, contextBuilder, system.Clock{}, random, aiSettings)
 	refineAction := appai.NewRefineActionUseCase(aiRepository, actionProvider, contextBuilder, system.Clock{}, random, aiSettings)
+	generateAction.SetObserver(metrics)
+	refineAction.SetObserver(metrics)
+	var googleVerifier account.GoogleVerifier = googleidentity.NewVerifier(settings.Google.WebClientID)
+	if settings.App.Environment == "test" {
+		googleVerifier = googleidentity.FakeVerifier{}
+	}
 	accountService := account.NewService(
-		postgres.NewAccountRepository(pool), googleidentity.NewVerifier(settings.Google.WebClientID),
+		postgres.NewAccountRepository(pool), googleVerifier,
 		system.Clock{}, random, random,
 		account.Settings{
 			SessionHashKey: []byte(settings.Session.TokenPepper), CSRFHashKey: []byte(settings.Session.CSRFTokenPepper),
@@ -128,6 +154,8 @@ func main() {
 		Logger:         logger,
 		Production:     settings.App.Environment == "production",
 		TrustProxy:     settings.App.Environment == "production",
+		StaticDir:      settings.App.StaticDir,
+		Metrics:        metrics,
 	})
 	server := &http.Server{
 		Addr:              settings.App.HTTPAddress,

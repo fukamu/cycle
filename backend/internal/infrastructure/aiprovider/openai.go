@@ -13,6 +13,10 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 )
@@ -32,6 +36,8 @@ func NewOpenAIActionAI(apiKey, model string, timeout time.Duration) *OpenAIActio
 }
 
 func (provider *OpenAIActionAI) Generate(ctx context.Context, input appai.GenerateActionAIInput) (appai.GeneratedAction, error) {
+	ctx, span := provider.startSpan(ctx, "generate")
+	defer span.End()
 	format := responses.ResponseFormatTextConfigParamOfJSONSchema("pdcai_generated_actions", generateSchema())
 	format.OfJSONSchema.Strict = openai.Bool(true)
 	response, err := provider.client.Responses.New(ctx, responses.ResponseNewParams{
@@ -44,6 +50,7 @@ func (provider *OpenAIActionAI) Generate(ctx context.Context, input appai.Genera
 		Text:             responses.ResponseTextConfigParam{Format: format, Verbosity: responses.ResponseTextConfigVerbosityLow},
 	})
 	if err != nil {
+		span.SetStatus(codes.Error, "provider request failed")
 		return appai.GeneratedAction{}, mapOpenAIError(err)
 	}
 	result := appai.GeneratedAction{Usage: usageFromResponse(response)}
@@ -63,6 +70,8 @@ func (provider *OpenAIActionAI) Generate(ctx context.Context, input appai.Genera
 }
 
 func (provider *OpenAIActionAI) Refine(ctx context.Context, input appai.RefineActionAIInput) (appai.RefinedAction, error) {
+	ctx, span := provider.startSpan(ctx, "refine")
+	defer span.End()
 	format := responses.ResponseFormatTextConfigParamOfJSONSchema("pdcai_refined_action", refineSchema())
 	format.OfJSONSchema.Strict = openai.Bool(true)
 	response, err := provider.client.Responses.New(ctx, responses.ResponseNewParams{
@@ -75,6 +84,7 @@ func (provider *OpenAIActionAI) Refine(ctx context.Context, input appai.RefineAc
 		Text:             responses.ResponseTextConfigParam{Format: format, Verbosity: responses.ResponseTextConfigVerbosityLow},
 	})
 	if err != nil {
+		span.SetStatus(codes.Error, "provider request failed")
 		return appai.RefinedAction{}, mapOpenAIError(err)
 	}
 	result := appai.RefinedAction{Usage: usageFromResponse(response)}
@@ -86,6 +96,13 @@ func (provider *OpenAIActionAI) Refine(ctx context.Context, input appai.RefineAc
 	}
 	result.Action = payload.RefinedAction
 	return result, nil
+}
+
+func (provider *OpenAIActionAI) startSpan(ctx context.Context, operation string) (context.Context, trace.Span) {
+	return otel.Tracer("pdcai/openai").Start(ctx, "openai.responses."+operation, trace.WithAttributes(
+		attribute.String("gen_ai.provider.name", "openai"),
+		attribute.String("gen_ai.request.model", string(provider.model)),
+	))
 }
 
 func generateSchema() map[string]any {

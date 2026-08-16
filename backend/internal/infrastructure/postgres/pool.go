@@ -17,6 +17,7 @@ func Open(ctx context.Context, settings config.DatabaseConfig) (*pgxpool.Pool, e
 	poolConfig.MaxConns = settings.MaxOpenConns
 	poolConfig.MinConns = min(settings.MaxIdleConns, settings.MaxOpenConns)
 	poolConfig.MaxConnLifetime = settings.ConnMaxLifetime
+	poolConfig.ConnConfig.Tracer = queryTracer{}
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open database pool: %w", err)
