@@ -10,11 +10,13 @@ import (
 	"syscall"
 	"time"
 
+	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
 	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
 	"github.com/matoruru/PDCAI/backend/internal/config"
 	"github.com/matoruru/PDCAI/backend/internal/httpapi"
+	"github.com/matoruru/PDCAI/backend/internal/infrastructure/aiprovider"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/postgres"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/system"
 )
@@ -56,12 +58,42 @@ func main() {
 	cycleService := appcycle.NewService(
 		postgres.NewCycleRepository(pool), system.Clock{}, random, []byte(settings.Session.TokenPepper),
 	)
+	tokenCounter, err := aiprovider.NewTokenCounter(settings.AI.TokenizerEncoding)
+	if err != nil {
+		logger.Error("AI tokenizer configuration failed", "error_class", "ai_tokenizer_invalid")
+		os.Exit(1)
+	}
+	var actionProvider appai.ActionAI = aiprovider.FakeActionAI{}
+	if settings.AI.APIKey != "" {
+		actionProvider = aiprovider.NewOpenAIActionAI(settings.AI.APIKey, settings.AI.Model, settings.AI.Timeout)
+	}
+	aiRepository := postgres.NewAIRepository(pool)
+	aiSettings := appai.Settings{
+		Provider: settings.AI.Provider, Model: settings.AI.Model,
+		MaxInputTokens: settings.AI.MaxInputTokens, MaxOutputTokens: settings.AI.MaxOutputTokens,
+		ProviderTimeout: settings.AI.Timeout, MaxProviderAttempts: settings.AI.MaxProviderAttempts,
+		MaxGenerationsPerUser24h: settings.AI.MaxGenerationsPerUser24h,
+		GeneratePromptVersion:    settings.AI.GeneratePromptVersion, RefinePromptVersion: settings.AI.RefinePromptVersion,
+		MonthlyBudgetUSD:     settings.AI.MonthlyBudgetUSD,
+		InputUSDPerMillion:   settings.AI.Pricing.InputUSDPerMillionTokens,
+		OutputUSDPerMillion:  settings.AI.Pricing.OutputUSDPerMillionTokens,
+		RatePerUserMinute:    settings.RateLimit.AIPerUserMinute,
+		RatePerSessionMinute: settings.RateLimit.AIPerSessionMinute,
+		RatePerIPMinute:      settings.RateLimit.AIPerIPMinute,
+		RateLimitHMACKey:     []byte(settings.Session.RateLimitHMACSecret),
+		LeaseDuration:        60 * time.Second,
+	}
+	contextBuilder := appai.NewContextBuilder(tokenCounter, settings.AI.MaxInputTokens)
+	generateAction := appai.NewGenerateActionUseCase(aiRepository, actionProvider, contextBuilder, system.Clock{}, random, aiSettings)
+	refineAction := appai.NewRefineActionUseCase(aiRepository, actionProvider, contextBuilder, system.Clock{}, random, aiSettings)
 	router := httpapi.NewRouter(httpapi.Dependencies{
-		Sessions:     sessionService,
-		Cycles:       cycleService,
-		RequestIDs:   random,
-		PublicOrigin: settings.App.PublicOrigin.String(),
-		Ready:        pool.Ping,
+		Sessions:       sessionService,
+		Cycles:         cycleService,
+		GenerateAction: generateAction,
+		RefineAction:   refineAction,
+		RequestIDs:     random,
+		PublicOrigin:   settings.App.PublicOrigin.String(),
+		Ready:          pool.Ping,
 	})
 	server := &http.Server{
 		Addr:              settings.App.HTTPAddress,

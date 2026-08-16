@@ -1,5 +1,6 @@
 import {
   activeCycleSchema,
+  aiActionSchema,
   completedDetailSchema,
   completedListSchema,
   completeCycleSchema,
@@ -47,6 +48,57 @@ export function completeCycle(
       csrfToken,
     },
   );
+}
+
+export type AIActionResponse = Awaited<ReturnType<typeof generateAction>>;
+
+export async function generateAction(
+  cycleId: string,
+  expectedContentRevision: number,
+  confirmReplace: boolean,
+  csrfToken: string,
+) {
+  return postAIWithNetworkRetry(
+    `/api/v1/cycles/${cycleId}/actions/generate`,
+    { expectedContentRevision, confirmReplace },
+    csrfToken,
+  );
+}
+
+export async function refineAction(
+  cycleId: string,
+  expectedContentRevision: number,
+  csrfToken: string,
+) {
+  return postAIWithNetworkRetry(
+    `/api/v1/cycles/${cycleId}/actions/refine`,
+    { expectedContentRevision },
+    csrfToken,
+  );
+}
+
+async function postAIWithNetworkRetry(
+  path: string,
+  body: unknown,
+  csrfToken: string,
+) {
+  const idempotencyKey = crypto.randomUUID();
+  try {
+    return await requestJSON(path, aiActionSchema, {
+      method: "POST",
+      body,
+      csrfToken,
+      idempotencyKey,
+    });
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return requestJSON(path, aiActionSchema, {
+      method: "POST",
+      body,
+      csrfToken,
+      idempotencyKey,
+    });
+  }
 }
 
 export function listCompletedCycles(

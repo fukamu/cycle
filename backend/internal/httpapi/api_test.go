@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
 	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
 	domaincycle "github.com/matoruru/PDCAI/backend/internal/domain/cycle"
@@ -83,6 +84,53 @@ func TestSaveFrameUsesAuthenticatedUser(t *testing.T) {
 	}
 }
 
+func TestGenerateActionRequiresIdempotencyAndUsesAuthenticatedScope(t *testing.T) {
+	t.Parallel()
+	sessions := &fakeSessionService{authenticated: appsession.AuthenticatedSession{ID: "session-id", UserID: user.ID(testUserID)}}
+	generate := &fakeGenerateActionService{result: appai.Result{
+		GenerationID: "00000000-0000-4000-8000-000000000010", Action: "1. 次の行動",
+		ContentRevision: 4, ActionRevision: 1,
+	}}
+	router := NewRouter(Dependencies{
+		Sessions: sessions, Cycles: &fakeCycleService{}, PublicOrigin: testOrigin,
+		GenerateAction: generate, RefineAction: &fakeRefineActionService{},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/cycles/"+testCycleID+"/actions/generate", strings.NewReader(`{"expectedContentRevision":3,"confirmReplace":false}`))
+	request.RemoteAddr = "192.0.2.10:4321"
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session"})
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", "valid-csrf")
+	request.Header.Set("Idempotency-Key", "00000000-0000-4000-8000-000000000008")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || generate.command.UserID != user.ID(testUserID) ||
+		generate.command.Scope.SessionID != "session-id" || generate.command.Scope.IP != "192.0.2.10" ||
+		!strings.Contains(response.Body.String(), `"action":"1. 次の行動"`) {
+		t.Fatalf("status/body/command = %d/%s/%#v", response.Code, response.Body.String(), generate.command)
+	}
+}
+
+func TestGenerateActionMapsBudgetFailure(t *testing.T) {
+	t.Parallel()
+	sessions := &fakeSessionService{authenticated: appsession.AuthenticatedSession{ID: "session-id", UserID: user.ID(testUserID)}}
+	router := NewRouter(Dependencies{
+		Sessions: sessions, Cycles: &fakeCycleService{}, PublicOrigin: testOrigin,
+		GenerateAction: &fakeGenerateActionService{err: appai.ErrServiceBudget}, RefineAction: &fakeRefineActionService{},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/cycles/"+testCycleID+"/actions/generate", strings.NewReader(`{"expectedContentRevision":3,"confirmReplace":false}`))
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session"})
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", "valid-csrf")
+	request.Header.Set("Idempotency-Key", "00000000-0000-4000-8000-000000000008")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "AI_SERVICE_BUDGET_EXCEEDED") {
+		t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
+	}
+}
+
 type fakeSessionService struct {
 	authenticated appsession.AuthenticatedSession
 	created       appsession.View
@@ -113,6 +161,23 @@ func (service *fakeSessionService) VerifyCSRF(_ appsession.AuthenticatedSession,
 type fakeCycleService struct {
 	saved     bool
 	savedUser user.ID
+}
+
+type fakeGenerateActionService struct {
+	command appai.GenerateCommand
+	result  appai.Result
+	err     error
+}
+
+func (service *fakeGenerateActionService) Execute(_ context.Context, command appai.GenerateCommand) (appai.Result, error) {
+	service.command = command
+	return service.result, service.err
+}
+
+type fakeRefineActionService struct{}
+
+func (*fakeRefineActionService) Execute(context.Context, appai.RefineCommand) (appai.Result, error) {
+	return appai.Result{}, errors.New("not implemented")
 }
 
 func (service *fakeCycleService) GetActive(context.Context, user.ID) (domaincycle.PDCACycle, error) {

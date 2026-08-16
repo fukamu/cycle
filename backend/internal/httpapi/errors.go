@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
 	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
@@ -44,6 +45,8 @@ func classifyError(err error) (int, string, string) {
 		return http.StatusServiceUnavailable, "ANTI_ABUSE_SERVICE_UNAVAILABLE", "現在、新しい利用を開始できません。しばらくしてからお試しください。"
 	case errors.Is(err, appcycle.ErrCycleNotFound):
 		return http.StatusNotFound, "CYCLE_NOT_FOUND", "サイクルが見つかりません。"
+	case errors.Is(err, appai.ErrTargetGone):
+		return http.StatusNotFound, "CYCLE_NOT_FOUND", "サイクルが見つかりません。"
 	case errors.Is(err, appcycle.ErrCycleNotCompleted):
 		return http.StatusConflict, "CYCLE_NOT_COMPLETED", "このサイクルはまだ完了していません。"
 	case errors.Is(err, appcycle.ErrInvalidCursor):
@@ -52,10 +55,28 @@ func classifyError(err error) (int, string, string) {
 		return http.StatusBadRequest, "VALIDATION_ERROR", "取得件数を確認してください。"
 	case errors.Is(err, domaincycle.ErrCycleNotActive):
 		return http.StatusConflict, "CYCLE_NOT_ACTIVE", "現在のサイクルを読み込み直してください。"
-	case errors.Is(err, domaincycle.ErrRevisionConflict):
+	case errors.Is(err, domaincycle.ErrRevisionConflict), errors.Is(err, appai.ErrRevisionConflict):
 		return http.StatusConflict, "CYCLE_REVISION_CONFLICT", "別の保存が先に反映されています。入力内容は保持されています。"
-	case errors.Is(err, domaincycle.ErrAIOperationRunning):
+	case errors.Is(err, domaincycle.ErrAIOperationRunning), errors.Is(err, appai.ErrOperationInProgress):
 		return http.StatusConflict, "AI_OPERATION_IN_PROGRESS", "AI処理の完了をお待ちください。"
+	case errors.Is(err, appai.ErrReplacementRequired):
+		return http.StatusConflict, "ACTION_REPLACEMENT_CONFIRMATION_REQUIRED", "現在のアクションを置き換える確認が必要です。"
+	case errors.Is(err, appai.ErrGenerateInputIncomplete):
+		return http.StatusBadRequest, "AI_GENERATE_INPUT_INCOMPLETE", "P/Dを入力し、実行後にCも記録してください。"
+	case errors.Is(err, appai.ErrRefineInputIncomplete):
+		return http.StatusBadRequest, "AI_REFINE_INPUT_INCOMPLETE", "P/D/C/Aをすべて入力してください。"
+	case errors.Is(err, appai.ErrUserRollingLimit):
+		return http.StatusTooManyRequests, "AI_USER_ROLLING_LIMIT_EXCEEDED", "直近24時間のAI利用上限に達しました。"
+	case errors.Is(err, appai.ErrRateLimit):
+		return http.StatusTooManyRequests, "AI_RATE_LIMIT_EXCEEDED", "短時間のAI利用が続いています。少し待ってお試しください。"
+	case errors.Is(err, appai.ErrServiceBudget):
+		return http.StatusServiceUnavailable, "AI_SERVICE_BUDGET_EXCEEDED", "現在AI機能を一時停止しています。"
+	case errors.Is(err, appai.ErrProviderTimeout):
+		return http.StatusGatewayTimeout, "AI_PROVIDER_TIMEOUT", "AI処理が時間内に完了しませんでした。もう一度お試しください。"
+	case errors.Is(err, appai.ErrInvalidResponse):
+		return http.StatusBadGateway, "AI_INVALID_RESPONSE", "AIの応答を確認できませんでした。もう一度お試しください。"
+	case errors.Is(err, appai.ErrProviderUnavailable):
+		return http.StatusServiceUnavailable, "AI_PROVIDER_UNAVAILABLE", "AIサービスに接続できません。もう一度お試しください。"
 	case errors.Is(err, domaincycle.ErrCycleIncomplete):
 		return http.StatusBadRequest, "CYCLE_COMPLETION_INPUT_INCOMPLETE", "P/D/C/Aをすべて入力してください。"
 	default:

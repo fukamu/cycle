@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
 	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
@@ -31,12 +32,22 @@ type CycleService interface {
 	ListCompleted(context.Context, user.ID, string, int) (appcycle.CompletedPage, error)
 }
 
+type GenerateActionService interface {
+	Execute(context.Context, appai.GenerateCommand) (appai.Result, error)
+}
+
+type RefineActionService interface {
+	Execute(context.Context, appai.RefineCommand) (appai.Result, error)
+}
+
 type Dependencies struct {
-	Sessions     SessionService
-	Cycles       CycleService
-	RequestIDs   ports.IDGenerator
-	PublicOrigin string
-	Ready        func(context.Context) error
+	Sessions       SessionService
+	Cycles         CycleService
+	GenerateAction GenerateActionService
+	RefineAction   RefineActionService
+	RequestIDs     ports.IDGenerator
+	PublicOrigin   string
+	Ready          func(context.Context) error
 }
 
 type api struct {
@@ -63,6 +74,10 @@ func NewRouter(dependencies Dependencies) http.Handler {
 			protected.Get("/cycles", server.listCompletedCycles)
 			protected.Get("/cycles/{cycleId}", server.getCompletedCycle)
 			protected.With(server.csrfMiddleware).Patch("/cycles/{cycleId}/frames/{frame}", server.saveFrame)
+			if dependencies.GenerateAction != nil && dependencies.RefineAction != nil {
+				protected.With(server.csrfMiddleware).Post("/cycles/{cycleId}/actions/generate", server.generateAction)
+				protected.With(server.csrfMiddleware).Post("/cycles/{cycleId}/actions/refine", server.refineAction)
+			}
 			protected.With(server.csrfMiddleware).Post("/cycles/{cycleId}/complete", server.completeCycle)
 		})
 	})

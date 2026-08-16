@@ -3,15 +3,23 @@ import { useMemo, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { completeCycle } from "../../../shared/api/cycles";
-import type { ActiveCycle, Frame } from "../../../shared/api/schemas";
+import type {
+  ActiveCycle,
+  AIActionResponse,
+  Frame,
+} from "../../../shared/api/schemas";
 import { formatActivePeriod } from "../../../shared/date/format";
+import { useAIProcessing } from "../../ai/aiProcessingContext";
 import { frameCopy } from "../copy";
 import type { DraftRecord } from "../draft/draftRepository";
 import { useAutoSave } from "../hooks/useAutoSave";
 import {
   canComplete,
+  canGenerate,
+  canRefine,
   codePointCount,
   disabledReason,
+  isNonBlank,
   type AIState,
   type FrameValues,
 } from "../model/eligibility";
@@ -33,7 +41,8 @@ export function CycleEditor({
 }: CycleEditorProps) {
   const queryClient = useQueryClient();
   const [selectedFrame, setSelectedFrame] = useState<Frame>("plan");
-  const [aiState] = useState<AIState>({ kind: "idle" });
+  const ai = useAIProcessing();
+  const aiState: AIState = ai.state;
   const defaultValues = useMemo<FrameValues>(() => {
     const values: Record<Frame, string> = {
       plan: cycle.plan,
@@ -44,7 +53,7 @@ export function CycleEditor({
     for (const draft of drafts) values[draft.frame] = draft.content;
     return values;
   }, [cycle, drafts]);
-  const { control } = useForm<FrameValues>({ defaultValues });
+  const { control, setValue } = useForm<FrameValues>({ defaultValues });
   const watchedValues = useWatch({ control });
   const values: FrameValues = {
     plan: watchedValues.plan ?? "",
@@ -102,6 +111,58 @@ export function CycleEditor({
       return;
     completeMutation.mutate();
   };
+  const applyAIResult = (result: AIActionResponse) => {
+    setValue("action", result.action, { shouldDirty: false });
+    autoSave.synchronizeFrame(
+      "action",
+      result.action,
+      result.actionRevision,
+      result.contentRevision,
+    );
+    queryClient.setQueryData(
+      ["active-cycle"],
+      (current: { cycle: ActiveCycle } | undefined) => {
+        if (current === undefined) return current;
+        return {
+          cycle: {
+            ...current.cycle,
+            action: result.action,
+            contentRevision: result.contentRevision,
+            frameRevisions: {
+              ...current.cycle.frameRevisions,
+              action: result.actionRevision,
+            },
+            actionUserModifiedAfterAI: false,
+          },
+        };
+      },
+    );
+  };
+  const generate = async () => {
+    const replacing = isNonBlank(values.action);
+    if (
+      replacing &&
+      !window.confirm(
+        cycle.actionUserModifiedAfterAI
+          ? "自分で編集した現在のAを、AI生成結果で置き換えますか？"
+          : "現在のAをAI生成結果で置き換えますか？",
+      )
+    ) {
+      return;
+    }
+    try {
+      applyAIResult(await ai.generate(cycle.contentRevision, replacing));
+    } catch {
+      // The provider keeps the existing A and exposes a user-facing error.
+    }
+  };
+  const refine = async () => {
+    try {
+      applyAIResult(await ai.refine(cycle.contentRevision));
+    } catch {
+      // The provider keeps the existing A and exposes a user-facing error.
+    }
+  };
 
   return (
     <main className="page editor-page">
@@ -137,6 +198,7 @@ export function CycleEditor({
               aria-describedby={`guide-${selectedFrame} count-${selectedFrame}`}
               placeholder={copy.placeholder}
               rows={12}
+              readOnly={selectedFrame === "action" && aiState.kind !== "idle"}
               onChange={(event) => {
                 if (codePointCount(event.target.value) > 2000) return;
                 field.onChange(event);
@@ -161,19 +223,37 @@ export function CycleEditor({
             <button
               type="button"
               className="secondary-button"
-              disabled
-              title="AI機能を接続中です"
+              disabled={!canGenerate(values, autoSave.saveState, aiState)}
+              onClick={() => void generate()}
             >
-              アクションを生成
+              {aiState.kind === "generating"
+                ? "生成しています…"
+                : "アクションを生成"}
             </button>
             <button
               type="button"
               className="secondary-button"
-              disabled
-              title="AI機能を接続中です"
+              disabled={!canRefine(values, autoSave.saveState, aiState)}
+              onClick={() => void refine()}
             >
-              AIで推敲
+              {aiState.kind === "refining" ? "推敲しています…" : "AIで推敲"}
             </button>
+            {aiState.kind !== "idle" && (
+              <p className="ai-status" aria-live="polite">
+                AIがAを準備しています。P/D/Cは引き続き編集できます。
+              </p>
+            )}
+            {ai.contextChanged && (
+              <p className="ai-notice" aria-live="polite">
+                P/D/C
+                がアクション生成開始後に変更されています。必要に応じて再生成してください。
+              </p>
+            )}
+            {ai.errorMessage !== null && (
+              <p className="inline-error" role="alert">
+                {ai.errorMessage}
+              </p>
+            )}
             {reason !== null && <p className="disabled-reason">{reason}</p>}
             <button
               type="button"

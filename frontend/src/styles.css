@@ -329,6 +329,32 @@ button:disabled {
   font-size: 0.78rem;
 }
 
+.ai-status,
+.ai-notice {
+  grid-column: 1 / -1;
+  margin: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.ai-status {
+  color: var(--ink-soft);
+  background: var(--surface-muted);
+}
+
+.ai-notice {
+  color: #7a5417;
+  background: #fff7dc;
+}
+
+textarea[readonly] {
+  color: var(--ink-soft);
+  background: var(--surface-muted);
+  cursor: progress;
+}
+
 .frame-tabs {
   position: fixed;
   z-index: 18;

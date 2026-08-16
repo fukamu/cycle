@@ -49,6 +49,15 @@ export const saveFrameSchema = z.object({
 });
 export type SaveFrameResponse = z.infer<typeof saveFrameSchema>;
 
+export const aiActionSchema = z.object({
+  generationId: uuidSchema,
+  action: z.string().min(1).max(2000),
+  contentRevision: z.number().int().nonnegative(),
+  actionRevision: z.number().int().nonnegative(),
+  contextChanged: z.boolean(),
+});
+export type AIActionResponse = z.infer<typeof aiActionSchema>;
+
 const completedSummarySchema = z.object({
   id: uuidSchema,
   sequenceNumber: z.number().int().positive(),

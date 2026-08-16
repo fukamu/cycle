@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { useSession } from "../features/auth/sessionContext";
+import { AIProcessingProvider } from "../features/ai/AIProcessingProvider";
 import { CycleEditor } from "../features/cycle-editor/components/CycleEditor";
 import {
   listCycleDrafts,
@@ -51,12 +52,17 @@ export function HomePage() {
     return <div className="app-message">サイクルを読み込んでいます…</div>;
   }
   return (
-    <CycleEditor
+    <AIProcessingProvider
       key={query.data.cycle.id}
-      cycle={query.data.cycle}
-      userId={session.user.id}
+      cycleId={query.data.cycle.id}
       csrfToken={session.csrfToken}
-      drafts={drafts.items}
-    />
+    >
+      <CycleEditor
+        cycle={query.data.cycle}
+        userId={session.user.id}
+        csrfToken={session.csrfToken}
+        drafts={drafts.items}
+      />
+    </AIProcessingProvider>
   );
 }
