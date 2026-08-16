@@ -1,0 +1,69 @@
+package httpapi
+
+import (
+	"net/http"
+
+	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
+)
+
+type sessionResponse struct {
+	User struct {
+		ID              string `json:"id"`
+		GoogleConnected bool   `json:"googleConnected"`
+	} `json:"user"`
+	CSRFToken     string `json:"csrfToken"`
+	ActiveCycleID string `json:"activeCycleId"`
+}
+
+type createAnonymousRequest struct {
+	BootstrapID    string `json:"bootstrapId"`
+	RecaptchaToken string `json:"recaptchaToken"`
+}
+
+func (server *api) getSession(writer http.ResponseWriter, request *http.Request) {
+	cookie, _ := request.Cookie(sessionCookieName)
+	view, err := server.dependencies.Sessions.Refresh(request.Context(), cookie.Value)
+	if err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	writeJSON(writer, http.StatusOK, mapSession(view))
+}
+
+func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Request) {
+	if !server.validOrigin(request) {
+		server.writeError(writer, request, appsession.ErrCSRFInvalid, nil)
+		return
+	}
+	if cookie, err := request.Cookie(sessionCookieName); err == nil {
+		if view, refreshErr := server.dependencies.Sessions.Refresh(request.Context(), cookie.Value); refreshErr == nil {
+			writeJSON(writer, http.StatusOK, mapSession(view))
+			return
+		}
+	}
+	var input createAnonymousRequest
+	if err := decodeJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, appsession.ErrBootstrapID, nil)
+		return
+	}
+	view, err := server.dependencies.Sessions.CreateAnonymous(request.Context(), appsession.CreateAnonymousInput{
+		BootstrapID: input.BootstrapID, RecaptchaToken: input.RecaptchaToken, RemoteAddress: request.RemoteAddr,
+	})
+	if err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	http.SetCookie(writer, &http.Cookie{
+		Name: sessionCookieName, Value: view.SessionToken, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	})
+	writeJSON(writer, http.StatusCreated, mapSession(view))
+}
+
+func mapSession(view appsession.View) sessionResponse {
+	var response sessionResponse
+	response.User.ID = string(view.UserID)
+	response.User.GoogleConnected = view.GoogleConnected
+	response.CSRFToken = view.CSRFToken
+	response.ActiveCycleID = view.ActiveCycleID
+	return response
+}
