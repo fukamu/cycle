@@ -1,0 +1,63 @@
+package config
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestLoadDevelopmentConfig(t *testing.T) {
+	t.Parallel()
+
+	config, err := Load(mapLookup(validEnvironment()))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if config.AI.MaxInputTokens != 12000 {
+		t.Fatalf("MaxInputTokens = %d", config.AI.MaxInputTokens)
+	}
+	if config.Database.MaxOpenConns != 10 {
+		t.Fatalf("MaxOpenConns = %d", config.Database.MaxOpenConns)
+	}
+}
+
+func TestLoadRejectsPricingModelMismatch(t *testing.T) {
+	t.Parallel()
+
+	environment := validEnvironment()
+	environment["AI_PRICE_MODEL"] = "different-model"
+	_, err := Load(mapLookup(environment))
+	if err == nil || !strings.Contains(err.Error(), "AI_MODEL and AI_PRICE_MODEL must match") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadRejectsInsecureProductionConfiguration(t *testing.T) {
+	t.Parallel()
+
+	environment := validEnvironment()
+	environment["APP_ENV"] = "production"
+	_, err := Load(mapLookup(environment))
+	if err == nil || !strings.Contains(err.Error(), "https") || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func validEnvironment() map[string]string {
+	return map[string]string{
+		"APP_ENV":                "development",
+		"PUBLIC_ORIGIN":          "http://localhost:5173",
+		"DATABASE_URL":           "postgres://pdcai:pdcai@localhost:5432/pdcai?sslmode=disable",
+		"SESSION_TOKEN_PEPPER":   "123456789012345678901234",
+		"CSRF_TOKEN_PEPPER":      "123456789012345678901234",
+		"BOOTSTRAP_ID_PEPPER":    "123456789012345678901234",
+		"RATE_LIMIT_HMAC_SECRET": "123456789012345678901234",
+		"RECAPTCHA_ENABLED":      "false",
+	}
+}
+
+func mapLookup(environment map[string]string) LookupEnv {
+	return func(key string) (string, bool) {
+		value, ok := environment[key]
+		return value, ok
+	}
+}
