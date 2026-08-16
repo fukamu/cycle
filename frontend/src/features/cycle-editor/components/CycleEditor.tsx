@@ -23,6 +23,10 @@ import {
   type AIState,
   type FrameValues,
 } from "../model/eligibility";
+import {
+  readFrameSelection,
+  writeFrameSelection,
+} from "../navigation/frameSelectionRepository";
 import { FrameTabs } from "./FrameTabs";
 import { SaveStatus } from "./SaveStatus";
 
@@ -40,7 +44,9 @@ export function CycleEditor({
   drafts,
 }: CycleEditorProps) {
   const queryClient = useQueryClient();
-  const [selectedFrame, setSelectedFrame] = useState<Frame>("plan");
+  const [selectedFrame, setSelectedFrame] = useState<Frame>(() =>
+    readFrameSelection(cycle.id),
+  );
   const ai = useAIProcessing();
   const aiState: AIState = ai.state;
   const defaultValues = useMemo<FrameValues>(() => {
@@ -105,6 +111,7 @@ export function CycleEditor({
   const selectFrame = (frame: Frame) => {
     autoSave.flush();
     setSelectedFrame(frame);
+    writeFrameSelection(cycle.id, frame);
   };
   const complete = () => {
     if (!window.confirm("このサイクルを完了し、次のサイクルへ進みますか？"))
@@ -188,12 +195,12 @@ export function CycleEditor({
           {copy.guide}
         </p>
         <Controller
+          key={selectedFrame}
           control={control}
           name={selectedFrame}
           render={({ field }) => (
             <textarea
               {...field}
-              key={selectedFrame}
               aria-label={`${copy.short} — ${copy.name}`}
               aria-describedby={`guide-${selectedFrame} count-${selectedFrame}`}
               placeholder={copy.placeholder}
