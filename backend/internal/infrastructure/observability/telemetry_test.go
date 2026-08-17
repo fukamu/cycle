@@ -19,7 +19,7 @@ func TestMetricsExposeRequiredInstruments(t *testing.T) {
 	t.Cleanup(func() {
 		_ = provider.Shutdown(context.Background())
 	})
-	metrics, err := NewMetrics([]float64{0.5, 0.8})
+	metrics, err := NewMetrics(nil, []float64{0.5, 0.8})
 	if err != nil {
 		t.Fatal(err)
 	}

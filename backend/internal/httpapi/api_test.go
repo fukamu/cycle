@@ -32,7 +32,7 @@ func TestAnonymousBootstrapSetsSecureOpaqueCookie(t *testing.T) {
 	router := NewRouter(Dependencies{Sessions: sessions, Cycles: &fakeCycleService{}, PublicOrigin: testOrigin})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/session/anonymous", strings.NewReader(`{
         "bootstrapId":"c683d6a9-6c10-44a0-b673-55b0ff3e6594",
-        "recaptchaToken":"test"
+        "turnstileToken":"test"
     }`))
 	request.Header.Set("Origin", testOrigin)
 	response := httptest.NewRecorder()

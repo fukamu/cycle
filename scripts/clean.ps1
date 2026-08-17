@@ -38,7 +38,8 @@ $safeTargets = @(
     "frontend/.eslintcache",
     "frontend/tsconfig.tsbuildinfo",
     "frontend/tsconfig.app.tsbuildinfo",
-    "frontend/tsconfig.node.tsbuildinfo"
+    "frontend/tsconfig.node.tsbuildinfo",
+    "cloudflare/.wrangler"
 )
 
 foreach ($target in $safeTargets) {
@@ -47,6 +48,7 @@ foreach ($target in $safeTargets) {
 
 if ($All) {
     Remove-GeneratedPath "frontend/node_modules"
+    Remove-GeneratedPath "cloudflare/node_modules"
 }
 
 Write-Host "Cleanup complete. Environment files, databases, Docker resources, and browser data were not touched."

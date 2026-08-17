@@ -5,14 +5,15 @@
 ## 前提環境
 
 - PowerShell 7（このリポジトリの補助スクリプトを使う場合）
-- Node.js 24以上、npm（lock fileは `frontend/package-lock.json`）
+- Node.js 24以上、npm（lock fileは `frontend/package-lock.json` と `cloudflare/package-lock.json`）
 - Go 1.26.6
 - PostgreSQL 17
 - sqlc 1.31.1（Backendの品質チェックとSQL生成に必要）
-- Docker（PostgreSQLの簡易起動とproduction imageのbuildに使う場合）
+- Docker（PostgreSQLの簡易起動とCloudflare Container imageのbuildに使う場合）
 - Chromium（E2Eを実行する場合）
+- Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
 
-CIとproduction imageはNode.js 24、Go 1.26.6、PostgreSQL 17を前提にしています。ローカルでも同じ系列を使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlcは不要です。
+CIとContainer imageはNode.js 24、Go 1.26.6、PostgreSQL 17を前提にし、Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
 
 ## 初回セットアップ
 
@@ -22,7 +23,7 @@ CIとproduction imageはNode.js 24、Go 1.26.6、PostgreSQL 17を前提にして
 pwsh ./scripts/setup.ps1
 ```
 
-このスクリプトはNode/Goのバージョンを確認し、未作成の場合だけ `.env.example` から `.env`、`frontend/.env.example` から `frontend/.env.local` を作り、`npm ci` を実行します。既存の環境ファイルを上書きしません。依存関係を入れず環境ファイルだけ準備する場合は `-SkipInstall` を指定できます。
+このスクリプトはNode/Goのバージョンを確認し、未作成の場合だけ `.env.example` から `.env`、`frontend/.env.example` から `frontend/.env.local` を作り、Frontend/Cloudflareの`npm ci`とBackendの`go mod download`を実行します。既存の環境ファイルを上書きしません。依存関係を入れず環境ファイルだけ準備する場合は `-SkipInstall` を指定できます。
 
 `.env` の4つのpepper/HMAC値は、ローカルでも24文字以上が必要です。example値をproductionで使ってはいけません。Frontendの `VITE_` 変数はブラウザへ公開されるため、秘密値を入れてはいけません。
 
@@ -72,7 +73,7 @@ npm run dev
 
 `http://localhost:5173` を開きます。Viteは `/api` を `http://localhost:8080` へproxyします。Frontend環境変数を変えたときはViteを再起動してください。
 
-Production相当の同一origin配信をローカルで確認する場合は、FrontendをbuildしてBackendへ静的assetsを渡します。
+Go Backend単体の同一origin配信fallbackをローカルで確認する場合は、FrontendをbuildしてBackendへ静的assetsを渡します。Cloudflare StagingではWorkerがstatic assetsを配信します。
 
 ```powershell
 Push-Location frontend
@@ -93,13 +94,14 @@ go run ./cmd/server
 pwsh ./scripts/check.ps1
 ```
 
-実行内容はFrontendのformat check、lint、typecheck、unit test、buildと、Backendのsqlc差分確認、gofmt、vet、test、server/migrate buildです。`TEST_DATABASE_URL` が未設定ならBackend integration testはskipされます。
+実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate build、Terraformのformat/init/validate、Wrangler config/typecheck/dry-runです。`TEST_DATABASE_URL` が未設定ならBackend integration testはskipされます。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
 
-FrontendまたはBackendだけを確認できます。
+Frontend、Backend、Infrastructureだけを確認できます。
 
 ```powershell
 pwsh ./scripts/check.ps1 -Scope frontend
 pwsh ./scripts/check.ps1 -Scope backend
+pwsh ./scripts/check.ps1 -Scope infrastructure
 ```
 
 Backend integration testには、消去してよい専用DBだけを指定してください。テストはschema内のapplication tableをdown/up migrationで作り直します。開発DBやproduction DBを指定してはいけません。
@@ -119,7 +121,7 @@ $env:TEST_DATABASE_URL = 'postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmo
 pwsh ./scripts/check.ps1 -E2E
 ```
 
-Playwright自身の既定portは55432です。このリポジトリのDocker例は5432なので、上記のように `TEST_DATABASE_URL` を明示してください。E2EではGoogle Identity、reCAPTCHA、OpenAIのtest doubleを使い、外部APIを呼びません。
+Playwright自身の既定portは55432です。このリポジトリのDocker例は5432なので、上記のように `TEST_DATABASE_URL` を明示してください。E2EではGoogle Identity、Turnstile、OpenAIのtest doubleを使い、外部APIを呼びません。
 
 CIと同じ個別コマンドが必要な場合は [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) を参照してください。
 

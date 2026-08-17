@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("all", "frontend", "backend")]
+    [ValidateSet("all", "frontend", "backend", "infrastructure")]
     [string]$Scope = "all",
     [switch]$E2E
 )
@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $runFrontend = $Scope -in @("all", "frontend")
 $runBackend = $Scope -in @("all", "backend")
+$runInfrastructure = $Scope -in @("all", "infrastructure")
 
 if ($E2E -and $Scope -ne "all") {
     throw "E2E requires -Scope all because it starts both the frontend build and backend server."
@@ -76,10 +77,60 @@ if ($runBackend) {
         $buildDir = Join-Path $repoRoot ".tmp/check"
         New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
         $suffix = if ($IsWindows -or $env:OS -eq "Windows_NT") { ".exe" } else { "" }
-        Invoke-Checked go build -o (Join-Path $buildDir "server$suffix") ./cmd/server
-        Invoke-Checked go build -o (Join-Path $buildDir "migrate$suffix") ./cmd/migrate
+        Invoke-Checked -Command go -Arguments @("build", "-o", (Join-Path $buildDir "server$suffix"), "./cmd/server")
+        Invoke-Checked -Command go -Arguments @("build", "-o", (Join-Path $buildDir "migrate$suffix"), "./cmd/migrate")
     }
     finally {
+        Pop-Location
+    }
+}
+
+if ($runInfrastructure) {
+    Assert-Command "terraform"
+    Assert-Command "npm"
+    $terraformDataDirWasSet = Test-Path Env:TF_DATA_DIR
+    $previousTerraformDataDir = $env:TF_DATA_DIR
+    $env:TF_DATA_DIR = Join-Path $repoRoot ".tmp/terraform-check"
+    Push-Location (Join-Path $repoRoot "infra/terraform/staging")
+    try {
+        Invoke-Checked terraform fmt -check -recursive .
+        Invoke-Checked terraform init -backend=false -input=false
+        Invoke-Checked terraform validate
+    }
+    finally {
+        Pop-Location
+        if ($terraformDataDirWasSet) {
+            $env:TF_DATA_DIR = $previousTerraformDataDir
+        }
+        else {
+            Remove-Item Env:TF_DATA_DIR -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "frontend/node_modules"))) {
+        throw "frontend/node_modules is missing. Run pwsh ./scripts/setup.ps1 first."
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "frontend/dist"))) {
+        Push-Location (Join-Path $repoRoot "frontend")
+        try {
+            Invoke-Checked npm run build
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "cloudflare/node_modules"))) {
+        throw "cloudflare/node_modules is missing. Run pwsh ./scripts/setup.ps1 first."
+    }
+    Push-Location (Join-Path $repoRoot "cloudflare")
+    try {
+        $previousXdgConfigHome = $env:XDG_CONFIG_HOME
+        $env:XDG_CONFIG_HOME = Join-Path $repoRoot "cloudflare/.wrangler/config"
+        Invoke-Checked npm run check
+        Invoke-Checked npm run deploy:dry-run
+    }
+    finally {
+        $env:XDG_CONFIG_HOME = $previousXdgConfigHome
         Pop-Location
     }
 }

@@ -71,7 +71,7 @@ type View struct {
 
 type CreateAnonymousInput struct {
 	BootstrapID    string
-	RecaptchaToken string
+	TurnstileToken string
 	RemoteAddress  string
 	UserAgent      string
 }
@@ -141,7 +141,7 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 		return View{}, ErrBootstrapID
 	}
 	if err := service.abuse.VerifyAnonymousCreation(ctx, ports.AnonymousAbuseInput{
-		RecaptchaToken: input.RecaptchaToken,
+		TurnstileToken: input.TurnstileToken,
 		RemoteAddress:  input.RemoteAddress,
 		UserAgent:      input.UserAgent,
 		BootstrapID:    input.BootstrapID,

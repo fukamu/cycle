@@ -2,74 +2,32 @@ package observability
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strconv"
 	"sync/atomic"
 	"time"
 
-	metricexporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric"
-	traceexporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
 	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 )
 
-// Setup installs the production Cloud Monitoring and Cloud Trace exporters.
-// Development and tests retain the OpenTelemetry no-op providers and therefore
-// never require Google credentials or external services.
-func Setup(ctx context.Context, enabled bool) (func(context.Context) error, error) {
-	if !enabled {
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{}, propagation.Baggage{},
-		))
-		return func(context.Context) error { return nil }, nil
-	}
-
-	res, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceName("pdcai-web"),
-	))
-	if err != nil {
-		return nil, fmt.Errorf("create telemetry resource: %w", err)
-	}
-	traceExporter, err := traceexporter.New()
-	if err != nil {
-		return nil, fmt.Errorf("create Cloud Trace exporter: %w", err)
-	}
-	metricExporter, err := metricexporter.New()
-	if err != nil {
-		return nil, fmt.Errorf("create Cloud Monitoring exporter: %w", err)
-	}
-
-	traces := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(traceExporter),
-		sdktrace.WithResource(res),
-	)
-	metrics := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(60*time.Second))),
-		sdkmetric.WithResource(res),
-	)
-	otel.SetTracerProvider(traces)
-	otel.SetMeterProvider(metrics)
+// Setup enables W3C trace propagation. Cloudflare automatically records the
+// Worker-to-Container request trace, while the Go service emits structured
+// application events to stdout for Workers Logs.
+func Setup() {
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{}, propagation.Baggage{},
 	))
-
-	return func(shutdownContext context.Context) error {
-		return errors.Join(metrics.Shutdown(shutdownContext), traces.Shutdown(shutdownContext))
-	}, nil
 }
 
 type Metrics struct {
+	logger               *slog.Logger
 	httpRequests         metric.Int64Counter
 	httpDuration         metric.Float64Histogram
 	autosaves            metric.Int64Counter
@@ -92,9 +50,9 @@ type Metrics struct {
 	warningThresholds    []float64
 }
 
-func NewMetrics(warningThresholds []float64) (*Metrics, error) {
+func NewMetrics(logger *slog.Logger, warningThresholds []float64) (*Metrics, error) {
 	meter := otel.Meter("pdcai")
-	result := Metrics{warningThresholds: append([]float64(nil), warningThresholds...)}
+	result := Metrics{logger: logger, warningThresholds: append([]float64(nil), warningThresholds...)}
 	var err error
 	if result.httpRequests, err = meter.Int64Counter("http_requests_total"); err != nil {
 		return nil, err
@@ -179,41 +137,48 @@ func (metrics *Metrics) ObserveAutosave(ctx context.Context, result string, dura
 	}
 	metrics.autosaves.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
 	metrics.autosaveDuration.Record(ctx, float64(duration.Microseconds())/1000)
+	metrics.log(ctx, "autosave", slog.String("result", result), slog.Int64("latency_ms", duration.Milliseconds()))
 }
 
 func (metrics *Metrics) CycleCompleted(ctx context.Context) {
 	if metrics != nil {
 		metrics.cyclesCompleted.Add(ctx, 1)
+		metrics.log(ctx, "cycle_completed")
 	}
 }
 
 func (metrics *Metrics) AccountUpgrade(ctx context.Context, result string) {
 	if metrics != nil {
 		metrics.accountUpgrades.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+		metrics.log(ctx, "account_upgrade", slog.String("result", result))
 	}
 }
 
 func (metrics *Metrics) AccountDelete(ctx context.Context, result string) {
 	if metrics != nil {
 		metrics.accountDeletes.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+		metrics.log(ctx, "account_delete", slog.String("result", result))
 	}
 }
 
 func (metrics *Metrics) AnonymousCreate(ctx context.Context, result string) {
 	if metrics != nil {
 		metrics.anonymousCreates.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+		metrics.log(ctx, "anonymous_create", slog.String("result", result))
 	}
 }
 
 func (metrics *Metrics) RateLimitRejected(ctx context.Context, scope string) {
 	if metrics != nil {
 		metrics.rateLimitRejected.Add(ctx, 1, metric.WithAttributes(attribute.String("scope", scope)))
+		metrics.log(ctx, "rate_limit_rejected", slog.String("scope", scope))
 	}
 }
 
 func (metrics *Metrics) ErrorCode(ctx context.Context, code string) {
 	if metrics != nil {
 		metrics.errorCodes.Add(ctx, 1, metric.WithAttributes(attribute.String("code", code)))
+		metrics.log(ctx, "error_code", slog.String("error_code", code))
 	}
 }
 
@@ -236,6 +201,13 @@ func (metrics *Metrics) ObserveAIGeneration(ctx context.Context, event appai.Obs
 	metrics.aiOutputTokens.Add(ctx, event.Usage.OutputTokens, model)
 	metrics.aiEstimatedCost.Add(ctx, event.EstimatedCostUSD, model)
 	metrics.aiContextCycleCount.Record(ctx, int64(event.ContextCycleCount))
+	metrics.log(ctx, "ai_generation",
+		slog.String("generation_type", string(event.Type)), slog.String("result", event.Result),
+		slog.String("ai_model", event.Model), slog.String("prompt_version", event.PromptVersion),
+		slog.Int64("input_tokens", event.Usage.InputTokens), slog.Int64("output_tokens", event.Usage.OutputTokens),
+		slog.Float64("estimated_cost_usd", event.EstimatedCostUSD), slog.Int64("latency_ms", event.Duration.Milliseconds()),
+		slog.Int("context_cycle_count", event.ContextCycleCount), slog.Bool("current_truncated", event.CurrentTruncated),
+	)
 	if event.CurrentTruncated {
 		metrics.aiCurrentTruncated.Add(ctx, 1)
 	}
@@ -246,7 +218,16 @@ func (metrics *Metrics) ObserveAIGeneration(ctx context.Context, event appai.Obs
 				metrics.budgetWarnings.Add(ctx, 1, metric.WithAttributes(
 					attribute.String("threshold", strconv.FormatFloat(threshold, 'f', -1, 64)),
 				))
+				metrics.log(ctx, "ai_budget_warning", slog.Float64("threshold", threshold), slog.Float64("usage_ratio", event.BudgetUsageRatio))
 			}
 		}
 	}
+}
+
+func (metrics *Metrics) log(ctx context.Context, event string, attributes ...slog.Attr) {
+	if metrics == nil || metrics.logger == nil {
+		return
+	}
+	base := []slog.Attr{slog.String("operation", event)}
+	metrics.logger.LogAttrs(ctx, slog.LevelInfo, "application metric", append(base, attributes...)...)
 }
