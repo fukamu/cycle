@@ -1,0 +1,269 @@
+name: Terraform Apply Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan_run_id:
+        description: Successful Terraform Plan Staging workflow run ID to approve
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: staging-terraform
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      artifact_name: ${{ steps.resolve.outputs.artifact_name }}
+      commit_sha: ${{ steps.resolve.outputs.commit_sha }}
+      plan_run_id: ${{ steps.resolve.outputs.plan_run_id }}
+    steps:
+      - name: Verify approver and resolve saved plan
+        id: resolve
+        shell: bash
+        env:
+          EXPECTED_APPROVER: ${{ vars.TERRAFORM_APPLY_APPROVER }}
+          GH_TOKEN: ${{ github.token }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != 'refs/heads/main' ]]; then
+            echo '::error::Terraform Apply is allowed only from main.'
+            exit 1
+          fi
+          if [[ -z "${EXPECTED_APPROVER}" ]]; then
+            echo '::error::Missing repository variable TERRAFORM_APPLY_APPROVER.'
+            exit 1
+          fi
+          if [[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]; then
+            echo "::error::Only configured approver ${EXPECTED_APPROVER} may run Terraform Apply; actor was ${GITHUB_ACTOR}."
+            exit 1
+          fi
+          if [[ ! "${PLAN_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Plan workflow run ID must be numeric: ${PLAN_RUN_ID}"
+            exit 1
+          fi
+
+          plan_run_json="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}"
+          )"
+          if ! jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            '.name == "Terraform Plan Staging" and
+             .path == ".github/workflows/terraform-plan.yml" and
+             .conclusion == "success" and
+             .head_branch == "main" and
+             .head_repository.full_name == $repository' \
+            <<< "${plan_run_json}" > /dev/null; then
+            echo "::error::Run ${PLAN_RUN_ID} is not a successful main Terraform Plan Staging run from this repository."
+            exit 1
+          fi
+
+          artifacts_json="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}/artifacts?per_page=100"
+          )"
+          mapfile -t artifact_names < <(
+            jq -r \
+              '.artifacts[]
+               | select(.expired == false)
+               | .name
+               | select(startswith("terraform-plan-staging-"))' \
+              <<< "${artifacts_json}"
+          )
+          if [[ "${#artifact_names[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one unexpired staging Terraform plan artifact in run ${PLAN_RUN_ID}."
+            exit 1
+          fi
+
+          artifact_name="${artifact_names[0]}"
+          commit_sha="${artifact_name#terraform-plan-staging-}"
+          if [[ ! "${commit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Plan artifact name does not contain a valid commit SHA: ${artifact_name}"
+            exit 1
+          fi
+
+          current_main_sha="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
+          if [[ "${commit_sha}" != "${current_main_sha}" ]]; then
+            echo "::error::Plan commit ${commit_sha} is stale; current main is ${current_main_sha}."
+            exit 1
+          fi
+
+          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+          echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"
+          echo "plan_run_id=${PLAN_RUN_ID}" >> "${GITHUB_OUTPUT}"
+
+  apply:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: staging-terraform-apply
+      url: https://pdcai.matoruru.com
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.TERRAFORM_CLOUDFLARE_API_TOKEN }}
+      COMMIT_SHA: ${{ needs.preflight.outputs.commit_sha }}
+      PLAN_ARTIFACT_NAME: ${{ needs.preflight.outputs.artifact_name }}
+      PLAN_RUN_ID: ${{ needs.preflight.outputs.plan_run_id }}
+      R2_STATE_BUCKET: ${{ vars.TERRAFORM_R2_STATE_BUCKET }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_cloudflare_account_id: ${{ vars.TERRAFORM_CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Verify approved plan is still main HEAD
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_main_sha="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
+          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
+            echo "::error::Approved plan commit ${COMMIT_SHA} is stale; current main is ${current_main_sha}."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+
+      - name: Download approved saved plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PLAN_ARTIFACT_NAME }}
+          path: infra/terraform/staging
+          github-token: ${{ github.token }}
+          run-id: ${{ env.PLAN_RUN_ID }}
+
+      - name: Verify saved plan integrity and commit
+        working-directory: infra/terraform/staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_commit="$(tr -d '\r\n' < staging.tfplan.commit-sha)"
+          if [[ "${artifact_commit}" != "${COMMIT_SHA}" ]]; then
+            echo "::error::Saved plan commit ${artifact_commit} does not match approved commit ${COMMIT_SHA}."
+            exit 1
+          fi
+          sha256sum --check staging.tfplan.sha256
+
+      - name: Validate Terraform deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY CLOUDFLARE_API_TOKEN
+            R2_STATE_BUCKET TF_VAR_cloudflare_account_id
+          )
+          missing=0
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing GitHub Terraform repository input: ${name}"
+              missing=1
+            fi
+          done
+          if [[ ! "${TF_VAR_cloudflare_account_id}" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "::error::TERRAFORM_CLOUDFLARE_ACCOUNT_ID must be 32 lowercase hexadecimal characters."
+            missing=1
+          fi
+          if [[ ! "${R2_STATE_BUCKET}" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]; then
+            echo "::error::TERRAFORM_R2_STATE_BUCKET must be a 3-63 character R2 bucket name."
+            missing=1
+          fi
+          exit "${missing}"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+
+      - name: Prepare ephemeral R2 backend configuration
+        shell: bash
+        env:
+          BACKEND_CONFIG: ${{ runner.temp }}/pdcai-staging-backend.hcl
+        run: |
+          set -euo pipefail
+          cp infra/terraform/staging/backend.hcl.example "${BACKEND_CONFIG}"
+          sed -i \
+            -e "s/<R2_STATE_BUCKET_NAME>/${R2_STATE_BUCKET}/g" \
+            -e "s/<CLOUDFLARE_ACCOUNT_ID>/${TF_VAR_cloudflare_account_id}/g" \
+            "${BACKEND_CONFIG}"
+
+      - name: Initialize Terraform
+        working-directory: infra/terraform/staging
+        run: terraform init -input=false -backend-config="${RUNNER_TEMP}/pdcai-staging-backend.hcl"
+
+      - name: Apply approved saved plan
+        working-directory: infra/terraform/staging
+        run: terraform apply -input=false -no-color staging.tfplan
+
+      - name: Publish apply result
+        working-directory: infra/terraform/staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          sitekey="$(terraform output -raw turnstile_sitekey)"
+          {
+            echo '## Terraform Apply completed'
+            echo
+            echo "- Commit: \`${COMMIT_SHA}\`"
+            echo "- Turnstile site key (public): \`${sitekey}\`"
+            echo '- `Deploy Staging` will start automatically from this successful workflow.'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Write deployment metadata
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/pdcai-terraform-apply"
+          printf '%s\n' "${COMMIT_SHA}" > "${RUNNER_TEMP}/pdcai-terraform-apply/commit-sha"
+
+      - name: Upload deployment metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-apply-staging-${{ env.COMMIT_SHA }}
+          path: ${{ runner.temp }}/pdcai-terraform-apply/commit-sha
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+      - name: Delete applied plan artifact
+        if: success()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_id="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}/artifacts?per_page=100" \
+              --jq ".artifacts[] | select(.name == \"${PLAN_ARTIFACT_NAME}\") | .id" \
+              | head -n 1
+          )"
+          if [[ -n "${artifact_id}" ]]; then
+            gh api \
+              --method DELETE \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+          fi

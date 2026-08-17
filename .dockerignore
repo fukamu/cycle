@@ -1,0 +1,16 @@
+.git
+.github
+.agents
+.codex
+.tmp/
+.tools/
+**/.tmp/
+**/.tools/
+frontend/node_modules
+frontend/dist
+frontend/playwright-report
+frontend/test-results
+backend/*.exe
+backend/coverage.out
+**/.env
+gha-creds-*.json

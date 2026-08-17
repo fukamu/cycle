@@ -1,0 +1,13 @@
+BEGIN;
+
+DROP TABLE IF EXISTS abuse_rate_buckets;
+DROP TABLE IF EXISTS ai_budget_monthly;
+DROP TABLE IF EXISTS ai_usage_events;
+DROP TABLE IF EXISTS ai_generations;
+DROP TABLE IF EXISTS pdca_cycles;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS auth_identities;
+DROP TABLE IF EXISTS anonymous_bootstraps;
+DROP TABLE IF EXISTS users;
+
+COMMIT;

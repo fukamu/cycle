@@ -1,0 +1,51 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+frontend/.npm-cache/
+cloudflare/node_modules/
+cloudflare/.wrangler/
+cloudflare/.dev.vars*
+cloudflare/worker-configuration.d.ts
+
+# Backend
+backend/bin/
+backend/coverage.out
+backend/*.exe
+backend/server
+backend/migrate
+*.tsbuildinfo
+
+# Local tooling
+.tools/
+.tmp/
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+gha-creds-*.json
+
+# Terraform local state and environment inputs
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+**/backend.hcl
+**/terraform.tfvars
+crash.log
+crash.*.log

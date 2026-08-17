@@ -1,0 +1,138 @@
+name: Terraform Plan Staging
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: staging-terraform
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.TERRAFORM_CLOUDFLARE_API_TOKEN }}
+      COMMIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      R2_STATE_BUCKET: ${{ vars.TERRAFORM_R2_STATE_BUCKET }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_cloudflare_account_id: ${{ vars.TERRAFORM_CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Verify manually dispatched commit has successful CI
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          successful_runs="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${COMMIT_SHA}&branch=main&status=success&per_page=1" \
+              --jq '.total_count'
+          )"
+          if [[ "${successful_runs}" -lt 1 ]]; then
+            echo "::error::No successful CI run found for main commit ${COMMIT_SHA}."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+
+      - name: Validate Terraform deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY CLOUDFLARE_API_TOKEN
+            R2_STATE_BUCKET TF_VAR_cloudflare_account_id
+          )
+          missing=0
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing GitHub Terraform repository input: ${name}"
+              missing=1
+            fi
+          done
+          if [[ ! "${TF_VAR_cloudflare_account_id}" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "::error::TERRAFORM_CLOUDFLARE_ACCOUNT_ID must be 32 lowercase hexadecimal characters."
+            missing=1
+          fi
+          if [[ ! "${R2_STATE_BUCKET}" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]; then
+            echo "::error::TERRAFORM_R2_STATE_BUCKET must be a 3-63 character R2 bucket name."
+            missing=1
+          fi
+          exit "${missing}"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+
+      - name: Prepare ephemeral R2 backend configuration
+        shell: bash
+        env:
+          BACKEND_CONFIG: ${{ runner.temp }}/pdcai-staging-backend.hcl
+        run: |
+          set -euo pipefail
+          cp infra/terraform/staging/backend.hcl.example "${BACKEND_CONFIG}"
+          sed -i \
+            -e "s/<R2_STATE_BUCKET_NAME>/${R2_STATE_BUCKET}/g" \
+            -e "s/<CLOUDFLARE_ACCOUNT_ID>/${TF_VAR_cloudflare_account_id}/g" \
+            "${BACKEND_CONFIG}"
+
+      - name: Initialize and validate Terraform
+        working-directory: infra/terraform/staging
+        run: |
+          terraform fmt -check
+          terraform init -input=false -backend-config="${RUNNER_TEMP}/pdcai-staging-backend.hcl"
+          terraform validate
+
+      - name: Create saved Terraform plan
+        working-directory: infra/terraform/staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform plan -input=false -no-color -out=staging.tfplan
+          sha256sum staging.tfplan > staging.tfplan.sha256
+          printf '%s\n' "${COMMIT_SHA}" > staging.tfplan.commit-sha
+
+      - name: Upload saved Terraform plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-staging-${{ env.COMMIT_SHA }}
+          path: |
+            infra/terraform/staging/staging.tfplan
+            infra/terraform/staging/staging.tfplan.sha256
+            infra/terraform/staging/staging.tfplan.commit-sha
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+      - name: Publish review instructions
+        shell: bash
+        run: |
+          {
+            echo '## Terraform Plan ready for review'
+            echo
+            echo "- Commit: \`${COMMIT_SHA}\`"
+            echo "- Plan workflow run: \`${GITHUB_RUN_ID}\`"
+            echo '- Review the `Create saved Terraform plan` log, then manually run `Terraform Apply Staging` with this Plan workflow run ID.'
+            echo '- The saved plan expires after 7 days; rerun Plan after expiry.'
+          } >> "${GITHUB_STEP_SUMMARY}"
