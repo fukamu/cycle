@@ -115,9 +115,9 @@ TERRAFORM_APPLY_APPROVER
 
 - `TERRAFORM_CLOUDFLARE_ACCOUNT_ID`: 32文字lowercase hexadecimal account ID。credentialではない。
 - `TERRAFORM_R2_STATE_BUCKET`: manual bootstrap済みの専用private bucket名。credentialではない。
-- `TERRAFORM_APPLY_APPROVER`: `staging-terraform-apply` Required reviewerへ登録したGitHub user loginと完全に同じ値。
+- `TERRAFORM_APPLY_APPROVER`: Plan review後に`Terraform Apply Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorと照合する。
 
-GitHub Environment `staging-terraform-apply`はsecret/variableの保管場所ではなくApply approval gateです。Deployment branchを`main`だけに制限し、`TERRAFORM_APPLY_APPROVER`のuserをRequired reviewerへ設定します。Workflow preflightがruleを検査し、不一致・未設定ではApplyしません。
+GitHub Environment `staging-terraform-apply`はsecret/variableの保管場所ではありません。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateとしてEnvironmentを設定します。Workflow preflightはactorと`TERRAFORM_APPLY_APPROVER`を照合し、不一致・未設定ではApplyしません。
 
 ## GitHub `staging` Environment
 

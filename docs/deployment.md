@@ -71,7 +71,6 @@ Worker/ContainerをTerraformとWranglerの両方で管理しません。Applicat
 - Cloudflareで`matoruru.com` zoneがActiveであること。
 - Cloudflare Workers Paid planを有効にすること。ContainersはPaid planが必要です。
 - GitHub repositoryのdefault branchが`main`で、CIがgreenであること。
-- GitHub planがrepositoryの[Required reviewers](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#required-reviewers)をsupportすること。Public repositoryではcurrent planで利用でき、private/internal repositoryではGitHub Enterpriseが必要です。
 - Local bootstrapにはTerraform 1.15.8、Node.js 24、npm、Gitを使うこと。
 - Cloudflare、Neon、Google、OpenAI、GitHubへ必要最小権限でaccessできること。
 
@@ -118,9 +117,9 @@ TERRAFORM_R2_STATE_BUCKET
 TERRAFORM_APPLY_APPROVER=<your GitHub login>
 ```
 
-GitHub Environment `staging-terraform-apply`を作成し、Deployment branchesを`main`へ制限します。Required reviewersへ`TERRAFORM_APPLY_APPROVER`と同じuserを1名指定します。Workflow起動者本人が承認者になる運用では`Prevent self-review`を有効にしません。Workflow preflightはEnvironment APIを読み、指定userのRequired reviewer ruleがなければApply jobを開始しません。
+`Terraform Apply Staging`は自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人がActions画面からmanual dispatchし、対象の`Terraform Plan Staging` run IDを入力します。Workflow preflightはactor、Plan workflow、repository、成功状態、main、artifact、current main HEADを検査し、不一致ならcredentialを使うApply jobへ進みません。このmanual dispatchがすべてのGitHub planで必須のapproval gateです。
 
-GitHub Free/Pro/Teamのprivate repositoryではRequired reviewersを利用できません。この構成は承認なしへ自動fallbackせず停止します。RepositoryをpublicにするかGitHub Enterpriseを使うかはsecurity/cost判断なので、workflowを迂回せず先に決定します。
+追加のUI approvalを使えるGitHub planではEnvironment `staging-terraform-apply`を作成し、Deployment branchesを`main`へ制限して、Required reviewersへ`TERRAFORM_APPLY_APPROVER`と同じuserを指定します。本人がmanual dispatchとreviewの両方を行う場合は`Prevent self-review`を有効にしません。GitHub Free/Pro/Teamのprivate repositoryでは[Required reviewers](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#required-reviewers)を利用できないため、Environmentはunprotectedのままでもowner限定manual dispatch gateがApplyを保護します。
 
 通常のsequence:
 
@@ -130,15 +129,16 @@ CI (main HEAD)
    -> R2 state lock/read
    -> terraform plan -out=staging.tfplan
    -> SHA-256 + commit SHA付きartifact（7日）
+-> ownerがPlan run IDを指定してTerraform Apply Stagingをmanual dispatch
 -> Terraform Apply Staging preflight
-   -> Required reviewer設定、artifact、current main HEADを検証
--> staging-terraform-apply Environment approval
+   -> actor、source Plan、artifact、current main HEADを検証
+-> optional staging-terraform-apply Environment approval
 -> 同じartifactを再検証してterraform apply
 -> Apply metadata artifact
 -> Deploy Staging
 ```
 
-`Terraform Plan Staging`のlogでhostnameが`pdcai.matoruru.com`、modeがinvisible、destroy/replaceがないことを確認してから、`Terraform Apply Staging` runの`Review deployments`から承認します。Approval待ちの間にmainが進んだ場合はstale planとして停止し、新しいCI/Planを待ちます。Plan artifactはApply成功後に削除を試み、削除できなくても7日でexpireします。
+`Terraform Plan Staging`のlogでhostnameが`pdcai.matoruru.com`、modeがinvisible、destroy/replaceがないことを確認してから、そのPlan run IDで`Terraform Apply Staging`を実行します。Environment Required reviewerも設定した場合は、続けて`Review deployments`から承認します。Review中にmainが進んだ場合はstale planとして停止し、新しいCI/Planを待ちます。Plan artifactはApply成功後に削除を試み、削除できなくても7日でexpireします。
 
 Saved planはstateとresource値を含み得るsecret相当です。Artifactをdownload、転記、長期保存しません。Turnstile resourceが返すsecretもR2 stateへ含まれ得るため、R2 credentialとGitHub Actions accessを最小化します。Site keyはGitHub variableへ、secret keyはCloudflare DashboardからGitHub secretへ登録し、terminal/logへ出しません。
 
@@ -202,7 +202,7 @@ Pepper/HMACはそれぞれ別の暗号学的random値を生成し、24文字以�
 
 ## 7. GitHub Environment variables
 
-GitHub Environment `staging`を作り、deployment branchを`main`だけに制限します。Application deployにも別の承認を要求したい場合だけreviewerを設定します。Terraform Applyの必須承認は別Environment `staging-terraform-apply`が所有します。次のvariablesを [`environment.md`](environment.md) とinput sheetに基づいて明示します。
+GitHub Environment `staging`を作り、deployment branchを`main`だけに制限します。Application deployにも別の承認を要求したい場合だけreviewerを設定します。Terraform Applyの必須owner承認はmanual `Terraform Apply Staging`が所有し、対応planでは別Environment `staging-terraform-apply`のreviewerも追加できます。次のvariablesを [`environment.md`](environment.md) とinput sheetに基づいて明示します。
 
 ```text
 PUBLIC_ORIGIN=https://pdcai.matoruru.com
@@ -239,11 +239,11 @@ Workflowは空値と誤った`PUBLIC_ORIGIN`をdeploy前に拒否します。Exa
 
 ## 8. First CI/CD deployment
 
-1. §3のTerraform repository secrets/variablesと、`staging-terraform-apply` Required reviewerを設定する。
+1. §3のTerraform repository secrets/variablesを設定する。GitHub planが対応する場合は`staging-terraform-apply` Required reviewerも設定する。
 2. §6–7の`staging` Environment secrets/variablesを設定する。Turnstile widgetがまだ存在しない初回だけ、`TURNSTILE_SITE_KEY`と`TURNSTILE_SECRET_KEY`はApply後に設定する。
 3. この変更を`main`へmergeし、対象commitの`CI` workflowが成功したことを確認する。
 4. `Terraform Plan Staging`の`Create saved Terraform plan` logを確認する。
-5. `Terraform Apply Staging`のpreflight成功後、pending deploymentを開き`Review deployments`から承認する。
+5. Plan summaryに表示されたrun IDを入力し、`TERRAFORM_APPLY_APPROVER`本人が`Terraform Apply Staging`をRun workflowする。Environment reviewerも設定した場合はpending deploymentを開き`Review deployments`から承認する。
 6. Applyと`Deploy Staging`が次の順で自動完了することを確認する。初回Turnstile作成時はApply summaryのpublic site keyとCloudflare Dashboardのsecret keyを`staging`へ登録し、入力不足で停止したDeploy jobをrerunする。
 
 ```text

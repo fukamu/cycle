@@ -62,8 +62,8 @@
 | 症状                              | 原因候補                                                              | 確認方法                                        | 解決方法                                                                           |
 | --------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Terraform Planが開始しない        | main以外、同一SHAのCI未成功、workflow disabled | ActionsのCI/Plan conclusion、branch | mainの同一SHAでCIを成功させる。必要ならmainからPlanをmanual dispatchする |
-| Terraform Apply preflightで停止   | Required reviewer未設定、approver不一致、artifact期限切れ、mainが進んだ | `staging-terraform-apply` protection、repository variable、Plan run、errorのSHA | reviewerと`TERRAFORM_APPLY_APPROVER`を一致させる。stale/expiredなら最新mainでPlanを再作成し、approvalを迂回しない |
-| Terraform Applyがapproval待ち     | 正常なRequired reviewer gate | Apply runの`Review deployments` | Plan logを確認し、指定ownerがApprove/Rejectする。7日を超えたら新しいPlanを使う |
+| Terraform Apply preflightで停止   | actor/approver不一致、誤ったPlan run ID、artifact期限切れ、mainが進んだ | repository variable、Plan run、errorのSHA | 指定owner本人が成功Planのrun IDを入力する。stale/expiredなら最新mainでPlanを再作成し、approvalを迂回しない |
+| Terraform Applyがapproval待ち     | optional Required reviewer gateが有効 | Apply runの`Review deployments` | Plan logを確認し、指定ownerがApprove/Rejectする。7日を超えたら新しいPlanを使う |
 | Deployが開始しない                | Apply失敗、Apply metadataなし、mainが進んだ、workflow disabled | ActionsのApply/Deploy conclusion、errorのSHA | 最新mainのCI→Plan→Applyを成功させる。Terraform変更をmanual Deployで迂回しない |
 | Variable validationで停止         | `staging` Environment input未設定/誤origin | errorに出た変数名 | [`deployment.md`](deployment.md) input sheetで値を決めて設定。仮値禁止 |
 | Migration stepで停止              | Neon direct URL/branch/SQL error | workflowのmigration step、Neon state | Wrangler deploy前に停止済み。DB runbookに従い原因解消、force/resetしない |

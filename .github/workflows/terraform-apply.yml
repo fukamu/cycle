@@ -1,9 +1,12 @@
 name: Terraform Apply Staging
 
 on:
-  workflow_run:
-    workflows: [Terraform Plan Staging]
-    types: [completed]
+  workflow_dispatch:
+    inputs:
+      plan_run_id:
+        description: Successful Terraform Plan Staging workflow run ID to approve
+        required: true
+        type: string
 
 permissions:
   actions: write
@@ -15,10 +18,6 @@ concurrency:
 
 jobs:
   preflight:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -26,39 +25,46 @@ jobs:
       commit_sha: ${{ steps.resolve.outputs.commit_sha }}
       plan_run_id: ${{ steps.resolve.outputs.plan_run_id }}
     steps:
-      - name: Verify approval protection and resolve saved plan
+      - name: Verify approver and resolve saved plan
         id: resolve
         shell: bash
         env:
           EXPECTED_APPROVER: ${{ vars.TERRAFORM_APPLY_APPROVER }}
           GH_TOKEN: ${{ github.token }}
-          PLAN_RUN_ID: ${{ github.event.workflow_run.id }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
         run: |
           set -euo pipefail
+          if [[ "${GITHUB_REF}" != 'refs/heads/main' ]]; then
+            echo '::error::Terraform Apply is allowed only from main.'
+            exit 1
+          fi
           if [[ -z "${EXPECTED_APPROVER}" ]]; then
             echo '::error::Missing repository variable TERRAFORM_APPLY_APPROVER.'
             exit 1
           fi
+          if [[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]; then
+            echo "::error::Only configured approver ${EXPECTED_APPROVER} may run Terraform Apply; actor was ${GITHUB_ACTOR}."
+            exit 1
+          fi
+          if [[ ! "${PLAN_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Plan workflow run ID must be numeric: ${PLAN_RUN_ID}"
+            exit 1
+          fi
 
-          environment_json="$(
+          plan_run_json="$(
             gh api \
               -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/environments/staging-terraform-apply"
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}"
           )"
-          reviewer_found="$(
-            jq \
-              --arg expected "${EXPECTED_APPROVER}" \
-              '[.protection_rules[]?
-                | select(.type == "required_reviewers")
-                | .reviewers[]?
-                | select(.type == "User")
-                | .reviewer.login
-                | select(ascii_downcase == ($expected | ascii_downcase))]
-               | length' \
-              <<< "${environment_json}"
-          )"
-          if [[ "${reviewer_found}" -lt 1 ]]; then
-            echo "::error::Environment staging-terraform-apply must require reviewer ${EXPECTED_APPROVER}."
+          if ! jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            '.name == "Terraform Plan Staging" and
+             .path == ".github/workflows/terraform-plan.yml" and
+             .conclusion == "success" and
+             .head_branch == "main" and
+             .head_repository.full_name == $repository' \
+            <<< "${plan_run_json}" > /dev/null; then
+            echo "::error::Run ${PLAN_RUN_ID} is not a successful main Terraform Plan Staging run from this repository."
             exit 1
           fi
 

@@ -2880,7 +2880,8 @@ successful main CI:
   commit SHA付きsaved planを短期artifactとして保存
 
 Terraform Apply (same main HEAD / same saved plan only):
-  専用GitHub Environmentでrequired reviewer approval
+  設定済みowner本人がPlan run IDを指定してmanual dispatch
+  GitHub planが対応する場合はEnvironment reviewer approvalも要求
   承認されたsaved planをapply
 
 successful Terraform Apply:
@@ -2890,7 +2891,7 @@ successful Terraform Apply:
   smoke test /healthz + /readyz
 ```
 
-Plan、Apply、application deployはworkflowを分離するが、artifact metadataとmain HEAD検査で同じcommitへ固定する。ApplyはRequired reviewerに指定したownerの承認前にcredentialへ到達せず、承認後もmainが進んでいればstale planとして停止する。Migration成功後のみapplication deployへ進む。Backward-incompatible migrationはexpand/contractを使い、同deploy内で旧codeを即破壊しない。Feature branch・任意SHA・local developer credentialからのStaging deployは行わない。
+Plan、Apply、application deployはworkflowを分離するが、artifact metadataとmain HEAD検査で同じcommitへ固定する。Applyはrepository variableに指定したowner本人のmanual dispatchを必須とし、GitHub planが対応する場合はEnvironment Required reviewerも重ねる。承認待ちの間にmainが進んでいればstale planとして停止する。Migration成功後のみapplication deployへ進む。Backward-incompatible migrationはexpand/contractを使い、同deploy内で旧codeを即破壊しない。Feature branch・任意SHA・local developer credentialからのStaging deployは行わない。
 
 正式domain/Production resourceが未決のためProduction自動deployは持たない。`pdcai.io`を確定した時点でProduction専用Terraform state、Neon project、Turnstile widget、Google client、GitHub Environment、Wrangler configを追加し、Staging値を流用しない。
 
