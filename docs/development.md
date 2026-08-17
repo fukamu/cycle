@@ -94,7 +94,7 @@ go run ./cmd/server
 pwsh ./scripts/check.ps1
 ```
 
-実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate build、Terraformのformat/init/validate、Wrangler config/typecheck/dry-runです。`TEST_DATABASE_URL` が未設定ならBackend integration testはskipされます。Terraform validateはcredential不要の`backend=false` initializationを使います。
+実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate build、Terraformのformat/init/validate、Wrangler config/typecheck/dry-runです。`TEST_DATABASE_URL` が未設定ならBackend integration testはskipされます。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
 
 Frontend、Backend、Infrastructureだけを確認できます。
 

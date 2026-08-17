@@ -6,4 +6,6 @@ Terraform state uses the S3 backend against a manually bootstrapped, private R2 
 
 R2 is strongly consistent and supports the conditional `PutObject` operations used by Terraform's S3 lockfile. Cloudflare documents R2 as a supported Terraform remote backend, but HashiCorp only tests the S3 backend against Amazon S3. R2 also does not provide S3-style object version history. Keep the bucket and its scoped credential private, avoid concurrent manual applies, retain `use_lockfile = true`, and capture a protected state backup before risky state operations.
 
-The complete bootstrap, plan/apply review, secret handling, and deploy sequence is in [`docs/deployment.md`](../../../docs/deployment.md).
+`Terraform Plan Staging` creates a commit-bound saved plan after successful main CI. `Terraform Apply Staging` verifies the immutable artifact and current main HEAD, then waits on the protected `staging-terraform-apply` GitHub Environment before applying that exact plan. A successful Apply triggers the migration-first Wrangler/Container deployment. Local Apply is not the normal release path.
+
+The complete bootstrap, repository inputs, approval configuration, secret handling, and deploy sequence is in [`docs/deployment.md`](../../../docs/deployment.md).

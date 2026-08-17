@@ -26,7 +26,7 @@ Healthだけで機能正常を断定せず、5xx、latency、Container cold star
 
 ## Deploy後チェック
 
-1. commit SHA、Cloudflare deployment/version、Container rollout、migration workflow runをrelease記録へ残す。
+1. commit SHA、Terraform Plan/Apply runとapprover、Cloudflare deployment/version、Container rollout、migration workflow runをrelease記録へ残す。
 2. `/healthz`と`/readyz`が継続して200。
 3. Workers Logs/Tracesでstartup、DB connection、5xxが増えていない。
 4. 匿名session、autosave、reload、cycle completeを検証dataで確認。
@@ -82,10 +82,10 @@ Cloudflare DashboardでWorker `pdcai-staging`、deploy時刻/version、Container
 ## Environment / secret rotation
 
 1. [`environment.md`](environment.md)でserver/client、secret/public、validation、影響を確認。
-2. GitHub `staging` Environment secretを更新する。Terraform/R2/deploy tokenは用途別の保管先でrotateする。
+2. Application値はGitHub `staging` Environment、Terraform/R2 credentialはrepository secretsで用途別にrotateする。Apply approver変更はrepository variableとEnvironment Required reviewerを同時に更新する。
 3. 変更理由、時刻、所有者、失効確認を記録する。値自体は記録しない。
 4. `VITE_`対応値がある場合はFrontendを必ずrebuildする。
-5. `Deploy Staging`で新deploymentを作り、healthと代表操作を確認する。
+5. main CIからPlan/承認付きApply/`Deploy Staging`を通し、healthと代表操作を確認する。Application値だけの変更で再buildが必要な場合はmain HEADから`Deploy Staging`をmanual dispatchする。
 6. Pepper変更は既存session/tokenへ影響するため、移行影響の確認なしにrotateしない。
 
 ## Rollback decision

@@ -87,8 +87,37 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 | `CI` | Playwright behavior | CIが自動設定 |
 | `CLOUDFLARE_ACCOUNT_ID` | Wrangler account | GitHub secret（値自体はcredentialではない） |
 | `CLOUDFLARE_API_TOKEN` | Wrangler deploy auth | **GitHub secret**、deploy最小権限 |
-| `AWS_ACCESS_KEY_ID` | R2 S3 backend access ID | **operator environment only** |
-| `AWS_SECRET_ACCESS_KEY` | R2 S3 backend secret | **operator environment only** |
+| `AWS_ACCESS_KEY_ID` | R2 S3 backend access ID | **secret**、local operator environment / workflowが`TERRAFORM_R2_ACCESS_KEY_ID`から一時mapping |
+| `AWS_SECRET_ACCESS_KEY` | R2 S3 backend secret | **secret**、local operator environment / workflowが`TERRAFORM_R2_SECRET_ACCESS_KEY`から一時mapping |
+
+## GitHub Terraform repository inputs
+
+Terraform PlanとApplyだけが使います。Application `staging` EnvironmentやWorker/Containerへ渡しません。
+
+Repository secrets:
+
+```text
+TERRAFORM_CLOUDFLARE_API_TOKEN
+TERRAFORM_R2_ACCESS_KEY_ID
+TERRAFORM_R2_SECRET_ACCESS_KEY
+```
+
+- `TERRAFORM_CLOUDFLARE_API_TOKEN`: 対象accountのTurnstile Editだけにscopeする。
+- `TERRAFORM_R2_ACCESS_KEY_ID` / `TERRAFORM_R2_SECRET_ACCESS_KEY`: state bucketだけのObject Read/Write credential。PlanのlockfileとApplyのstate更新に必要。
+
+Repository variables:
+
+```text
+TERRAFORM_CLOUDFLARE_ACCOUNT_ID
+TERRAFORM_R2_STATE_BUCKET
+TERRAFORM_APPLY_APPROVER
+```
+
+- `TERRAFORM_CLOUDFLARE_ACCOUNT_ID`: 32文字lowercase hexadecimal account ID。credentialではない。
+- `TERRAFORM_R2_STATE_BUCKET`: manual bootstrap済みの専用private bucket名。credentialではない。
+- `TERRAFORM_APPLY_APPROVER`: `staging-terraform-apply` Required reviewerへ登録したGitHub user loginと完全に同じ値。
+
+GitHub Environment `staging-terraform-apply`はsecret/variableの保管場所ではなくApply approval gateです。Deployment branchを`main`だけに制限し、`TERRAFORM_APPLY_APPROVER`のuserをRequired reviewerへ設定します。Workflow preflightがruleを検査し、不一致・未設定ではApplyしません。
 
 ## GitHub `staging` Environment
 

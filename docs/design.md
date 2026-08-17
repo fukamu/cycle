@@ -2875,15 +2875,22 @@ PR / main push:
   Terraform fmt/validate
   Wrangler typecheck/dry-run
 
-manual Staging deploy (main HEAD + successful CI only):
-  GitHub Environment approval
+successful main CI:
+  Terraform PlanをR2 stateに対して作成
+  commit SHA付きsaved planを短期artifactとして保存
+
+Terraform Apply (same main HEAD / same saved plan only):
+  専用GitHub Environmentでrequired reviewer approval
+  承認されたsaved planをapply
+
+successful Terraform Apply:
   rebuild frontend
   run migration against Neon direct URL
   Wrangler deploy Worker + Container + static assets + runtime secrets
   smoke test /healthz + /readyz
 ```
 
-Migration成功後のみapplication deployへ進む。Backward-incompatible migrationはexpand/contractを使い、同deploy内で旧codeを即破壊しない。Feature branch・任意SHA・local developer credentialからのStaging deployは行わない。
+Plan、Apply、application deployはworkflowを分離するが、artifact metadataとmain HEAD検査で同じcommitへ固定する。ApplyはRequired reviewerに指定したownerの承認前にcredentialへ到達せず、承認後もmainが進んでいればstale planとして停止する。Migration成功後のみapplication deployへ進む。Backward-incompatible migrationはexpand/contractを使い、同deploy内で旧codeを即破壊しない。Feature branch・任意SHA・local developer credentialからのStaging deployは行わない。
 
 正式domain/Production resourceが未決のためProduction自動deployは持たない。`pdcai.io`を確定した時点でProduction専用Terraform state、Neon project、Turnstile widget、Google client、GitHub Environment、Wrangler configを追加し、Staging値を流用しない。
 
@@ -3308,6 +3315,8 @@ repository-root/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml
+│       ├── terraform-plan.yml
+│       ├── terraform-apply.yml
 │       └── deploy.yml
 ├── Dockerfile
 └── .gitignore

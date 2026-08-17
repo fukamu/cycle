@@ -1,6 +1,9 @@
 name: Deploy Staging
 
 on:
+  workflow_run:
+    workflows: [Terraform Apply Staging]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -12,15 +15,78 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      commit_sha: ${{ steps.resolve.outputs.commit_sha }}
+    steps:
+      - name: Resolve deployment commit
+        id: resolve
+        shell: bash
+        env:
+          APPLY_RUN_ID: ${{ github.event.workflow_run.id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == 'workflow_dispatch' ]]; then
+            if [[ "${GITHUB_REF}" != 'refs/heads/main' ]]; then
+              echo '::error::Manual Staging deployment is allowed only from main.'
+              exit 1
+            fi
+            commit_sha="${GITHUB_SHA}"
+          else
+            artifacts_json="$(
+              gh api \
+                -H 'Accept: application/vnd.github+json' \
+                "/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}/artifacts?per_page=100"
+            )"
+            mapfile -t artifact_names < <(
+              jq -r \
+                '.artifacts[]
+                 | select(.expired == false)
+                 | .name
+                 | select(startswith("terraform-apply-staging-"))' \
+                <<< "${artifacts_json}"
+            )
+            if [[ "${#artifact_names[@]}" -ne 1 ]]; then
+              echo "::error::Expected exactly one Terraform Apply deployment metadata artifact in run ${APPLY_RUN_ID}."
+              exit 1
+            fi
+            commit_sha="${artifact_names[0]#terraform-apply-staging-}"
+          fi
+
+          if [[ ! "${commit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Resolved deployment commit is not a valid SHA: ${commit_sha}"
+            exit 1
+          fi
+          current_main_sha="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
+          if [[ "${commit_sha}" != "${current_main_sha}" ]]; then
+            echo "::error::Deployment commit ${commit_sha} is stale; current main is ${current_main_sha}."
+            exit 1
+          fi
+          echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"
+
   deploy:
-    if: github.ref == 'refs/heads/main'
+    needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
       name: staging
       url: https://pdcai.matoruru.com
     env:
-      COMMIT_SHA: ${{ github.sha }}
+      COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
       PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
       GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
       TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}

@@ -25,7 +25,9 @@ PDCAI MVPの実装リポジトリです。Cloudflare WorkerがReact/Vite SPAをe
 - `cloudflare/`: Worker routing、Container、static assets、Wrangler config
 - `infra/terraform/staging/`: Staging LightのTurnstile widget（R2 backend、secret payload/deployは対象外）
 - `.github/workflows/ci.yml`: Frontend、Backend、Infrastructure、E2EのCI
-- `.github/workflows/deploy.yml`: Staging Lightのmanual migration-first Cloudflare deploy
+- `.github/workflows/terraform-plan.yml`: main CI成功後のTerraform saved plan
+- `.github/workflows/terraform-apply.yml`: owner承認後のsaved plan apply
+- `.github/workflows/deploy.yml`: Apply成功後のmigration-first Cloudflare deploy
 - `Dockerfile`: Cloudflare Container用non-root Go Backend image
 
 ## Prerequisites
@@ -86,4 +88,4 @@ Backend local値はGit管理外の `.env`、Frontendの公開build-time値は `f
 
 Pull requestとmainへのpushで`CI`がformat、lint、typecheck、unit/integration test、build、E2Eを実行します。CIはjob専用PostgreSQLとtest doubleを使い、productionへ接続しません。
 
-Staging Lightはmain HEADのCI成功後に`Deploy Staging`をmanual dispatchします。GitHub Environment approval後、Neon direct connectionでmigrationが成功した場合だけWranglerがWorker、Container、static assets、runtime secretsをdeployします。Production deploymentは正式domain `pdcai.io`と専用resourceが決まるまで未構築です。R2 Terraform backendを含む初回手順は [`docs/deployment.md`](docs/deployment.md) を参照してください。
+Staging Lightはmain HEADのCI成功後にTerraform Planを自動作成し、専用GitHub Environmentでownerが承認した同一saved planだけをApplyします。Apply成功後、Neon direct connectionでmigrationが成功した場合だけWranglerがWorker、Container、static assets、runtime secretsを自動deployします。Production deploymentは正式domain `pdcai.io`と専用resourceが決まるまで未構築です。GitHub Environment、R2 backend、repository secret/variableを含む初回手順は [`docs/deployment.md`](docs/deployment.md) を参照してください。

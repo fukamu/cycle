@@ -77,8 +77,8 @@ if ($runBackend) {
         $buildDir = Join-Path $repoRoot ".tmp/check"
         New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
         $suffix = if ($IsWindows -or $env:OS -eq "Windows_NT") { ".exe" } else { "" }
-        Invoke-Checked go build -o (Join-Path $buildDir "server$suffix") ./cmd/server
-        Invoke-Checked go build -o (Join-Path $buildDir "migrate$suffix") ./cmd/migrate
+        Invoke-Checked -Command go -Arguments @("build", "-o", (Join-Path $buildDir "server$suffix"), "./cmd/server")
+        Invoke-Checked -Command go -Arguments @("build", "-o", (Join-Path $buildDir "migrate$suffix"), "./cmd/migrate")
     }
     finally {
         Pop-Location
@@ -88,6 +88,9 @@ if ($runBackend) {
 if ($runInfrastructure) {
     Assert-Command "terraform"
     Assert-Command "npm"
+    $terraformDataDirWasSet = Test-Path Env:TF_DATA_DIR
+    $previousTerraformDataDir = $env:TF_DATA_DIR
+    $env:TF_DATA_DIR = Join-Path $repoRoot ".tmp/terraform-check"
     Push-Location (Join-Path $repoRoot "infra/terraform/staging")
     try {
         Invoke-Checked terraform fmt -check -recursive .
@@ -96,6 +99,12 @@ if ($runInfrastructure) {
     }
     finally {
         Pop-Location
+        if ($terraformDataDirWasSet) {
+            $env:TF_DATA_DIR = $previousTerraformDataDir
+        }
+        else {
+            Remove-Item Env:TF_DATA_DIR -ErrorAction SilentlyContinue
+        }
     }
 
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "frontend/node_modules"))) {
