@@ -1,155 +1,86 @@
 # PDCAI
 
-PDCAI MVP の実装リポジトリです。確定仕様、設計判断、制約の唯一の Source of Truth は [`docs/design.md`](docs/design.md) です。この README は仕様書ではなく、開発・検証・デプロイの手順書です。
+PDCAI MVPの実装リポジトリです。React/ViteのSPAとGo APIを同一originで配信し、PostgreSQLへcycleを保存します。
 
-## 構成
+アプリケーションの要件・仕様・設計に関する最上位のSource of Truthは [`docs/design.md`](docs/design.md) です。READMEは入口であり、仕様書ではありません。
 
-- `frontend/`: React 19、TypeScript、Vite、React Query、React Hook Form
-- `backend/`: Go HTTP API、Application/Domain、PostgreSQL adapter
-- `backend/migrations/`: PostgreSQL migration
-- `.github/workflows/ci.yml`: format、lint、unit/integration、E2E、build
-- `.github/workflows/deploy.yml`: migration-first の Cloud Run deploy
-- `Dockerfile`: Frontend と Backend を同一 origin で配信する production image
+## Documentation
+
+| テーマ                    | Source of Truth                                      |
+| ------------------------- | ---------------------------------------------------- |
+| 要件・仕様・設計          | [`docs/design.md`](docs/design.md)                   |
+| ローカル開発・test・clean | [`docs/development.md`](docs/development.md)         |
+| 環境変数                  | [`docs/environment.md`](docs/environment.md)         |
+| Database・Migration       | [`docs/database.md`](docs/database.md)               |
+| Deployment                | [`docs/deployment.md`](docs/deployment.md)           |
+| Production運用            | [`docs/operations.md`](docs/operations.md)           |
+| Troubleshooting           | [`docs/troubleshooting.md`](docs/troubleshooting.md) |
+| Coding agent向け規則      | [`AGENTS.md`](AGENTS.md)                             |
+
+## Repository
+
+- `frontend/`: React 19、TypeScript、Vite、Vitest、Playwright
+- `backend/`: Go API、PostgreSQL adapter、migration
+- `scripts/`: PowerShellのlocal setup/check/clean/reset補助
+- `.github/workflows/ci.yml`: Frontend、Backend、E2EのCI
+- `.github/workflows/deploy.yml`: migration-firstのCloud Run deploy
+- `Dockerfile`: FrontendとBackendを含むnon-root production image
 
 ## Prerequisites
 
+- PowerShell 7（補助scriptを使う場合）
+- Node.js 24以上とnpm
 - Go 1.26.6
-- Node.js 24 と npm
 - PostgreSQL 17
-- sqlc 1.31.1（SQL生成結果の検証・再生成時）
-- Docker（image build と PostgreSQL の簡易起動時）
-- Chromium（E2E。`npx playwright install chromium` で導入可能）
+- sqlc 1.31.1（Backend check/SQL生成）
+- Docker（local PostgreSQL/image buildに使う場合）
+- Chromium（E2Eに必要）
 
-## Environment setup
+詳細とversion根拠は [`docs/development.md`](docs/development.md) を参照してください。
 
-```powershell
-Copy-Item .env.example .env
-Copy-Item frontend/.env.example frontend/.env.local
-```
-
-`.env` の4つのpepper/HMAC secretは、開発用であっても24文字以上にします。Productionでは十分なentropyを持つ互いに異なる値をSecret Managerから渡してください。`OPENAI_API_KEY` が空のdevelopment/testでは決定的なFake AIを使います。`RECAPTCHA_ENABLED=false` はdevelopment/test専用です。
-
-Backendは意図的にdotenvを暗黙ロードしません。起動shellへ環境変数をexportしてください。PowerShellで単純な `KEY=VALUE` の `.env` を読み込む例です。
+## Quick start
 
 ```powershell
-Get-Content .env | Where-Object { $_ -match '^([^#][^=]*)=(.*)$' } | ForEach-Object {
-  [Environment]::SetEnvironmentVariable($Matches[1].Trim(), $Matches[2], 'Process')
-}
-```
-
-Frontendの公開build-time値は `frontend/.env.local` に置きます。秘密値は `VITE_` 変数へ入れないでください。
-
-## Database setup / migration
-
-ローカルの例では `pdcai` database/userを作り、`.env` の `DATABASE_URL` と一致させます。Dockerを使う場合は次のように起動できます。
-
-```powershell
+pwsh ./scripts/setup.ps1
 docker run --name pdcai-postgres -e POSTGRES_USER=pdcai -e POSTGRES_PASSWORD=pdcai -e POSTGRES_DB=pdcai -p 5432:5432 -d postgres:17-alpine
-```
-
-Migrationはadvisory lockとmigration ledgerを使い、各 `.up.sql` をtransaction内で一度だけ適用します。
-
-```powershell
-Set-Location backend
+. ./scripts/import-env.ps1
+Push-Location backend
 go run ./cmd/migrate
-```
-
-## Local development
-
-Terminal 1でAPIを起動します。
-
-```powershell
-Set-Location backend
 go run ./cmd/server
 ```
 
-Terminal 2でFrontendを起動します。
+別terminalでFrontendを起動します。
 
 ```powershell
-Set-Location frontend
-npm ci
+Push-Location frontend
 npm run dev
 ```
 
-既定では `http://localhost:5173` から `/api` がBackendへproxyされます。Session cookieは設計どおり常に `Secure` です。通常のブラウザではlocalhostをsecure contextとして扱います。
+`http://localhost:5173` を開きます。同名のPostgreSQL containerを以前作成済みなら、`docker run` の代わりに `docker start pdcai-postgres` を使います。既存 `.env` / `.env.local` はsetup scriptで上書きされません。
 
-Production相当の同一origin配信は、Frontendをbuildして `STATIC_DIR` を指定します。
+## Main commands
 
-```powershell
-Set-Location frontend
-npm run build
-Set-Location ../backend
-$env:PUBLIC_ORIGIN='http://localhost:8080'
-$env:STATIC_DIR=(Resolve-Path ../frontend/dist)
-go run ./cmd/server
-```
+| 用途                                  | Command                                                                            |
+| ------------------------------------- | ---------------------------------------------------------------------------------- |
+| 初回setup                             | `pwsh ./scripts/setup.ps1`                                                         |
+| Backend環境変数を現在のterminalへ読込 | `. ./scripts/import-env.ps1`                                                       |
+| 全品質check                           | `pwsh ./scripts/check.ps1`                                                         |
+| Frontend / Backendだけcheck           | `pwsh ./scripts/check.ps1 -Scope frontend` / `-Scope backend`                      |
+| E2Eを含むcheck                        | `pwsh ./scripts/check.ps1 -E2E`                                                    |
+| Safe clean                            | `pwsh ./scripts/clean.ps1`                                                         |
+| 依存関係を含むfull clean              | `pwsh ./scripts/clean.ps1 -All`                                                    |
+| Local Docker DB reset                 | `pwsh ./scripts/reset-local-db.ps1 -DatabaseName pdcai -ConfirmDatabaseName pdcai` |
 
-Livenessは `/healthz`、DB readinessは `/readyz` です。
+`TEST_DATABASE_URL`を使うBackend integration testとE2Eはtableを初期化します。消去してよい専用test DBだけを指定してください。
 
-## Test / lint / format
+Safe/full cleanは環境file、DB、Docker resource、browser dataを削除しません。DB resetは全データを削除する別のHigh impact commandです。実行前に [`docs/database.md`](docs/database.md) の警告と `-WhatIf` を使用してください。Production DBをresetするcommandはありません。
 
-Backend unit testは外部APIを呼びません。`TEST_DATABASE_URL` を設定するとPostgreSQL integration testも実行されます。テスト専用DBを指定してください。integration testはschemaを再作成します。
+## Environment
 
-```powershell
-Set-Location backend
-$env:TEST_DATABASE_URL='postgres://pdcai:pdcai@localhost:5432/pdcai_test?sslmode=disable'
-go test -count=1 ./...
-go vet ./...
-gofmt -l .
-sqlc compile
-sqlc generate
-git diff --exit-code
-```
+Backend local値はGit管理外の `.env`、Frontendの公開build-time値は `frontend/.env.local` に置きます。`VITE_` 変数はbrowserへ公開されるため秘密値を入れてはいけません。全変数、必須性、公開範囲、productionの設定場所は [`docs/environment.md`](docs/environment.md) を参照してください。
 
-Frontendの検証です。
+## CI/CD
 
-```powershell
-Set-Location frontend
-npm ci
-npm run format:check
-npm run lint
-npm run typecheck
-npm test
-npm run build
-```
+Pull requestとmainへのpushで`CI`がformat、lint、typecheck、unit/integration test、build、E2Eを実行します。CIはjob専用PostgreSQLとtest doubleを使い、productionへ接続しません。
 
-E2Eはbuilt Frontend、Go、空にしてよいPostgreSQL test database、Chromiumを使います。Google/reCAPTCHA/OpenAIはtest doubleです。
-
-```powershell
-Set-Location frontend
-npx playwright install chromium
-npm run build
-$env:TEST_DATABASE_URL='postgres://pdcai:pdcai@localhost:5432/pdcai_test?sslmode=disable'
-npm run test:e2e
-```
-
-## Container build
-
-```powershell
-docker build -t pdcai:local .
-docker run --rm --env-file .env pdcai:local /app/migrate
-docker run --rm --env-file .env -p 8080:8080 pdcai:local
-```
-
-ContainerからhostのPostgreSQLへ接続する場合は、`DATABASE_URL` のhostを環境に合わせて `host.docker.internal` 等へ変更します。Imageはdistroless/non-rootで、`/app/server`、`/app/migrate`、migration、Frontend assetsだけを含みます。
-
-## Deployment
-
-`main` のCI成功後、Deploy workflowが次の順で実行します。
-
-1. Artifact Registryへimmutable SHA tagのimageをpush
-2. Cloud Run migration jobをdeployして完了待ち
-3. migration成功時だけCloud Run serviceをdeploy
-4. `/healthz` と `/readyz` をsmoke test
-
-事前にTokyo region (`asia-northeast1`)へArtifact Registry、Cloud SQL for PostgreSQL、Secret Manager、Cloud Run service/job、reCAPTCHA Enterprise、Google OAuth clientを用意します。Runtime service accountにはCloud SQL接続、Secret参照、reCAPTCHA利用に加え、`roles/monitoring.metricWriter` と `roles/cloudtrace.agent` を最小scopeで付与します。Serviceはsmoke testとMVP利用のためpublic invocationを別途許可してください。
-
-GitHub Environment `production` に以下を設定します。
-
-- Secrets: `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOY_SERVICE_ACCOUNT`
-- Variables: `GCP_PROJECT_ID`, `GCP_RUNTIME_SERVICE_ACCOUNT`, `CLOUD_SQL_INSTANCE`, `PUBLIC_ORIGIN`, `GOOGLE_WEB_CLIENT_ID`, `RECAPTCHA_SITE_KEY`, `AI_MODEL`, `AI_PRICE_INPUT_USD_PER_MILLION`, `AI_PRICE_OUTPUT_USD_PER_MILLION`
-- Secret Manager: `PDCAI_DATABASE_URL`, `PDCAI_OPENAI_API_KEY`, `PDCAI_SESSION_TOKEN_PEPPER`, `PDCAI_CSRF_TOKEN_PEPPER`, `PDCAI_BOOTSTRAP_ID_PEPPER`, `PDCAI_RATE_LIMIT_HMAC_SECRET`
-
-`PDCAI_DATABASE_URL` はCloud RunからCloud SQLへ接続できるsupported connector/unix socket形式にします。Application Default CredentialsでOpenTelemetry metric/traceをCloud Monitoring/Cloud Traceへ送信し、JSON logはstdoutからCloud Loggingへ収集されます。本文、prompt/output、token、email、raw User ID/IPをlogやspan attributeへ加えないでください。
-
-Production開始前に `docs/design.md` の運用未決事項を確定します。具体的にはpublic domainと各site/client key、OpenAIモデル利用可否と当日のtoken単価、provider側spend/rate limit、Cloud SQL tier/connection数、Cloud Run最大instance数、backup retention、AI budget/rate/reCAPTCHA閾値、Monitoring alert閾値です。これらはProduct Ruleの未実装ではなく、環境ごとの運用設定です。
+mainのCI成功後、`Deploy` workflowが同じcommit SHAのimageをbuild/pushし、Cloud Run migration jobの成功後だけserviceを更新し、`/healthz`・`/readyz`をsmoke testします。Productionへ進む前に、domain、provider、capacity、backup、budget/rate/security threshold、alertsの未決値を必ず確定してください。手順と禁止事項は [`docs/deployment.md`](docs/deployment.md) を参照してください。
