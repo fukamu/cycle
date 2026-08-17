@@ -42,16 +42,17 @@ describe("past cycle number typography", () => {
     mocks.getCompletedCycle.mockResolvedValue({ cycle: completedCycle });
   });
 
-  it("uses the cycle sequence typography for list card numbers", async () => {
+  it("keeps the list card typography separate from detail headings", async () => {
     renderPage(
       "/cycles",
       <Route path="/cycles" element={<PastCyclesPage />} />,
     );
 
     const badge = await screen.findByText("07");
-    expect(badge).toHaveClass("cycle-card__number", "cycle-sequence");
+    expect(badge).toHaveClass("cycle-card__number");
+    expect(badge).not.toHaveClass("cycle-sequence");
     const heading = screen.getByRole("heading", { name: "Cycle 7" });
-    expect(heading.querySelector(".cycle-sequence")).toHaveTextContent("7");
+    expect(heading.querySelector(".cycle-sequence")).not.toBeInTheDocument();
   });
 
   it("uses the cycle sequence typography on the detail heading", async () => {

@@ -59,12 +59,6 @@ test("anonymous autosave, AI generation, completion, history, and deletion", asy
   await expect(page.getByRole("heading", { name: "Cycle 3" })).toBeVisible();
 
   await page.goto("/cycles");
-  await expect(
-    page.locator(".cycle-card__number.cycle-sequence", { hasText: "01" }),
-  ).toBeVisible();
-  await expect(
-    page.locator(".cycle-card h2 .cycle-sequence", { hasText: "1" }),
-  ).toBeVisible();
   await page.getByRole("link", { name: /Cycle 1/ }).click();
   await expect(page.locator(".page-heading h1 .cycle-sequence")).toHaveText(
     "1",

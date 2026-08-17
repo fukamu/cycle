@@ -3290,7 +3290,7 @@ Header:
 - period: active started local date + `〜`
 - right: hamburger
 
-**[設計判断]** Home、過去Cycle一覧、過去Cycle詳細で表示するCycle番号の数字部分は、Georgiaのold-style figuresによる数字ごとの高さ・ベースライン差を避けるため、Constantiaを第一候補とするscreen向けserif stackとlining figuresを使用する。過去Cycle一覧の左側に表示するゼロ埋め番号にも同じ指定を使用する。
+**[設計判断]** Homeと過去Cycle詳細で表示するCycle番号の数字部分は、Georgiaのold-style figuresによる数字ごとの高さ・ベースライン差を避けるため、Constantiaを第一候補とするscreen向けserif stackとlining figuresを使用する。過去Cycle一覧の番号にはこの指定を適用せず、一覧用の既存typographyを維持する。
 
 Main:
 
