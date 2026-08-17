@@ -451,7 +451,6 @@ textarea[readonly] {
 
 .cycle-card__number {
   color: var(--accent);
-  font-family: Georgia, serif;
   font-size: 1.5rem;
 }
 

@@ -42,11 +42,14 @@ export function PastCyclesPage() {
       <div className="cycle-list">
         {items.map((item) => (
           <Link className="cycle-card" to={`/cycles/${item.id}`} key={item.id}>
-            <div className="cycle-card__number">
+            <div className="cycle-card__number cycle-sequence">
               {String(item.sequenceNumber).padStart(2, "0")}
             </div>
             <div>
-              <h2>Cycle {item.sequenceNumber}</h2>
+              <h2>
+                Cycle{" "}
+                <span className="cycle-sequence">{item.sequenceNumber}</span>
+              </h2>
               <p className="cycle-card__date">
                 {formatCompletedPeriod(item.startedAt, item.completedAt)}
               </p>

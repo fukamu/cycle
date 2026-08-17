@@ -31,7 +31,9 @@ export function PastCycleDetailPage() {
       </Link>
       <header className="page-heading">
         <p className="eyebrow">COMPLETED</p>
-        <h1>Cycle {cycle.sequenceNumber}</h1>
+        <h1>
+          Cycle <span className="cycle-sequence">{cycle.sequenceNumber}</span>
+        </h1>
         <p>{formatCompletedPeriod(cycle.startedAt, cycle.completedAt)}</p>
       </header>
       <div className="detail-frames">
