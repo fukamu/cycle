@@ -37,7 +37,22 @@ func TestLoadRejectsInsecureProductionConfiguration(t *testing.T) {
 	environment := validEnvironment()
 	environment["APP_ENV"] = "production"
 	_, err := Load(mapLookup(environment))
-	if err == nil || !strings.Contains(err.Error(), "https") || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+	if err == nil || !strings.Contains(err.Error(), "https") || !strings.Contains(err.Error(), "OPENAI_API_KEY") || !strings.Contains(err.Error(), "Turnstile") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
+	t.Parallel()
+
+	environment := validEnvironment()
+	environment["APP_ENV"] = "production"
+	environment["PUBLIC_ORIGIN"] = "https://pdcai.matoruru.com"
+	environment["OPENAI_API_KEY"] = "test-openai-key"
+	environment["GOOGLE_WEB_CLIENT_ID"] = "test.apps.googleusercontent.com"
+	environment["TURNSTILE_ENABLED"] = "true"
+	environment["TURNSTILE_SECRET_KEY"] = "test-turnstile-secret"
+	if _, err := Load(mapLookup(environment)); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 }
@@ -51,7 +66,7 @@ func validEnvironment() map[string]string {
 		"CSRF_TOKEN_PEPPER":      "123456789012345678901234",
 		"BOOTSTRAP_ID_PEPPER":    "123456789012345678901234",
 		"RATE_LIMIT_HMAC_SECRET": "123456789012345678901234",
-		"RECAPTCHA_ENABLED":      "false",
+		"TURNSTILE_ENABLED":      "false",
 	}
 }
 

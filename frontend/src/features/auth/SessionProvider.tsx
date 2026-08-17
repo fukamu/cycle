@@ -7,8 +7,8 @@ import {
   clearBootstrapID,
   getOrCreateBootstrapID,
 } from "./bootstrapRepository";
-import { getAnonymousBootstrapToken } from "./recaptcha";
 import { ReplaceSessionContext, SessionContext } from "./sessionContext";
+import { getAnonymousBootstrapToken } from "./turnstile";
 
 async function loadSession(): Promise<Session> {
   try {
@@ -22,13 +22,13 @@ async function loadSession(): Promise<Session> {
     }
   }
   const bootstrapId = await getOrCreateBootstrapID();
-  const recaptchaToken = await getAnonymousBootstrapToken();
+  const turnstileToken = await getAnonymousBootstrapToken();
   const session = await requestJSON(
     "/api/v1/session/anonymous",
     sessionSchema,
     {
       method: "POST",
-      body: { bootstrapId, recaptchaToken },
+      body: { bootstrapId, turnstileToken },
     },
   );
   await clearBootstrapID();

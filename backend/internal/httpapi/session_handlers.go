@@ -17,7 +17,7 @@ type sessionResponse struct {
 
 type createAnonymousRequest struct {
 	BootstrapID    string `json:"bootstrapId"`
-	RecaptchaToken string `json:"recaptchaToken"`
+	TurnstileToken string `json:"turnstileToken"`
 }
 
 func (server *api) getSession(writer http.ResponseWriter, request *http.Request) {
@@ -54,7 +54,7 @@ func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	view, err := server.dependencies.Sessions.CreateAnonymous(request.Context(), appsession.CreateAnonymousInput{
-		BootstrapID: input.BootstrapID, RecaptchaToken: input.RecaptchaToken,
+		BootstrapID: input.BootstrapID, TurnstileToken: input.TurnstileToken,
 		RemoteAddress: server.remoteIP(request), UserAgent: request.UserAgent(),
 	})
 	if err != nil {

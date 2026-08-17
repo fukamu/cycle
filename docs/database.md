@@ -74,29 +74,25 @@ pwsh ./scripts/reset-local-db.ps1 -DatabaseName pdcai -ConfirmDatabaseName pdcai
 
 保持されるものは `.env`、Frontend環境・依存関係、Docker container自体、他のDB、browser dataです。Migrationに失敗した場合は空または途中状態のローカルDBが残る可能性があるため、errorを解消して `go run ./cmd/migrate` を再実行します。
 
-## Production migration
+## Staging / Production migration
 
-通常のproduction migrationをdeveloper PCから実行しません。[`deploy.yml`](../.github/workflows/deploy.yml) がimmutable imageからCloud Run Job `pdcai-migrate` を更新し、次の順序を強制します。
+通常のStaging/Production migrationをdeveloper PCから実行しません。Stagingは [`deploy.yml`](../.github/workflows/deploy.yml) がGitHub `staging` EnvironmentのNeon direct URLを一時的に `DATABASE_URL`へmapし、次の順序を強制します。
 
-1. migration jobをdeploy
-2. jobを実行し完了まで待つ
-3. 成功した場合だけapplication serviceをdeploy
+1. main HEADと同じSHAのCI成功を確認
+2. `go run ./cmd/migrate`をNeon direct URLに対して実行
+3. 成功した場合だけWranglerでWorker/Container/assetsをdeploy
 4. `/healthz` と `/readyz` を確認
 
-Migration jobはruntime service accountとCloud SQL attachmentを使い、Secret Managerの `PDCAI_DATABASE_URL` を `DATABASE_URL` として受け取ります。手動再実行が必要なincidentでは、接続URLをlocalへ取り出さず、権限を持つoperatorが次を実行します。
+Application runtimeはNeon pooled URL、migrationはdirect URLを使います。Migration URLはCloudflare Worker/Containerへ渡さず、runtime URLはmigrationへ流用しません。双方をGitHub `staging` Environment secretに置き、workflowは値を出力しません。
 
-```powershell
-gcloud run jobs execute pdcai-migrate --region asia-northeast1 --wait
-```
-
-これはproduction変更です。失敗原因と適用versionを確認せず繰り返してはいけません。
+手動再実行が必要なincidentでは通常deployを止め、対象Neon project/branch、head SHA、現在のschema version、失敗原因を確認した個別runbookを作ります。URLをlocalへ取り出したり、確認なしにworkflowを繰り返したりしません。Production pipelineは正式domain/resource決定後に別Environmentとして設計します。
 
 ## Destructive migration・rollback・backup
 
 - column/table削除、型の縮小、既存データ変換などは、同じreleaseでapplication rollbackを不可能にし得ます。expand/contractを使い、backupと復旧確認なしに実行しません。
 - Deploy失敗時にdown migrationを自動実行しません。application image/revisionのrollbackとDB schema rollbackは別判断です。
 - dirty versionを強制的に書き換える操作やproductionでのreset/drop/truncateを、汎用scriptとして提供しません。
-- production backup retentionとPITR設定は [`design.md`](design.md) §21・§54で正式値が未決です。初回production deploy前にCloud SQL tier、backup、PITR、保持期間、復元演習方法を決定する必要があります。
+- production restore windowと追加backup設定は [`design.md`](design.md) §21・§54で正式値が未決です。初回production deploy前にNeon plan/compute、restore window、保持期間、復元演習方法を決定する必要があります。
 - destructive migration前は、その決定済みpolicyに基づくbackupが成功しており、別instanceへのrestore手順が確認済みであることをrelease記録へ残します。
 
 Productionの復元やdata correctionが必要な場合は通常deployを止め、対象・時点・影響・承認・backupを確認した個別runbookを作成してください。既存仕様と矛盾するdata変更をその場で決めてはいけません。

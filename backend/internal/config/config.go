@@ -19,7 +19,7 @@ type Config struct {
 	Session   SessionConfig
 	AI        AIConfig
 	RateLimit RateLimitConfig
-	Recaptcha RecaptchaConfig
+	Turnstile TurnstileConfig
 	Google    GoogleConfig
 }
 
@@ -79,11 +79,9 @@ type RateLimitConfig struct {
 	AIPerIPMinute            int
 }
 
-type RecaptchaConfig struct {
+type TurnstileConfig struct {
 	Enabled        bool
-	ProjectID      string
-	SiteKey        string
-	ScoreThreshold float64
+	SecretKey      string
 	ExpectedAction string
 }
 
@@ -148,12 +146,10 @@ func Load(lookup LookupEnv) (Config, error) {
 			AIPerSessionMinute:       reader.intValue("RATE_AI_PER_SESSION_MINUTE", 3),
 			AIPerIPMinute:            reader.intValue("RATE_AI_PER_IP_MINUTE", 10),
 		},
-		Recaptcha: RecaptchaConfig{
-			Enabled:        reader.boolValue("RECAPTCHA_ENABLED", true),
-			ProjectID:      reader.stringValue("RECAPTCHA_PROJECT_ID", ""),
-			SiteKey:        reader.stringValue("RECAPTCHA_SITE_KEY", ""),
-			ScoreThreshold: reader.floatValue("RECAPTCHA_SCORE_THRESHOLD", 0.5),
-			ExpectedAction: reader.stringValue("RECAPTCHA_EXPECTED_ACTION", "anonymous_bootstrap"),
+		Turnstile: TurnstileConfig{
+			Enabled:        reader.boolValue("TURNSTILE_ENABLED", true),
+			SecretKey:      reader.stringValue("TURNSTILE_SECRET_KEY", ""),
+			ExpectedAction: reader.stringValue("TURNSTILE_EXPECTED_ACTION", "anonymous_bootstrap"),
 		},
 		Google: GoogleConfig{WebClientID: reader.stringValue("GOOGLE_WEB_CLIENT_ID", "")},
 	}
@@ -230,8 +226,8 @@ func (config Config) Validate() error {
 	if config.RateLimit.AnonymousCreatePerIPHour <= 0 || config.RateLimit.AnonymousCreatePerIP24h <= 0 || config.RateLimit.AIPerUserMinute <= 0 || config.RateLimit.AIPerSessionMinute <= 0 || config.RateLimit.AIPerIPMinute <= 0 {
 		problems = append(problems, "rate limits must be positive")
 	}
-	if config.Recaptcha.ScoreThreshold < 0 || config.Recaptcha.ScoreThreshold > 1 || config.Recaptcha.ExpectedAction == "" {
-		problems = append(problems, "reCAPTCHA threshold/action are invalid")
+	if config.Turnstile.ExpectedAction == "" {
+		problems = append(problems, "TURNSTILE_EXPECTED_ACTION is required")
 	}
 	if config.App.Environment == "production" {
 		if config.AI.APIKey == "" {
@@ -240,8 +236,8 @@ func (config Config) Validate() error {
 		if config.Google.WebClientID == "" {
 			problems = append(problems, "GOOGLE_WEB_CLIENT_ID is required in production")
 		}
-		if !config.Recaptcha.Enabled || config.Recaptcha.ProjectID == "" || config.Recaptcha.SiteKey == "" {
-			problems = append(problems, "reCAPTCHA must be fully configured in production")
+		if !config.Turnstile.Enabled || config.Turnstile.SecretKey == "" {
+			problems = append(problems, "Turnstile must be fully configured in production")
 		}
 	}
 	if len(problems) > 0 {

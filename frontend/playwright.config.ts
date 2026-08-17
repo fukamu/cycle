@@ -41,7 +41,7 @@ export default defineConfig({
       CSRF_TOKEN_PEPPER: "e2e-csrf-token-pepper-123456789",
       BOOTSTRAP_ID_PEPPER: "e2e-bootstrap-pepper-1234567890",
       RATE_LIMIT_HMAC_SECRET: "e2e-rate-limit-secret-123456789",
-      RECAPTCHA_ENABLED: "false",
+      TURNSTILE_ENABLED: "false",
     },
   },
 });

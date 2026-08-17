@@ -35,14 +35,15 @@
 
 ### 0.2 2026年時点の一次情報確認
 
-本書の技術選定のうち変化し得る事項は、2026-08-16 時点の公式情報を確認した。
+本書の技術選定のうち変化し得る事項は、2026-08-17 時点の公式情報を確認した。
 
 - React 公式: React 19.2 が公開済み。React公式は新規Reactアプリの構築手段としてVite等を案内している。
 - Google Identity Services: Google ID token は Backend で検証し、永続的なGoogle Account識別には `sub` を使用する。Emailを不変キーとして使用しない。
 - OpenAI: Responses API を主要APIとして利用可能。Structured Outputs は JSON Schema による厳格な出力制約を提供する。公式 Go SDK `github.com/openai/openai-go/v3` が Responses API / Structured Outputs を提供する。
 - OpenAI Model: MVP初期候補は低コスト系の `gpt-5-mini`。モデル名はConfigurationで置換可能とし、コードへ固定しない。
-- Hosting: Google Cloud Run はコンテナを実行するフルマネージド基盤で、Cloud SQL for PostgreSQL と統合可能。
-- Bot対策: Google Cloud reCAPTCHA の score-based key はユーザー操作なしにリスクスコアを返し、Backendでassessmentを検証できる。
+- Hosting: Cloudflare Workersは静的assetsとcustom domainをedge配信し、Cloudflare Containersは任意のOCI containerをWorkerから起動できる。ContainersはWorkers Paid planが必要で、初期releaseは明示的なinstance上限で運用する。
+- Bot対策: Cloudflare Turnstileはinvisible widgetを提供し、BackendでSiteverifyのtoken validity/action/hostnameを検証できる。
+- Database: Neonはserverless PostgreSQLとpooled/direct connection URLを提供する。Applicationはpooled URL、migrationはdirect URLを使い分ける。
 
 参照URLは「付録A. 外部一次情報」に記載する。
 
@@ -56,7 +57,7 @@
 
 - Frontend: TypeScript / React 19.2 / Vite SPA
 - Backend: Go / `net/http` + `chi`
-- Database: PostgreSQL / Cloud SQL
+- Database: PostgreSQL / Neon
 - DB access: `pgx/v5` + `sqlc`
 - Migration: `golang-migrate/migrate`
 - Frontend server state: TanStack Query v5
@@ -64,9 +65,9 @@
 - Frontend validation: Zod 4
 - Authentication: PDCAI独自のOpaque Session Cookie + Google Identity ServicesによるAccount Upgrade/Login
 - AI: OpenAI Responses API + Structured Outputs、公式 Go SDK
-- Hosting: 1つのCloud Run serviceがGo APIとビルド済みSPA静的ファイルを同一Origin配信
-- Observability: Cloud Logging / Cloud Monitoring + OpenTelemetry-compatible instrumentation
-- CI/CD: GitHub Actions → test/build → Artifact Registry → Cloud Run deploy
+- Hosting: Cloudflare WorkerがSPA静的assetsを配信し、同一OriginのAPIをCloudflare Container上のGo Backendへroute
+- Observability: Cloudflare Workers Logs / Traces + structured `slog` application metrics
+- CI/CD: GitHub Actions → test/build → DB migration → WranglerでWorker / Container / assetsをdeploy
 
 この構成はMicroservicesを採用せず、Domain / Application / Infrastructure の依存境界をGo packageで分離した**モジュラモノリス**とする。PostgreSQLのTransaction・row lock・partial unique indexを利用し、Active Cycle一意性、Cycle TransitionのAtomicity、AI二重実行、Auto Save orderingを保証する。
 
@@ -163,18 +164,20 @@
 flowchart LR
     U[Browser / React SPA]
     G[Google Identity Services]
-    R[reCAPTCHA score-based]
-    B[Go Backend on Cloud Run]
-    D[(Cloud SQL PostgreSQL)]
+    R[Cloudflare Turnstile]
+    W[Cloudflare Worker / static assets]
+    B[Go Backend in Cloudflare Container]
+    D[(Neon PostgreSQL)]
     O[OpenAI Responses API]
-    S[Secret Manager]
-    L[Cloud Logging / Monitoring]
+    S[Cloudflare Worker Secrets]
+    L[Workers Logs / Traces]
 
-    U -->|HTTPS same-origin JSON API| B
+    U -->|HTTPS same-origin| W
+    W -->|API / health route| B
     U -->|Google Sign-In UI| G
     U -->|risk token| R
     B -->|verify Google ID token| G
-    B -->|assessment| R
+    B -->|Siteverify| R
     B -->|SQL / transaction| D
     B -->|ActionGenerator port| O
     B -->|read secrets at runtime/deploy| S
@@ -192,7 +195,7 @@ Domain
     ↑
 Ports (Repository / AI / Clock / ID / AntiAbuse)
     ↑
-Infrastructure adapters (PostgreSQL / OpenAI / Google / reCAPTCHA)
+Infrastructure adapters (PostgreSQL / OpenAI / Google / Turnstile)
 ```
 
 Domain packageは以下へimportしてはならない。
@@ -201,12 +204,12 @@ Domain packageは以下へimportしてはならない。
 - PostgreSQL / pgx / sqlc
 - OpenAI SDK
 - Google SDK
-- reCAPTCHA SDK/API client
+- Turnstile Siteverify API client
 - Cloud-specific SDK
 
 ## 5.3 Deployment unit
 
-**[設計判断]** Frontend build artifact (`frontend/dist`) をBackend containerへ同梱し、Goが `/assets/*` と SPA fallbackを配信する。APIは `/api/v1/*`。同一OriginにすることでMVPではCORSを不要にする。
+**[設計判断]** Frontend build artifact (`frontend/dist`) はCloudflare Workers Static Assetsで配信する。Workerは `/api/*`、`/healthz`、`/readyz` だけをCloudflare ContainerのGo Backendへ転送し、その他はSPA fallbackとする。APIは `/api/v1/*`。Custom domain上では同一OriginとなるためMVPではCORSを不要にする。
 
 ---
 
@@ -959,7 +962,7 @@ Base path: `/api/v1`
 
 - Content-Type: `application/json; charset=utf-8`
 - Authentication: `__Host-pdcai_session` Secure HttpOnly Cookie
-- Unsafe method (`POST/PATCH/PUT/DELETE`) は `X-CSRF-Token` 必須。ただしanonymous bootstrapだけはsession未作成のためOrigin検証 + reCAPTCHA + rate limitで保護する。
+- Unsafe method (`POST/PATCH/PUT/DELETE`) は `X-CSRF-Token` 必須。ただしanonymous bootstrapだけはsession未作成のためOrigin検証 + Turnstile + rate limitで保護する。
 - 全Responseに `X-Request-ID` を付与。Client送信値は形式妥当なら引き継ぎ、なければServer生成。
 - FrontendはResponseを`unknown`としてZod schemaでparse/validateする。
 - BackendはJSON decode時にunknown fieldを原則拒否する (`DisallowUnknownFields`)。
@@ -1050,21 +1053,21 @@ Request:
 ```json
 {
   "bootstrapId": "c683d6a9-6c10-44a0-b673-55b0ff3e6594",
-  "recaptchaToken": "opaque-client-token"
+  "turnstileToken": "opaque-client-token"
 }
 ```
 
 Validation:
 
 - `bootstrapId`: UUID、Frontendが初回bootstrap前に生成しIndexedDBへ一時保持。
-- `recaptchaToken`: prodではrequired、dev/testではconfigによりtest adapter可。
+- `turnstileToken`: prodではrequired、dev/testではconfigによりtest adapter可。
 - Originがconfigured public originと一致。
 
 Processing:
 
 1. Existing valid sessionがあればそのまま返す。
 2. IPの生値を保存せず、`HMAC(rateLimitSecret, normalizedIP)`をrate-limit keyとする。
-3. reCAPTCHA assessmentをServer-sideで実行し、token validity/action/hostname/scoreを検証。
+3. Turnstile SiteverifyをServer-sideで実行し、token validity/action/hostnameを検証。Tokenはsingle-useかつ有効期限が短いため、network retryでは再取得する。
 4. anon-create rate limitを検査。
 5. `HMAC(bootstrapSecret, bootstrapId)`を`keyHash`にする。
 6. `anonymous_bootstraps.key_hash`を検索。有効期限内のrecordがあれば同Userへ新Sessionを発行してnetwork retryをidempotentにする。期限切れrecordは削除し認証には使わない。
@@ -1081,7 +1084,7 @@ Errors:
 - `503 ANTI_ABUSE_SERVICE_UNAVAILABLE`（fail-open/closedは後述）
 - `500 INTERNAL_ERROR`
 
-**Idempotency:** 同じ`bootstrapId`は**bootstrap TTL内だけ**同じUserへ収束する。`bootstrapId`は恒久Session credentialではない。異なるIDを大量生成する攻撃はreCAPTCHA + IP rate limit + service budget等の多層防御で抑止する。
+**Idempotency:** 同じ`bootstrapId`は**bootstrap TTL内だけ**同じUserへ収束する。`bootstrapId`は恒久Session credentialではない。異なるIDを大量生成する攻撃はTurnstile + IP rate limit + service budget等の多層防御で抑止する。
 
 ---
 
@@ -1677,9 +1680,9 @@ Actions: `キャンセル` / `削除する`。
 | Aggregate metrics without identifiers | No requirement | retain |
 | `ai_budget_monthly` | No | aggregate only |
 | Operational logs | raw User ID/PDCA本文を長期保存しない設計 | retention expire |
-| Cloud SQL backups | immediate physical purge不可 | normal backup retention expiry; deleted Userを通常環境へ個別restoreしない |
+| Neon backups / restore history | immediate physical purge不可 | configured restore window expiry; deleted Userを通常環境へ個別restoreしない |
 
-**[設計判断]** Production backup retention初期値は7日を推奨し、Cloud SQL/ops configurationで管理する。法務・運営ポリシーが別途定めた場合はそちらを優先する。
+**[設計判断]** Production restore window初期値は7日を推奨し、Neon projectの計画・設定とops configurationで管理する。選択planで実現できない場合はproduction releaseを止めて代替backupを設計する。法務・運営ポリシーが別途定めた場合はそちらを優先する。
 
 
 ---
@@ -2096,7 +2099,7 @@ Startup時にmodelとpricing configのmodelが不一致ならfail-fastする。P
 
 **[設計判断]** MVPは以下の多層防御を使う。
 
-1. reCAPTCHA score-based assessment: anonymous user creation
+1. Cloudflare Turnstile invisible challenge: anonymous user creation
 2. Distributed DB rate bucket: anon creation / AI sensitive endpoints
 3. User rolling AI limit
 4. Session rate limit
@@ -2120,21 +2123,21 @@ rate_limits:
     per_ip_per_minute: 10
 ```
 
-Rate limit keyにraw IPを保存しない。Trusted proxy（Cloud Run ingress）の`X-Forwarded-For`解釈を固定し、任意client headerを信頼しない。
+Rate limit keyにraw IPを保存しない。WorkerはCloudflareが付与する `CF-Connecting-IP` を正規化してBackendへ渡し、clientが送信した任意の `X-Forwarded-For` は破棄する。Backendはこの固定されたproxy boundaryだけを信頼する。
 
-## 29.3 reCAPTCHA
+## 29.3 Turnstile
 
-- score-based keyを使用し、通常はユーザーへchallenge UIを出さない。
+- invisible widgetを明示render/executeし、通常はユーザー操作を追加しない。Cloudflareが必要と判断した場合のchallengeは許容する。
 - expected action: `anonymous_bootstrap`
-- hostname/token validityを確認。
-- initial score threshold例: `0.5`（config）。
-- scoreだけでなくrate signalと組み合わせる。
-- productionでassessment serviceが停止した場合、**新規Anonymous User作成はfail-closed**とし、既存session userの利用は継続させる。AI cost暴走を優先して防ぐ。
+- hostname/token validity/actionを確認し、Siteverifyの`success=false`を拒否する。
+- tokenは5分間・single-useであり、Server-side validationを必須とする。
+- Turnstileだけでなくrate signalと組み合わせる。
+- productionでSiteverifyが停止した場合、**新規Anonymous User作成はfail-closed**とし、既存session userの利用は継続させる。AI cost暴走を優先して防ぐ。
 - local/testはFakeAntiAbuseVerifierをdependency injectionする。
 
 ## 29.4 UX trade-off
 
-常時checkbox CAPTCHAはMVPの「すぐ書き始められる」UXを損なうため採用しない。Score-based assessmentにより摩擦を抑えつつ、自動大量作成を難しくする。誤検知時には`ANONYMOUS_CREATION_BLOCKED`を返し、少し時間を空けて再試行する案内を出す。
+常時checkbox CAPTCHAはMVPの「すぐ書き始められる」UXを損なうため採用しない。Invisible Turnstileにより摩擦を抑えつつ、自動大量作成を難しくする。拒否時には`ANONYMOUS_CREATION_BLOCKED`を返し、少し時間を空けて再試行する案内を出す。
 
 ---
 
@@ -2359,7 +2362,7 @@ TanStack Query `useInfiniteQuery`を利用。
 - Google ID token verify: `google.golang.org/api/idtoken`
 - OpenAI: `github.com/openai/openai-go/v3`
 - Logging: standard `log/slog` JSON handler
-- Telemetry: OpenTelemetry Go SDK/API、Cloud Monitoring/Loggingへexport
+- Telemetry: OpenTelemetry Go API instrumentation + structured `slog`。収集・検索はCloudflare Workers Logs / Tracesを使用
 - Test: standard `testing`, `httptest`, actual PostgreSQL integration、Playwright E2EはFrontend側
 
 ## 35.2 Package structure
@@ -2400,7 +2403,7 @@ backend/
 │   │   │   └── transaction.go
 │   │   ├── openai/
 │   │   ├── googleauth/
-│   │   ├── recaptcha/
+│   │   ├── turnstile/
 │   │   ├── sessiontoken/
 │   │   └── telemetry/
 │   ├── httpapi/
@@ -2446,8 +2449,8 @@ Domain functionはDB/API/clockを直接呼ばない。必要な`now`等はApplic
 - Session token generation/hash
 - OpenAI request/response mapping
 - Google token validation
-- reCAPTCHA assessment
-- Cloud telemetry export
+- Turnstile Siteverify
+- structured application metrics / trace-safe attributes
 
 ## 35.6 HTTP Handler responsibilities
 
@@ -2627,15 +2630,15 @@ P/D/C/A、Refine source Aは仕事・生活・悩み等を含み得るため、�
 ## 41.2 Data in transit
 
 - production HTTPS only。
-- Cloud Run public endpoint/HTTPS load pathでTLS termination。
+- Cloudflare custom domain / edgeでTLS termination。
 - `Strict-Transport-Security`をproduction custom domainで有効化。
 - HTTP originはproductionで提供しない。
 
 ## 41.3 Data at rest
 
-- Cloud SQLのprovider-managed encryption at restを利用。
-- Secret Managerをsecret保管に利用。
-- App level field encryptionはMVPでは導入しない。理由はkey management/検索/削除/運用を複雑化し、Cloud SQL暗号化 + IAM最小権限でMVP要件を満たすため。
+- Neonのprovider-managed encryption at restを利用。
+- Runtime secretはCloudflare Worker Secret、migration用DB URLはGitHub Environment secret、Terraform backend credentialはoperator環境だけで保管する。
+- App level field encryptionはMVPでは導入しない。理由はkey management/検索/削除/運用を複雑化し、provider暗号化 + credential分離 + 最小権限でMVP要件を満たすため。
 - Backupもprovider encryption下に置く。
 
 ## 41.4 XSS
@@ -2644,7 +2647,7 @@ P/D/C/A、Refine source Aは仕事・生活・悩み等を含み得るため、�
 - `dangerouslySetInnerHTML`をPDCA本文/AI出力に使用禁止。
 - Markdown renderingはMVPでは行わない。
 - CSPを設定し、`unsafe-eval`禁止。可能な限り`unsafe-inline`も禁止。
-- Google Identity / reCAPTCHAに必要なscript/frame/connect originだけallowlistする。
+- Google Identity / Cloudflare Turnstileに必要なscript/frame/connect originだけallowlistする。
 - `X-Content-Type-Options: nosniff`。
 
 ## 41.5 CSP baseline
@@ -2654,9 +2657,9 @@ P/D/C/A、Refine source Aは仕事・生活・悩み等を含み得るため、�
 ```text
 Content-Security-Policy:
   default-src 'self';
-  script-src 'self' https://accounts.google.com https://www.google.com https://www.gstatic.com;
-  connect-src 'self' https://accounts.google.com https://www.google.com;
-  frame-src https://accounts.google.com https://www.google.com;
+  script-src 'self' https://accounts.google.com https://www.google.com https://www.gstatic.com https://challenges.cloudflare.com;
+  connect-src 'self' https://accounts.google.com https://www.google.com https://challenges.cloudflare.com;
+  frame-src https://accounts.google.com https://www.google.com https://challenges.cloudflare.com;
   img-src 'self' data: https:;
   style-src 'self';
   object-src 'none';
@@ -2687,14 +2690,15 @@ Secret対象:
 - OpenAI API key
 - Google client secretが必要な構成の場合のsecret（GIS ID token verifyだけならweb client IDはpublic config）
 - Session/bootstrap/CSRF関連HMAC secret
-- reCAPTCHA server credentials/site backend config
-- DB credential（Cloud SQL IAM/Auth Proxy等採用時はpassword最小化）
+- Turnstile secret key
+- Neon pooled/direct DB connection URL
 
 Rules:
 
 - Gitへcommit禁止。
 - `.env` production secret禁止。
-- Cloud RunへSecret Manager referenceとして注入。
+- Runtime secretはWranglerのsecret uploadでWorkerへ注入し、平文variableやrepositoryへ置かない。
+- GitHub Actionsはdeploy時にrunnerの一時`--secrets-file`を作成し、成否にかかわらず削除する。
 - log出力禁止。
 - rotation可能な形式で設計。
 
@@ -2765,7 +2769,7 @@ provider_latency_ms
 - Google ID token
 - Session/CSRF cookie/token
 - OpenAI key
-- raw reCAPTCHA token
+- raw Turnstile token
 - Google email（通常log）
 - long-lived raw User ID
 
@@ -2797,7 +2801,7 @@ Active Userは`users.last_active_at`から日次query可能とし、専用管理
 
 ## 42.3 Tracing
 
-HTTP request → Application → SQL/OpenAI/Google/reCAPTCHA spanをOpenTelemetryで関連付ける。ただしspan attributeにPDCA本文/tokenを含めない。
+HTTP request → Worker → Container → Application → SQL/OpenAI/Google/Turnstileをrequest/trace IDで関連付ける。ただしspan/log attributeにPDCA本文/tokenを含めない。Cloudflareの自動traceをprimaryとし、Application内部はOpenTelemetry API instrumentationとstructured log eventで補完する。
 
 ## 42.4 Alerts
 
@@ -2810,7 +2814,7 @@ Production initial recommendations:
 - 100% budgetでAI停止が発生
 - DB connection saturation
 - Account deletion repeated failure
-- anonymous blocked/reCAPTCHA failure sudden spike
+- anonymous blocked/Turnstile failure sudden spike
 
 Thresholdは運用調整可能。
 
@@ -2824,57 +2828,93 @@ Support上User correlationが必要な場合は、Application DB内のUser IDで
 
 # 44. Hosting / Infrastructure / CI-CD
 
-## 44.1 Google Cloud resources
+## 44.1 Cloudflare-centered Staging Light
 
-**[設計判断]** 初期productionはTokyo region (`asia-northeast1`)を第一候補とする。日本語専用MVPで想定利用者に近く、Cloud Run/Cloud SQLを同regionへ置きnetwork latency/egress complexityを抑えるため。これはProduct Ruleではなくdeployment decision。
+**[設計判断]** Production公開前の実external integration検証環境として、Staging Lightを1環境だけ持つ。公開originは `https://pdcai.matoruru.com` とし、Cloudflare Workers / Containers、Neon PostgreSQL、Google Identity、Cloudflare Turnstile、OpenAI、Workers Logs / Tracesをproduction相当のcode pathで検証する。
+
+Staging Lightの境界:
+
+- testerだけが使用し、availability・data retention・backup/restoreをProduction相当には保証しない。
+- 保存dataは破棄可能な検証dataだけとし、Productionへcopy/migrateしない。Production data/secret/credentialもStagingへcopyしない。
+- Cloudflare Worker/Container、Neon project/branch、Google Web Client、Turnstile widget、OpenAI key/budget、GitHub Environment、Terraform stateをProductionから分離する。
+- Applicationは `APP_ENV=production` で起動し、HTTPS、Secure Cookie、実provider必須validation、production security header、trusted proxyを有効にする。これはruntime security profileの共有であり、Production resource/data/config値の共有ではない。
+- Staging固有の運営値は明示して設定し、application example/defaultを承認済み値として流用しない。
+- Stagingのdomain/session/IndexedDB/dataは将来のProduction domainへ移行しない。`pdcai.io` は別origin・別resource・別stateとして開始する。
+- CloudflareのDDoS mitigationは全planで自動有効だが、Application認可、Turnstile、rate limit、OpenAI budgetの代替にはしない。
 
 Resources:
 
-- Cloud Run: `pdcai-web`
-- Cloud SQL for PostgreSQL
-- Artifact Registry
-- Secret Manager
-- Cloud Logging / Monitoring
-- reCAPTCHA
-- optional custom domain/DNS
+- Cloudflare Worker `pdcai-staging`: static assets、custom domain、TLS、routing、logs/traces
+- Cloudflare Container `Backend`: Go API、`lite` instance、APAC placement、scale-to-zero
+- Cloudflare Durable Object: Container lifecycle/routing用。Application dataのSource of Truthにはしない
+- Neon PostgreSQL: Staging専用project/branch、application pooled URL、migration direct URL
+- Cloudflare Turnstile: Staging専用invisible widget
+- Cloudflare R2: Terraform state専用private bucket
+- Google Identity Services / OpenAI
 
-Redis/Memorystore、Pub/Sub、KubernetesはMVPでは使わない。
+Redis、Queues、KubernetesはMVPでは使わない。
 
-## 44.2 Database connectivity
+## 44.2 Request routing / capacity / database connectivity
 
-- Cloud Run service accountに必要最小権限。
-- Cloud SQL connector/private connectivityのsupported secure methodを使用。
-- DB pool sizeをCloud Run max instances × pool sizeでCloud SQL connection limitを超えないよう設定。
-- initial example: max instances 5、per-instance pool max 10（実際はCloud SQL tierに合わせ調整）。
+- Workerがstatic assetsをedge配信し、`/api/*`、`/healthz`、`/readyz`だけをsingleton Containerへrouteする。
+- `workers.dev`は無効にし、custom domain `pdcai.matoruru.com`だけを公開する。Custom domainのDNS record/certificateはWrangler deploymentでCloudflareが管理する。
+- Containerは`max_instances=1`、`lite`、APAC、idle 10分でsleepをStaging初期値とする。Cloudflare Containersには自動autoscalingがまだないため、Productionのcapacity値として流用しない。
+- ApplicationはNeon pooled URL、GitHub Actions migrationはdirect URLを使う。双方ともTLSを必須とする。
+- `DB_MAX_OPEN_CONNS`はNeon compute/connection上限とContainer instance上限に合わせる。Migration/管理接続分の余裕を残す。
+- Cloudflare edge/ContainerからNeonまでのregion latencyを初回Stagingで計測する。許容できない場合はNeon regionまたは正式Production architectureを再評価する。
 
 ## 44.3 Deploy pipeline
 
 GitHub Actions:
 
 ```text
-PR:
-  frontend lint/typecheck/test
-  backend gofmt/go vet/test
+PR / main push:
+  frontend lint/typecheck/test/build
+  backend gofmt/go vet/test/build
   migration static check
-  build
+  Terraform fmt/validate
+  Wrangler typecheck/dry-run
 
-main merge:
-  same checks
-  build multi-stage container
-  push Artifact Registry
-  run migration job/controlled step
-  deploy Cloud Run revision
-  smoke test /healthz + key API
+manual Staging deploy (main HEAD + successful CI only):
+  GitHub Environment approval
+  rebuild frontend
+  run migration against Neon direct URL
+  Wrangler deploy Worker + Container + static assets + runtime secrets
+  smoke test /healthz + /readyz
 ```
 
-Production deploymentはmigration成功後のみapp revisionをtrafficへ切替える。Backward-incompatible migrationはexpand/contractを使い、同deploy内で旧codeを即破壊しない。
+Migration成功後のみapplication deployへ進む。Backward-incompatible migrationはexpand/contractを使い、同deploy内で旧codeを即破壊しない。Feature branch・任意SHA・local developer credentialからのStaging deployは行わない。
+
+正式domain/Production resourceが未決のためProduction自動deployは持たない。`pdcai.io`を確定した時点でProduction専用Terraform state、Neon project、Turnstile widget、Google client、GitHub Environment、Wrangler configを追加し、Staging値を流用しない。
 
 ## 44.4 Health endpoints
 
-- `GET /healthz`: process alive。DB不要。
-- `GET /readyz`: DB connectivity + essential config readiness。OpenAI/Google external callは毎readinessで叩かない。
+- `GET /healthz`: WorkerからContainer processへの到達確認。DB不要。
+- `GET /readyz`: DB connectivity + essential config readiness。OpenAI/Google/Turnstile external callは毎readinessで叩かない。
 
 Public user dataは返さない。
+
+## 44.5 Infrastructure as Code boundary / R2 backend
+
+**[設計判断]** Staging LightからTerraformを導入するが、Terraformは長期control-plane resource、Wranglerはapplication deploymentを所有する。同一resourceを両者で管理しない。
+
+Terraformで管理するもの:
+
+- Staging専用Cloudflare Turnstile widgetと許可hostname/action policy
+
+Wrangler / GitHub Actionsで管理するもの:
+
+- Worker code、Container image/build、static assets、custom domain route、Container configuration、runtime secret upload、schema migration
+
+Bootstrap/manual control plane:
+
+- Cloudflare account/zone、Workers Paid plan、API token、R2 state bucketとbucket-scoped S3 credential
+- Neon project/branch/database/role、pooled/direct URL、compute/restore policy
+- Google Identity Web Client、OpenAI provider側limit、GitHub Environmentのsecret/variable値
+
+Terraform S3 backendはR2のaccount endpointを使い、`use_lockfile = true`とする。R2はstrong consistencyとconditional writesを提供するためlockfile方式と整合する。一方、R2にはTerraform stateの履歴復旧に使えるS3 Object Versioningがない。したがってstate bucketを他用途と共有せず、最小権限credentialを使い、apply前にplanをreviewし、state事故への復旧保証をversioningがあるbackendと同等とみなさない。Bucket Lockはstate上書きを妨げるためstate objectへ設定しない。
+
+Turnstile resourceが返すsecretはTerraform stateへ含まれ得る。State、backend credential、Terraform plan fileをsecretとして扱い、output/log/repositoryへ出さない。Runtime DB URL、OpenAI key、pepper/HMAC、Turnstile secretを通常のTerraform variableへ渡さない。
 
 ---
 
@@ -2892,8 +2932,7 @@ Public user dataは返さない。
 ```yaml
 app:
   environment: production
-  public_origin: https://pdcai.example
-  region: asia-northeast1
+  public_origin: https://pdcai.matoruru.com
 
 session:
   idle_days: 30
@@ -2927,9 +2966,8 @@ rate_limits:
   ai_per_session_minute: 3
   ai_per_ip_minute: 10
 
-recaptcha:
+turnstile:
   enabled: true
-  anonymous_bootstrap_score_threshold: 0.5
   expected_action: anonymous_bootstrap
 
 database:
@@ -2943,19 +2981,19 @@ database:
 Conceptual environment names:
 
 ```text
-DATABASE_URL or Cloud SQL connection settings
+DATABASE_URL                   # Neon pooled URL at application runtime
 OPENAI_API_KEY
 GOOGLE_WEB_CLIENT_ID          # ID自体はsecretではないがenvironment-specific
 SESSION_TOKEN_PEPPER
 CSRF_TOKEN_PEPPER
 BOOTSTRAP_ID_PEPPER
 RATE_LIMIT_HMAC_SECRET
-RECAPTCHA_PROJECT_ID / credentials binding
+TURNSTILE_SECRET_KEY
 AI_PRICE_INPUT_USD_PER_MILLION
 AI_PRICE_OUTPUT_USD_PER_MILLION
 ```
 
-Cloud Run service account credentialはstatic JSON keyを置かずattached identityを優先する。
+Application runtime secretはCloudflare Worker SecretsからContainerへ明示的に渡す。Migration専用のNeon direct URLはGitHub Environment secretだけに置き、runtimeへ渡さない。
 
 ---
 
@@ -2979,9 +3017,9 @@ Cloud Run service account credentialはstatic JSON keyを置かずattached ident
 | Backend validation | go-playground/validator + Domain funcs | DTO validationとbusiness rule分離 | ozzo, manual only | tagとDomainの二層になる |
 | Auth | Opaque app session + Google GIS | anonymous/upgrade/instant revokeを明確に実装 | Firebase Auth, Identity Platform | session storageを自前管理 |
 | AI | OpenAI Responses API + official Go SDK | Structured Outputs、公式client | raw HTTP / other providers | Provider adapterは必要 |
-| Abuse | reCAPTCHA score-based + app rate limits | no-checkbox friction、GCP integration | Turnstile | Google dependency / scoring tuning |
-| Hosting | Cloud Run + Cloud SQL | containerized Go、managed、MVP運用簡素 | Render/Fly/AWS | GCP vendor dependency |
-| Observability | slog + OTel + Cloud Ops | standard-first、managed backend | Datadog/Sentry | Cloud console依存あり |
+| Abuse | Turnstile invisible + app rate limits | low-friction、Cloudflare edge統合 | reCAPTCHA | challenge/provider dependency |
+| Hosting | Workers Static Assets + Containers + Neon | edge配信、Go container維持、scale-to-zero | Cloud Run / Render / Fly | ContainersはWorkers Paid必須でmanual scaling |
+| Observability | slog + OTel API + Workers Logs/Traces | Cloudflare上でdeployとrequestを相関 | Datadog/Sentry | application metricはstructured log集計が中心 |
 | CI/CD | GitHub Actions | repository-centric、一般的 | Cloud Build | GitHub dependency |
 
 ## 46.2 Why not Next.js
@@ -3004,14 +3042,14 @@ Cycle/Auth/AIの強いtransactional consistencyを単一DB/単一deployで扱う
 
 # 47. Main Trade-offs
 
-1. **同一Origin単一Cloud Run:** deployment/securityが簡単。ただしFrontendだけ独立CDN deployする柔軟性は低い。
+1. **同一Origin Worker + Container:** Workerがstatic assetsとAPI routingをまとめるためcookie/CORSが簡単。ただしContainer lifecycleとWorker routingの運用知識が必要。
 2. **Opaque DB session:** revoke/deleteが簡単。各requestでsession DB lookupが必要。必要ならsession lookup cacheは将来検討。
 3. **Per-frame revision + content revision:** concurrency semanticsが明確だが、単一revisionよりDB field/APIが少し増える。AI中P/D/C編集要件を安全に満たすため採用。
 4. **PostgreSQL rate buckets:** distributed correctnessを追加serviceなしで得るが、非常に高いtrafficではDB write負荷。MVPでは許容。
 5. **Synchronous AI request:** queue不要で実装単純。client disconnectに弱いが、lease recoveryでstuckを防ぐ。MVPはbackground jobを採用しない。
 6. **IndexedDB unsaved draft:** network/crash recovery性を上げる一方、XSS時の露出面が増える。未保存のみ・短TTLで抑える。
 7. **Prompt contextにraw past cycle:** summary生成コスト/複雑性がなく忠実だがtoken consumptionが増える。最大10 + budgetで制御。
-8. **Google/reCAPTCHA/OpenAI/GCP:** managed integrationの運用性が高いがvendor dependencyがある。Domain/Application portでOpenAI/anti-abuse/auth verificationの境界を切る。
+8. **Google/Turnstile/OpenAI/Cloudflare/Neon:** managed integrationの運用性が高いがvendor dependencyがある。Domain/Application portでOpenAI/anti-abuse/auth verificationの境界を切る。
 
 ---
 
@@ -3024,7 +3062,7 @@ Cycle/Auth/AIの強いtransactional consistencyを単一DB/単一deployで扱う
 - Repository tests: actual PostgreSQL
 - HTTP integration: `httptest` + real DB/fake external providers
 - Frontend component/hook tests: Vitest/RTL
-- E2E: Playwright + test server + fake AI/Google/reCAPTCHA adapters
+- E2E: Playwright + test server + fake AI/Google/Turnstile adapters
 - Limited provider contract test: manual/staging、costを伴うためPR CIの必須条件にしない
 
 ## 48.2 Domain test cases
@@ -3139,7 +3177,7 @@ Cycle/Auth/AIの強いtransactional consistencyを単一DB/単一deployで扱う
 - expired bootstrap cannot issue a Session to the old User and is lazily removed。
 - successful Google upgrade deletes the User's bootstrap record immediately。
 - many bootstrap IDs from same IP hit rate limit。
-- invalid/low-score reCAPTCHA blocks create。
+- invalid/replayed/wrong-host Turnstile token blocks create。
 - no raw IP stored in rate table。
 
 ## 48.9 Auth tests
@@ -3227,7 +3265,7 @@ Model/prompt変更前にsmall manual/automated evalを実行し、品質が落�
 1. **Repository foundation**: frontend/backend、lint/typecheck/test、CI。
 2. **Configuration & DB**: typed config、PostgreSQL、migrations、sqlc。
 3. **Domain core**: User/Cycle text/status/revision/complete pure rules。
-4. **Session & Anonymous bootstrap**: opaque cookie、CSRF、User+Cycle1 Tx、fake anti-abuse then reCAPTCHA adapter。
+4. **Session & Anonymous bootstrap**: opaque cookie、CSRF、User+Cycle1 Tx、fake anti-abuse then Turnstile adapter。
 5. **Cycle API**: active/get/save/complete、transaction/concurrency tests。
 6. **Frontend Home**: P/D/C/A tabs、guide/placeholder、char validation、save state。
 7. **Auto Save**: queue、frame revisions、IndexedDB draft、retry、error recovery。
@@ -3239,7 +3277,7 @@ Model/prompt変更前にsmall manual/automated evalを実行し、品質が落�
 13. **Account deletion**: hard delete、client cleanup、concurrency tests。
 14. **Security hardening**: CSP/headers/secret review/cross-user tests。
 15. **Observability**: metrics/traces/alerts。
-16. **Cloud deployment**: Cloud Run/Cloud SQL/Secret Manager/Artifact Registry、migration pipeline。
+16. **Cloud deployment**: Cloudflare Worker/Container/Turnstile、Neon、R2 Terraform backend、migration-first pipeline。
 17. **Full E2E / acceptance review** against this document。
 
 各段階で未実装future featureを仮実装しない。
@@ -3398,14 +3436,27 @@ Placeholder: `例：メールを開く前に、最重要タスクへ30分取り�
 
 以下はコード実装を妨げないが、production deploy前に実値を設定する必要がある。
 
-1. **[未決事項/運用]** Production public domain / Google Web Client ID / reCAPTCHA site key。
+1. **[未決事項/運用]** Production public domain / Google Web Client ID / Turnstile widget。
 2. **[未決事項/運用]** OpenAI `gpt-5-mini` のproduction accountでの利用可否と、deploy時点のtoken pricing値。利用不可/品質不足ならConfigurationとeval結果に基づきモデルを変更する。
 3. **[未決事項/運用]** OpenAI provider側spend/rate limitの具体値。
-4. **[未決事項/運用]** Cloud SQL instance tier / max connections / Cloud Run max instances。初期traffic想定に合わせる。
-5. **[未決事項/運用]** Backup retentionの正式ポリシー。設計初期推奨は7日だが、法務/運営要件を優先。
-6. **[未決事項/運用]** AI monthly budget 100 USD、rolling user limit 10/24h、rate/reCAPTCHA thresholdは初期config例であり、実運用データで調整する。
+4. **[未決事項/運用]** ProductionのCloudflare Container instance/capacity、Neon compute/connection上限。初期traffic想定に合わせる。
+5. **[未決事項/運用]** Neon restore windowと追加backupの正式ポリシー。設計初期推奨は7日だが、planの制約と法務/運営要件を優先。
+6. **[未決事項/運用]** AI monthly budget 100 USD、rolling user limit 10/24h、application/Turnstile rejection調整値は初期config例であり、実運用データで調整する。
 
 これらをProduct Ruleとして本書で固定しない。
+
+## 54.3 Staging Light deploy前の運用値
+
+Staging LightはProduction release gateを解除しないが、外部公開・課金・DB接続を伴うため、初回deploy前に次を明示してrelease記録へ残す。
+
+1. Cloudflare account/zone ID、Workers Paid契約確認、deploy token owner、R2 state bucket/operator。
+2. Neon project/region/compute、scale-to-zero、restore window、connection上限とpooled/direct URLの分離。
+3. Container type/max instances/idle sleepと、`DB_MAX_OPEN_CONNS × max instances` に管理/migration接続余裕を加えたconnection budget。
+4. Staging専用Google Web Client ID、Turnstile widget、OpenAI key/model/当日価格/provider spend/rate limit。
+5. Application AI budget、rolling/rate limit、tester範囲、公開期間。
+6. Workers Logs/Traces確認者、cost budget/alert、teardownまたは継続運用の判断日。
+
+値は [`docs/deployment.md`](deployment.md) のStaging Light input sheetへ記録し、Secret自体は記録しない。
 
 ---
 
@@ -3488,12 +3539,17 @@ AIコーディングエージェントは以下を守る。
 9. OpenAI data controls: https://platform.openai.com/docs/models/default-usage-policies-by-endpoint
 10. OpenAI Models: https://platform.openai.com/docs/models
 11. OpenAI tiktoken: https://github.com/openai/tiktoken
-12. Cloud Run documentation: https://cloud.google.com/run/docs
-13. Cloud Run / Cloud SQL integration: https://cloud.google.com/run/docs
-14. reCAPTCHA score-based website integration: https://cloud.google.com/recaptcha/docs/instrument-web-pages
-15. reCAPTCHA assessment: https://cloud.google.com/recaptcha/docs/create-assessment-website
-16. TanStack Query: https://tanstack.com/query/latest
-17. Zod 4: https://zod.dev/v4
+12. Cloudflare Containers: https://developers.cloudflare.com/containers/
+13. Cloudflare Containers pricing: https://developers.cloudflare.com/containers/pricing/
+14. Cloudflare Worker custom domains: https://developers.cloudflare.com/workers/configuration/routing/custom-domains/
+15. Cloudflare DDoS protection: https://developers.cloudflare.com/ddos-protection/get-started/
+16. Cloudflare Turnstile server-side validation: https://developers.cloudflare.com/turnstile/get-started/server-side-validation/
+17. Cloudflare Workers observability: https://developers.cloudflare.com/workers/observability/
+18. Cloudflare Terraform R2 backend: https://developers.cloudflare.com/terraform/advanced-topics/remote-backend/
+19. Terraform S3 backend locking: https://developer.hashicorp.com/terraform/language/backend/s3
+20. Neon connection pooling: https://neon.com/docs/connect/connection-pooling
+21. TanStack Query: https://tanstack.com/query/latest
+22. Zod 4: https://zod.dev/v4
 
 ---
 

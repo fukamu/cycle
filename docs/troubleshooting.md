@@ -46,27 +46,29 @@
 | Chromiumがない                             | Playwright browser未install               | Errorのbrowser executable path              | `Push-Location frontend; npx playwright install chromium; Pop-Location`             |
 | CIだけflaky                                | timing、CI resource、shared state         | Playwright trace/screenshot、job log        | Testを並列化せず現状workers=1を維持し、traceから根因を修正。retry増加だけで隠さない |
 
-## Authentication / reCAPTCHA / AI
+## Authentication / Turnstile / AI
 
 | 症状                       | 原因候補                                             | 確認方法                                              | 解決方法                                                                     |
 | -------------------------- | ---------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------- |
 | Google buttonが出ない/失敗 | VITE client ID空、server IDとの不一致、origin未登録  | Browser console/network、公開IDの一致                 | `.env.local`とserver設定を同じclient IDへ。Productionはimage再build          |
 | Login後もsessionがない     | cookie/origin/HTTPS、token verification error        | Network response、cookie属性、server error code       | `PUBLIC_ORIGIN`と実originを一致。ProductionはHTTPS必須                       |
-| Anonymous session作成失敗  | reCAPTCHA key/project/action/権限不一致              | Browser network、server error、Cloud reCAPTCHA設定    | client/server site keyとdomain/actionを合わせる。Productionで無効化しない    |
+| Anonymous session作成失敗  | Turnstile site/secret key、hostname/action不一致、token期限切れ/replay | Browser network、server error、Turnstile widget設定 | Site/secret keyとhostname/actionを合わせる。Tokenは再取得し、Productionで無効化しない |
 | Local AIが実APIを呼ばない  | `OPENAI_API_KEY`空のdevelopment/testは仕様どおりFake | APP_ENVとkeyの有無（値は表示しない）                  | 実APIが必要な明示的検証だけlocal secretをprocessへ設定。通常testはFakeを使う |
 | Production AI失敗          | Key、model、quota/spend/rate limit、provider障害     | AI error metrics/log、provider status/dashboard       | 設定とprovider制限を確認。Fakeへ切替えず、非AI機能と切り分ける               |
 | AI costが0/不正            | price vars未設定/旧単価、model不一致                 | Deploy variables、`AI_MODEL`/`AI_PRICE_MODEL`、確認日 | 当日の正式単価をreviewして新revisionをdeploy。推測値を入れない               |
 
-## CI / Deploy / Production
+## CI / Cloudflare Deploy / Production
 
 | 症状                              | 原因候補                                                              | 確認方法                                        | 解決方法                                                                           |
 | --------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Deployが開始しない                | main以外、CI未成功、workflow disabled                                 | ActionsのCI conclusion、branch、Deploy workflow | mainの同一SHAでCIを成功させる。PRから手動production deployしない                   |
-| Variable validationで停止         | Production Environment variable未設定                                 | errorに出た変数名                               | [`deployment.md`](deployment.md) release gateで値を決めて設定。仮値禁止            |
-| Migration stepで停止              | Cloud SQL/secret/SA/SQL error                                         | `pdcai-migrate` execution log                   | Serviceは未deploy。DB runbookに従い原因解消、force/resetしない                     |
-| `/healthz` 200、`/readyz` 503     | ProcessはaliveだがDB unavailable                                      | Cloud SQL state、connection、service attachment | DB接続・pool・secretを修正。OpenAI/Google疎通はreadiness対象外                     |
-| Previewでは動くがProductionで失敗 | 正式Previewは存在しない。local/testとの差、HTTPS/real provider/config | APP_ENV、revision env、build args、provider設定 | Production release gateと環境表を照合。Previewという未定義環境を追加して回避しない |
-| Deploy後に5xx増加                 | 新revision/config/schema incompatibility                              | revision別log/metrics、直前SHA                  | 旧revisionとschema互換ならtraffic rollback。互換でなければroll-forward             |
-| Telemetry startup error           | Runtime SA権限/API/quota                                              | `telemetry_startup_failed`、Cloud API           | Monitoring/Traceの最小権限/APIを修正。無断で観測を無効化しない                     |
+| Deployが開始しない                | main以外、同一SHAのCI未成功、workflow disabled | ActionsのCI conclusion、branch、Deploy Staging | mainの同一SHAでCIを成功させる。Feature branchからdeployしない |
+| Variable validationで停止         | `staging` Environment input未設定/誤origin | errorに出た変数名 | [`deployment.md`](deployment.md) input sheetで値を決めて設定。仮値禁止 |
+| Migration stepで停止              | Neon direct URL/branch/SQL error | workflowのmigration step、Neon state | Wrangler deploy前に停止済み。DB runbookに従い原因解消、force/resetしない |
+| Wrangler deployで停止             | Cloudflare token権限、Workers Paid、config/container build error | Wrangler log、Cloudflare deployment | account/zone/plan/token scopeを確認し、CI dry-runとの差を修正 |
+| Custom domainが作れない           | 同名DNS record、zone未Active、token zone権限不足 | DNS records、zone status、Wrangler error | 既存recordの所有用途を確認。不要と確認できたrecordだけ除去して再deploy |
+| `/healthz` 200、`/readyz` 503     | ProcessはaliveだがNeon unavailable | Neon compute/connection、runtime pooled URL、pool | DB接続・pool・secretを修正。OpenAI/Google/Turnstileはreadiness対象外 |
+| Static assetsだけ404              | `frontend/dist`未build、assets path/config不一致 | workflow build、Wrangler assets output | Frontend build後にWrangler deploy。Worker/API routingとは分けて確認 |
+| Deploy後に5xx増加                 | 新deployment/config/schema incompatibility | version別Workers Logs/Traces、直前SHA | 旧versionとschema互換なら直前commitを再deploy。互換でなければroll-forward |
+| Logs/tracesが見えない             | Wrangler observability設定、sampling、Dashboard filter | `wrangler.jsonc`、対象Worker/version | 対象version/filterを確認。Secret/本文を追加logして回避しない |
 
 Production障害では秘密値やuser本文を共有せず、[`operations.md`](operations.md) のincident手順へ移行してください。

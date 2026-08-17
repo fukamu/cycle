@@ -1,6 +1,6 @@
 # PDCAI
 
-PDCAI MVPの実装リポジトリです。React/ViteのSPAとGo APIを同一originで配信し、PostgreSQLへcycleを保存します。
+PDCAI MVPの実装リポジトリです。Cloudflare WorkerがReact/Vite SPAをedge配信し、同一originのAPIをCloudflare Container上のGoへrouteします。CycleはNeon PostgreSQLへ保存します。
 
 アプリケーションの要件・仕様・設計に関する最上位のSource of Truthは [`docs/design.md`](docs/design.md) です。READMEは入口であり、仕様書ではありません。
 
@@ -13,7 +13,7 @@ PDCAI MVPの実装リポジトリです。React/ViteのSPAとGo APIを同一orig
 | 環境変数                  | [`docs/environment.md`](docs/environment.md)         |
 | Database・Migration       | [`docs/database.md`](docs/database.md)               |
 | Deployment                | [`docs/deployment.md`](docs/deployment.md)           |
-| Production運用            | [`docs/operations.md`](docs/operations.md)           |
+| Staging / Production運用  | [`docs/operations.md`](docs/operations.md)           |
 | Troubleshooting           | [`docs/troubleshooting.md`](docs/troubleshooting.md) |
 | Coding agent向け規則      | [`AGENTS.md`](AGENTS.md)                             |
 
@@ -22,9 +22,11 @@ PDCAI MVPの実装リポジトリです。React/ViteのSPAとGo APIを同一orig
 - `frontend/`: React 19、TypeScript、Vite、Vitest、Playwright
 - `backend/`: Go API、PostgreSQL adapter、migration
 - `scripts/`: PowerShellのlocal setup/check/clean/reset補助
-- `.github/workflows/ci.yml`: Frontend、Backend、E2EのCI
-- `.github/workflows/deploy.yml`: migration-firstのCloud Run deploy
-- `Dockerfile`: FrontendとBackendを含むnon-root production image
+- `cloudflare/`: Worker routing、Container、static assets、Wrangler config
+- `infra/terraform/staging/`: Staging LightのTurnstile widget（R2 backend、secret payload/deployは対象外）
+- `.github/workflows/ci.yml`: Frontend、Backend、Infrastructure、E2EのCI
+- `.github/workflows/deploy.yml`: Staging Lightのmanual migration-first Cloudflare deploy
+- `Dockerfile`: Cloudflare Container用non-root Go Backend image
 
 ## Prerequisites
 
@@ -33,8 +35,9 @@ PDCAI MVPの実装リポジトリです。React/ViteのSPAとGo APIを同一orig
 - Go 1.26.6
 - PostgreSQL 17
 - sqlc 1.31.1（Backend check/SQL生成）
-- Docker（local PostgreSQL/image buildに使う場合）
+- Docker（local PostgreSQL/Container image buildに使う場合）
 - Chromium（E2Eに必要）
+- Terraform 1.15.8（Staging基盤と全体checkに必要）
 
 詳細とversion根拠は [`docs/development.md`](docs/development.md) を参照してください。
 
@@ -65,7 +68,7 @@ npm run dev
 | 初回setup                             | `pwsh ./scripts/setup.ps1`                                                         |
 | Backend環境変数を現在のterminalへ読込 | `. ./scripts/import-env.ps1`                                                       |
 | 全品質check                           | `pwsh ./scripts/check.ps1`                                                         |
-| Frontend / Backendだけcheck           | `pwsh ./scripts/check.ps1 -Scope frontend` / `-Scope backend`                      |
+| Frontend / Backend / Infrastructureだけcheck | `pwsh ./scripts/check.ps1 -Scope frontend` / `-Scope backend` / `-Scope infrastructure` |
 | E2Eを含むcheck                        | `pwsh ./scripts/check.ps1 -E2E`                                                    |
 | Safe clean                            | `pwsh ./scripts/clean.ps1`                                                         |
 | 依存関係を含むfull clean              | `pwsh ./scripts/clean.ps1 -All`                                                    |
@@ -83,4 +86,4 @@ Backend local値はGit管理外の `.env`、Frontendの公開build-time値は `f
 
 Pull requestとmainへのpushで`CI`がformat、lint、typecheck、unit/integration test、build、E2Eを実行します。CIはjob専用PostgreSQLとtest doubleを使い、productionへ接続しません。
 
-mainのCI成功後、`Deploy` workflowが同じcommit SHAのimageをbuild/pushし、Cloud Run migration jobの成功後だけserviceを更新し、`/healthz`・`/readyz`をsmoke testします。Productionへ進む前に、domain、provider、capacity、backup、budget/rate/security threshold、alertsの未決値を必ず確定してください。手順と禁止事項は [`docs/deployment.md`](docs/deployment.md) を参照してください。
+Staging Lightはmain HEADのCI成功後に`Deploy Staging`をmanual dispatchします。GitHub Environment approval後、Neon direct connectionでmigrationが成功した場合だけWranglerがWorker、Container、static assets、runtime secretsをdeployします。Production deploymentは正式domain `pdcai.io`と専用resourceが決まるまで未構築です。R2 Terraform backendを含む初回手順は [`docs/deployment.md`](docs/deployment.md) を参照してください。

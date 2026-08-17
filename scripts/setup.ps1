@@ -60,6 +60,35 @@ if (-not $SkipInstall) {
     finally {
         Pop-Location
     }
+
+    Push-Location (Join-Path $repoRoot "cloudflare")
+    try {
+        $previousXdgConfigHome = $env:XDG_CONFIG_HOME
+        $env:XDG_CONFIG_HOME = Join-Path $repoRoot "cloudflare/.wrangler/config"
+        & npm ci
+        if ($LASTEXITCODE -ne 0) {
+            throw "Cloudflare npm ci failed with exit code $LASTEXITCODE."
+        }
+        & npm run types
+        if ($LASTEXITCODE -ne 0) {
+            throw "Cloudflare type generation failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        $env:XDG_CONFIG_HOME = $previousXdgConfigHome
+        Pop-Location
+    }
+
+    Push-Location (Join-Path $repoRoot "backend")
+    try {
+        & go mod download
+        if ($LASTEXITCODE -ne 0) {
+            throw "go mod download failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 Write-Host "Local files are ready. Review .env, then follow docs/development.md to start PostgreSQL and the servers."

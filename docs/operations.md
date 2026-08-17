@@ -1,122 +1,110 @@
-# Production運用
+# Cloud運用
 
-この文書は稼働中のProduction運用runbookです。仕様は [`design.md`](design.md)、releaseは [`deployment.md`](deployment.md)、DBは [`database.md`](database.md) が上位または専門のSource of Truthです。
+この文書は稼働中のStaging/将来Productionのrunbookです。仕様は [`design.md`](design.md)、releaseは [`deployment.md`](deployment.md)、DBは [`database.md`](database.md) がSource of Truthです。現在実装済みのcloud targetはStaging Lightだけで、Productionは未構築です。
 
-## 現在導入済みの観測手段
+## Observability
 
-- Go `slog` のJSON logをstdoutへ出し、Cloud RunからCloud Loggingへ収集
-- ProductionでOpenTelemetry traceをCloud Traceへexport
-- ProductionでOpenTelemetry metricsを60秒間隔でCloud Monitoringへexport
-- HTTP logにrequest ID、trace ID、route template、method、status、latency
+- Cloudflare Worker/Containerのconsole出力をWorkers Logsで収集
+- Cloudflare automatic tracesを5% sample、logsを100% sampleで有効化
+- Go `slog` JSONにrequest ID、trace ID、route template、method、status、latencyを記録
+- Application metric eventをstructured logとして出力
 - `/healthz` と `/readyz`
 
-Dashboard、alert policy、notification channel、uptime checkのInfrastructure as Codeはリポジトリにありません。導入済みとみなしてはいけません。thresholdと通知先は [`design.md`](design.md) §54の未決事項で、初回production前にCloud Monitoring側で構成し、所有者と確認手順を記録するTODOです。
+Dashboard、alert policy、notification channel、uptime monitorはまだIaC化されていません。導入済みとみなさず、初回Production前にthreshold、通知先、所有者を決定します。Cloudflare Analytics/Logs、Neon Monitoring、OpenAI usageを横断して確認します。
 
-Applicationが出す主なmetricは、HTTP request/latency、autosave件数/latency、cycle完了、account操作、anonymous作成、rate-limit拒否、error code、AI生成件数/latency/token/推定cost/context、AI budget使用率/警告です。metric名の正確な一覧は [`backend/internal/infrastructure/observability/telemetry.go`](../backend/internal/infrastructure/observability/telemetry.go) を参照してください。
-
-## 稼働確認
+## Health check
 
 ```powershell
-$serviceUrl = gcloud run services describe pdcai-web --region asia-northeast1 --format 'value(status.url)'
-Invoke-RestMethod "$serviceUrl/healthz"
-Invoke-RestMethod "$serviceUrl/readyz"
+Invoke-RestMethod 'https://pdcai.matoruru.com/healthz'
+Invoke-RestMethod 'https://pdcai.matoruru.com/readyz'
 ```
 
-- `/healthz`: process liveness。DBや外部APIを呼ばず、200ならprocessが応答可能。
-- `/readyz`: essential configはstartup validation済みで、requestごとにDB pingを行う。DB接続不可なら503。OpenAI/Google/reCAPTCHAを毎回呼ばない。
+- `/healthz`: WorkerからContainer processへ到達できる。DBや外部APIは呼ばない。
+- `/readyz`: startup configはvalidation済みで、DB pingが成功する。OpenAI/Google/Turnstileは毎回呼ばない。
 
-Healthだけで機能正常を断定せず、error rate、latency、DB connections、代表操作も確認します。
+Healthだけで機能正常を断定せず、5xx、latency、Container cold start、Neon connections、代表操作も確認します。
 
 ## Deploy後チェック
 
-1. 対象commit SHA、Cloud Run revision、image digest、migration job executionをrelease記録へ残す。
-2. `/healthz` と `/readyz` が継続して200。
-3. 5xx、startup error、DB connection error、telemetry export errorが増えていない。
-4. 匿名session、autosave、reload、cycle completeをtest用account/dataで確認。
-5. Google login、reCAPTCHA、AI generate/refineを最小回数確認し、provider dashboardのerror/spendも確認。
-6. DB pool、Cloud SQL connection数、latency、AI cost/budget、rate-limit拒否が決定済みthreshold内。
+1. commit SHA、Cloudflare deployment/version、Container rollout、migration workflow runをrelease記録へ残す。
+2. `/healthz`と`/readyz`が継続して200。
+3. Workers Logs/Tracesでstartup、DB connection、5xxが増えていない。
+4. 匿名session、autosave、reload、cycle completeを検証dataで確認。
+5. Google login、Turnstile、AI generate/refineを最小回数確認し、provider error/spendも確認。
+6. Neon connection/compute、latency、AI cost/budget、rate-limit拒否が決定済みthreshold内。
 
 Production userの本文、email、token、raw user ID/IPを確認用logへ追加しません。
 
-## Log・error調査
+## Logs / error investigation
 
-Cloud Loggingでまず次を絞ります。
+Cloudflare DashboardでWorker `pdcai-staging`、deploy時刻/version、Containerを絞り、`severity`、`error_class`、`error_code`、request/trace IDを確認します。PDCA本文、prompt/output、session/CSRF token、Google credential、email、raw user ID/IP、raw Turnstile tokenを検索・記録・転記しません。
 
-- resource: Cloud Run Revision、service `pdcai-web`
-- deploy時刻と対象revision
-- `severity>=WARNING`
-- `error_class` / `error_code`
-- userから提供されたrequest ID、またはlog内のtrace ID
+必要な調査結果は時刻、version、route template、status、error class/code、集約eventで残します。Neon/OpenAI/Google/Turnstileのdashboardを確認するときもcredential値を表示しません。
 
-Request/trace IDで同一requestのHTTP log、error log、Cloud Traceを関連付けます。本文、prompt/output、session/CSRF token、Google credential、email、raw user ID/IPを検索・記録・転記しません。必要な調査結果は時刻、revision、route template、status、error class/code、集約metricで残します。
+## Incident first response
 
-## 障害別の初動
+### Database
 
-### DB障害
+症状は`/readyz` 503、`database_startup_failed`、repository error、latency/connection増加です。
 
-症状は`/readyz` 503、startupの`database_startup_failed`、repository error、latency/connection増加です。
+1. Neon project/branch/compute state、connection上限、storage、maintenanceを確認。
+2. Runtime pooled URLとmigration direct URLの混同がないか、値を表示せずGitHub Environmentの更新履歴で確認。
+3. `DB_MAX_OPEN_CONNS × active Container instances`と実接続数を比較。
+4. Application起因ならschema互換性を確認して旧versionへrollbackを検討。
+5. Data corruptionの疑いがあればwriteを増やす操作を止め、restore/backup判断へ移る。resetしない。
 
-1. Cloud SQL instance state、接続上限、storage、CPU、ongoing maintenanceを確認。
-2. Runtime SAのCloud SQL権限、serviceのCloud SQL attachment、`PDCAI_DATABASE_URL` secret versionを確認。
-3. `DB_MAX_OPEN_CONNS × active max instances` と実接続数を比較。
-4. Application deploy起因ならcompatibleな旧revisionへrollbackを検討。
-5. Data corruptionの疑いがあればwriteを増やす操作を止め、backup/restore判断へ移る。productionでresetしない。
+### OpenAI / AI
 
-### OpenAI / AI機能障害
+1. AI error event、latency、provider status、spend/rate limitを確認。
+2. Key、model availability、価格設定の更新履歴を値を表示せず確認。
+3. Provider障害時にFake AIへ切り替えず、AI errorを返して非AI機能と分離する。
+4. Cost急増時はapplication budget/rate limitとprovider hard limitを確認し、変更をreviewして再deployする。
 
-1. AI routeのerror code、`ai_generation_total`のresult、latency、provider status、spend/rate limitを確認。
-2. `OPENAI_API_KEY`、model availability、価格設定の更新履歴を確認する。keyをlogへ出さない。
-3. Provider障害時にproductionをFake AIへ切り替えない。AI機能のerrorを利用者へ返し、P/D/C保存など非AI機能の健全性を分けて確認する。
-4. Cost急増時はapplication budget/rate limitsとprovider側hard limitを確認し、必要ならAI利用を抑制する。設定変更は新revisionで行う。
+### Google Identity
 
-### Google Identity障害
+1. Browser networkとserver error codeをcredential値なしで確認。
+2. `GOOGLE_WEB_CLIENT_ID`、Frontend build値、authorized origin、`PUBLIC_ORIGIN`の一致を確認。
+3. Google側障害とconfig mismatch、anonymous既存sessionを切り分ける。
 
-1. Browser console/networkとserverの認証error codeを、credential値を記録せず確認。
-2. `GOOGLE_WEB_CLIENT_ID` と`VITE_GOOGLE_WEB_CLIENT_ID`、authorized origin、`PUBLIC_ORIGIN`の一致を確認。
-3. Google側障害かconfig mismatchかを切り分ける。Anonymous既存sessionの挙動と分離する。
+### Turnstile
 
-### reCAPTCHA障害
+1. Anonymous bootstrap errorとSiteverify response classを確認する。Raw token/secretをlogに追加しない。
+2. Frontend site key、Backend secret、hostname `pdcai.matoruru.com`、action `anonymous_bootstrap`を確認。
+3. Production profileで`TURNSTILE_ENABLED=false`にしない。Fail-closedを維持し、rate limitとprovider statusを切り分ける。
 
-1. anonymous bootstrapのerror、score/action、project/site keyの対応、runtime SA権限を確認。
-2. `RECAPTCHA_SITE_KEY` と`VITE_RECAPTCHA_SITE_KEY`、expected action、production domainを確認。
-3. Productionで `RECAPTCHA_ENABLED=false` にして回避しない。threshold変更はabuse riskを評価して承認・記録する。
+### Cloudflare Worker / Container
 
-### Telemetry障害
+1. Deployment/version、Container rollout/status、Worker exception、cold-start latencyを確認。
+2. Static assetsだけかAPIだけか、custom domain/TLSを含む全体かを切り分ける。
+3. DDoS event/mitigationとApplication 429/403を混同しない。
+4. Wrangler deploy後の失敗はschema互換性を確認し、直前の成功commitから再deployする。
 
-Productionではexporter初期化失敗によりserver startupが失敗します。Runtime SAのMonitoring/Trace権限、Google API、quotaを確認します。可観測性を黙って無効化するcode変更で回避しません。
+## Environment / secret rotation
 
-## 環境変数・Secret変更
+1. [`environment.md`](environment.md)でserver/client、secret/public、validation、影響を確認。
+2. GitHub `staging` Environment secretを更新する。Terraform/R2/deploy tokenは用途別の保管先でrotateする。
+3. 変更理由、時刻、所有者、失効確認を記録する。値自体は記録しない。
+4. `VITE_`対応値がある場合はFrontendを必ずrebuildする。
+5. `Deploy Staging`で新deploymentを作り、healthと代表操作を確認する。
+6. Pepper変更は既存session/tokenへ影響するため、移行影響の確認なしにrotateしない。
 
-1. [`environment.md`](environment.md) でserver/client、秘密/公開、validation、影響を確認。
-2. SecretはSecret Managerへ新versionとして登録し、GitHubやterminalへ値を表示しない。
-3. GitHub Environment variable変更はreviewを通し、理由・旧値の管理先・変更時刻を記録。
-4. Frontend `VITE_` 対応値がある場合は必ずimageを再buildする。
-5. Workflowで新revisionをdeployし、startup validation、health、代表操作を確認。
-6. Pepper変更は既存session/token等へ影響し得るため、仕様と移行影響の確認なしにrotateしない。
+## Rollback decision
 
-## Rollback判断
+Deploy直後に5xx/readiness/主要操作の失敗が増えた、新version固有と判定できた、またはsecurity/data corruptionが疑われる場合は新規deployを止めます。旧versionとDB schemaがcompatibleな場合だけ直前成功commitを再deployします。Migrationを自動downせず、互換でなければroll-forwardまたは個別DB復旧を判断します。
 
-次の場合は新規deployを止め、[`deployment.md`](deployment.md) のapplication rollbackを優先検討します。
+## Incident record
 
-- deploy直後に5xx/readiness failure/主要操作失敗が明確に増えた。
-- Data corruptionやsecurity incidentの可能性がある。
-- DB/外部provider障害ではなく、新revision固有と切り分けられた。
+1. 発見時刻、影響、deployment/version、直前変更、request/trace ID、error/eventを記録。
+2. Incident leadを決め通常deployを停止。
+3. Security/data lossを判定し、必要ならaccess制限・credential revoke・provider停止を権限者へescalate。
+4. 影響を止める最小変更を選び、cloud操作を記録。
+5. Healthと代表操作で復旧を確認し監視を継続。
+6. 原因、timeline、user impact、再発防止、未検知理由をpostmortemへ残す。秘密値・個人dataは含めない。
 
-旧revisionとDB schemaがcompatibleでない場合、rollbackはせずroll-forwardまたは個別DB復旧を判断します。Migrationを自動downしません。
+## Production data
 
-## Incident基本対応
-
-1. 発見時刻、影響範囲、revision、直前変更、request/trace ID、error/metricを記録する。
-2. Incident leadを決め、通常deployを一時停止する。
-3. Security/data lossの可能性を判定し、必要ならaccess制限・credential rotation・provider停止を権限者へescalateする。
-4. 影響拡大を止める最小変更（traffic rollback、AI制限等）を選び、production操作を記録する。
-5. Healthと代表操作で復旧を確認し、監視を継続する。
-6. 原因、timeline、user impact、再発防止、未検知理由をpostmortemへ残す。秘密値・個人データは含めない。
-
-## Production dataの注意
-
-- 最小権限・最短時間でアクセスし、調査目的と承認を記録する。
-- Production dataをlocal/testへcopyしない。必要なら仕様に沿って匿名化した最小fixtureを別途作る。
-- 手動UPDATE/DELETE、data correction、restoreは事前backup、対象query review、rollback plan、実行記録が必須。
+- 最小権限・最短時間でaccessし、目的と承認を記録する。
+- Production dataをStaging/local/testへcopyしない。
+- 手動UPDATE/DELETE、data correction、restoreは事前backup、query review、rollback plan、実行記録が必須。
 - Account deletion/data retention要件を運用都合で変更しない。
-- Backup/PITR retentionとrestore drillは未決のproduction-blocking TODO。値を決めるまで本番準備完了としない。
+- Neon restore window、追加backup、restore drillはProduction-blocking TODO。値を決めるまでProduction準備完了としない。
