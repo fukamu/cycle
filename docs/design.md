@@ -296,6 +296,7 @@ Menuは独立RouteではなくDrawer UIとする。
 
 ## 8.2 Navigation rules
 
+- Headerの`PDCAI`ロゴをクリックすると、どのRouteからでもHomeの現在Cycleへ遷移し、P Tabを選択する。既にHomeにいる場合もP Tabへ移動する。
 - P/D/C/A Tab移動は常時可能。
 - AI処理中もTab移動可能。
 - AI処理中、P/D/Cは編集可能、Aのみread-only。
@@ -2206,6 +2207,10 @@ frontend/
 - `useAutoSave`: debounce/queue/retry/frame revision/draft cacheを担当。
 - `AIProcessingProvider`: Home内Tab切替でAI mutationがunmountされないようfeature scopeに置く。
 
+## 30.4 Selected tab persistence
+
+**[設計判断]** Homeで選択中のP/D/C/Aタブは画面リロード後も維持する。Browser `localStorage`には本文を保存せず、現在のActive Cycle IDとFrame名だけを1件保存する。読込時は取得したActive Cycle IDと一致し、Frame名が有効な場合だけ復元する。新しいCycle、破損値、またはBrowser storageを利用できない場合はPを初期表示する。Headerの`PDCAI`ロゴからHomeへ遷移した場合は、この保存値をPへ更新する。
+
 ---
 
 # 31. Auto Save Design
@@ -3069,9 +3074,12 @@ Cycle/Auth/AIの強いtransactional consistencyを単一DB/単一deployで扱う
 | F-AS-07 | save failed | AI/Complete disabled |
 | F-AS-08 | save succeeds | draft removed, enabled if other conditions valid |
 | F-AS-09 | tab switch while dirty | immediate enqueue, navigation allowed |
-| F-AS-10 | reload same frame revision | draft restored and saved |
-| F-AS-11 | reload revision mismatch | draft preserved, no auto-overwrite |
-| F-AS-12 | P save pending while AI A response updates contentRevision | P can still save using planRevision |
+| F-AS-10 | reload after selecting D/C/A | same active cycle's selected tab restored |
+| F-AS-11 | switch tabs after reload | each tab renders its own saved content |
+| F-AS-12 | Header logo click from Home/another Route | current active cycle's P selected |
+| F-AS-13 | reload same frame revision | draft restored and saved |
+| F-AS-14 | reload revision mismatch | draft preserved, no auto-overwrite |
+| F-AS-15 | P save pending while AI A response updates contentRevision | P can still save using planRevision |
 
 ## 48.5 AI Generate tests
 
@@ -3277,10 +3285,12 @@ repository-root/
 
 Header:
 
-- left/app title: `PDCAI`
+- left/app title: `PDCAI`。クリックで現在CycleのP Tabへ遷移
 - current Cycle: `Cycle {sequenceNumber}`
 - period: active started local date + `〜`
 - right: hamburger
+
+**[設計判断]** Homeと過去Cycle詳細で表示するCycle番号の数字部分は、Georgiaのold-style figuresによる数字ごとの高さ・ベースライン差を避けるため、Constantiaを第一候補とするscreen向けserif stackとlining figuresを使用する。過去Cycle一覧の番号にはこの指定を適用せず、一覧用の既存typographyを維持する。
 
 Main:
 

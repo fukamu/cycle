@@ -15,11 +15,18 @@ frontend/.npm-cache/
 backend/bin/
 backend/coverage.out
 backend/*.exe
+backend/server
+backend/migrate
 *.tsbuildinfo
 
 # Local tooling
 .tools/
 .tmp/
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Editors / OS
 .idea/

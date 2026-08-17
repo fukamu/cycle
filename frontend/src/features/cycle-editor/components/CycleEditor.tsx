@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { completeCycle } from "../../../shared/api/cycles";
@@ -23,6 +23,10 @@ import {
   type AIState,
   type FrameValues,
 } from "../model/eligibility";
+import {
+  readFrameSelection,
+  writeFrameSelection,
+} from "../navigation/frameSelectionRepository";
 import { FrameTabs } from "./FrameTabs";
 import { SaveStatus } from "./SaveStatus";
 
@@ -31,6 +35,9 @@ type CycleEditorProps = {
   readonly userId: string;
   readonly csrfToken: string;
   readonly drafts: readonly DraftRecord[];
+  readonly planNavigationRequested: boolean;
+  readonly onPlanNavigationHandled: () => void;
+  readonly registerPlanNavigationHandler: (handler: () => void) => () => void;
 };
 
 export function CycleEditor({
@@ -38,9 +45,14 @@ export function CycleEditor({
   userId,
   csrfToken,
   drafts,
+  planNavigationRequested,
+  onPlanNavigationHandled,
+  registerPlanNavigationHandler,
 }: CycleEditorProps) {
   const queryClient = useQueryClient();
-  const [selectedFrame, setSelectedFrame] = useState<Frame>("plan");
+  const [selectedFrame, setSelectedFrame] = useState<Frame>(() =>
+    planNavigationRequested ? "plan" : readFrameSelection(cycle.id),
+  );
   const ai = useAIProcessing();
   const aiState: AIState = ai.state;
   const defaultValues = useMemo<FrameValues>(() => {
@@ -86,6 +98,27 @@ export function CycleEditor({
       );
     },
   });
+  const flushAutoSave = autoSave.flush;
+  useEffect(
+    () =>
+      registerPlanNavigationHandler(() => {
+        flushAutoSave();
+        setSelectedFrame("plan");
+        writeFrameSelection(cycle.id, "plan");
+      }),
+    [cycle.id, flushAutoSave, registerPlanNavigationHandler],
+  );
+  useEffect(() => {
+    if (!planNavigationRequested) return;
+    flushAutoSave();
+    writeFrameSelection(cycle.id, "plan");
+    onPlanNavigationHandled();
+  }, [
+    cycle.id,
+    flushAutoSave,
+    onPlanNavigationHandled,
+    planNavigationRequested,
+  ]);
   const completeMutation = useMutation({
     mutationFn: () =>
       completeCycle(
@@ -105,6 +138,7 @@ export function CycleEditor({
   const selectFrame = (frame: Frame) => {
     autoSave.flush();
     setSelectedFrame(frame);
+    writeFrameSelection(cycle.id, frame);
   };
   const complete = () => {
     if (!window.confirm("このサイクルを完了し、次のサイクルへ進みますか？"))
@@ -169,7 +203,9 @@ export function CycleEditor({
       <section className="cycle-heading" aria-label="現在のサイクル">
         <p className="eyebrow">CURRENT CYCLE</p>
         <div>
-          <h1>Cycle {cycle.sequenceNumber}</h1>
+          <h1>
+            Cycle <span className="cycle-sequence">{cycle.sequenceNumber}</span>
+          </h1>
           <p>{formatActivePeriod(cycle.startedAt)}</p>
         </div>
       </section>
@@ -188,12 +224,12 @@ export function CycleEditor({
           {copy.guide}
         </p>
         <Controller
+          key={selectedFrame}
           control={control}
           name={selectedFrame}
           render={({ field }) => (
             <textarea
               {...field}
-              key={selectedFrame}
               aria-label={`${copy.short} — ${copy.name}`}
               aria-describedby={`guide-${selectedFrame} count-${selectedFrame}`}
               placeholder={copy.placeholder}

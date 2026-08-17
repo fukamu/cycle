@@ -16,9 +16,18 @@ test("anonymous autosave, AI generation, completion, history, and deletion", asy
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Cycle 1" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "A — Action" })).toBeVisible();
   await page.getByRole("tab", { name: /P Plan/ }).click();
   await expect(page.getByRole("textbox", { name: "P — Plan" })).toHaveValue(
     "朝の集中時間を改善する",
+  );
+  await page.getByRole("tab", { name: /D Do/ }).click();
+  await expect(page.getByRole("textbox", { name: "D — Do" })).toHaveValue(
+    "三日間、朝一番に試した",
+  );
+  await page.getByRole("tab", { name: /C Check/ }).click();
+  await expect(page.getByRole("textbox", { name: "C — Check" })).toHaveValue(
+    "二日成功し、一日はメールを先に見た",
   );
   await page.getByRole("tab", { name: /A Action/ }).click();
   await page.getByRole("button", { name: "アクションを生成" }).click();
@@ -51,6 +60,9 @@ test("anonymous autosave, AI generation, completion, history, and deletion", asy
 
   await page.goto("/cycles");
   await page.getByRole("link", { name: /Cycle 1/ }).click();
+  await expect(page.locator(".page-heading h1 .cycle-sequence")).toHaveText(
+    "1",
+  );
   await expect(page.getByText("朝の集中時間を改善する")).toBeVisible();
   await expect(page.getByRole("textbox")).toHaveCount(0);
 
@@ -86,6 +98,26 @@ test("save failure keeps input and a retry persists it", async ({ page }) => {
   await expect(page.getByText("● 保存済み")).toBeVisible();
   await page.reload();
   await expect(plan).toHaveValue("失敗しても保持する入力");
+});
+
+test("the PDCAI wordmark opens the current cycle's plan from any screen", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("tab", { name: /C Check/ }).click();
+  await page.getByRole("link", { name: "PDCAI 現在のサイクルのPへ" }).click();
+  await expect(page.getByRole("tab", { name: /P Plan/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await page.goto("/settings");
+  await page.getByRole("link", { name: "PDCAI 現在のサイクルのPへ" }).click();
+  await expect(page.getByRole("heading", { name: "Cycle 1" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /P Plan/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
 test("AI failure leaves A unchanged and a retry can succeed", async ({

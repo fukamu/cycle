@@ -29,6 +29,49 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Validate required production variables
+        shell: bash
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_RUNTIME_SERVICE_ACCOUNT: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+          CLOUD_SQL_INSTANCE: ${{ vars.CLOUD_SQL_INSTANCE }}
+          PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
+          GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
+          RECAPTCHA_SITE_KEY: ${{ vars.RECAPTCHA_SITE_KEY }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          AI_PRICE_INPUT_USD_PER_MILLION: ${{ vars.AI_PRICE_INPUT_USD_PER_MILLION }}
+          AI_PRICE_OUTPUT_USD_PER_MILLION: ${{ vars.AI_PRICE_OUTPUT_USD_PER_MILLION }}
+          AI_MONTHLY_BUDGET_USD: ${{ vars.AI_MONTHLY_BUDGET_USD }}
+          AI_MAX_GENERATIONS_PER_USER_24H: ${{ vars.AI_MAX_GENERATIONS_PER_USER_24H }}
+          RECAPTCHA_SCORE_THRESHOLD: ${{ vars.RECAPTCHA_SCORE_THRESHOLD }}
+          RATE_ANONYMOUS_CREATE_PER_IP_HOUR: ${{ vars.RATE_ANONYMOUS_CREATE_PER_IP_HOUR }}
+          RATE_ANONYMOUS_CREATE_PER_IP_24H: ${{ vars.RATE_ANONYMOUS_CREATE_PER_IP_24H }}
+          RATE_AI_PER_USER_MINUTE: ${{ vars.RATE_AI_PER_USER_MINUTE }}
+          RATE_AI_PER_SESSION_MINUTE: ${{ vars.RATE_AI_PER_SESSION_MINUTE }}
+          RATE_AI_PER_IP_MINUTE: ${{ vars.RATE_AI_PER_IP_MINUTE }}
+          DB_MAX_OPEN_CONNS: ${{ vars.DB_MAX_OPEN_CONNS }}
+          DB_MAX_IDLE_CONNS: ${{ vars.DB_MAX_IDLE_CONNS }}
+          CLOUD_RUN_MAX_INSTANCES: ${{ vars.CLOUD_RUN_MAX_INSTANCES }}
+        run: |
+          set -euo pipefail
+          required=(
+            GCP_PROJECT_ID GCP_RUNTIME_SERVICE_ACCOUNT CLOUD_SQL_INSTANCE PUBLIC_ORIGIN
+            GOOGLE_WEB_CLIENT_ID RECAPTCHA_SITE_KEY AI_MODEL
+            AI_PRICE_INPUT_USD_PER_MILLION AI_PRICE_OUTPUT_USD_PER_MILLION
+            AI_MONTHLY_BUDGET_USD AI_MAX_GENERATIONS_PER_USER_24H
+            RECAPTCHA_SCORE_THRESHOLD RATE_ANONYMOUS_CREATE_PER_IP_HOUR
+            RATE_ANONYMOUS_CREATE_PER_IP_24H RATE_AI_PER_USER_MINUTE
+            RATE_AI_PER_SESSION_MINUTE RATE_AI_PER_IP_MINUTE
+            DB_MAX_OPEN_CONNS DB_MAX_IDLE_CONNS CLOUD_RUN_MAX_INSTANCES
+          )
+          missing=0
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing GitHub Environment variable: ${name}"
+              missing=1
+            fi
+          done
+          exit "${missing}"
       - id: auth
         uses: google-github-actions/auth@v3
         with:
@@ -77,6 +120,16 @@ jobs:
             AI_PRICE_MODEL=${{ vars.AI_MODEL }}
             AI_PRICE_INPUT_USD_PER_MILLION=${{ vars.AI_PRICE_INPUT_USD_PER_MILLION }}
             AI_PRICE_OUTPUT_USD_PER_MILLION=${{ vars.AI_PRICE_OUTPUT_USD_PER_MILLION }}
+            AI_MONTHLY_BUDGET_USD=${{ vars.AI_MONTHLY_BUDGET_USD }}
+            AI_MAX_GENERATIONS_PER_USER_24H=${{ vars.AI_MAX_GENERATIONS_PER_USER_24H }}
+            RECAPTCHA_SCORE_THRESHOLD=${{ vars.RECAPTCHA_SCORE_THRESHOLD }}
+            RATE_ANONYMOUS_CREATE_PER_IP_HOUR=${{ vars.RATE_ANONYMOUS_CREATE_PER_IP_HOUR }}
+            RATE_ANONYMOUS_CREATE_PER_IP_24H=${{ vars.RATE_ANONYMOUS_CREATE_PER_IP_24H }}
+            RATE_AI_PER_USER_MINUTE=${{ vars.RATE_AI_PER_USER_MINUTE }}
+            RATE_AI_PER_SESSION_MINUTE=${{ vars.RATE_AI_PER_SESSION_MINUTE }}
+            RATE_AI_PER_IP_MINUTE=${{ vars.RATE_AI_PER_IP_MINUTE }}
+            DB_MAX_OPEN_CONNS=${{ vars.DB_MAX_OPEN_CONNS }}
+            DB_MAX_IDLE_CONNS=${{ vars.DB_MAX_IDLE_CONNS }}
           secrets: |-
             DATABASE_URL=PDCAI_DATABASE_URL:latest
             OPENAI_API_KEY=PDCAI_OPENAI_API_KEY:latest
@@ -87,7 +140,7 @@ jobs:
           flags: >-
             --service-account=${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
             --add-cloudsql-instances=${{ vars.CLOUD_SQL_INSTANCE }}
-            --max-instances=5
+            --max-instances=${{ vars.CLOUD_RUN_MAX_INSTANCES }}
             --min-instances=0
             --port=8080
       - name: Smoke test

@@ -1,8 +1,35 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Outlet } from "react-router-dom";
+
+type PlanNavigationHandler = () => void;
+
+export type AppOutletContext = {
+  readonly planNavigationRequested: boolean;
+  readonly onPlanNavigationHandled: () => void;
+  readonly registerPlanNavigationHandler: (
+    handler: PlanNavigationHandler,
+  ) => () => void;
+};
 
 export function AppLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [planNavigationRequested, setPlanNavigationRequested] = useState(false);
+  const planNavigationHandler = useRef<PlanNavigationHandler | null>(null);
+  const onPlanNavigationHandled = useCallback(
+    () => setPlanNavigationRequested(false),
+    [],
+  );
+  const registerPlanNavigationHandler = useCallback(
+    (handler: PlanNavigationHandler) => {
+      planNavigationHandler.current = handler;
+      return () => {
+        if (planNavigationHandler.current === handler) {
+          planNavigationHandler.current = null;
+        }
+      };
+    },
+    [],
+  );
   useEffect(() => {
     if (!menuOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -15,7 +42,20 @@ export function AppLayout() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <Link className="wordmark" to="/" aria-label="PDCAI ホーム">
+        <Link
+          className="wordmark"
+          to="/"
+          aria-label="PDCAI 現在のサイクルのPへ"
+          onClick={() => {
+            setMenuOpen(false);
+            if (planNavigationHandler.current === null) {
+              setPlanNavigationRequested(true);
+            } else {
+              planNavigationHandler.current();
+              setPlanNavigationRequested(false);
+            }
+          }}
+        >
           PDCAI
         </Link>
         <button
@@ -48,7 +88,13 @@ export function AppLayout() {
           </nav>
         </>
       )}
-      <Outlet />
+      <Outlet
+        context={{
+          planNavigationRequested,
+          onPlanNavigationHandled,
+          registerPlanNavigationHandler,
+        }}
+      />
     </div>
   );
 }
