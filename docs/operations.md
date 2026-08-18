@@ -29,9 +29,10 @@ Healthだけで機能正常を断定せず、5xx、latency、Container cold star
 1. commit SHA、Terraform Plan/Apply runとapprover、Cloudflare deployment/version、Container rollout、migration workflow runをrelease記録へ残す。
 2. `/healthz`と`/readyz`が継続して200。
 3. Workers Logs/Tracesでstartup、DB connection、5xxが増えていない。
-4. 匿名session、autosave、reload、cycle completeを検証dataで確認。
-5. Google login、Turnstile、AI generate/refineを最小回数確認し、provider error/spendも確認。
-6. Neon connection/compute、latency、AI cost/budget、rate-limit拒否が決定済みthreshold内。
+4. 匿名session、Goal Draft autosave、Goal開始、P/D/C/A autosave、Cycle完了後に次CycleではなくGoal Reviewが開くことを検証dataで確認。
+5. Reviewから目標維持/更新で次Cycleを開始でき、Goal TimelineでVersion markerとCompleted/Canceled CycleがGoal単位に表示されることを確認。
+6. Google login、Turnstile、Goal Refine、Action Generate/Refineを最小回数確認し、provider error/spendも確認。
+7. Neon connection/compute、latency、AI cost/budget、rate-limit拒否が決定済みthreshold内。
 
 Production userの本文、email、token、raw user ID/IPを確認用logへ追加しません。
 

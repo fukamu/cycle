@@ -25,7 +25,7 @@ pwsh ./scripts/setup.ps1
 
 このスクリプトはNode/Goのバージョンを確認し、未作成の場合だけ `.env.example` から `.env`、`frontend/.env.example` から `frontend/.env.local` を作り、Frontend/Cloudflareの`npm ci`とBackendの`go mod download`を実行します。既存の環境ファイルを上書きしません。依存関係を入れず環境ファイルだけ準備する場合は `-SkipInstall` を指定できます。
 
-`.env` の4つのpepper/HMAC値は、ローカルでも24文字以上が必要です。example値をproductionで使ってはいけません。Frontendの `VITE_` 変数はブラウザへ公開されるため、秘密値を入れてはいけません。
+`.env` のSession/CSRF/bootstrap pepper、rate-limit HMAC、cursor署名secretは、ローカルでも24文字以上が必要です。example値をproductionで使ってはいけません。Frontendの `VITE_` 変数はブラウザへ公開されるため、秘密値を入れてはいけません。
 
 Backendはdotenvを暗黙ロードしません。Backendを操作する各PowerShellターミナルで、次のように現在のprocessへ読み込みます。値は画面へ表示されません。
 
@@ -52,7 +52,7 @@ go run ./cmd/migrate
 Pop-Location
 ```
 
-Migrationは再実行可能で、未適用分だけを適用します。seed処理はありません。初期データは不要で、画面から匿名sessionを作るとcycleが作成されます。
+Migrationは再実行可能で、未適用分だけを適用します。seed処理はありません。画面を開くと匿名sessionだけが作成され、HomeからGoal Creation Draftを作って開始した時点でGoal v1とCycle 1が同一transactionで作成されます。
 
 ## 開発サーバー
 

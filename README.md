@@ -1,6 +1,6 @@
 # PDCAI
 
-PDCAI MVPの実装リポジトリです。Cloudflare WorkerがReact/Vite SPAをedge配信し、同一originのAPIをCloudflare Container上のGoへrouteします。CycleはNeon PostgreSQLへ保存します。
+PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal Reviewで目標を維持・更新・終了できるG-PDCAアプリです。Cloudflare WorkerがReact/Vite SPAをedge配信し、同一originのAPIをCloudflare Container上のGoへrouteします。Goal、immutable Goal Version、Cycle、Review DraftはNeon PostgreSQLへ保存します。
 
 アプリケーションの要件・仕様・設計に関する最上位のSource of Truthは [`docs/design.md`](docs/design.md) です。READMEは入口であり、仕様書ではありません。
 
@@ -83,6 +83,8 @@ Safe/full cleanは環境file、DB、Docker resource、browser dataを削除し�
 ## Environment
 
 Backend local値はGit管理外の `.env`、Frontendの公開build-time値は `frontend/.env.local` に置きます。`VITE_` 変数はbrowserへ公開されるため秘密値を入れてはいけません。全変数、必須性、公開範囲、productionの設定場所は [`docs/environment.md`](docs/environment.md) を参照してください。
+
+Local/Testでは`OPENAI_API_KEY`を空にすると、外部通信しない決定的なFake AI Adapterを使用します。ProductionはAPI key、正式なmodel単価、Turnstile、Google設定が揃わない限り起動しません。
 
 ## CI/CD
 

@@ -8,7 +8,7 @@
 - Migration runner: `backend/cmd/migrate`（`golang-migrate`）
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
-- 現在のschema: `000001_init.up.sql`
+- 現在のbaseline schema: `000001_pdcai_baseline.up.sql`
 
 Migration runnerは `DATABASE_URL` と、任意の `MIGRATIONS_DIR`（default `migrations`）だけを読み、未適用のup migrationを順番に適用します。適用履歴はDBの `schema_migrations` で管理されます。
 
@@ -49,7 +49,9 @@ pwsh ./scripts/check.ps1 -Scope backend
 
 ## Seedと開発データ
 
-seed scriptと固定seedデータはありません。Migration後、画面から匿名sessionを作ると最初のcycleが作成されます。Test fixtureはtest process内で作成し、productionへ投入しません。
+seed scriptと固定seedデータはありません。Migration後、匿名sessionの作成だけではGoal/Cycleを作りません。Goal Creation Draftを開始へ変換すると、Goal、Goal Version 1、Cycle 1が同一transactionで作成されます。Test fixtureはtest process内で作成し、productionへ投入しません。
+
+主要aggregateは `users -> goals -> goal_versions / pdca_cycles / goal_drafts / ai_generations` です。Cycle番号はUser全体ではなくGoal内で採番されます。完了したCycleから次Cycleを直接作らず、`goal_review` とReview Draftを作成します。Progressing Goal上限はUser row lock下で判定し、将来の複数Goal entitlementを妨げるUser単位unique制約は置きません。詳細な制約と削除・保持規則は [`design.md`](design.md) §12〜18を参照してください。
 
 ローカルの `.env`、DB data、ブラウザIndexedDBはsafe cleanで保持されます。ブラウザデータだけを消す場合は対象originのsite dataを開発者ツールから削除します。これはserver DBを削除しません。
 
