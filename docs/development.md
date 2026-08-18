@@ -111,7 +111,7 @@ $env:TEST_DATABASE_URL = 'postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmo
 pwsh ./scripts/check.ps1 -Scope backend
 ```
 
-E2Eも同じ専用DBを使います。初回のみChromiumを導入し、`-E2E` を付けます。
+E2Eも同じ専用DBを使います。初回のみChromiumを導入し、`-E2E` を付けます。Check scriptはbuild済みのmigration/server binaryを使って事前migrationとPlaywright server起動を行い、Windowsでも子processを確実に終了します。
 
 ```powershell
 Push-Location frontend
