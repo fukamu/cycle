@@ -6,7 +6,7 @@ import {
   SessionContext,
 } from "../features/auth/sessionContext";
 import { deleteAccount } from "../shared/api/account";
-import { clearUserDrafts } from "../features/cycle-editor/draft/draftRepository";
+import { clearUserDrafts } from "../shared/drafts/browserDraftCache";
 import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../shared/api/account", () => ({
@@ -14,7 +14,7 @@ vi.mock("../shared/api/account", () => ({
   loginGoogle: vi.fn(),
   upgradeGoogle: vi.fn(),
 }));
-vi.mock("../features/cycle-editor/draft/draftRepository", () => ({
+vi.mock("../shared/drafts/browserDraftCache", () => ({
   clearUserDrafts: vi.fn(),
 }));
 
@@ -24,7 +24,6 @@ const session = {
     googleConnected: false,
   },
   csrfToken: "csrf-token",
-  activeCycleId: "00000000-0000-4000-8000-000000000002",
 };
 
 describe("SettingsPage", () => {

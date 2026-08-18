@@ -1,100 +1,59 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Outlet } from "react-router-dom";
 
-type PlanNavigationHandler = () => void;
-
-export type AppOutletContext = {
-  readonly planNavigationRequested: boolean;
-  readonly onPlanNavigationHandled: () => void;
-  readonly registerPlanNavigationHandler: (
-    handler: PlanNavigationHandler,
-  ) => () => void;
-};
-
 export function AppLayout() {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [planNavigationRequested, setPlanNavigationRequested] = useState(false);
-  const planNavigationHandler = useRef<PlanNavigationHandler | null>(null);
-  const onPlanNavigationHandled = useCallback(
-    () => setPlanNavigationRequested(false),
-    [],
-  );
-  const registerPlanNavigationHandler = useCallback(
-    (handler: PlanNavigationHandler) => {
-      planNavigationHandler.current = handler;
-      return () => {
-        if (planNavigationHandler.current === handler) {
-          planNavigationHandler.current = null;
-        }
-      };
-    },
-    [],
-  );
+  const [open, setOpen] = useState(false);
+  const menu = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (!menuOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [menuOpen]);
-
+    if (!open) return;
+    const close = (event: KeyboardEvent) =>
+      event.key === "Escape" && setOpen(false);
+    document.addEventListener("keydown", close);
+    menu.current?.querySelector<HTMLElement>("a")?.focus();
+    return () => document.removeEventListener("keydown", close);
+  }, [open]);
   return (
     <div className="app-shell">
       <header className="app-header">
-        <Link
-          className="wordmark"
-          to="/"
-          aria-label="PDCAI 現在のサイクルのPへ"
-          onClick={() => {
-            setMenuOpen(false);
-            if (planNavigationHandler.current === null) {
-              setPlanNavigationRequested(true);
-            } else {
-              planNavigationHandler.current();
-              setPlanNavigationRequested(false);
-            }
-          }}
-        >
+        <Link className="wordmark" to="/" aria-label="PDCAI ホーム">
           PDCAI
         </Link>
         <button
           className="icon-button"
           type="button"
-          aria-label="メニューを開く"
-          aria-expanded={menuOpen}
+          aria-label={open ? "メニューを閉じる" : "メニューを開く"}
+          aria-expanded={open}
           aria-controls="app-menu"
-          onClick={() => setMenuOpen((current) => !current)}
+          onClick={() => setOpen((value) => !value)}
         >
           <span aria-hidden="true">☰</span>
         </button>
       </header>
-      {menuOpen && (
+      {open && (
         <>
           <button
             className="drawer-backdrop"
             type="button"
             aria-label="メニューを閉じる"
-            onClick={() => setMenuOpen(false)}
+            onClick={() => setOpen(false)}
           />
-          <nav className="drawer" id="app-menu" aria-label="メインメニュー">
+          <nav
+            ref={menu}
+            className="drawer"
+            id="app-menu"
+            aria-label="メインメニュー"
+          >
             <p className="drawer__label">メニュー</p>
-            <Link to="/cycles" onClick={() => setMenuOpen(false)}>
-              過去のサイクル
+            <Link to="/history" onClick={() => setOpen(false)}>
+              目標の履歴
             </Link>
-            <Link to="/settings" onClick={() => setMenuOpen(false)}>
+            <Link to="/settings" onClick={() => setOpen(false)}>
               設定
             </Link>
           </nav>
         </>
       )}
-      <Outlet
-        context={{
-          planNavigationRequested,
-          onPlanNavigationHandled,
-          registerPlanNavigationHandler,
-        }}
-      />
+      <Outlet />
     </div>
   );
 }

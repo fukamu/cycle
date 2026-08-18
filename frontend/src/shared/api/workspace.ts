@@ -1,0 +1,276 @@
+import { z } from "zod";
+
+import { requestJSON } from "./client";
+import {
+  aiResponseSchema,
+  cyclePageSchema,
+  cycleSchema,
+  draftSchema,
+  goalPageSchema,
+  goalSchema,
+  homeSchema,
+  reviewSchema,
+  saveFrameSchema,
+  type Frame,
+} from "./schemas";
+
+const draftEnvelope = z.object({ draft: draftSchema });
+const reviewDraftEnvelope = z.object({ reviewDraft: draftSchema });
+const goalEnvelope = z.object({ goal: goalSchema });
+const cycleEnvelope = z.object({ cycle: cycleSchema });
+const startEnvelope = z.object({ goal: goalSchema, cycle: cycleSchema });
+const completeEnvelope = z.object({
+  completedCycle: cycleSchema,
+  goal: goalSchema,
+  reviewDraft: draftSchema,
+});
+const continueEnvelope = z.object({
+  goal: goalSchema,
+  versionCreated: z.boolean(),
+  cycle: cycleSchema,
+});
+const terminateEnvelope = z.object({
+  goal: goalSchema,
+  canceledCycle: cycleSchema.nullable(),
+});
+
+export const operationId = () => crypto.randomUUID();
+
+export const getHome = () => requestJSON("/api/v1/home", homeSchema);
+export const createGoalDraft = (initialBody: string, csrfToken: string) =>
+  requestJSON("/api/v1/goal-drafts", draftEnvelope, {
+    method: "POST",
+    csrfToken,
+    body: { initialBody },
+  });
+export const getGoalDraft = (draftId: string) =>
+  requestJSON(`/api/v1/goal-drafts/${draftId}`, draftEnvelope);
+export const saveGoalDraft = (
+  draftId: string,
+  body: string,
+  expectedRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(`/api/v1/goal-drafts/${draftId}`, draftEnvelope, {
+    method: "PATCH",
+    csrfToken,
+    body: { body, expectedRevision },
+  });
+export const discardGoalDraft = (draftId: string, csrfToken: string) =>
+  requestJSON(`/api/v1/goal-drafts/${draftId}`, z.undefined(), {
+    method: "DELETE",
+    csrfToken,
+  });
+export const refineGoalDraft = (
+  draftId: string,
+  expectedDraftRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(`/api/v1/goal-drafts/${draftId}/refinements`, aiResponseSchema, {
+    method: "POST",
+    csrfToken,
+    idempotencyKey: operationId(),
+    body: { expectedDraftRevision },
+  });
+export const adoptGoalDraft = (
+  draftId: string,
+  generationId: string,
+  expectedDraftRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(
+    `/api/v1/goal-drafts/${draftId}/refinements/${generationId}/adopt`,
+    draftEnvelope,
+    {
+      method: "POST",
+      csrfToken,
+      body: { expectedDraftRevision },
+    },
+  );
+export const startGoal = (
+  draftId: string,
+  expectedDraftRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(`/api/v1/goal-drafts/${draftId}/start`, startEnvelope, {
+    method: "POST",
+    csrfToken,
+    body: { operationId: operationId(), expectedDraftRevision },
+  });
+
+export const listGoals = (scope = "all", cursor?: string) => {
+  const query = new URLSearchParams({ scope, limit: "20" });
+  if (cursor) query.set("cursor", cursor);
+  return requestJSON(`/api/v1/goals?${query}`, goalPageSchema);
+};
+export const getGoal = (goalId: string) =>
+  requestJSON(`/api/v1/goals/${goalId}`, goalEnvelope);
+export const getReview = (goalId: string) =>
+  requestJSON(`/api/v1/goals/${goalId}/review`, reviewSchema);
+export const saveReview = (
+  goalId: string,
+  body: string,
+  expectedRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(`/api/v1/goals/${goalId}/review`, reviewDraftEnvelope, {
+    method: "PATCH",
+    csrfToken,
+    body: { body, expectedRevision },
+  });
+export const refineReview = (
+  goalId: string,
+  expectedDraftRevision: number,
+  expectedGoalRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(`/api/v1/goals/${goalId}/review/refinements`, aiResponseSchema, {
+    method: "POST",
+    csrfToken,
+    idempotencyKey: operationId(),
+    body: { expectedDraftRevision, expectedGoalRevision },
+  });
+export const adoptReview = (
+  goalId: string,
+  generationId: string,
+  expectedDraftRevision: number,
+  expectedGoalRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(
+    `/api/v1/goals/${goalId}/review/refinements/${generationId}/adopt`,
+    reviewDraftEnvelope,
+    {
+      method: "POST",
+      csrfToken,
+      body: { expectedDraftRevision, expectedGoalRevision },
+    },
+  );
+export const continueReview = (
+  goalId: string,
+  expectedGoalRevision: number,
+  expectedDraftRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(`/api/v1/goals/${goalId}/review/continue`, continueEnvelope, {
+    method: "POST",
+    csrfToken,
+    body: {
+      operationId: operationId(),
+      expectedGoalRevision,
+      expectedDraftRevision,
+    },
+  });
+export const terminateGoal = (
+  goalId: string,
+  outcome: "achieved" | "ended",
+  expectedGoalRevision: number,
+  expectedState: "active_cycle" | "goal_review",
+  csrfToken: string,
+  active?: { id: string; revision: number },
+) =>
+  requestJSON(`/api/v1/goals/${goalId}/termination`, terminateEnvelope, {
+    method: "POST",
+    csrfToken,
+    body: {
+      operationId: operationId(),
+      outcome,
+      expectedGoalRevision,
+      expectedState,
+      activeCycleId: active?.id,
+      expectedCycleContentRevision: active?.revision,
+      confirmDiscardReviewDraft: expectedState === "goal_review",
+    },
+  });
+export const deleteGoal = (
+  goalId: string,
+  expectedGoalRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(`/api/v1/goals/${goalId}`, z.undefined(), {
+    method: "DELETE",
+    csrfToken,
+    idempotencyKey: operationId(),
+    body: { confirmed: true, expectedGoalRevision },
+  });
+
+export const listCycles = (goalId: string, cursor?: string) => {
+  const query = new URLSearchParams({ limit: "20" });
+  if (cursor) query.set("cursor", cursor);
+  return requestJSON(
+    `/api/v1/goals/${goalId}/cycles?${query}`,
+    cyclePageSchema,
+  );
+};
+export const getCycle = (goalId: string, cycleId: string) =>
+  requestJSON(`/api/v1/goals/${goalId}/cycles/${cycleId}`, cycleEnvelope);
+export const saveCycleFrame = (
+  goalId: string,
+  cycleId: string,
+  frame: Frame,
+  content: string,
+  expectedFrameRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(
+    `/api/v1/goals/${goalId}/cycles/${cycleId}/frames/${frame}`,
+    saveFrameSchema,
+    {
+      method: "PATCH",
+      csrfToken,
+      body: { content, expectedFrameRevision },
+    },
+  );
+export const generateAction = (
+  goalId: string,
+  cycleId: string,
+  expectedContentRevision: number,
+  confirmReplace: boolean,
+  csrfToken: string,
+) =>
+  requestJSON(
+    `/api/v1/goals/${goalId}/cycles/${cycleId}/actions/generate`,
+    aiResponseSchema,
+    {
+      method: "POST",
+      csrfToken,
+      idempotencyKey: operationId(),
+      body: { expectedContentRevision, confirmReplace },
+    },
+  );
+export const refineAction = (
+  goalId: string,
+  cycleId: string,
+  expectedContentRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(
+    `/api/v1/goals/${goalId}/cycles/${cycleId}/actions/refine`,
+    aiResponseSchema,
+    {
+      method: "POST",
+      csrfToken,
+      idempotencyKey: operationId(),
+      body: { expectedContentRevision },
+    },
+  );
+export const completeCycle = (
+  goalId: string,
+  cycleId: string,
+  expectedGoalRevision: number,
+  expectedContentRevision: number,
+  csrfToken: string,
+) =>
+  requestJSON(
+    `/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
+    completeEnvelope,
+    {
+      method: "POST",
+      csrfToken,
+      body: {
+        operationId: operationId(),
+        expectedGoalRevision,
+        expectedContentRevision,
+      },
+    },
+  );

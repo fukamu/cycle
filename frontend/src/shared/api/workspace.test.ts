@@ -1,0 +1,64 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { completeCycle, listCycles, saveCycleFrame } from "./workspace";
+
+const goalId = "00000000-0000-4000-8000-000000000001";
+const cycleId = "00000000-0000-4000-8000-000000000002";
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("goal-scoped workspace API", () => {
+  it("saves a frame through the nested goal/cycle route with CSRF", async () => {
+    const response = {
+      cycleId,
+      frame: "plan",
+      content: "計画",
+      frameRevision: 1,
+      contentRevision: 1,
+      savedAt: "2026-08-19T00:00:00Z",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json(response));
+    vi.stubGlobal("fetch", fetchMock);
+    await saveCycleFrame(goalId, cycleId, "plan", "計画", 0, "csrf");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `/api/v1/goals/${goalId}/cycles/${cycleId}/frames/plan`,
+    );
+    const options = fetchMock.mock.calls[0]?.[1];
+    expect(options?.method).toBe("PATCH");
+    expect(new Headers(options?.headers).get("X-CSRF-Token")).toBe("csrf");
+    expect(options?.body).toBe(
+      JSON.stringify({ content: "計画", expectedFrameRevision: 0 }),
+    );
+  });
+
+  it("uses a signed cursor opaquely when listing a goal timeline", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ items: [], nextCursor: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    await listCycles(goalId, "opaque+cursor/=");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain(
+      "cursor=opaque%2Bcursor%2F%3D",
+    );
+  });
+
+  it("sends goal and cycle revisions when completing without creating a next cycle client-side", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      completeCycle(goalId, cycleId, 4, 9, "csrf"),
+    ).rejects.toBeDefined();
+    const options = fetchMock.mock.calls[0]?.[1];
+    const body = JSON.parse(String(options?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      expectedGoalRevision: 4,
+      expectedContentRevision: 9,
+    });
+    expect(body).toHaveProperty("operationId");
+    expect(body).not.toHaveProperty("nextCycleId");
+  });
+});

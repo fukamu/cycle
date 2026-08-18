@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 
 import { GoogleIdentityButton } from "../features/auth/GoogleIdentityButton";
 import { useReplaceSession, useSession } from "../features/auth/sessionContext";
-import { clearUserDrafts } from "../features/cycle-editor/draft/draftRepository";
+import { clearUserDrafts } from "../shared/drafts/browserDraftCache";
 import {
   deleteAccount,
   loginGoogle,
@@ -56,7 +56,7 @@ export function SettingsPage() {
   async function removeAccount() {
     if (
       !window.confirm(
-        "PDCA履歴を含むすべてのアカウントデータを削除します。この操作は取り消せません。削除しますか？",
+        "目標・Goal Version・PDCAサイクルを含むすべてのアカウントデータを削除します。この操作は取り消せません。削除しますか？",
       )
     ) {
       return;
