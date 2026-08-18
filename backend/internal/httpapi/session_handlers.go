@@ -11,8 +11,7 @@ type sessionResponse struct {
 		ID              string `json:"id"`
 		GoogleConnected bool   `json:"googleConnected"`
 	} `json:"user"`
-	CSRFToken     string `json:"csrfToken"`
-	ActiveCycleID string `json:"activeCycleId"`
+	CSRFToken string `json:"csrfToken"`
 }
 
 type createAnonymousRequest struct {
@@ -71,6 +70,5 @@ func mapSession(view appsession.View) sessionResponse {
 	response.User.ID = string(view.UserID)
 	response.User.GoogleConnected = view.GoogleConnected
 	response.CSRFToken = view.CSRFToken
-	response.ActiveCycleID = view.ActiveCycleID
 	return response
 }

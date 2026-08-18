@@ -13,9 +13,25 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
-
-	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 )
+
+type AIUsage struct {
+	InputTokens  int64
+	OutputTokens int64
+}
+
+type AIObservation struct {
+	Type              string
+	Result            string
+	Model             string
+	PromptVersion     string
+	Usage             AIUsage
+	EstimatedCostUSD  float64
+	ContextCycleCount int
+	CurrentTruncated  bool
+	BudgetUsageRatio  float64
+	Duration          time.Duration
+}
 
 // Setup enables W3C trace propagation. Cloudflare automatically records the
 // Worker-to-Container request trace, while the Go service emits structured
@@ -182,7 +198,7 @@ func (metrics *Metrics) ErrorCode(ctx context.Context, code string) {
 	}
 }
 
-func (metrics *Metrics) ObserveAIGeneration(ctx context.Context, event appai.Observation) {
+func (metrics *Metrics) ObserveAIGeneration(ctx context.Context, event AIObservation) {
 	if metrics == nil {
 		return
 	}

@@ -1,10 +1,14 @@
 BEGIN;
 
 DROP TABLE IF EXISTS abuse_rate_buckets;
-DROP TABLE IF EXISTS ai_budget_monthly;
-DROP TABLE IF EXISTS ai_usage_events;
+DROP TABLE IF EXISTS goal_delete_receipts;
 DROP TABLE IF EXISTS ai_generations;
+DROP TABLE IF EXISTS ai_usage_events;
+DROP TABLE IF EXISTS goal_drafts;
 DROP TABLE IF EXISTS pdca_cycles;
+DROP TABLE IF EXISTS goal_versions;
+DROP TABLE IF EXISTS goals;
+DROP TABLE IF EXISTS ai_budget_monthly;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS auth_identities;
 DROP TABLE IF EXISTS anonymous_bootstraps;

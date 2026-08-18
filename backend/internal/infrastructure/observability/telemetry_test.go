@@ -8,8 +8,6 @@ import (
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-
-	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
 )
 
 func TestMetricsExposeRequiredInstruments(t *testing.T) {
@@ -32,9 +30,9 @@ func TestMetricsExposeRequiredInstruments(t *testing.T) {
 	metrics.AnonymousCreate(ctx, "success")
 	metrics.RateLimitRejected(ctx, "ai")
 	metrics.ErrorCode(ctx, "VALIDATION_ERROR")
-	metrics.ObserveAIGeneration(ctx, appai.Observation{
-		Type: appai.GenerationGenerate, Result: "success", Model: "test", PromptVersion: "v1",
-		Usage: appai.Usage{InputTokens: 10, OutputTokens: 5}, EstimatedCostUSD: 0.01,
+	metrics.ObserveAIGeneration(ctx, AIObservation{
+		Type: "action_generate", Result: "success", Model: "test", PromptVersion: "v1",
+		Usage: AIUsage{InputTokens: 10, OutputTokens: 5}, EstimatedCostUSD: 0.01,
 		ContextCycleCount: 2, CurrentTruncated: true, BudgetUsageRatio: 0.5, Duration: 20 * time.Millisecond,
 	})
 

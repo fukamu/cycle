@@ -59,10 +59,6 @@ id,user_id,provider,provider_subject,email_at_link,email_verified_at_link,create
 		return result, err
 	}
 	result.UserID = input.CurrentUserID
-	if err = tx.QueryRow(ctx, `SELECT id FROM pdca_cycles WHERE user_id=$1 AND status='active'`, mustUUID(string(input.CurrentUserID))).Scan(&linkedUser); err != nil {
-		return result, err
-	}
-	result.ActiveCycleID = uuidString(linkedUser)
 	err = tx.Commit(ctx)
 	return result, err
 }
@@ -94,11 +90,6 @@ WHERE id=$1 AND revoked_at IS NULL`, mustUUID(input.CurrentSessionID), input.Now
 		input.Now, input.IdleExpiresAt, input.AbsoluteExpiresAt); err != nil {
 		return result, err
 	}
-	var activeCycle pgtype.UUID
-	if err = tx.QueryRow(ctx, `SELECT id FROM pdca_cycles WHERE user_id=$1 AND status='active'`, targetUser).Scan(&activeCycle); err != nil {
-		return result, err
-	}
-	result.ActiveCycleID = uuidString(activeCycle)
 	err = tx.Commit(ctx)
 	return result, err
 }
@@ -112,7 +103,7 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 	if err = lockUser(ctx, tx, userID); err != nil {
 		return err
 	}
-	cycleRows, err := tx.Query(ctx, `SELECT id FROM pdca_cycles WHERE user_id=$1 ORDER BY id FOR UPDATE`, mustUUID(string(userID)))
+	cycleRows, err := tx.Query(ctx, `SELECT id FROM goals WHERE user_id=$1 ORDER BY id FOR UPDATE`, mustUUID(string(userID)))
 	if err != nil {
 		return err
 	}
@@ -154,7 +145,9 @@ FROM ai_generations WHERE user_id=$1 AND status='running' ORDER BY id FOR UPDATE
 	sort.Slice(months, func(i, j int) bool { return months[i].Before(months[j]) })
 	for _, month := range months {
 		command, updateErr := tx.Exec(ctx, `UPDATE ai_budget_monthly SET
-reserved_cost_usd=reserved_cost_usd-$2, updated_at=$3
+reserved_cost_usd=reserved_cost_usd-$2,
+unattributed_cost_usd=unattributed_cost_usd+$2,
+updated_at=$3
 WHERE month_utc=$1 AND reserved_cost_usd >= $2`, month, reservations[month], now)
 		if updateErr != nil {
 			return updateErr

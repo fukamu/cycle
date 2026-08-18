@@ -89,7 +89,7 @@ func (server *api) deleteAccount(writer http.ResponseWriter, request *http.Reque
 func sessionResponseFromAccount(view account.View) sessionResponse {
 	return mapSession(appsession.View{
 		UserID: view.UserID, GoogleConnected: view.GoogleConnected,
-		CSRFToken: view.CSRFToken, ActiveCycleID: view.ActiveCycleID, SessionToken: view.SessionToken,
+		CSRFToken: view.CSRFToken, SessionToken: view.SessionToken,
 	})
 }
 

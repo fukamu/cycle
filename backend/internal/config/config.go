@@ -17,6 +17,7 @@ type Config struct {
 	App       AppConfig
 	Database  DatabaseConfig
 	Session   SessionConfig
+	Goals     GoalConfig
 	AI        AIConfig
 	RateLimit RateLimitConfig
 	Turnstile TurnstileConfig
@@ -42,10 +43,15 @@ type SessionConfig struct {
 	CSRFTokenPepper       string
 	BootstrapIDPepper     string
 	RateLimitHMACSecret   string
+	CursorSigningSecret   string
 	IdleTTL               time.Duration
 	AbsoluteTTL           time.Duration
 	ActivityTouchInterval time.Duration
 	AnonymousBootstrapTTL time.Duration
+}
+
+type GoalConfig struct {
+	MaxProgressingGoals int
 }
 
 type AIConfig struct {
@@ -56,7 +62,11 @@ type AIConfig struct {
 	MaxOutputTokens          int
 	Timeout                  time.Duration
 	MaxProviderAttempts      int
+	MaxRetryBackoff          time.Duration
+	FinalizationGrace        time.Duration
+	LeaseDuration            time.Duration
 	MaxGenerationsPerUser24h int
+	GoalPromptVersion        string
 	GeneratePromptVersion    string
 	RefinePromptVersion      string
 	TokenizerEncoding        string
@@ -114,27 +124,33 @@ func Load(lookup LookupEnv) (Config, error) {
 			CSRFTokenPepper:       reader.stringValue("CSRF_TOKEN_PEPPER", ""),
 			BootstrapIDPepper:     reader.stringValue("BOOTSTRAP_ID_PEPPER", ""),
 			RateLimitHMACSecret:   reader.stringValue("RATE_LIMIT_HMAC_SECRET", ""),
+			CursorSigningSecret:   reader.stringValue("CURSOR_SIGNING_SECRET", ""),
 			IdleTTL:               reader.durationDays("SESSION_IDLE_DAYS", 30),
 			AbsoluteTTL:           reader.durationDays("SESSION_ABSOLUTE_DAYS", 180),
 			ActivityTouchInterval: reader.durationMinutes("SESSION_ACTIVITY_TOUCH_MINUTES", 15),
 			AnonymousBootstrapTTL: reader.durationMinutes("ANONYMOUS_BOOTSTRAP_TTL_MINUTES", 10),
 		},
+		Goals: GoalConfig{MaxProgressingGoals: reader.intValue("MAX_PROGRESSING_GOALS", 1)},
 		AI: AIConfig{
 			APIKey:                   reader.stringValue("OPENAI_API_KEY", ""),
 			Provider:                 reader.stringValue("AI_PROVIDER", "openai"),
-			Model:                    reader.stringValue("AI_MODEL", "gpt-5-mini"),
+			Model:                    reader.stringValue("AI_MODEL", "gpt-5.6-luna"),
 			MaxInputTokens:           reader.intValue("AI_MAX_INPUT_TOKENS", 12000),
 			MaxOutputTokens:          reader.intValue("AI_MAX_OUTPUT_TOKENS", 800),
 			Timeout:                  reader.durationSeconds("AI_TIMEOUT_SECONDS", 45),
 			MaxProviderAttempts:      reader.intValue("AI_MAX_PROVIDER_ATTEMPTS", 2),
+			MaxRetryBackoff:          reader.durationSeconds("AI_MAX_RETRY_BACKOFF_SECONDS", 5),
+			FinalizationGrace:        reader.durationSeconds("AI_FINALIZATION_GRACE_SECONDS", 15),
+			LeaseDuration:            reader.durationSeconds("AI_LEASE_SECONDS", 120),
 			MaxGenerationsPerUser24h: reader.intValue("AI_MAX_GENERATIONS_PER_USER_24H", 10),
-			GeneratePromptVersion:    reader.stringValue("AI_GENERATE_PROMPT_VERSION", "generate-action-v1"),
-			RefinePromptVersion:      reader.stringValue("AI_REFINE_PROMPT_VERSION", "refine-action-v1"),
+			GoalPromptVersion:        reader.stringValue("AI_GOAL_REFINE_PROMPT_VERSION", "goal-refine-v1"),
+			GeneratePromptVersion:    reader.stringValue("AI_GENERATE_PROMPT_VERSION", "action-generate-v1"),
+			RefinePromptVersion:      reader.stringValue("AI_REFINE_PROMPT_VERSION", "action-refine-v1"),
 			TokenizerEncoding:        reader.stringValue("AI_TOKENIZER_ENCODING", "o200k_base"),
 			MonthlyBudgetUSD:         reader.floatValue("AI_MONTHLY_BUDGET_USD", 100),
 			WarningThresholds:        reader.floatList("AI_WARNING_THRESHOLDS", []float64{0.5, 0.8}),
 			Pricing: AIPricingConfig{
-				Model:                     reader.stringValue("AI_PRICE_MODEL", "gpt-5-mini"),
+				Model:                     reader.stringValue("AI_PRICE_MODEL", "gpt-5.6-luna"),
 				InputUSDPerMillionTokens:  reader.floatValue("AI_PRICE_INPUT_USD_PER_MILLION", 0),
 				OutputUSDPerMillionTokens: reader.floatValue("AI_PRICE_OUTPUT_USD_PER_MILLION", 0),
 			},
@@ -189,6 +205,7 @@ func (config Config) Validate() error {
 		"CSRF_TOKEN_PEPPER":      config.Session.CSRFTokenPepper,
 		"BOOTSTRAP_ID_PEPPER":    config.Session.BootstrapIDPepper,
 		"RATE_LIMIT_HMAC_SECRET": config.Session.RateLimitHMACSecret,
+		"CURSOR_SIGNING_SECRET":  config.Session.CursorSigningSecret,
 	} {
 		if len(secret) < minimumSecretLength {
 			problems = append(problems, name+" must be at least 24 characters")
@@ -196,6 +213,9 @@ func (config Config) Validate() error {
 	}
 	if config.Session.IdleTTL <= 0 || config.Session.AbsoluteTTL < config.Session.IdleTTL || config.Session.ActivityTouchInterval <= 0 || config.Session.AnonymousBootstrapTTL <= 0 {
 		problems = append(problems, "session durations are invalid")
+	}
+	if config.Goals.MaxProgressingGoals <= 0 {
+		problems = append(problems, "MAX_PROGRESSING_GOALS must be positive")
 	}
 	if config.AI.Provider != "openai" {
 		problems = append(problems, "AI_PROVIDER must be openai")
@@ -206,6 +226,13 @@ func (config Config) Validate() error {
 	if config.AI.MaxProviderAttempts < 1 || config.AI.MaxProviderAttempts > 2 {
 		problems = append(problems, "AI_MAX_PROVIDER_ATTEMPTS must be between 1 and 2")
 	}
+	minimumLease := config.AI.Timeout*time.Duration(config.AI.MaxProviderAttempts) + config.AI.MaxRetryBackoff + config.AI.FinalizationGrace
+	if config.AI.MaxRetryBackoff < 0 || config.AI.FinalizationGrace <= 0 || config.AI.LeaseDuration <= minimumLease {
+		problems = append(problems, "AI_LEASE_SECONDS must exceed provider timeout attempts plus retry backoff and finalization grace")
+	}
+	if config.AI.GoalPromptVersion == "" || config.AI.GeneratePromptVersion == "" || config.AI.RefinePromptVersion == "" {
+		problems = append(problems, "AI prompt versions are required")
+	}
 	if config.AI.MaxGenerationsPerUser24h <= 0 || config.AI.MonthlyBudgetUSD <= 0 {
 		problems = append(problems, "AI limits and monthly budget must be positive")
 	}
@@ -214,6 +241,9 @@ func (config Config) Validate() error {
 	}
 	if config.AI.Pricing.InputUSDPerMillionTokens < 0 || config.AI.Pricing.OutputUSDPerMillionTokens < 0 {
 		problems = append(problems, "AI prices cannot be negative")
+	}
+	if config.App.Environment == "production" && (config.AI.Pricing.InputUSDPerMillionTokens <= 0 || config.AI.Pricing.OutputUSDPerMillionTokens <= 0) {
+		problems = append(problems, "production AI prices must be positive")
 	}
 	previous := float64(0)
 	for _, threshold := range config.AI.WarningThresholds {

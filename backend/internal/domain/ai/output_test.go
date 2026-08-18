@@ -29,7 +29,7 @@ func TestRenderGeneratedActionsRejectsInvalidCountAndOversize(t *testing.T) {
 	if _, err := RenderGeneratedActions([]string{"1", "2", "3", "4"}); !errors.Is(err, ErrInvalidActionCount) {
 		t.Fatalf("four error = %v", err)
 	}
-	if _, err := RenderGeneratedActions([]string{strings.Repeat("長", cycle.MaxFrameCodePoints)}); !errors.Is(err, cycle.ErrFrameTooLong) {
+	if _, err := RenderGeneratedActions([]string{strings.Repeat("長", cycle.MaxFrameCodePoints)}); !errors.Is(err, cycle.ErrFrameTextTooLong) {
 		t.Fatalf("oversize error = %v", err)
 	}
 }

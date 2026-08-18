@@ -17,50 +17,64 @@ type AbuseRateBucket struct {
 }
 
 type AiBudgetMonthly struct {
-	MonthUtc        pgtype.Date
-	ReservedCostUsd pgtype.Numeric
-	ActualCostUsd   pgtype.Numeric
-	UpdatedAt       pgtype.Timestamptz
+	MonthUtc            pgtype.Date
+	ReservedCostUsd     pgtype.Numeric
+	ActualCostUsd       pgtype.Numeric
+	UnattributedCostUsd pgtype.Numeric
+	UpdatedAt           pgtype.Timestamptz
 }
 
 type AiGeneration struct {
-	ID                     pgtype.UUID
-	UserID                 pgtype.UUID
-	CycleID                pgtype.UUID
-	GenerationType         string
-	Status                 string
-	Provider               string
-	Model                  string
-	PromptVersion          string
-	CurrentContentRevision int64
-	IdempotencyKey         pgtype.UUID
-	InputHash              string
-	RefineSourceAction     *string
-	Output                 *string
-	ContextCycleIds        []pgtype.UUID
-	InputTokens            *int64
-	OutputTokens           *int64
-	EstimatedCostUsd       pgtype.Numeric
-	BudgetMonthUtc         pgtype.Date
-	BudgetReservedCostUsd  pgtype.Numeric
-	AttemptCount           int16
-	FailureCode            *string
-	ProviderRequestID      *string
-	LeaseExpiresAt         pgtype.Timestamptz
-	StartedAt              pgtype.Timestamptz
-	FinishedAt             pgtype.Timestamptz
+	ID                    pgtype.UUID
+	UserID                pgtype.UUID
+	OperationType         string
+	Status                string
+	SourceGoalDraftID     pgtype.UUID
+	GoalID                pgtype.UUID
+	GoalVersionID         pgtype.UUID
+	CycleID               pgtype.UUID
+	TargetRevision        int64
+	IdempotencyKey        pgtype.UUID
+	InputHash             string
+	SourceText            *string
+	Output                *string
+	ContextCycleIds       []pgtype.UUID
+	Provider              string
+	Model                 string
+	PromptVersion         string
+	InputTokens           *int64
+	OutputTokens          *int64
+	EstimatedCostUsd      pgtype.Numeric
+	BudgetMonthUtc        pgtype.Date
+	BudgetReservedCostUsd pgtype.Numeric
+	AttemptCount          int16
+	FailureCode           *string
+	ProviderRequestID     *string
+	LeaseExpiresAt        pgtype.Timestamptz
+	ContextChanged        bool
+	AdoptedAt             pgtype.Timestamptz
+	AdoptedDraftRevision  *int64
+	AppliedAt             pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	FinishedAt            pgtype.Timestamptz
 }
 
 type AiUsageEvent struct {
-	ID               pgtype.UUID
-	UserID           pgtype.UUID
-	GenerationID     pgtype.UUID
-	GenerationType   string
-	AcceptedAt       pgtype.Timestamptz
-	Status           string
-	InputTokens      *int64
-	OutputTokens     *int64
-	EstimatedCostUsd pgtype.Numeric
+	OperationID              pgtype.UUID
+	UserID                   pgtype.UUID
+	GoalID                   pgtype.UUID
+	OperationType            string
+	Status                   string
+	Provider                 string
+	Model                    string
+	PromptVersion            string
+	AcceptedAt               pgtype.Timestamptz
+	InputTokens              *int64
+	OutputTokens             *int64
+	EstimatedCostUsd         pgtype.Numeric
+	ProviderUsageFinalizedAt pgtype.Timestamptz
+	QuotaRetainUntil         pgtype.Timestamptz
+	ContentDeleted           bool
 }
 
 type AnonymousBootstrap struct {
@@ -80,13 +94,63 @@ type AuthIdentity struct {
 	CreatedAt           pgtype.Timestamptz
 }
 
+type Goal struct {
+	ID                      pgtype.UUID
+	UserID                  pgtype.UUID
+	Status                  string
+	CurrentVersionNumber    int32
+	NextCycleSequenceNumber int32
+	Revision                int64
+	TerminalAt              pgtype.Timestamptz
+	TerminalOperationID     pgtype.UUID
+	TerminalRequestHash     *string
+	CreatedAt               pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+}
+
+type GoalDeleteReceipt struct {
+	UserID         pgtype.UUID
+	IdempotencyKey pgtype.UUID
+	DeletedGoalID  pgtype.UUID
+	RequestHash    string
+	DeletedAt      pgtype.Timestamptz
+	ExpiresAt      pgtype.Timestamptz
+}
+
+type GoalDraft struct {
+	ID                pgtype.UUID
+	UserID            pgtype.UUID
+	DraftType         string
+	GoalID            pgtype.UUID
+	BaseGoalVersionID pgtype.UUID
+	ReviewCycleID     pgtype.UUID
+	Body              string
+	Revision          int64
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+type GoalVersion struct {
+	ID                   pgtype.UUID
+	UserID               pgtype.UUID
+	GoalID               pgtype.UUID
+	VersionNumber        int32
+	Body                 string
+	CreatedByOperationID pgtype.UUID
+	CreatedAt            pgtype.Timestamptz
+}
+
 type PdcaCycle struct {
 	ID                                 pgtype.UUID
 	UserID                             pgtype.UUID
+	GoalID                             pgtype.UUID
+	GoalVersionID                      pgtype.UUID
 	SequenceNumber                     int32
 	Status                             string
 	StartedAt                          pgtype.Timestamptz
 	CompletedAt                        pgtype.Timestamptz
+	CanceledAt                         pgtype.Timestamptz
+	CancellationReason                 *string
 	Plan                               string
 	DoText                             string
 	CheckText                          string
@@ -98,7 +162,10 @@ type PdcaCycle struct {
 	ActionRevision                     int64
 	ActionLastAiAppliedContentRevision *int64
 	ActionUserModifiedAfterAi          bool
+	StartOperationID                   pgtype.UUID
+	StartRequestHash                   string
 	CompletionOperationID              pgtype.UUID
+	CompletionRequestHash              *string
 	CreatedAt                          pgtype.Timestamptz
 	UpdatedAt                          pgtype.Timestamptz
 }

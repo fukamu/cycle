@@ -21,7 +21,7 @@ func TestCreateAnonymousHashesCredentialsAndReturnsPlainTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.UserID != "00000000-0000-4000-8000-000000000001" || view.ActiveCycleID == "" || view.SessionToken == "" || view.CSRFToken == "" {
+	if view.UserID != "00000000-0000-4000-8000-000000000001" || view.SessionToken == "" || view.CSRFToken == "" {
 		t.Fatalf("view = %#v", view)
 	}
 	if string(repository.created.SessionTokenHash) == view.SessionToken || string(repository.created.CSRFTokenHash) == view.CSRFToken {
@@ -49,7 +49,6 @@ func TestRefreshRotatesCSRFAndVerifyCSRF(t *testing.T) {
 		ID:            "00000000-0000-4000-8000-000000000009",
 		UserID:        user.ID("00000000-0000-4000-8000-000000000001"),
 		LastSeenAt:    testTime.Add(-time.Hour),
-		ActiveCycleID: "00000000-0000-4000-8000-000000000002",
 		CSRFTokenHash: keyedHash([]byte("csrf-key"), "token-2"),
 	}}
 	service := testService(repository)
@@ -139,5 +138,5 @@ func (repository *fakeRepository) Touch(context.Context, string, time.Time, time
 
 func (repository *fakeRepository) CreateOrResumeAnonymous(_ context.Context, input CreateAnonymousRecord) (AnonymousRecord, error) {
 	repository.created = input
-	return AnonymousRecord{UserID: input.UserID, ActiveCycleID: input.CycleID, Created: true}, nil
+	return AnonymousRecord{UserID: input.UserID, Created: true}, nil
 }

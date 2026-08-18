@@ -52,6 +52,8 @@ func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
 	environment["GOOGLE_WEB_CLIENT_ID"] = "test.apps.googleusercontent.com"
 	environment["TURNSTILE_ENABLED"] = "true"
 	environment["TURNSTILE_SECRET_KEY"] = "test-turnstile-secret"
+	environment["AI_PRICE_INPUT_USD_PER_MILLION"] = "1"
+	environment["AI_PRICE_OUTPUT_USD_PER_MILLION"] = "1"
 	if _, err := Load(mapLookup(environment)); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -66,6 +68,7 @@ func validEnvironment() map[string]string {
 		"CSRF_TOKEN_PEPPER":      "123456789012345678901234",
 		"BOOTSTRAP_ID_PEPPER":    "123456789012345678901234",
 		"RATE_LIMIT_HMAC_SECRET": "123456789012345678901234",
+		"CURSOR_SIGNING_SECRET":  "123456789012345678901234",
 		"TURNSTILE_ENABLED":      "false",
 	}
 }

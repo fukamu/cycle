@@ -137,6 +137,15 @@ func requestID(ctx context.Context) string {
 	return value
 }
 
+func (server *api) remoteIP(request *http.Request) string {
+	if server.dependencies.TrustProxy {
+		if value := strings.TrimSpace(strings.Split(request.Header.Get("CF-Connecting-IP"), ",")[0]); value != "" {
+			return value
+		}
+	}
+	return request.RemoteAddr
+}
+
 func isCanonicalUUID(value string) bool {
 	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
 		return false
