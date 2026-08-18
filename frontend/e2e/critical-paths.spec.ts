@@ -100,6 +100,93 @@ test("goal review termination discards an unversioned change explicitly", async 
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });
 
+test("cross-user draft, goal, cycle, and delete access is rejected", async ({
+  browser,
+}) => {
+  const ownerContext = await browser.newContext();
+  const outsiderContext = await browser.newContext();
+  try {
+    const owner = await ownerContext.newPage();
+    await owner.goto("/");
+    const draftResponse = owner.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/api/v1/goal-drafts") &&
+        response.status() === 201,
+    );
+    await owner.getByRole("button", { name: "新しい目標を設定" }).click();
+    const draftPayload = (await (await draftResponse).json()) as {
+      draft: { id: string };
+    };
+
+    const outsider = await outsiderContext.newPage();
+    await outsider.goto("/");
+    await expect(
+      outsider.getByRole("button", { name: "新しい目標を設定" }),
+    ).toBeVisible();
+    await expectAPIError(
+      outsider,
+      `/api/v1/goal-drafts/${draftPayload.draft.id}`,
+      404,
+      "GOAL_DRAFT_NOT_FOUND",
+    );
+
+    await saveText(
+      owner,
+      owner.getByRole("textbox", { name: "あなたの目標" }),
+      "所有者だけが操作できる目標",
+      "/api/v1/goal-drafts/",
+    );
+    await owner.getByRole("button", { name: "この目標で始める" }).click();
+    await expect(owner.getByText("Goal v1 · Cycle 1")).toBeVisible();
+    const route = new URL(owner.url()).pathname.match(
+      /^\/goals\/([^/]+)\/cycles\/([^/]+)$/,
+    );
+    expect(route).not.toBeNull();
+    const [, goalId, cycleId] = route!;
+
+    await expectAPIError(
+      outsider,
+      `/api/v1/goals/${goalId}`,
+      404,
+      "GOAL_NOT_FOUND",
+    );
+    await expectAPIError(
+      outsider,
+      `/api/v1/goals/${goalId}/cycles/${cycleId}`,
+      404,
+      "CYCLE_NOT_FOUND",
+    );
+
+    const deleteAttempt = await outsider.evaluate(async (targetGoalId) => {
+      const sessionResponse = await fetch("/api/v1/session");
+      const session = (await sessionResponse.json()) as { csrfToken: string };
+      const response = await fetch(`/api/v1/goals/${targetGoalId}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-CSRF-Token": session.csrfToken,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({ confirmed: true, expectedGoalRevision: 0 }),
+      });
+      const payload = (await response.json()) as { error: { code: string } };
+      return { status: response.status, code: payload.error.code };
+    }, goalId);
+    expect(deleteAttempt).toEqual({ status: 404, code: "GOAL_NOT_FOUND" });
+
+    const ownerReadStatus = await owner.evaluate(async (targetGoalId) => {
+      const response = await fetch(`/api/v1/goals/${targetGoalId}`);
+      return response.status;
+    }, goalId);
+    expect(ownerReadStatus).toBe(200);
+  } finally {
+    await ownerContext.close();
+    await outsiderContext.close();
+  }
+});
+
 async function createAndCompleteGoal(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
@@ -156,4 +243,18 @@ async function saveText(
   await editor.fill(content);
   await response;
   await expect(page.getByText("保存済み")).toBeVisible();
+}
+
+async function expectAPIError(
+  page: Page,
+  path: string,
+  status: number,
+  code: string,
+) {
+  const result = await page.evaluate(async (targetPath) => {
+    const response = await fetch(targetPath);
+    const payload = (await response.json()) as { error: { code: string } };
+    return { status: response.status, code: payload.error.code };
+  }, path);
+  expect(result).toEqual({ status, code });
 }
