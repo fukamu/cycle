@@ -63,7 +63,11 @@ ORDER BY g.updated_at DESC,g.id DESC`, mustUUID(userID))
 		}
 		ids = append(ids, id)
 	}
+	rowErr := rows.Err()
 	rows.Close()
+	if rowErr != nil {
+		return view, rowErr
+	}
 	for _, id := range ids {
 		item, getErr := store.GetGoal(ctx, userID, id)
 		if getErr != nil {
@@ -227,11 +231,15 @@ func (store *WorkspaceStore) ListGoals(ctx context.Context, userID, scope, encod
 	if err != nil {
 		return workspace.GoalPage{}, err
 	}
+	var cursorID any
+	if cursor.ID != "" {
+		cursorID = cursor.ID
+	}
 	rows, err := store.pool.Query(ctx, `SELECT id,updated_at FROM goals
 WHERE user_id=$1
 AND ($2='all' OR ($2='progressing' AND status IN ('active_cycle','goal_review')) OR ($2='history' AND status IN ('achieved','ended')))
 AND ($3::timestamptz IS NULL OR (updated_at,id)<($3,$4::uuid))
-ORDER BY updated_at DESC,id DESC LIMIT $5`, mustUUID(userID), scope, cursor.Time, cursor.ID, limit+1)
+ORDER BY updated_at DESC,id DESC LIMIT $5`, mustUUID(userID), scope, cursor.Time, cursorID, limit+1)
 	if err != nil {
 		return workspace.GoalPage{}, err
 	}
@@ -248,7 +256,11 @@ ORDER BY updated_at DESC,id DESC LIMIT $5`, mustUUID(userID), scope, cursor.Time
 		}
 		found = append(found, item)
 	}
+	rowErr := rows.Err()
 	rows.Close()
+	if rowErr != nil {
+		return workspace.GoalPage{}, rowErr
+	}
 	page := workspace.GoalPage{Items: []workspace.GoalView{}}
 	for index, item := range found {
 		if index == limit {
@@ -308,10 +320,14 @@ func (store *WorkspaceStore) ListCycles(ctx context.Context, userID, goalID, enc
 	if cursor.Sequence != nil {
 		sequence = *cursor.Sequence
 	}
+	var cursorID any
+	if cursor.ID != "" {
+		cursorID = cursor.ID
+	}
 	rows, err := store.pool.Query(ctx, `SELECT c.id FROM pdca_cycles c
 WHERE c.user_id=$1 AND c.goal_id=$2
 AND ($3::integer=0 OR (c.sequence_number,c.id)<($3,$4::uuid))
-ORDER BY c.sequence_number DESC,c.id DESC LIMIT $5`, mustUUID(userID), mustUUID(goalID), sequence, cursor.ID, limit+1)
+ORDER BY c.sequence_number DESC,c.id DESC LIMIT $5`, mustUUID(userID), mustUUID(goalID), sequence, cursorID, limit+1)
 	if err != nil {
 		return workspace.CyclePage{}, err
 	}
@@ -324,7 +340,11 @@ ORDER BY c.sequence_number DESC,c.id DESC LIMIT $5`, mustUUID(userID), mustUUID(
 		}
 		ids = append(ids, id)
 	}
+	rowErr := rows.Err()
 	rows.Close()
+	if rowErr != nil {
+		return workspace.CyclePage{}, rowErr
+	}
 	page := workspace.CyclePage{Items: []workspace.CycleSummary{}}
 	for index, id := range ids {
 		if index == limit {

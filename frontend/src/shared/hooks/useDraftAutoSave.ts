@@ -28,6 +28,7 @@ export function useDraftAutoSave(input: Input) {
   const revisionRef = useRef(revision);
   const savedBody = useRef(input.initialBody);
   const inFlight = useRef(false);
+  const paused = useRef(false);
 
   useEffect(() => {
     void getBrowserDraft(input.userId, input.subjectKey).then((draft) => {
@@ -65,6 +66,7 @@ export function useDraftAutoSave(input: Input) {
   useEffect(() => {
     if (state !== "dirty" || inFlight.current) return;
     const timer = window.setTimeout(async () => {
+      if (paused.current) return;
       const snapshot = bodyRef.current;
       const base = revisionRef.current;
       inFlight.current = true;
@@ -111,6 +113,23 @@ export function useDraftAutoSave(input: Input) {
     [input.subjectKey, input.userId],
   );
 
+  const pause = useCallback(() => {
+    paused.current = true;
+  }, []);
+
+  const resume = useCallback(() => {
+    paused.current = false;
+    if (bodyRef.current !== savedBody.current) {
+      setState("dirty");
+      setRetryNonce((value) => value + 1);
+    }
+  }, []);
+
+  const discard = useCallback(async () => {
+    paused.current = true;
+    await deleteBrowserDraft(input.userId, input.subjectKey);
+  }, [input.subjectKey, input.userId]);
+
   return {
     body,
     setBody,
@@ -121,5 +140,8 @@ export function useDraftAutoSave(input: Input) {
       setRetryNonce((value) => value + 1);
     },
     synchronize,
+    pause,
+    resume,
+    discard,
   };
 }

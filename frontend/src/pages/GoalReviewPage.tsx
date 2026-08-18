@@ -110,6 +110,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   async function nextCycle() {
     setPending(true);
     setError(undefined);
+    editor.pause();
     try {
       const result = await continueReview(
         goal.id,
@@ -117,11 +118,13 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         editor.revision,
         session.csrfToken,
       );
-      await cache.invalidateQueries();
+      await editor.discard();
+      await cache.invalidateQueries({ refetchType: "none" });
       navigate(`/goals/${goal.id}/cycles/${result.cycle.id}`, {
         replace: true,
       });
     } catch {
+      editor.resume();
       setError(
         "次のサイクルを開始できませんでした。保存状態を確認してください。",
       );
@@ -136,6 +139,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     if (!window.confirm(`目標を${label}しますか？${discard}`)) return;
     setPending(true);
     setError(undefined);
+    editor.pause();
     try {
       await terminateGoal(
         goal.id,
@@ -144,9 +148,11 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         "goal_review",
         session.csrfToken,
       );
-      await cache.invalidateQueries();
+      await editor.discard();
+      await cache.invalidateQueries({ refetchType: "none" });
       navigate("/", { replace: true });
     } catch {
+      editor.resume();
       setError(`目標を${label}できませんでした。`);
       setPending(false);
     }
@@ -159,11 +165,14 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     )
       return;
     setPending(true);
+    editor.pause();
     try {
       await deleteGoal(goal.id, goal.revision, session.csrfToken);
-      await cache.invalidateQueries();
+      await editor.discard();
+      await cache.invalidateQueries({ refetchType: "none" });
       navigate("/", { replace: true });
     } catch {
+      editor.resume();
       setError("目標を削除できませんでした。");
       setPending(false);
     }

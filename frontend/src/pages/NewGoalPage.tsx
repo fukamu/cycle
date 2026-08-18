@@ -132,17 +132,20 @@ function GoalDraftEditor({
   async function start() {
     setPending(true);
     setError(undefined);
+    editor.pause();
     try {
       const result = await startGoal(
         draft.id,
         editor.revision,
         session.csrfToken,
       );
-      await cache.invalidateQueries();
+      await editor.discard();
+      await cache.invalidateQueries({ refetchType: "none" });
       navigate(`/goals/${result.goal.id}/cycles/${result.cycle.id}`, {
         replace: true,
       });
     } catch {
+      editor.resume();
       setError(
         "目標を開始できませんでした。保存状態と進行中の目標を確認してください。",
       );
@@ -152,11 +155,14 @@ function GoalDraftEditor({
   async function discard() {
     if (!window.confirm("この目標の下書きを破棄しますか？")) return;
     setPending(true);
+    editor.pause();
     try {
       await discardGoalDraft(draft.id, session.csrfToken);
-      await cache.invalidateQueries();
+      await editor.discard();
+      await cache.invalidateQueries({ refetchType: "none" });
       navigate("/", { replace: true });
     } catch {
+      editor.resume();
       setError("下書きを破棄できませんでした。");
       setPending(false);
     }

@@ -533,7 +533,11 @@ WHERE goal_id=$1 AND status='running' ORDER BY id FOR UPDATE`, mustUUID(goalID))
 		}
 		reservations = append(reservations, item)
 	}
+	rowErr := rows.Err()
 	rows.Close()
+	if rowErr != nil {
+		return rowErr
+	}
 	sort.Slice(reservations, func(i, j int) bool { return reservations[i].month.Before(reservations[j].month) })
 	for _, item := range reservations {
 		if item.amount > 0 {

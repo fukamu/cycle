@@ -281,7 +281,7 @@ function CycleWorkspace({
         contentRevision.current,
         session.csrfToken,
       );
-      await cache.invalidateQueries();
+      await cache.invalidateQueries({ refetchType: "none" });
       navigate(`/goals/${goal.id}/review`, { replace: true });
     } catch {
       setError("サイクルを完了できませんでした。入力内容を確認してください。");
@@ -306,7 +306,7 @@ function CycleWorkspace({
         session.csrfToken,
         { id: cycle.id, revision: contentRevision.current },
       );
-      await cache.invalidateQueries();
+      await cache.invalidateQueries({ refetchType: "none" });
       navigate("/", { replace: true });
     } catch {
       setError(`目標を${wording}できませんでした。`);
@@ -323,7 +323,7 @@ function CycleWorkspace({
     setPendingAction(true);
     try {
       await deleteGoal(goal.id, goal.revision, session.csrfToken);
-      await cache.invalidateQueries();
+      await cache.invalidateQueries({ refetchType: "none" });
       navigate("/", { replace: true });
     } catch {
       setError("目標を削除できませんでした。");
