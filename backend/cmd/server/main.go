@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/matoruru/PDCAI/backend/internal/ai/prompts"
 	"github.com/matoruru/PDCAI/backend/internal/application/account"
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
 	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
@@ -70,11 +71,16 @@ func main() {
 	)
 	var aiProvider workspace.AIProvider = aiprovider.Fake{}
 	if settings.AI.APIKey != "" {
-		aiProvider = aiprovider.NewOpenAI(settings.AI.APIKey, settings.AI.Model, settings.AI.Timeout, settings.AI.MaxOutputTokens,
+		aiProvider = aiprovider.NewOpenAI(settings.AI.APIKey, settings.AI.Model, settings.AI.Timeout, settings.AI.ActionMaxOutputTokens,
 			settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
 	}
+	tokenCounter, err := aiprovider.NewTokenCounter(settings.AI.TokenizerEncoding)
+	if err != nil {
+		logger.Error("AI tokenizer unavailable", "error_class", "tokenizer_startup_failed")
+		os.Exit(1)
+	}
 	reservationUSD := (float64(settings.AI.MaxInputTokens)*settings.AI.Pricing.InputUSDPerMillionTokens +
-		float64(settings.AI.MaxOutputTokens)*settings.AI.Pricing.OutputUSDPerMillionTokens) / 1_000_000 * float64(settings.AI.MaxProviderAttempts)
+		float64(settings.AI.ActionMaxOutputTokens)*settings.AI.Pricing.OutputUSDPerMillionTokens) / 1_000_000 * float64(settings.AI.MaxProviderAttempts)
 	workspaceStore := postgres.NewWorkspaceStore(pool, postgres.WorkspaceStoreSettings{
 		CursorSigningKey: []byte(settings.Session.CursorSigningSecret), Provider: settings.AI.Provider, Model: settings.AI.Model,
 		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
@@ -85,7 +91,13 @@ func main() {
 	})
 	workspaceService := workspace.NewService(workspaceStore, aiProvider, system.Clock{}, random, workspace.Settings{
 		MaxProgressingGoals: settings.Goals.MaxProgressingGoals, MaxProviderAttempts: settings.AI.MaxProviderAttempts,
-		MaxRetryBackoff: settings.AI.MaxRetryBackoff,
+		MaxRetryBackoff: settings.AI.MaxRetryBackoff, FinalizationGrace: settings.AI.FinalizationGrace, Model: settings.AI.Model,
+		MaxInputTokens: settings.AI.MaxInputTokens, GoalRefineMaxOutputTokens: settings.AI.GoalRefineMaxOutputTokens,
+		ActionMaxOutputTokens: settings.AI.ActionMaxOutputTokens, MaxContextCycles: settings.AI.MaxContextCycles,
+		GoalRefineInstructions: prompts.GoalRefine, ActionGenerateInstructions: prompts.ActionGenerate,
+		ActionRefineInstructions: prompts.ActionRefine, TokenCounter: tokenCounter,
+		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
+		RefinePromptVersion: settings.AI.RefinePromptVersion, AIObserver: metrics,
 	})
 	var googleVerifier account.GoogleVerifier = googleidentity.NewVerifier(settings.Google.WebClientID)
 	if settings.App.Environment == "test" {
@@ -106,7 +118,8 @@ func main() {
 	})
 	server := &http.Server{
 		Addr: settings.App.HTTPAddress, Handler: router,
-		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 70 * time.Second, IdleTimeout: 120 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second,
+		WriteTimeout: settings.AI.LeaseDuration + settings.AI.FinalizationGrace, IdleTimeout: 120 * time.Second,
 	}
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.ListenAndServe() }()

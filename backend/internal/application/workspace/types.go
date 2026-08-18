@@ -11,6 +11,10 @@ import (
 
 var (
 	ErrNotFound               = errors.New("resource not found")
+	ErrGoalDraftNotFound      = errors.New("goal draft not found")
+	ErrGoalNotFound           = errors.New("goal not found")
+	ErrCycleNotFound          = errors.New("cycle not found")
+	ErrGoalReviewNotFound     = errors.New("goal review not found")
 	ErrDraftAlreadyExists     = errors.New("goal creation draft already exists")
 	ErrDraftRevisionConflict  = errors.New("goal draft revision conflict")
 	ErrReviewRevisionConflict = errors.New("goal review draft revision conflict")
@@ -36,6 +40,8 @@ var (
 	ErrAIProviderUnavailable  = errors.New("AI provider unavailable")
 	ErrAIProviderTimeout      = errors.New("AI provider timeout")
 	ErrAIInvalidResponse      = errors.New("AI invalid response")
+	ErrAIContextIsolation     = errors.New("AI context isolation violation")
+	ErrAIInputBudget          = errors.New("AI input cannot fit token budget")
 	ErrIdempotencyKeyReused   = errors.New("idempotency key reused")
 	ErrInvalidCursor          = errors.New("invalid cursor")
 )
@@ -261,6 +267,8 @@ type AIContextCycle struct {
 	ID             string
 	GoalID         string
 	SequenceNumber int32
+	Status         cycle.Status
+	GoalBody       string
 	Plan           string
 	Do             string
 	Check          string
@@ -268,22 +276,35 @@ type AIContextCycle struct {
 }
 
 type AISnapshot struct {
-	GenerationID   string
-	Operation      string
-	TargetRevision int64
-	GoalBody       string
-	SourceText     string
-	CurrentCycle   *AIContextCycle
-	PastCycles     []AIContextCycle
-	ReplayedOutput *string
+	GenerationID     string
+	Operation        string
+	TargetRevision   int64
+	GoalID           string
+	GoalBody         string
+	SourceText       string
+	CurrentCycle     *AIContextCycle
+	PastCycles       []AIContextCycle
+	CurrentTruncated bool
+	ReplayedOutput   *string
+}
+
+type AIProviderCycle struct {
+	SequenceNumber int32        `json:"sequenceNumber"`
+	Status         cycle.Status `json:"status"`
+	GoalBody       string       `json:"goalBody"`
+	Plan           string       `json:"plan"`
+	Do             string       `json:"do"`
+	Check          string       `json:"check"`
+	Action         string       `json:"action"`
 }
 
 type AIProviderRequest struct {
-	Operation    string
-	GoalBody     string
-	SourceText   string
-	CurrentCycle *AIContextCycle
-	PastCycles   []AIContextCycle
+	Operation       string            `json:"operation"`
+	GoalBody        string            `json:"goalBody"`
+	SourceText      string            `json:"sourceText"`
+	CurrentCycle    *AIProviderCycle  `json:"currentCycle,omitempty"`
+	PastCycles      []AIProviderCycle `json:"pastCycles"`
+	MaxOutputTokens int64             `json:"-"`
 }
 
 type AIProviderResult struct {
@@ -293,6 +314,19 @@ type AIProviderResult struct {
 	ProviderRequestID string
 	CostUSD           float64
 	Attempts          int16
+}
+
+type AIObservation struct {
+	Operation         string
+	Result            string
+	Model             string
+	PromptVersion     string
+	InputTokens       int64
+	OutputTokens      int64
+	EstimatedCostUSD  float64
+	ContextCycleCount int
+	CurrentTruncated  bool
+	Duration          time.Duration
 }
 
 type AIResponse struct {
@@ -309,6 +343,17 @@ type AIResponse struct {
 type AIProvider interface {
 	Execute(context.Context, AIProviderRequest) (AIProviderResult, error)
 }
+
+type TokenCounter interface {
+	Count(context.Context, string, string) (int, error)
+	Truncate(context.Context, string, string, int, string) (string, error)
+}
+
+type AIObserver interface {
+	ObserveAI(context.Context, AIObservation)
+}
+
+type AIContextSelector func(context.Context, AISnapshot) (AISnapshot, error)
 
 type Store interface {
 	Home(context.Context, string, int) (HomeView, error)
@@ -328,9 +373,9 @@ type Store interface {
 	GetCycle(context.Context, string, string, string) (CycleView, error)
 	SaveFrame(context.Context, SaveFrameInput) (SaveFrameResult, error)
 	CompleteCycle(context.Context, CompleteCycleInput) (CompleteCycleResult, error)
-	BeginGoalRefine(context.Context, GoalRefineInput) (AISnapshot, error)
+	BeginGoalRefine(context.Context, GoalRefineInput, AIContextSelector) (AISnapshot, error)
 	FinishGoalRefine(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
 	AdoptGoalSuggestion(context.Context, string, string, string, int64, *int64, time.Time) (DraftView, error)
-	BeginActionAI(context.Context, ActionAIInput) (AISnapshot, error)
+	BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error)
 	FinishActionAI(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
 }

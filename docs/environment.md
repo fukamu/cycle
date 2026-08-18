@@ -11,7 +11,7 @@ Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging L
 - Staging runtime secretsはGitHub `staging` Environmentからdeploy時の一時`--secrets-file`経由でCloudflare Worker Secretsへ登録します。一時fileはworkflowの`always()` stepで削除します。
 - Neon migration direct URLはGitHub Actionsだけが使い、Worker/Containerへ渡しません。Runtimeにはpooled URLだけを渡します。
 - R2 backend credential、Terraform/Turnstile token、Cloudflare deploy tokenは用途別に分離します。
-- 4つのpepper/HMACは環境ごと・用途ごとに異なる24文字以上の高entropy値にします。
+- Session/CSRF/bootstrap pepper、rate-limit HMAC、cursor署名secretは環境ごと・用途ごとに異なる24文字以上の高entropy値にします。
 
 ## Backend runtime
 
@@ -31,10 +31,12 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | `CSRF_TOKEN_PEPPER` | CSRF hash | 24文字以上 | **secret**、GitHub secret |
 | `BOOTSTRAP_ID_PEPPER` | bootstrap hash | 24文字以上 | **secret**、GitHub secret |
 | `RATE_LIMIT_HMAC_SECRET` | IP等のrate key HMAC | 24文字以上 | **secret**、GitHub secret |
+| `CURSOR_SIGNING_SECRET` | Goal/Cycle cursor署名 | 24文字以上 | **secret**、GitHub secret |
 | `SESSION_IDLE_DAYS` | idle TTL、`30` | positive | GitHub variable |
 | `SESSION_ABSOLUTE_DAYS` | absolute TTL、`180` | idle以上 | GitHub variable |
 | `SESSION_ACTIVITY_TOUCH_MINUTES` | activity更新間隔、`15` | positive | GitHub variable |
 | `ANONYMOUS_BOOTSTRAP_TTL_MINUTES` | bootstrap idempotency TTL、`10` | positive | GitHub variable |
+| `MAX_PROGRESSING_GOALS` | 同時進行Goal上限、MVP `1` | positive | GitHub variable |
 
 ## AI / authentication / abuse prevention
 
@@ -42,14 +44,20 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 |---|---|---|---|
 | `OPENAI_API_KEY` | OpenAI auth | Production profile必須 | **secret**、GitHub secret |
 | `AI_PROVIDER` | `openai` | `openai`のみ | Container code固定 |
-| `AI_MODEL` | model、`gpt-5-mini` | price modelと一致 | GitHub variable |
+| `AI_MODEL` | model、`gpt-5.6-luna` | quality gate通過済み、price modelと一致 | GitHub variable |
 | `AI_MAX_INPUT_TOKENS` | input max、`12000` | positive | GitHub variable |
-| `AI_MAX_OUTPUT_TOKENS` | output max、`800` | positive | GitHub variable |
+| `AI_GOAL_REFINE_MAX_OUTPUT_TOKENS` | Goal Refine output max、`400` | positive | GitHub variable |
+| `AI_ACTION_MAX_OUTPUT_TOKENS` | Action AI output max、`800` | positive | GitHub variable |
+| `AI_MAX_CONTEXT_CYCLES` | 同一Goalの過去Cycle候補上限、`10` | 1〜10 | GitHub variable |
 | `AI_TIMEOUT_SECONDS` | timeout、`45` | positive | GitHub variable |
 | `AI_MAX_PROVIDER_ATTEMPTS` | attempts、`2` | 1〜2 | GitHub variable |
+| `AI_MAX_RETRY_BACKOFF_SECONDS` | logical operation内retry待機上限、`5` | 0以上 | GitHub variable |
+| `AI_FINALIZATION_GRACE_SECONDS` | DB finalization余裕、`15` | positive | GitHub variable |
+| `AI_LEASE_SECONDS` | running generation lease、`120` | timeout×attempts+backoff+graceより大 | GitHub variable |
 | `AI_MAX_GENERATIONS_PER_USER_24H` | rolling limit、`10` | positive | GitHub variable |
-| `AI_GENERATE_PROMPT_VERSION` | `generate-action-v1` | matching prompt file必須 | GitHub variable |
-| `AI_REFINE_PROMPT_VERSION` | `refine-action-v1` | matching prompt file必須 | GitHub variable |
+| `AI_GOAL_REFINE_PROMPT_VERSION` | `goal-refine-v1` | matching prompt file必須 | GitHub variable |
+| `AI_GENERATE_PROMPT_VERSION` | `action-generate-v1` | matching prompt file必須 | GitHub variable |
+| `AI_REFINE_PROMPT_VERSION` | `action-refine-v1` | matching prompt file必須 | GitHub variable |
 | `AI_TOKENIZER_ENCODING` | `o200k_base` | implementation対応値 | GitHub variable |
 | `AI_MONTHLY_BUDGET_USD` | app budget、`100` | positive | GitHub variable |
 | `AI_WARNING_THRESHOLDS` | `0.5,0.8` | 0〜1の昇順 | GitHub variable |
@@ -135,6 +143,7 @@ SESSION_TOKEN_PEPPER
 CSRF_TOKEN_PEPPER
 BOOTSTRAP_ID_PEPPER
 RATE_LIMIT_HMAC_SECRET
+CURSOR_SIGNING_SECRET
 TURNSTILE_SECRET_KEY
 ```
 
@@ -151,12 +160,19 @@ SESSION_IDLE_DAYS
 SESSION_ABSOLUTE_DAYS
 SESSION_ACTIVITY_TOUCH_MINUTES
 ANONYMOUS_BOOTSTRAP_TTL_MINUTES
+MAX_PROGRESSING_GOALS
 AI_MODEL
 AI_MAX_INPUT_TOKENS
-AI_MAX_OUTPUT_TOKENS
+AI_GOAL_REFINE_MAX_OUTPUT_TOKENS
+AI_ACTION_MAX_OUTPUT_TOKENS
+AI_MAX_CONTEXT_CYCLES
 AI_TIMEOUT_SECONDS
 AI_MAX_PROVIDER_ATTEMPTS
+AI_MAX_RETRY_BACKOFF_SECONDS
+AI_FINALIZATION_GRACE_SECONDS
+AI_LEASE_SECONDS
 AI_MAX_GENERATIONS_PER_USER_24H
+AI_GOAL_REFINE_PROMPT_VERSION
 AI_GENERATE_PROMPT_VERSION
 AI_REFINE_PROMPT_VERSION
 AI_TOKENIZER_ENCODING

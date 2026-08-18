@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
+
+	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
 )
 
 type AIUsage struct {
@@ -56,6 +58,7 @@ type Metrics struct {
 	aiEstimatedCost      metric.Float64Counter
 	aiContextCycleCount  metric.Int64Histogram
 	aiCurrentTruncated   metric.Int64Counter
+	aiContextIsolation   metric.Int64Counter
 	accountUpgrades      metric.Int64Counter
 	accountDeletes       metric.Int64Counter
 	anonymousCreates     metric.Int64Counter
@@ -104,6 +107,9 @@ func NewMetrics(logger *slog.Logger, warningThresholds []float64) (*Metrics, err
 		return nil, err
 	}
 	if result.aiCurrentTruncated, err = meter.Int64Counter("ai_context_current_truncated_total"); err != nil {
+		return nil, err
+	}
+	if result.aiContextIsolation, err = meter.Int64Counter("ai_context_isolation_violation_total"); err != nil {
 		return nil, err
 	}
 	if result.accountUpgrades, err = meter.Int64Counter("account_upgrade_total"); err != nil {
@@ -216,7 +222,8 @@ func (metrics *Metrics) ObserveAIGeneration(ctx context.Context, event AIObserva
 	metrics.aiInputTokens.Add(ctx, event.Usage.InputTokens, model)
 	metrics.aiOutputTokens.Add(ctx, event.Usage.OutputTokens, model)
 	metrics.aiEstimatedCost.Add(ctx, event.EstimatedCostUSD, model)
-	metrics.aiContextCycleCount.Record(ctx, int64(event.ContextCycleCount))
+	operation := metric.WithAttributes(attribute.String("type", string(event.Type)))
+	metrics.aiContextCycleCount.Record(ctx, int64(event.ContextCycleCount), operation)
 	metrics.log(ctx, "ai_generation",
 		slog.String("generation_type", string(event.Type)), slog.String("result", event.Result),
 		slog.String("ai_model", event.Model), slog.String("prompt_version", event.PromptVersion),
@@ -225,7 +232,7 @@ func (metrics *Metrics) ObserveAIGeneration(ctx context.Context, event AIObserva
 		slog.Int("context_cycle_count", event.ContextCycleCount), slog.Bool("current_truncated", event.CurrentTruncated),
 	)
 	if event.CurrentTruncated {
-		metrics.aiCurrentTruncated.Add(ctx, 1)
+		metrics.aiCurrentTruncated.Add(ctx, 1, operation)
 	}
 	if event.BudgetUsageRatio > 0 {
 		previous := math.Float64frombits(metrics.budgetUsageBits.Swap(math.Float64bits(event.BudgetUsageRatio)))
@@ -238,6 +245,22 @@ func (metrics *Metrics) ObserveAIGeneration(ctx context.Context, event AIObserva
 			}
 		}
 	}
+}
+
+func (metrics *Metrics) AIContextIsolationViolation(ctx context.Context) {
+	if metrics != nil {
+		metrics.aiContextIsolation.Add(ctx, 1)
+		metrics.log(ctx, "ai_context_isolation_violation")
+	}
+}
+
+func (metrics *Metrics) ObserveAI(ctx context.Context, event workspace.AIObservation) {
+	metrics.ObserveAIGeneration(ctx, AIObservation{
+		Type: event.Operation, Result: event.Result, Model: event.Model, PromptVersion: event.PromptVersion,
+		Usage:            AIUsage{InputTokens: event.InputTokens, OutputTokens: event.OutputTokens},
+		EstimatedCostUSD: event.EstimatedCostUSD, ContextCycleCount: event.ContextCycleCount,
+		CurrentTruncated: event.CurrentTruncated, Duration: event.Duration,
+	})
 }
 
 func (metrics *Metrics) log(ctx context.Context, event string, attributes ...slog.Attr) {

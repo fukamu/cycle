@@ -28,6 +28,9 @@ type apiError struct {
 func (server *api) writeError(writer http.ResponseWriter, request *http.Request, err error, details map[string]any) {
 	status, code, message := classifyError(err)
 	if server.dependencies.Metrics != nil {
+		if errors.Is(err, workspace.ErrAIContextIsolation) {
+			server.dependencies.Metrics.AIContextIsolationViolation(request.Context())
+		}
 		server.dependencies.Metrics.ErrorCode(request.Context(), code)
 	}
 	if server.dependencies.Logger != nil {
@@ -65,7 +68,13 @@ func classifyError(err error) (int, string, string) {
 		return 400, "FRAME_TEXT_TOO_LONG", "各項目は2,000文字以内で入力してください。"
 	case errors.Is(err, goal.ErrForbiddenCharacter), errors.Is(err, cycle.ErrForbiddenCharacter), errors.Is(err, cycle.ErrInvalidFrame):
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
-	case errors.Is(err, workspace.ErrNotFound):
+	case errors.Is(err, workspace.ErrGoalDraftNotFound):
+		return 404, "GOAL_DRAFT_NOT_FOUND", "目標の下書きが見つかりません。"
+	case errors.Is(err, workspace.ErrCycleNotFound):
+		return 404, "CYCLE_NOT_FOUND", "サイクルが見つかりません。"
+	case errors.Is(err, workspace.ErrGoalReviewNotFound):
+		return 404, "GOAL_REVIEW_NOT_FOUND", "目標の見直しが見つかりません。"
+	case errors.Is(err, workspace.ErrGoalNotFound), errors.Is(err, workspace.ErrNotFound):
 		return 404, "GOAL_NOT_FOUND", "対象が見つかりません。"
 	case errors.Is(err, workspace.ErrDraftAlreadyExists):
 		return 409, "GOAL_CREATION_DRAFT_ALREADY_EXISTS", "目標の下書きはすでにあります。"

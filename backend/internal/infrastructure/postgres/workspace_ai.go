@@ -18,7 +18,7 @@ import (
 	"github.com/matoruru/PDCAI/backend/internal/domain/user"
 )
 
-func (store *WorkspaceStore) BeginGoalRefine(ctx context.Context, input workspace.GoalRefineInput) (snapshot workspace.AISnapshot, err error) {
+func (store *WorkspaceStore) BeginGoalRefine(ctx context.Context, input workspace.GoalRefineInput, selectContext workspace.AIContextSelector) (snapshot workspace.AISnapshot, err error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return snapshot, err
@@ -63,7 +63,21 @@ WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(inp
 			return snapshot, err
 		}
 	}
-	inputHash := digestAIInput(store.settings.GoalPromptVersion, store.settings.Model, "goal_refine", draft.Revision, goalBody, draft.Body, nil, contextCycles)
+	snapshot = workspace.AISnapshot{
+		GenerationID: input.GenerationID, Operation: "goal_refine", TargetRevision: draft.Revision,
+		GoalBody: goalBody, SourceText: draft.Body, PastCycles: contextCycles,
+	}
+	if goalID != nil {
+		snapshot.GoalID = *goalID
+	}
+	if selectContext == nil {
+		return workspace.AISnapshot{}, workspace.ErrAIInputBudget
+	}
+	snapshot, err = selectContext(ctx, snapshot)
+	if err != nil {
+		return workspace.AISnapshot{}, err
+	}
+	inputHash := digestAIInput(store.settings.GoalPromptVersion, store.settings.Model, "goal_refine", draft.Revision, snapshot.GoalBody, snapshot.SourceText, nil, snapshot.PastCycles)
 	replayed, replayErr := existingGeneration(ctx, tx, input.UserID, "goal_refine", input.IdempotencyKey, inputHash)
 	if replayErr != nil {
 		return snapshot, replayErr
@@ -73,22 +87,16 @@ WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(inp
 	}
 	if err = store.reserveAI(ctx, tx, input.UserID, input.GenerationID, "goal_refine", input.IdempotencyKey,
 		inputHash, draft.ID, goalID, goalVersionID, nil, draft.Revision, draft.Body, store.settings.GoalPromptVersion,
-		contextCycleIDs(contextCycles), input.SessionID, input.RemoteAddress, input.Now); err != nil {
+		contextCycleIDs(snapshot.PastCycles), input.SessionID, input.RemoteAddress, input.Now); err != nil {
 		return snapshot, err
 	}
-	snapshot = workspace.AISnapshot{
-		GenerationID: input.GenerationID, Operation: "goal_refine", TargetRevision: draft.Revision,
-		SourceText: draft.Body,
-	}
-	snapshot.GoalBody = goalBody
-	snapshot.PastCycles = contextCycles
 	if err = tx.Commit(ctx); err != nil {
 		return workspace.AISnapshot{}, err
 	}
 	return snapshot, nil
 }
 
-func (store *WorkspaceStore) BeginActionAI(ctx context.Context, input workspace.ActionAIInput) (snapshot workspace.AISnapshot, err error) {
+func (store *WorkspaceStore) BeginActionAI(ctx context.Context, input workspace.ActionAIInput, selectContext workspace.AIContextSelector) (snapshot workspace.AISnapshot, err error) {
 	if input.Operation != "action_generate" && input.Operation != "action_refine" {
 		return snapshot, workspace.ErrAIInputIncomplete
 	}
@@ -137,15 +145,29 @@ WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(inp
 	if err != nil {
 		return snapshot, err
 	}
-	currentContext := &workspace.AIContextCycle{ID: current.ID, GoalID: current.GoalID, SequenceNumber: current.SequenceNumber,
-		Plan: current.Plan, Do: current.Do, Check: current.Check, Action: current.Action}
+	currentContext := &workspace.AIContextCycle{
+		ID: current.ID, GoalID: current.GoalID, SequenceNumber: current.SequenceNumber,
+		Status: current.Status, GoalBody: goalBody, Plan: current.Plan, Do: current.Do, Check: current.Check, Action: current.Action,
+	}
 	promptVersion := store.settings.GeneratePromptVersion
 	var sourceText *string
 	if input.Operation == "action_refine" {
 		promptVersion = store.settings.RefinePromptVersion
 		sourceText = &current.Action
 	}
-	inputHash := digestAIInput(promptVersion, store.settings.Model, input.Operation, current.Revisions.Content, goalBody, pointerValue(sourceText), currentContext, past)
+	snapshot = workspace.AISnapshot{
+		GenerationID: input.GenerationID, Operation: input.Operation, TargetRevision: current.Revisions.Content,
+		GoalID: input.GoalID, GoalBody: goalBody, SourceText: pointerValue(sourceText), PastCycles: past,
+		CurrentCycle: currentContext,
+	}
+	if selectContext == nil {
+		return workspace.AISnapshot{}, workspace.ErrAIInputBudget
+	}
+	snapshot, err = selectContext(ctx, snapshot)
+	if err != nil {
+		return workspace.AISnapshot{}, err
+	}
+	inputHash := digestAIInput(promptVersion, store.settings.Model, input.Operation, current.Revisions.Content, snapshot.GoalBody, snapshot.SourceText, snapshot.CurrentCycle, snapshot.PastCycles)
 	replayed, replayErr := existingGeneration(ctx, tx, input.UserID, input.Operation, input.IdempotencyKey, inputHash)
 	if replayErr != nil {
 		return snapshot, replayErr
@@ -155,13 +177,8 @@ WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(inp
 	}
 	if err = store.reserveAI(ctx, tx, input.UserID, input.GenerationID, input.Operation, input.IdempotencyKey,
 		inputHash, "", &input.GoalID, &versionID, &input.CycleID, current.Revisions.Content, pointerValue(sourceText), promptVersion,
-		contextCycleIDs(past), input.SessionID, input.RemoteAddress, input.Now); err != nil {
+		contextCycleIDs(snapshot.PastCycles), input.SessionID, input.RemoteAddress, input.Now); err != nil {
 		return snapshot, err
-	}
-	snapshot = workspace.AISnapshot{
-		GenerationID: input.GenerationID, Operation: input.Operation, TargetRevision: current.Revisions.Content,
-		GoalBody: goalBody, SourceText: pointerValue(sourceText), PastCycles: past,
-		CurrentCycle: currentContext,
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return workspace.AISnapshot{}, err
@@ -496,9 +513,11 @@ WHERE id=$1 AND user_id=$2 AND operation_type='goal_refine' AND source_goal_draf
 }
 
 func loadAIContextCycles(ctx context.Context, tx pgx.Tx, userID, goalID, excludeCycleID string, limit int) ([]workspace.AIContextCycle, error) {
-	rows, err := tx.Query(ctx, `SELECT id,goal_id,sequence_number,plan,do_text,check_text,action FROM pdca_cycles
-WHERE user_id=$1 AND goal_id=$2 AND status='completed' AND ($3::uuid IS NULL OR id<>$3)
-ORDER BY sequence_number DESC LIMIT $4`, mustUUID(userID), mustUUID(goalID), nullableUUID(excludeCycleID), limit)
+	rows, err := tx.Query(ctx, `SELECT c.id,c.goal_id,c.sequence_number,c.status,gv.body,c.plan,c.do_text,c.check_text,c.action
+FROM pdca_cycles c
+JOIN goal_versions gv ON gv.goal_id=c.goal_id AND gv.id=c.goal_version_id
+WHERE c.user_id=$1 AND c.goal_id=$2 AND c.status IN ('completed','canceled') AND ($3::uuid IS NULL OR c.id<>$3)
+ORDER BY c.sequence_number DESC LIMIT $4`, mustUUID(userID), mustUUID(goalID), nullableUUID(excludeCycleID), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +525,7 @@ ORDER BY sequence_number DESC LIMIT $4`, mustUUID(userID), mustUUID(goalID), nul
 	items := []workspace.AIContextCycle{}
 	for rows.Next() {
 		var item workspace.AIContextCycle
-		if err = rows.Scan(&item.ID, &item.GoalID, &item.SequenceNumber, &item.Plan, &item.Do, &item.Check, &item.Action); err != nil {
+		if err = rows.Scan(&item.ID, &item.GoalID, &item.SequenceNumber, &item.Status, &item.GoalBody, &item.Plan, &item.Do, &item.Check, &item.Action); err != nil {
 			return nil, err
 		}
 		if item.GoalID != goalID {

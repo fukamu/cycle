@@ -55,6 +55,7 @@ type Metrics interface {
 	AccountDelete(context.Context, string)
 	AnonymousCreate(context.Context, string)
 	RateLimitRejected(context.Context, string)
+	AIContextIsolationViolation(context.Context)
 	ErrorCode(context.Context, string)
 }
 

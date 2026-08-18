@@ -196,9 +196,10 @@ GitHub `staging` Environment secrets:
 - `CSRF_TOKEN_PEPPER`
 - `BOOTSTRAP_ID_PEPPER`
 - `RATE_LIMIT_HMAC_SECRET`
+- `CURSOR_SIGNING_SECRET`
 - `TURNSTILE_SECRET_KEY`
 
-Pepper/HMACはそれぞれ別の暗号学的random値を生成し、24文字以上にします。Application runtime/migration/deploy secretはGitHub repository-level secretではなく`staging` Environmentへ置きます。Terraform Plan/Apply用の独立credentialだけは§3のrepository secretへ置き、applicationへ渡しません。
+Pepper/HMAC/cursor署名secretはそれぞれ別の暗号学的random値を生成し、24文字以上にします。Application runtime/migration/deploy secretはGitHub repository-level secretではなく`staging` Environmentへ置きます。Terraform Plan/Apply用の独立credentialだけは§3のrepository secretへ置き、applicationへ渡しません。
 
 ## 7. GitHub Environment variables
 
@@ -215,12 +216,19 @@ SESSION_IDLE_DAYS
 SESSION_ABSOLUTE_DAYS
 SESSION_ACTIVITY_TOUCH_MINUTES
 ANONYMOUS_BOOTSTRAP_TTL_MINUTES
+MAX_PROGRESSING_GOALS
 AI_MODEL
 AI_MAX_INPUT_TOKENS
-AI_MAX_OUTPUT_TOKENS
+AI_GOAL_REFINE_MAX_OUTPUT_TOKENS
+AI_ACTION_MAX_OUTPUT_TOKENS
+AI_MAX_CONTEXT_CYCLES
 AI_TIMEOUT_SECONDS
 AI_MAX_PROVIDER_ATTEMPTS
+AI_MAX_RETRY_BACKOFF_SECONDS
+AI_FINALIZATION_GRACE_SECONDS
+AI_LEASE_SECONDS
 AI_MAX_GENERATIONS_PER_USER_24H
+AI_GOAL_REFINE_PROMPT_VERSION
 AI_GENERATE_PROMPT_VERSION
 AI_REFINE_PROMPT_VERSION
 AI_TOKENIZER_ENCODING

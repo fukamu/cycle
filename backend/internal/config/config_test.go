@@ -12,8 +12,8 @@ func TestLoadDevelopmentConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if config.AI.MaxInputTokens != 12000 {
-		t.Fatalf("MaxInputTokens = %d", config.AI.MaxInputTokens)
+	if config.AI.MaxInputTokens != 12000 || config.AI.GoalRefineMaxOutputTokens != 400 || config.AI.ActionMaxOutputTokens != 800 || config.AI.MaxContextCycles != 10 {
+		t.Fatalf("AI token defaults = %#v", config.AI)
 	}
 	if config.Database.MaxOpenConns != 10 {
 		t.Fatalf("MaxOpenConns = %d", config.Database.MaxOpenConns)

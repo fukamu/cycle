@@ -46,10 +46,14 @@ func (provider *OpenAI) Execute(ctx context.Context, input workspace.AIProviderR
 	}
 	format := responses.ResponseFormatTextConfigParamOfJSONSchema(schemaName, schema)
 	format.OfJSONSchema.Strict = openai.Bool(true)
+	maxOutputTokens := input.MaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = provider.maxOutputTokens
+	}
 	response, err := provider.client.Responses.New(ctx, responses.ResponseNewParams{
 		Model: provider.model, Instructions: openai.String(instructions),
 		Input:           responses.ResponseNewParamsInputUnion{OfString: openai.String(string(content))},
-		MaxOutputTokens: openai.Int(provider.maxOutputTokens), Store: openai.Bool(false),
+		MaxOutputTokens: openai.Int(maxOutputTokens), Store: openai.Bool(false),
 		Text: responses.ResponseTextConfigParam{Format: format, Verbosity: responses.ResponseTextConfigVerbosityLow},
 	})
 	if err != nil {

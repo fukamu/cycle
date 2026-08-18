@@ -1,6 +1,7 @@
 package aiprovider
 
 import (
+	"context"
 	"errors"
 
 	"github.com/tiktoken-go/tokenizer"
@@ -18,22 +19,22 @@ func NewTokenCounter(encoding string) (*TokenCounter, error) {
 	return &TokenCounter{codec: codec}, nil
 }
 
-func (counter *TokenCounter) Count(value string) (int, error) {
+func (counter *TokenCounter) Count(_ context.Context, _ string, value string) (int, error) {
 	return counter.codec.Count(value)
 }
 
-func (counter *TokenCounter) Truncate(value string, maxTokens int, marker string) (string, error) {
+func (counter *TokenCounter) Truncate(ctx context.Context, model, value string, maxTokens int, marker string) (string, error) {
 	if maxTokens < 0 {
 		return "", errors.New("token limit cannot be negative")
 	}
-	count, err := counter.Count(value)
+	count, err := counter.Count(ctx, model, value)
 	if err != nil {
 		return "", err
 	}
 	if count <= maxTokens {
 		return value, nil
 	}
-	markerCount, err := counter.Count(marker)
+	markerCount, err := counter.Count(ctx, model, marker)
 	if err != nil {
 		return "", err
 	}
@@ -45,7 +46,7 @@ func (counter *TokenCounter) Truncate(value string, maxTokens int, marker string
 	for low < high {
 		middle := (low + high + 1) / 2
 		candidate := string(runes[:middle]) + marker
-		candidateCount, countErr := counter.Count(candidate)
+		candidateCount, countErr := counter.Count(ctx, model, candidate)
 		if countErr != nil {
 			return "", countErr
 		}

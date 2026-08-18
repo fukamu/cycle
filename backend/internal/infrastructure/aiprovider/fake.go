@@ -19,7 +19,10 @@ func (Fake) Execute(_ context.Context, input workspace.AIProviderRequest) (works
 	case "action_generate":
 		output = "1. 次の実行では、計画した手順を一つずつ確認し、完了後に結果を記録する。"
 	case "action_refine":
-		output = input.SourceText + " 次のサイクルでは実行結果を記録して確認する。"
+		if input.CurrentCycle == nil {
+			return workspace.AIProviderResult{}, workspace.ErrAIInputIncomplete
+		}
+		output = input.CurrentCycle.Action + " 次のサイクルでは実行結果を記録して確認する。"
 	default:
 		return workspace.AIProviderResult{}, fmt.Errorf("unsupported fake operation: %s", input.Operation)
 	}

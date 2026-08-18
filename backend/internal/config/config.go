@@ -55,24 +55,26 @@ type GoalConfig struct {
 }
 
 type AIConfig struct {
-	APIKey                   string
-	Provider                 string
-	Model                    string
-	MaxInputTokens           int
-	MaxOutputTokens          int
-	Timeout                  time.Duration
-	MaxProviderAttempts      int
-	MaxRetryBackoff          time.Duration
-	FinalizationGrace        time.Duration
-	LeaseDuration            time.Duration
-	MaxGenerationsPerUser24h int
-	GoalPromptVersion        string
-	GeneratePromptVersion    string
-	RefinePromptVersion      string
-	TokenizerEncoding        string
-	MonthlyBudgetUSD         float64
-	WarningThresholds        []float64
-	Pricing                  AIPricingConfig
+	APIKey                    string
+	Provider                  string
+	Model                     string
+	MaxInputTokens            int
+	GoalRefineMaxOutputTokens int
+	ActionMaxOutputTokens     int
+	MaxContextCycles          int
+	Timeout                   time.Duration
+	MaxProviderAttempts       int
+	MaxRetryBackoff           time.Duration
+	FinalizationGrace         time.Duration
+	LeaseDuration             time.Duration
+	MaxGenerationsPerUser24h  int
+	GoalPromptVersion         string
+	GeneratePromptVersion     string
+	RefinePromptVersion       string
+	TokenizerEncoding         string
+	MonthlyBudgetUSD          float64
+	WarningThresholds         []float64
+	Pricing                   AIPricingConfig
 }
 
 type AIPricingConfig struct {
@@ -132,23 +134,25 @@ func Load(lookup LookupEnv) (Config, error) {
 		},
 		Goals: GoalConfig{MaxProgressingGoals: reader.intValue("MAX_PROGRESSING_GOALS", 1)},
 		AI: AIConfig{
-			APIKey:                   reader.stringValue("OPENAI_API_KEY", ""),
-			Provider:                 reader.stringValue("AI_PROVIDER", "openai"),
-			Model:                    reader.stringValue("AI_MODEL", "gpt-5.6-luna"),
-			MaxInputTokens:           reader.intValue("AI_MAX_INPUT_TOKENS", 12000),
-			MaxOutputTokens:          reader.intValue("AI_MAX_OUTPUT_TOKENS", 800),
-			Timeout:                  reader.durationSeconds("AI_TIMEOUT_SECONDS", 45),
-			MaxProviderAttempts:      reader.intValue("AI_MAX_PROVIDER_ATTEMPTS", 2),
-			MaxRetryBackoff:          reader.durationSeconds("AI_MAX_RETRY_BACKOFF_SECONDS", 5),
-			FinalizationGrace:        reader.durationSeconds("AI_FINALIZATION_GRACE_SECONDS", 15),
-			LeaseDuration:            reader.durationSeconds("AI_LEASE_SECONDS", 120),
-			MaxGenerationsPerUser24h: reader.intValue("AI_MAX_GENERATIONS_PER_USER_24H", 10),
-			GoalPromptVersion:        reader.stringValue("AI_GOAL_REFINE_PROMPT_VERSION", "goal-refine-v1"),
-			GeneratePromptVersion:    reader.stringValue("AI_GENERATE_PROMPT_VERSION", "action-generate-v1"),
-			RefinePromptVersion:      reader.stringValue("AI_REFINE_PROMPT_VERSION", "action-refine-v1"),
-			TokenizerEncoding:        reader.stringValue("AI_TOKENIZER_ENCODING", "o200k_base"),
-			MonthlyBudgetUSD:         reader.floatValue("AI_MONTHLY_BUDGET_USD", 100),
-			WarningThresholds:        reader.floatList("AI_WARNING_THRESHOLDS", []float64{0.5, 0.8}),
+			APIKey:                    reader.stringValue("OPENAI_API_KEY", ""),
+			Provider:                  reader.stringValue("AI_PROVIDER", "openai"),
+			Model:                     reader.stringValue("AI_MODEL", "gpt-5.6-luna"),
+			MaxInputTokens:            reader.intValue("AI_MAX_INPUT_TOKENS", 12000),
+			GoalRefineMaxOutputTokens: reader.intValue("AI_GOAL_REFINE_MAX_OUTPUT_TOKENS", 400),
+			ActionMaxOutputTokens:     reader.intValue("AI_ACTION_MAX_OUTPUT_TOKENS", 800),
+			MaxContextCycles:          reader.intValue("AI_MAX_CONTEXT_CYCLES", 10),
+			Timeout:                   reader.durationSeconds("AI_TIMEOUT_SECONDS", 45),
+			MaxProviderAttempts:       reader.intValue("AI_MAX_PROVIDER_ATTEMPTS", 2),
+			MaxRetryBackoff:           reader.durationSeconds("AI_MAX_RETRY_BACKOFF_SECONDS", 5),
+			FinalizationGrace:         reader.durationSeconds("AI_FINALIZATION_GRACE_SECONDS", 15),
+			LeaseDuration:             reader.durationSeconds("AI_LEASE_SECONDS", 120),
+			MaxGenerationsPerUser24h:  reader.intValue("AI_MAX_GENERATIONS_PER_USER_24H", 10),
+			GoalPromptVersion:         reader.stringValue("AI_GOAL_REFINE_PROMPT_VERSION", "goal-refine-v1"),
+			GeneratePromptVersion:     reader.stringValue("AI_GENERATE_PROMPT_VERSION", "action-generate-v1"),
+			RefinePromptVersion:       reader.stringValue("AI_REFINE_PROMPT_VERSION", "action-refine-v1"),
+			TokenizerEncoding:         reader.stringValue("AI_TOKENIZER_ENCODING", "o200k_base"),
+			MonthlyBudgetUSD:          reader.floatValue("AI_MONTHLY_BUDGET_USD", 100),
+			WarningThresholds:         reader.floatList("AI_WARNING_THRESHOLDS", []float64{0.5, 0.8}),
 			Pricing: AIPricingConfig{
 				Model:                     reader.stringValue("AI_PRICE_MODEL", "gpt-5.6-luna"),
 				InputUSDPerMillionTokens:  reader.floatValue("AI_PRICE_INPUT_USD_PER_MILLION", 0),
@@ -220,8 +224,8 @@ func (config Config) Validate() error {
 	if config.AI.Provider != "openai" {
 		problems = append(problems, "AI_PROVIDER must be openai")
 	}
-	if config.AI.Model == "" || config.AI.MaxInputTokens <= 0 || config.AI.MaxOutputTokens <= 0 || config.AI.Timeout <= 0 {
-		problems = append(problems, "AI model, token budgets, and timeout must be positive")
+	if config.AI.Model == "" || config.AI.MaxInputTokens <= 0 || config.AI.GoalRefineMaxOutputTokens <= 0 || config.AI.ActionMaxOutputTokens <= 0 || config.AI.MaxContextCycles < 1 || config.AI.MaxContextCycles > 10 || config.AI.Timeout <= 0 {
+		problems = append(problems, "AI model, token budgets, context cycle limit (1..10), and timeout are invalid")
 	}
 	if config.AI.MaxProviderAttempts < 1 || config.AI.MaxProviderAttempts > 2 {
 		problems = append(problems, "AI_MAX_PROVIDER_ATTEMPTS must be between 1 and 2")
