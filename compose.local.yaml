@@ -1,0 +1,84 @@
+name: pdcai-local
+
+x-runtime-environment: &runtime-environment
+  APP_ENV: development
+  PUBLIC_ORIGIN: http://localhost:${PDCAI_LOCAL_PORT:-8080}
+  HTTP_ADDRESS: :8080
+  STATIC_DIR: /app/static
+  DATABASE_URL: postgres://pdcai:pdcai@postgres:5432/pdcai_local?sslmode=disable
+  SESSION_TOKEN_PEPPER: local-only-session-token-pepper
+  CSRF_TOKEN_PEPPER: local-only-csrf-token-pepper
+  BOOTSTRAP_ID_PEPPER: local-only-bootstrap-id-pepper
+  RATE_LIMIT_HMAC_SECRET: local-only-rate-limit-hmac-secret
+  CURSOR_SIGNING_SECRET: local-only-cursor-signing-secret
+  OPENAI_API_KEY: ""
+  GOOGLE_WEB_CLIENT_ID: ""
+  TURNSTILE_ENABLED: "false"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: pdcai
+      POSTGRES_PASSWORD: pdcai
+      POSTGRES_DB: pdcai_local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username pdcai --dbname pdcai_local"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks:
+      - local
+
+  migrate:
+    image: pdcai-local-app:dev
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    command: ["/app/migrate"]
+    environment: *runtime-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+    networks:
+      - local
+
+  app:
+    image: pdcai-local-app:dev
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    environment: *runtime-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - 127.0.0.1:${PDCAI_LOCAL_PORT:-8080}:8080
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 20s
+    networks:
+      - local
+
+networks:
+  local:

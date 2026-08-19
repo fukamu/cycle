@@ -88,6 +88,8 @@ if ($runBackend) {
 if ($runInfrastructure) {
     Assert-Command "terraform"
     Assert-Command "npm"
+    Assert-Command "docker"
+    Invoke-Checked docker compose --file (Join-Path $repoRoot "compose.local.yaml") config --quiet
     $terraformDataDirWasSet = Test-Path Env:TF_DATA_DIR
     $previousTerraformDataDir = $env:TF_DATA_DIR
     $env:TF_DATA_DIR = Join-Path $repoRoot ".tmp/terraform-check"

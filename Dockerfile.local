@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1.7
+
+FROM node:24-alpine AS frontend-build
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+FROM golang:1.26.6-alpine AS backend-build
+WORKDIR /src/backend
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
+
+FROM alpine:3.22
+RUN apk add --no-cache ca-certificates
+WORKDIR /app
+COPY --from=backend-build --chown=65532:65532 /out/server /app/server
+COPY --from=backend-build --chown=65532:65532 /out/migrate /app/migrate
+COPY --chown=65532:65532 backend/migrations /app/migrations
+COPY --from=frontend-build --chown=65532:65532 /src/frontend/dist /app/static
+ENV HTTP_ADDRESS=:8080 \
+    STATIC_DIR=/app/static
+EXPOSE 8080
+USER 65532:65532
+CMD ["/app/server"]

@@ -29,6 +29,7 @@ PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal 
 - `.github/workflows/terraform-apply.yml`: 指定ownerがmanual承認するsaved plan apply
 - `.github/workflows/deploy.yml`: Apply成功後のmigration-first Cloudflare deploy
 - `Dockerfile`: Cloudflare Container用non-root Go Backend image
+- `Dockerfile.local` / `compose.local.yaml`: 破棄可能なローカル実機確認環境
 
 ## Prerequisites
 
@@ -42,6 +43,16 @@ PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal 
 - Terraform 1.15.8（Staging基盤と全体checkに必要）
 
 詳細とversion根拠は [`docs/development.md`](docs/development.md) を参照してください。
+
+## Docker local preview
+
+Docker DesktopとPowerShell 7だけで、Frontend、Backend、Migration、PostgreSQLを起動して実際の画面を確認できます。Repositoryへ依存関係やbuild出力を作らず、既存の`.env`とローカルDBも使用しません。
+
+```powershell
+pwsh ./scripts/local-app.ps1
+```
+
+準備完了後に`http://localhost:8080`を開きます。AIは外部通信しないFake Adapter、Turnstileは無効、Google連携は未設定です。Enterで終了するとcontainer、network、破棄可能DBを削除します。詳細、別port、detached起動は[`docs/development.md`](docs/development.md)を参照してください。
 
 ## Quick start
 
@@ -68,6 +79,7 @@ npm run dev
 | 用途                                  | Command                                                                            |
 | ------------------------------------- | ---------------------------------------------------------------------------------- |
 | 初回setup                             | `pwsh ./scripts/setup.ps1`                                                         |
+| Dockerローカル実機確認                | `pwsh ./scripts/local-app.ps1`                                                     |
 | Backend環境変数を現在のterminalへ読込 | `. ./scripts/import-env.ps1`                                                       |
 | 全品質check                           | `pwsh ./scripts/check.ps1`                                                         |
 | Frontend / Backend / Infrastructureだけcheck | `pwsh ./scripts/check.ps1 -Scope frontend` / `-Scope backend` / `-Scope infrastructure` |

@@ -93,11 +93,16 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 | `TEST_DATABASE_URL` | disposable integration/E2E DB | runtime/Production DBを指定禁止 |
 | `PDCAI_GO_BINARY` | Playwright用Go executable | optional |
 | `PDCAI_SERVER_BINARY` | prebuilt E2E server | optional、指定時は事前migration必要 |
+| `PDCAI_LOCAL_PORT` | Dockerローカル実機確認のHost port | optional、`scripts/local-app.ps1`が`-Port`から一時設定、既定`8080` |
 | `CI` | Playwright behavior | CIが自動設定 |
 | `CLOUDFLARE_ACCOUNT_ID` | Wrangler account | GitHub secret（値自体はcredentialではない） |
 | `CLOUDFLARE_API_TOKEN` | Wrangler deploy auth | **GitHub secret**、deploy最小権限 |
 | `AWS_ACCESS_KEY_ID` | R2 S3 backend access ID | **secret**、local operator environment / workflowが`TERRAFORM_R2_ACCESS_KEY_ID`から一時mapping |
 | `AWS_SECRET_ACCESS_KEY` | R2 S3 backend secret | **secret**、local operator environment / workflowが`TERRAFORM_R2_SECRET_ACCESS_KEY`から一時mapping |
+
+### Dockerローカル実機profile
+
+`compose.local.yaml`はRepositoryの`.env`をcontainerへ渡さず、development専用の非secret値を明示します。PostgreSQL URLとpepperは破棄可能な隔離環境だけで使用し、OpenAI、Google、Turnstileのcredentialは設定しません。このprofileをStaging / Productionへ転用してはいけません。
 
 ## GitHub Terraform repository inputs
 

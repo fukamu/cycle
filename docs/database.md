@@ -47,6 +47,8 @@ pwsh ./scripts/check.ps1 -Scope backend
 
 `createdb` は初回だけです。integration testはapplication tableにdown/up SQLを適用して初期化するため、保持したいデータがあるDBを絶対に指定しないでください。CIはjobごとのPostgreSQL service `pdcai_test` を使い、productionへ接続しません。
 
+`pwsh ./scripts/local-app.ps1`で起動する`pdcai_local`は、`pdcai-local` Compose project内のtmpfsだけを使う手動実機確認用DBです。Host port、既存の`pdcai-postgres`、`.env`の`DATABASE_URL`を使用せず、終了時に破棄されます。保持したいデータを保存しないでください。
+
 ## Seedと開発データ
 
 seed scriptと固定seedデータはありません。Migration後、匿名sessionの作成だけではGoal/Cycleを作りません。Goal Creation Draftを開始へ変換すると、Goal、Goal Version 1、Cycle 1が同一transactionで作成されます。Test fixtureはtest process内で作成し、productionへ投入しません。
