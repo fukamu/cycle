@@ -79,6 +79,48 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   await expect(editor).toHaveValue("失敗しても保持する目標");
 });
 
+test("cycle autosave serializes an edit made during a slow save", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "新しい目標を設定" }).click();
+  await saveText(
+    page,
+    page.getByRole("textbox", { name: "あなたの目標" }),
+    "直列保存を確認する目標",
+    "/api/v1/goal-drafts/",
+  );
+  await page.getByRole("button", { name: "この目標で始める" }).click();
+
+  let releaseFirst!: () => void;
+  const release = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let markFirstStarted!: () => void;
+  const firstStarted = new Promise<void>((resolve) => {
+    markFirstStarted = resolve;
+  });
+  let first = true;
+  await page.route("**/api/v1/goals/*/cycles/*/frames/plan", async (route) => {
+    if (route.request().method() === "PATCH" && first) {
+      first = false;
+      markFirstStarted();
+      await release;
+    }
+    await route.continue();
+  });
+
+  const plan = page.getByRole("textbox", { name: "P — Plan" });
+  await plan.fill("先に送る内容");
+  await firstStarted;
+  await plan.fill("保存中に更新した最終内容");
+  releaseFirst();
+
+  await expect(page.getByText("保存済み")).toBeVisible();
+  await page.reload();
+  await expect(plan).toHaveValue("保存中に更新した最終内容");
+});
+
 test("goal review termination discards an unversioned change explicitly", async ({
   page,
 }) => {

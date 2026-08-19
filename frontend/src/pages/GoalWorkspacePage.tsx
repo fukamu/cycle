@@ -94,12 +94,14 @@ function CycleWorkspace({
   });
   const [selected, setSelected] = useState<Frame>("plan");
   const [saveState, setSaveState] = useState<SaveState>("saved");
+  const [saveQueueNonce, setSaveQueueNonce] = useState(0);
   const [aiState, setAIState] = useState<"idle" | "generating" | "refining">(
     "idle",
   );
   const [pendingAction, setPendingAction] = useState(false);
   const [error, setError] = useState<string>();
   const pending = useRef(new Map<Frame, string>());
+  const saveInFlight = useRef(false);
   const valuesRef = useRef(values);
   const revisions = useRef({ ...initial.frameRevisions });
   const contentRevision = useRef(initial.contentRevision);
@@ -124,6 +126,7 @@ function CycleWorkspace({
   }, [cycle.id, editable, session.user.id]);
 
   const pump = useCallback(async () => {
+    if (saveInFlight.current) return;
     if (!editable || pending.current.size === 0) {
       setSaveState("saved");
       return;
@@ -134,7 +137,9 @@ function CycleWorkspace({
     if (!entry) return;
     const [frame, body] = entry;
     pending.current.delete(frame);
+    saveInFlight.current = true;
     setSaveState("saving");
+    let failed = false;
     try {
       const result = await saveCycleFrame(
         goal.id,
@@ -165,10 +170,19 @@ function CycleWorkspace({
           baseRevision: result.frameRevision,
           updatedAt: new Date().toISOString(),
         });
-      setSaveState(pending.current.size ? "dirty" : "saved");
     } catch {
-      pending.current.set(frame, body);
-      setSaveState("failed");
+      if (!pending.current.has(frame)) pending.current.set(frame, body);
+      failed = true;
+    } finally {
+      saveInFlight.current = false;
+      if (failed) {
+        setSaveState("failed");
+      } else if (pending.current.size) {
+        setSaveState("dirty");
+        setSaveQueueNonce((value) => value + 1);
+      } else {
+        setSaveState("saved");
+      }
     }
   }, [cycle.id, editable, goal.id, session.csrfToken, session.user.id]);
 
@@ -176,7 +190,7 @@ function CycleWorkspace({
     if (saveState !== "dirty") return;
     const timer = window.setTimeout(() => void pump(), 800);
     return () => window.clearTimeout(timer);
-  }, [pump, saveState]);
+  }, [pump, saveQueueNonce, saveState]);
 
   function change(frame: Frame, value: string) {
     if (Array.from(value).length > 2000) return;
