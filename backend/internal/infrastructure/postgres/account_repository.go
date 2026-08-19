@@ -32,8 +32,11 @@ func (repository *AccountRepository) UpgradeGoogle(ctx context.Context, input ac
 		return result, err
 	}
 	var linkedUser pgtype.UUID
-	err = tx.QueryRow(ctx, `SELECT user_id FROM auth_identities
-WHERE provider='google' AND provider_subject=$1`, input.Identity.Subject).Scan(&linkedUser)
+	var linkedEmail pgtype.Text
+	err = tx.QueryRow(ctx, `SELECT user_id,
+CASE WHEN email_verified_at_link IS TRUE THEN email_at_link ELSE NULL END
+FROM auth_identities
+WHERE provider='google' AND provider_subject=$1`, input.Identity.Subject).Scan(&linkedUser, &linkedEmail)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		_, err = tx.Exec(ctx, `INSERT INTO auth_identities (
@@ -46,10 +49,13 @@ id,user_id,provider,provider_subject,email_at_link,email_verified_at_link,create
 			}
 			return result, err
 		}
+		result.GoogleEmail = verifiedGoogleEmail(input.Identity)
 	case err != nil:
 		return result, err
 	case uuidString(linkedUser) != string(input.CurrentUserID):
 		return result, account.ErrGoogleIdentityLinked
+	default:
+		result.GoogleEmail = nullableText(linkedEmail)
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM anonymous_bootstraps WHERE user_id=$1`, mustUUID(string(input.CurrentUserID))); err != nil {
 		return result, err
@@ -70,8 +76,11 @@ func (repository *AccountRepository) LoginGoogle(ctx context.Context, input acco
 	}
 	defer rollbackOnError(ctx, tx, &err)
 	var targetUser pgtype.UUID
-	err = tx.QueryRow(ctx, `SELECT user_id FROM auth_identities
-WHERE provider='google' AND provider_subject=$1`, input.Identity.Subject).Scan(&targetUser)
+	var googleEmail pgtype.Text
+	err = tx.QueryRow(ctx, `SELECT user_id,
+CASE WHEN email_verified_at_link IS TRUE THEN email_at_link ELSE NULL END
+FROM auth_identities
+WHERE provider='google' AND provider_subject=$1`, input.Identity.Subject).Scan(&targetUser, &googleEmail)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return result, account.ErrGoogleAccountNotLinked
 	}
@@ -79,6 +88,7 @@ WHERE provider='google' AND provider_subject=$1`, input.Identity.Subject).Scan(&
 		return result, err
 	}
 	result.UserID = user.ID(uuidString(targetUser))
+	result.GoogleEmail = nullableText(googleEmail)
 	if err = lockUser(ctx, tx, result.UserID); err != nil {
 		return result, err
 	}
@@ -189,4 +199,20 @@ func insertAccountSession(ctx context.Context, tx pgx.Tx, sessionID string, user
 id,user_id,token_hash,csrf_token_hash,created_at,last_seen_at,idle_expires_at,absolute_expires_at
 ) VALUES($1,$2,$3,$4,$5,$5,$6,$7)`, mustUUID(sessionID), mustUUID(string(userID)), tokenHash, csrfHash, now, idleExpiry, absoluteExpiry)
 	return err
+}
+
+func verifiedGoogleEmail(identity account.GoogleIdentity) *string {
+	if identity.Email == nil || identity.EmailVerified == nil || !*identity.EmailVerified {
+		return nil
+	}
+	email := *identity.Email
+	return &email
+}
+
+func nullableText(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	text := value.String
+	return &text
 }

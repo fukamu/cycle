@@ -23,7 +23,14 @@ SELECT
         SELECT 1
         FROM auth_identities ai
         WHERE ai.user_id = s.user_id AND ai.provider = 'google'
-    ) AS google_connected
+    ) AS google_connected,
+    (
+        SELECT ai.email_at_link
+        FROM auth_identities ai
+        WHERE ai.user_id = s.user_id
+          AND ai.provider = 'google'
+          AND ai.email_verified_at_link IS TRUE
+    ) AS google_email
 FROM sessions s
 WHERE s.token_hash = $1
   AND s.revoked_at IS NULL
@@ -44,6 +51,7 @@ type GetSessionByTokenHashRow struct {
 	IdleExpiresAt     pgtype.Timestamptz
 	AbsoluteExpiresAt pgtype.Timestamptz
 	GoogleConnected   bool
+	GoogleEmail       *string
 }
 
 func (q *Queries) GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (*GetSessionByTokenHashRow, error) {
@@ -57,6 +65,7 @@ func (q *Queries) GetSessionByTokenHash(ctx context.Context, arg GetSessionByTok
 		&i.IdleExpiresAt,
 		&i.AbsoluteExpiresAt,
 		&i.GoogleConnected,
+		&i.GoogleEmail,
 	)
 	return &i, err
 }

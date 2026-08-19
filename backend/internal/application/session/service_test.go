@@ -44,12 +44,15 @@ func TestCreateAnonymousRejectsInvalidBootstrapBeforeAbuseCheck(t *testing.T) {
 
 func TestRefreshRotatesCSRFAndVerifyCSRF(t *testing.T) {
 	t.Parallel()
+	email := "person@example.com"
 
 	repository := &fakeRepository{found: AuthenticatedSession{
-		ID:            "00000000-0000-4000-8000-000000000009",
-		UserID:        user.ID("00000000-0000-4000-8000-000000000001"),
-		LastSeenAt:    testTime.Add(-time.Hour),
-		CSRFTokenHash: keyedHash([]byte("csrf-key"), "token-2"),
+		ID:              "00000000-0000-4000-8000-000000000009",
+		UserID:          user.ID("00000000-0000-4000-8000-000000000001"),
+		LastSeenAt:      testTime.Add(-time.Hour),
+		CSRFTokenHash:   keyedHash([]byte("csrf-key"), "token-2"),
+		GoogleConnected: true,
+		GoogleEmail:     &email,
 	}}
 	service := testService(repository)
 	view, err := service.Refresh(context.Background(), "session-token")
@@ -58,6 +61,9 @@ func TestRefreshRotatesCSRFAndVerifyCSRF(t *testing.T) {
 	}
 	if view.CSRFToken != "token-1" || len(repository.rotatedHash) == 0 || !repository.touched {
 		t.Fatalf("view/repository = %#v/%#v", view, repository)
+	}
+	if !view.GoogleConnected || view.GoogleEmail == nil || *view.GoogleEmail != email {
+		t.Fatalf("Google identity view = %#v", view)
 	}
 	record := repository.found
 	record.CSRFTokenHash = repository.rotatedHash

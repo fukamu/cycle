@@ -13,8 +13,9 @@ var accountTestTime = time.Date(2026, time.August, 16, 1, 2, 3, 0, time.UTC)
 
 func TestUpgradeGoogleKeepsUserAndHashesRotatedCredentials(t *testing.T) {
 	t.Parallel()
+	email := "person@example.com"
 	repository := &fakeAccountRepository{result: AuthResult{
-		UserID: user.ID("00000000-0000-4000-8000-000000000001"),
+		UserID: user.ID("00000000-0000-4000-8000-000000000001"), GoogleEmail: &email,
 	}}
 	service := accountTestService(repository, fakeGoogleVerifier{identity: GoogleIdentity{Subject: "google-sub"}})
 	view, err := service.UpgradeGoogle(context.Background(), repository.result.UserID, "old-session", "signed-token")
@@ -23,6 +24,9 @@ func TestUpgradeGoogleKeepsUserAndHashesRotatedCredentials(t *testing.T) {
 	}
 	if view.UserID != repository.result.UserID || !view.GoogleConnected || view.SessionToken == "" || view.CSRFToken == "" {
 		t.Fatalf("view = %#v", view)
+	}
+	if view.GoogleEmail == nil || *view.GoogleEmail != email {
+		t.Fatalf("Google email = %#v", view.GoogleEmail)
 	}
 	if repository.upgrade.Identity.Subject != "google-sub" || repository.upgrade.CurrentSessionID != "old-session" {
 		t.Fatalf("upgrade = %#v", repository.upgrade)

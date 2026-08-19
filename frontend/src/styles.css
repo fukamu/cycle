@@ -593,6 +593,10 @@ textarea[readonly] {
 .settings-card code {
   overflow-wrap: anywhere;
 }
+.settings-account-detail {
+  overflow-wrap: anywhere;
+  color: var(--ink) !important;
+}
 .danger-zone {
   margin-top: 22px;
   border-color: #ddc2bd;

@@ -44,6 +44,7 @@ func (repository *SessionRepository) FindByTokenHash(ctx context.Context, hash [
 		IdleExpiresAt:     row.IdleExpiresAt.Time,
 		AbsoluteExpiresAt: row.AbsoluteExpiresAt.Time,
 		GoogleConnected:   row.GoogleConnected,
+		GoogleEmail:       row.GoogleEmail,
 	}, nil
 }
 

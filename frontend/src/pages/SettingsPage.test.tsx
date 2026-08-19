@@ -7,6 +7,7 @@ import {
 } from "../features/auth/sessionContext";
 import { deleteAccount } from "../shared/api/account";
 import { clearUserDrafts } from "../shared/drafts/browserDraftCache";
+import type { Session } from "../shared/api/schemas";
 import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../shared/api/account", () => ({
@@ -18,10 +19,11 @@ vi.mock("../shared/drafts/browserDraftCache", () => ({
   clearUserDrafts: vi.fn(),
 }));
 
-const session = {
+const session: Session = {
   user: {
     id: "00000000-0000-4000-8000-000000000001",
     googleConnected: false,
+    googleEmail: null,
   },
   csrfToken: "csrf-token",
 };
@@ -30,6 +32,23 @@ describe("SettingsPage", () => {
   beforeEach(() => {
     vi.mocked(deleteAccount).mockReset();
     vi.mocked(clearUserDrafts).mockReset();
+  });
+
+  it("identifies the connected Google Account by its verified email", () => {
+    renderPage({
+      ...session,
+      user: {
+        ...session.user,
+        googleConnected: true,
+        googleEmail: "person@example.com",
+      },
+    });
+
+    expect(screen.getByText("連携済み")).toBeInTheDocument();
+    expect(screen.getByText("person@example.com")).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Google Account 連携"),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps local drafts when server deletion fails", async () => {
@@ -87,10 +106,10 @@ describe("SettingsPage", () => {
   });
 });
 
-function renderPage() {
+function renderPage(value = session) {
   render(
     <ReplaceSessionContext.Provider value={vi.fn()}>
-      <SessionContext.Provider value={session}>
+      <SessionContext.Provider value={value}>
         <SettingsPage />
       </SessionContext.Provider>
     </ReplaceSessionContext.Provider>,

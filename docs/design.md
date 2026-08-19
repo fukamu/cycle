@@ -2286,7 +2286,8 @@ Response:
 {
   "user": {
     "id": "uuid",
-    "googleConnected": false
+    "googleConnected": false,
+    "googleEmail": null
   },
   "csrfToken": "opaque-csrf-token"
 }
@@ -2328,7 +2329,8 @@ Response `201`:
 {
   "user": {
     "id": "uuid",
-    "googleConnected": false
+    "googleConnected": false,
+    "googleEmail": null
   },
   "csrfToken": "opaque-csrf-token"
 }
@@ -3491,7 +3493,8 @@ Response `200`:
 {
   "user": {
     "id": "same-application-user-uuid",
-    "googleConnected": true
+    "googleConnected": true,
+    "googleEmail": "user@example.com"
   },
   "csrfToken": "new-csrf-token"
 }
@@ -3539,7 +3542,8 @@ Response `200`:
 {
   "user": {
     "id": "existing-user-uuid",
-    "googleConnected": true
+    "googleConnected": true,
+    "googleEmail": "user@example.com"
   },
   "csrfToken": "new-csrf-token"
 }
@@ -3717,6 +3721,7 @@ Google Upgrade / Login成功時はSession tokenとCSRF tokenを必ずrotateし�
 - ID tokenはBackendで署名、`aud`、`iss`、`exp`を検証する。
 - 永続IdentifierはGoogle `sub`。
 - EmailをAuthentication keyにしない。
+- Googleが検証済みとしたEmailだけを、current User自身の設定画面で連携Accountを識別するために表示する。Email claimがない、または未検証の場合は`googleEmail=null`とする。
 - Google tokenをApplication Sessionとして使わない。
 - Google Account Upgrade成功後もApplication User IDを変えない。
 
