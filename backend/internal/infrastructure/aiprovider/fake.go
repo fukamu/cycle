@@ -2,29 +2,32 @@ package aiprovider
 
 import (
 	"context"
+	"fmt"
 	"unicode/utf8"
 
-	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
+	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
 )
 
-// FakeActionAI is deterministic and is wired only when no provider key is set in
-// non-production environments. Tests can use it without network access.
-type FakeActionAI struct{}
+// Fake is deterministic and must never be enabled in production.
+type Fake struct{}
 
-func (FakeActionAI) Generate(_ context.Context, input appai.GenerateActionAIInput) (appai.GeneratedAction, error) {
-	return appai.GeneratedAction{
-		Actions: []string{"次の実行では、計画した手順を一つずつ確認し、完了後に結果を記録する"},
-		Usage:   fakeUsage(input.Instructions + input.Content),
+func (Fake) Execute(_ context.Context, input workspace.AIProviderRequest) (workspace.AIProviderResult, error) {
+	output := ""
+	switch input.Operation {
+	case "goal_refine":
+		output = input.SourceText
+	case "action_generate":
+		output = "1. 次の実行では、計画した手順を一つずつ確認し、完了後に結果を記録する。"
+	case "action_refine":
+		if input.CurrentCycle == nil {
+			return workspace.AIProviderResult{}, workspace.ErrAIInputIncomplete
+		}
+		output = input.CurrentCycle.Action + " 次のサイクルでは実行結果を記録して確認する。"
+	default:
+		return workspace.AIProviderResult{}, fmt.Errorf("unsupported fake operation: %s", input.Operation)
+	}
+	return workspace.AIProviderResult{
+		Output: output, InputTokens: int64(utf8.RuneCountInString(input.GoalBody+input.SourceText) / 2),
+		OutputTokens: int64(utf8.RuneCountInString(output) / 2), ProviderRequestID: "fake", Attempts: 1,
 	}, nil
-}
-
-func (FakeActionAI) Refine(_ context.Context, input appai.RefineActionAIInput) (appai.RefinedAction, error) {
-	return appai.RefinedAction{
-		Action: "次の実行では、変更する手順を事前に一つ決め、実行後に結果を記録して確認する",
-		Usage:  fakeUsage(input.Instructions + input.Content),
-	}, nil
-}
-
-func fakeUsage(input string) appai.Usage {
-	return appai.Usage{InputTokens: int64(utf8.RuneCountInString(input) / 2), OutputTokens: 32, ProviderRequestID: "fake"}
 }

@@ -12,8 +12,8 @@ func TestLoadDevelopmentConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if config.AI.MaxInputTokens != 12000 {
-		t.Fatalf("MaxInputTokens = %d", config.AI.MaxInputTokens)
+	if config.AI.MaxInputTokens != 12000 || config.AI.GoalRefineMaxOutputTokens != 400 || config.AI.ActionMaxOutputTokens != 800 || config.AI.MaxContextCycles != 10 {
+		t.Fatalf("AI token defaults = %#v", config.AI)
 	}
 	if config.Database.MaxOpenConns != 10 {
 		t.Fatalf("MaxOpenConns = %d", config.Database.MaxOpenConns)
@@ -24,9 +24,9 @@ func TestLoadRejectsPricingModelMismatch(t *testing.T) {
 	t.Parallel()
 
 	environment := validEnvironment()
-	environment["AI_PRICE_MODEL"] = "different-model"
+	environment["AI_PRICING_MODEL"] = "different-model"
 	_, err := Load(mapLookup(environment))
-	if err == nil || !strings.Contains(err.Error(), "AI_MODEL and AI_PRICE_MODEL must match") {
+	if err == nil || !strings.Contains(err.Error(), "AI_MODEL and AI_PRICING_MODEL must match") {
 		t.Fatalf("Load() error = %v", err)
 	}
 }
@@ -52,6 +52,8 @@ func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
 	environment["GOOGLE_WEB_CLIENT_ID"] = "test.apps.googleusercontent.com"
 	environment["TURNSTILE_ENABLED"] = "true"
 	environment["TURNSTILE_SECRET_KEY"] = "test-turnstile-secret"
+	environment["AI_PRICE_INPUT_USD_PER_MILLION"] = "1"
+	environment["AI_PRICE_OUTPUT_USD_PER_MILLION"] = "1"
 	if _, err := Load(mapLookup(environment)); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -66,6 +68,7 @@ func validEnvironment() map[string]string {
 		"CSRF_TOKEN_PEPPER":      "123456789012345678901234",
 		"BOOTSTRAP_ID_PEPPER":    "123456789012345678901234",
 		"RATE_LIMIT_HMAC_SECRET": "123456789012345678901234",
+		"CURSOR_SIGNING_SECRET":  "123456789012345678901234",
 		"TURNSTILE_ENABLED":      "false",
 	}
 }

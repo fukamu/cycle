@@ -2,36 +2,36 @@ package cycle
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
-
-	"github.com/matoruru/PDCAI/backend/internal/domain/user"
 )
 
 const MaxFrameCodePoints = 2000
 
 var (
-	ErrInvalidFrame       = errors.New("invalid frame")
-	ErrInvalidText        = errors.New("invalid frame text")
-	ErrFrameTooLong       = errors.New("frame text exceeds 2000 code points")
+	ErrInvalidFrame       = errors.New("invalid PDCA frame")
+	ErrFrameTextTooLong   = errors.New("frame text is too long")
+	ErrForbiddenCharacter = errors.New("text contains a forbidden character")
 	ErrCycleNotActive     = errors.New("cycle is not active")
 	ErrRevisionConflict   = errors.New("cycle revision conflict")
+	ErrCycleIncomplete    = errors.New("cycle completion input is incomplete")
 	ErrAIOperationRunning = errors.New("AI operation is running")
-	ErrCycleIncomplete    = errors.New("cycle is incomplete")
-	ErrInvalidTransition  = errors.New("invalid cycle transition")
 )
-
-type ID string
-type OperationID string
 
 type Status string
 
 const (
 	StatusActive    Status = "active"
 	StatusCompleted Status = "completed"
+	StatusCanceled  Status = "canceled"
+)
+
+type CancellationReason string
+
+const (
+	CancellationGoalAchieved CancellationReason = "goal_achieved"
+	CancellationGoalEnded    CancellationReason = "goal_ended"
 )
 
 type Frame string
@@ -45,68 +45,55 @@ const (
 
 var allFrames = []Frame{FramePlan, FrameDo, FrameCheck, FrameAction}
 
+type Revisions struct {
+	Content int64
+	Plan    int64
+	Do      int64
+	Check   int64
+	Action  int64
+}
+
 type PDCACycle struct {
-	ID                                 ID
-	UserID                             user.ID
-	SequenceNumber                     int32
-	Status                             Status
-	StartedAt                          time.Time
-	CompletedAt                        *time.Time
-	Plan                               string
-	Do                                 string
-	Check                              string
-	Action                             string
-	ContentRevision                    int64
-	PlanRevision                       int64
-	DoRevision                         int64
-	CheckRevision                      int64
-	ActionRevision                     int64
-	ActionLastAIAppliedContentRevision *int64
-	ActionUserModifiedAfterAI          bool
-	CompletionOperationID              *OperationID
-	CreatedAt                          time.Time
-	UpdatedAt                          time.Time
+	ID                    string
+	UserID                string
+	GoalID                string
+	GoalVersionID         string
+	SequenceNumber        int32
+	Status                Status
+	StartedAt             time.Time
+	CompletedAt           *time.Time
+	CanceledAt            *time.Time
+	CancellationReason    *CancellationReason
+	Plan                  string
+	Do                    string
+	Check                 string
+	Action                string
+	Revisions             Revisions
+	ActionLastAIRevision  *int64
+	ActionModifiedAfterAI bool
+	StartOperationID      string
+	StartRequestHash      string
+	CompletionOperationID *string
+	CompletionRequestHash *string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type SaveFrameResult struct {
 	Cycle   PDCACycle
-	NoOp    bool
 	Frame   Frame
+	Content string
+	NoOp    bool
 	SavedAt time.Time
 }
 
-type ApplyAIResult struct {
-	Cycle          PDCACycle
-	ContextChanged bool
-}
-
-type CompleteResult struct {
-	Completed PDCACycle
-	Next      PDCACycle
-}
-
-type IncompleteError struct {
-	MissingFrames []Frame
-}
-
-func (err *IncompleteError) Error() string {
-	return fmt.Sprintf("%s: %v", ErrCycleIncomplete, err.MissingFrames)
-}
-
-func (err *IncompleteError) Unwrap() error {
-	return ErrCycleIncomplete
-}
-
-func NewInitial(id ID, userID user.ID, now time.Time) PDCACycle {
+func New(id, userID, goalID, goalVersionID string, sequence int32, operationID, requestHash string, now time.Time) PDCACycle {
 	now = now.UTC()
 	return PDCACycle{
-		ID:             id,
-		UserID:         userID,
-		SequenceNumber: 1,
-		Status:         StatusActive,
-		StartedAt:      now,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID: id, UserID: userID, GoalID: goalID, GoalVersionID: goalVersionID,
+		SequenceNumber: sequence, Status: StatusActive, StartedAt: now,
+		StartOperationID: operationID, StartRequestHash: requestHash,
+		CreatedAt: now, UpdatedAt: now,
 	}
 }
 
@@ -121,142 +108,130 @@ func ParseFrame(value string) (Frame, error) {
 }
 
 func NormalizeAndValidateText(value string) (string, error) {
-	if !utf8.ValidString(value) {
-		return "", ErrInvalidText
-	}
-	normalized := strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n")
-	if utf8.RuneCountInString(normalized) > MaxFrameCodePoints {
-		return "", ErrFrameTooLong
-	}
-	for _, codePoint := range normalized {
-		if isForbiddenControl(codePoint) {
-			return "", ErrInvalidText
+	value = strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n")
+	for _, codePoint := range value {
+		if codePoint == 0 || (codePoint < 0x20 && codePoint != '\n' && codePoint != '\t') || codePoint == 0x7f {
+			return "", ErrForbiddenCharacter
 		}
 	}
-	return normalized, nil
+	if utf8.RuneCountInString(value) > MaxFrameCodePoints {
+		return "", ErrFrameTextTooLong
+	}
+	return value, nil
 }
 
-func IsBlank(value string) bool {
-	return strings.TrimFunc(value, unicode.IsSpace) == ""
-}
+func IsBlank(value string) bool { return strings.TrimSpace(value) == "" }
 
-func SaveFrame(current PDCACycle, frame Frame, content string, expectedFrameRevision int64, aiRunning bool, now time.Time) (SaveFrameResult, error) {
+func SaveFrame(current PDCACycle, frame Frame, content string, expectedRevision int64, aiRunning bool, now time.Time) (SaveFrameResult, error) {
 	if current.Status != StatusActive {
 		return SaveFrameResult{}, ErrCycleNotActive
 	}
-	if _, err := ParseFrame(string(frame)); err != nil {
-		return SaveFrameResult{}, err
-	}
-	if frame == FrameAction && aiRunning {
+	if aiRunning && frame == FrameAction {
 		return SaveFrameResult{}, ErrAIOperationRunning
 	}
-	if expectedFrameRevision < 0 || current.FrameRevision(frame) != expectedFrameRevision {
-		return SaveFrameResult{}, ErrRevisionConflict
-	}
-	normalized, err := NormalizeAndValidateText(content)
+	content, err := NormalizeAndValidateText(content)
 	if err != nil {
 		return SaveFrameResult{}, err
 	}
-	if current.FrameContent(frame) == normalized {
-		return SaveFrameResult{Cycle: current, NoOp: true, Frame: frame, SavedAt: now.UTC()}, nil
+	if current.FrameRevision(frame) != expectedRevision {
+		return SaveFrameResult{}, ErrRevisionConflict
 	}
-
-	updated := current
+	if current.FrameContent(frame) == content {
+		return SaveFrameResult{Cycle: current, Frame: frame, Content: content, NoOp: true, SavedAt: current.UpdatedAt}, nil
+	}
+	current.Revisions.Content++
 	switch frame {
 	case FramePlan:
-		updated.Plan = normalized
-		updated.PlanRevision++
+		current.Plan = content
+		current.Revisions.Plan++
 	case FrameDo:
-		updated.Do = normalized
-		updated.DoRevision++
+		current.Do = content
+		current.Revisions.Do++
 	case FrameCheck:
-		updated.Check = normalized
-		updated.CheckRevision++
+		current.Check = content
+		current.Revisions.Check++
 	case FrameAction:
-		updated.Action = normalized
-		updated.ActionRevision++
-		if updated.ActionLastAIAppliedContentRevision != nil {
-			updated.ActionUserModifiedAfterAI = true
-		}
+		current.Action = content
+		current.Revisions.Action++
+		current.ActionModifiedAfterAI = current.ActionLastAIRevision != nil
 	default:
 		return SaveFrameResult{}, ErrInvalidFrame
 	}
-	updated.ContentRevision++
-	updated.UpdatedAt = now.UTC()
-	return SaveFrameResult{Cycle: updated, Frame: frame, SavedAt: now.UTC()}, nil
+	current.UpdatedAt = now.UTC()
+	return SaveFrameResult{Cycle: current, Frame: frame, Content: content, SavedAt: current.UpdatedAt}, nil
 }
 
-func ApplyAIAction(current PDCACycle, action string, generationContentRevision int64, now time.Time) (ApplyAIResult, error) {
+func ApplyAIAction(current PDCACycle, action string, expectedContentRevision int64, now time.Time) (PDCACycle, error) {
 	if current.Status != StatusActive {
-		return ApplyAIResult{}, ErrCycleNotActive
+		return PDCACycle{}, ErrCycleNotActive
 	}
-	normalized, err := NormalizeAndValidateText(action)
-	if err != nil {
-		return ApplyAIResult{}, err
+	if current.Revisions.Content != expectedContentRevision {
+		return PDCACycle{}, ErrRevisionConflict
 	}
-	if IsBlank(normalized) {
-		return ApplyAIResult{}, ErrInvalidText
+	action, err := NormalizeAndValidateText(action)
+	if err != nil || IsBlank(action) {
+		if err != nil {
+			return PDCACycle{}, err
+		}
+		return PDCACycle{}, ErrCycleIncomplete
 	}
-	updated := current
-	updated.Action = normalized
-	updated.ActionRevision++
-	updated.ContentRevision++
-	updated.UpdatedAt = now.UTC()
-	appliedRevision := updated.ContentRevision
-	updated.ActionLastAIAppliedContentRevision = &appliedRevision
-	updated.ActionUserModifiedAfterAI = false
-	return ApplyAIResult{
-		Cycle:          updated,
-		ContextChanged: current.ContentRevision != generationContentRevision,
-	}, nil
+	current.Action = action
+	current.Revisions.Content++
+	current.Revisions.Action++
+	appliedRevision := current.Revisions.Content
+	current.ActionLastAIRevision = &appliedRevision
+	current.ActionModifiedAfterAI = false
+	current.UpdatedAt = now.UTC()
+	return current, nil
 }
 
-func Complete(current PDCACycle, now time.Time, nextID ID, operationID OperationID, expectedContentRevision int64, aiRunning bool) (CompleteResult, error) {
+func Complete(current PDCACycle, operationID, requestHash string, expectedContentRevision int64, aiRunning bool, now time.Time) (PDCACycle, error) {
 	if current.Status != StatusActive {
-		return CompleteResult{}, ErrCycleNotActive
+		return PDCACycle{}, ErrCycleNotActive
 	}
-	if expectedContentRevision < 0 || current.ContentRevision != expectedContentRevision {
-		return CompleteResult{}, ErrRevisionConflict
+	if current.Revisions.Content != expectedContentRevision {
+		return PDCACycle{}, ErrRevisionConflict
 	}
 	if aiRunning {
-		return CompleteResult{}, ErrAIOperationRunning
+		return PDCACycle{}, ErrAIOperationRunning
 	}
-	if nextID == "" || operationID == "" {
-		return CompleteResult{}, ErrInvalidTransition
+	if len(current.MissingRequiredFrames()) != 0 {
+		return PDCACycle{}, ErrCycleIncomplete
 	}
-	missing := current.MissingRequiredFrames()
-	if len(missing) > 0 {
-		return CompleteResult{}, &IncompleteError{MissingFrames: missing}
-	}
+	now = now.UTC()
+	current.Status = StatusCompleted
+	current.CompletedAt = &now
+	current.CompletionOperationID = &operationID
+	current.CompletionRequestHash = &requestHash
+	current.UpdatedAt = now
+	return current, nil
+}
 
-	transitionTime := now.UTC()
-	completed := current
-	completed.Status = StatusCompleted
-	completed.CompletedAt = &transitionTime
-	completed.CompletionOperationID = &operationID
-	completed.UpdatedAt = transitionTime
-	next := PDCACycle{
-		ID:             nextID,
-		UserID:         current.UserID,
-		SequenceNumber: current.SequenceNumber + 1,
-		Status:         StatusActive,
-		StartedAt:      transitionTime,
-		CreatedAt:      transitionTime,
-		UpdatedAt:      transitionTime,
+func Cancel(current PDCACycle, reason CancellationReason, now time.Time) (PDCACycle, error) {
+	if current.Status != StatusActive {
+		return PDCACycle{}, ErrCycleNotActive
 	}
-	return CompleteResult{Completed: completed, Next: next}, nil
+	if reason != CancellationGoalAchieved && reason != CancellationGoalEnded {
+		return PDCACycle{}, ErrCycleNotActive
+	}
+	now = now.UTC()
+	current.Status = StatusCanceled
+	current.CanceledAt = &now
+	current.CancellationReason = &reason
+	current.UpdatedAt = now
+	return current, nil
 }
 
 func (current PDCACycle) FrameRevision(frame Frame) int64 {
 	switch frame {
 	case FramePlan:
-		return current.PlanRevision
+		return current.Revisions.Plan
 	case FrameDo:
-		return current.DoRevision
+		return current.Revisions.Do
 	case FrameCheck:
-		return current.CheckRevision
+		return current.Revisions.Check
 	case FrameAction:
-		return current.ActionRevision
+		return current.Revisions.Action
 	default:
 		return -1
 	}
@@ -278,18 +253,11 @@ func (current PDCACycle) FrameContent(frame Frame) string {
 }
 
 func (current PDCACycle) MissingRequiredFrames() []Frame {
-	missing := make([]Frame, 0, len(allFrames))
+	missing := make([]Frame, 0, 4)
 	for _, frame := range allFrames {
 		if IsBlank(current.FrameContent(frame)) {
 			missing = append(missing, frame)
 		}
 	}
 	return missing
-}
-
-func isForbiddenControl(codePoint rune) bool {
-	if codePoint == '\n' || codePoint == '\t' {
-		return false
-	}
-	return codePoint == 0x7f || (codePoint >= 0 && codePoint < 0x20)
 }

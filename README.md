@@ -1,6 +1,6 @@
 # PDCAI
 
-PDCAI MVPの実装リポジトリです。Cloudflare WorkerがReact/Vite SPAをedge配信し、同一originのAPIをCloudflare Container上のGoへrouteします。CycleはNeon PostgreSQLへ保存します。
+PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal Reviewで目標を維持・更新・終了できるG-PDCAアプリです。Cloudflare WorkerがReact/Vite SPAをedge配信し、同一originのAPIをCloudflare Container上のGoへrouteします。Goal、immutable Goal Version、Cycle、Review DraftはNeon PostgreSQLへ保存します。
 
 アプリケーションの要件・仕様・設計に関する最上位のSource of Truthは [`docs/design.md`](docs/design.md) です。READMEは入口であり、仕様書ではありません。
 
@@ -29,6 +29,7 @@ PDCAI MVPの実装リポジトリです。Cloudflare WorkerがReact/Vite SPAをe
 - `.github/workflows/terraform-apply.yml`: 指定ownerがmanual承認するsaved plan apply
 - `.github/workflows/deploy.yml`: Apply成功後のmigration-first Cloudflare deploy
 - `Dockerfile`: Cloudflare Container用non-root Go Backend image
+- `Dockerfile.local` / `compose.local.yaml`: 破棄可能なローカル実機確認環境
 
 ## Prerequisites
 
@@ -42,6 +43,16 @@ PDCAI MVPの実装リポジトリです。Cloudflare WorkerがReact/Vite SPAをe
 - Terraform 1.15.8（Staging基盤と全体checkに必要）
 
 詳細とversion根拠は [`docs/development.md`](docs/development.md) を参照してください。
+
+## Docker local preview
+
+Docker DesktopとPowerShell 7だけで、Frontend、Backend、Migration、PostgreSQLを起動して実際の画面を確認できます。Repositoryへ依存関係やbuild出力を作らず、既存の`.env`とローカルDBも使用しません。
+
+```powershell
+pwsh ./scripts/local-app.ps1
+```
+
+準備完了後に`http://localhost:8080`を開きます。AIは外部通信しないFake Adapter、Turnstileは無効、Google連携は未設定です。Enterで終了するとcontainer、network、破棄可能DBを削除します。詳細、別port、detached起動は[`docs/development.md`](docs/development.md)を参照してください。
 
 ## Quick start
 
@@ -68,10 +79,12 @@ npm run dev
 | 用途                                  | Command                                                                            |
 | ------------------------------------- | ---------------------------------------------------------------------------------- |
 | 初回setup                             | `pwsh ./scripts/setup.ps1`                                                         |
+| Dockerローカル実機確認                | `pwsh ./scripts/local-app.ps1`                                                     |
 | Backend環境変数を現在のterminalへ読込 | `. ./scripts/import-env.ps1`                                                       |
 | 全品質check                           | `pwsh ./scripts/check.ps1`                                                         |
 | Frontend / Backend / Infrastructureだけcheck | `pwsh ./scripts/check.ps1 -Scope frontend` / `-Scope backend` / `-Scope infrastructure` |
 | E2Eを含むcheck                        | `pwsh ./scripts/check.ps1 -E2E`                                                    |
+| AI quality evaluation手順             | [`docs/ai-evaluation.md`](docs/ai-evaluation.md)                                   |
 | Safe clean                            | `pwsh ./scripts/clean.ps1`                                                         |
 | 依存関係を含むfull clean              | `pwsh ./scripts/clean.ps1 -All`                                                    |
 | Local Docker DB reset                 | `pwsh ./scripts/reset-local-db.ps1 -DatabaseName pdcai -ConfirmDatabaseName pdcai` |
@@ -83,6 +96,8 @@ Safe/full cleanは環境file、DB、Docker resource、browser dataを削除し�
 ## Environment
 
 Backend local値はGit管理外の `.env`、Frontendの公開build-time値は `frontend/.env.local` に置きます。`VITE_` 変数はbrowserへ公開されるため秘密値を入れてはいけません。全変数、必須性、公開範囲、productionの設定場所は [`docs/environment.md`](docs/environment.md) を参照してください。
+
+Local/Testでは`OPENAI_API_KEY`を空にすると、外部通信しない決定的なFake AI Adapterを使用します。ProductionはAPI key、正式なmodel単価、Turnstile、Google設定が揃わない限り起動しません。
 
 ## CI/CD
 

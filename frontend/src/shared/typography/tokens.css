@@ -1,0 +1,23 @@
+:root,
+:root:lang(ja) {
+  --font-family-body-ja:
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic",
+    Meiryo, "Noto Sans JP", "Noto Sans CJK JP", system-ui, sans-serif;
+  --font-family-ui: var(--font-family-body-ja);
+  --font-family-body: var(--font-family-body-ja);
+  --font-family-editor: var(--font-family-body-ja);
+  --font-family-number: var(--font-family-body-ja);
+  --font-size-body: 1rem;
+  --font-size-editor: 1rem;
+  --font-size-small: 0.875rem;
+  --font-size-title: clamp(1.25rem, 4vw, 1.75rem);
+  --font-weight-regular: 400;
+  --font-weight-medium: 600;
+  --font-weight-bold: 700;
+  --line-height-ui: 1.45;
+  --line-height-body-ja: 1.7;
+  --line-height-editor-ja: 1.75;
+  --letter-spacing-ui-ja: 0;
+  --letter-spacing-body-ja: 0;
+  --line-height-body: var(--line-height-body-ja);
+}

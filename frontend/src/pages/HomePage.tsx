@@ -1,78 +1,97 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate } from "react-router-dom";
 
-import type { AppOutletContext } from "../app/AppLayout";
 import { useSession } from "../features/auth/sessionContext";
-import { AIProcessingProvider } from "../features/ai/AIProcessingProvider";
-import { CycleEditor } from "../features/cycle-editor/components/CycleEditor";
-import {
-  listCycleDrafts,
-  type DraftRecord,
-} from "../features/cycle-editor/draft/draftRepository";
-import { getActiveCycle } from "../shared/api/cycles";
-
-type LoadedDrafts = {
-  readonly cycleId: string;
-  readonly items: readonly DraftRecord[];
-};
+import { createGoalDraft, getHome } from "../shared/api/workspace";
+import { PageError, PageLoading } from "../shared/components/AsyncState";
+import { statusLabel } from "../shared/copy/ja";
 
 export function HomePage() {
   const session = useSession();
-  const {
-    planNavigationRequested,
-    onPlanNavigationHandled,
-    registerPlanNavigationHandler,
-  } = useOutletContext<AppOutletContext>();
-  const query = useQuery({
-    queryKey: ["active-cycle"],
-    queryFn: ({ signal }) => getActiveCycle(signal),
+  const navigate = useNavigate();
+  const cache = useQueryClient();
+  const query = useQuery({ queryKey: ["home"], queryFn: getHome });
+  const create = useMutation({
+    mutationFn: () => createGoalDraft("", session.csrfToken),
+    onSuccess: async () => {
+      await cache.invalidateQueries({ queryKey: ["home"] });
+      navigate("/goals/new");
+    },
   });
-  const [drafts, setDrafts] = useState<LoadedDrafts | null>(null);
-
-  useEffect(() => {
-    if (query.data === undefined) return;
-    let active = true;
-    void listCycleDrafts(session.user.id, query.data.cycle.id).then((items) => {
-      if (active) setDrafts({ cycleId: query.data.cycle.id, items });
-    });
-    return () => {
-      active = false;
-    };
-  }, [query.data, session.user.id]);
-
-  if (query.isError) {
-    return (
-      <div className="app-message app-message--error" role="alert">
-        <p>現在のサイクルを読み込めませんでした。</p>
-        <button type="button" onClick={() => void query.refetch()}>
-          再試行
-        </button>
-      </div>
-    );
-  }
-  if (
-    query.isPending ||
-    query.data === undefined ||
-    drafts?.cycleId !== query.data.cycle.id
-  ) {
-    return <div className="app-message">サイクルを読み込んでいます…</div>;
-  }
+  if (query.isPending) return <PageLoading />;
+  if (query.isError) return <PageError retry={() => void query.refetch()} />;
+  const home = query.data;
   return (
-    <AIProcessingProvider
-      key={query.data.cycle.id}
-      cycleId={query.data.cycle.id}
-      csrfToken={session.csrfToken}
-    >
-      <CycleEditor
-        cycle={query.data.cycle}
-        userId={session.user.id}
-        csrfToken={session.csrfToken}
-        drafts={drafts.items}
-        planNavigationRequested={planNavigationRequested}
-        onPlanNavigationHandled={onPlanNavigationHandled}
-        registerPlanNavigationHandler={registerPlanNavigationHandler}
-      />
-    </AIProcessingProvider>
+    <main className="page home-page">
+      <header className="page-heading">
+        <p className="eyebrow">G-PDCA WORKSPACE</p>
+        <h1>目標から、次の一歩へ。</h1>
+        <p>目標ごとに小さなサイクルを回し、学びながら前へ進みます。</p>
+      </header>
+      <section
+        className="goal-collection"
+        aria-labelledby="progressing-heading"
+      >
+        <div className="section-heading">
+          <h2 id="progressing-heading">取り組んでいる目標</h2>
+          <span>
+            {home.progressingGoals.length} / {home.progressingGoalLimit}
+          </span>
+        </div>
+        {home.progressingGoals.length === 0 && (
+          <div className="empty-card">
+            <p>まだ進行中の目標はありません。</p>
+          </div>
+        )}
+        {home.progressingGoals.map((goal) => {
+          const target =
+            goal.status === "goal_review"
+              ? `/goals/${goal.id}/review`
+              : `/goals/${goal.id}/cycles/${goal.currentWork?.cycleId ?? ""}`;
+          return (
+            <Link className="goal-card" key={goal.id} to={target}>
+              <span className="goal-card__kicker">あなたの目標</span>
+              <strong>{goal.currentVersion.body}</strong>
+              <div className="goal-card__meta">
+                <span>{statusLabel[goal.status]}</span>
+                <span>
+                  {goal.status === "active_cycle"
+                    ? `Cycle ${goal.currentWork?.cycleSequenceNumber ?? ""}`
+                    : "前回Cycleを振り返って目標を確認してください"}
+                </span>
+              </div>
+            </Link>
+          );
+        })}
+      </section>
+      {home.creationDraft && (
+        <section className="draft-card">
+          <p className="eyebrow">DRAFT</p>
+          <h2>目標の設定を続ける</h2>
+          <p>{home.creationDraft.body || "まだ本文はありません。"}</p>
+          <Link className="button button--primary" to="/goals/new">
+            下書きを開く
+          </Link>
+        </section>
+      )}
+      {!home.creationDraft && home.canCreateGoalDraft && (
+        <button
+          className="button button--primary home-cta"
+          type="button"
+          disabled={create.isPending}
+          onClick={() => create.mutate()}
+        >
+          {create.isPending ? "準備中…" : "新しい目標を設定"}
+        </button>
+      )}
+      {create.isError && (
+        <p className="inline-error" role="alert">
+          目標の下書きを作成できませんでした。
+        </p>
+      )}
+      <Link className="history-link" to="/history">
+        すべての目標と履歴を見る →
+      </Link>
+    </main>
   );
 }

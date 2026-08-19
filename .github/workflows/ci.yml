@@ -9,6 +9,15 @@ permissions:
   contents: read
 
 jobs:
+  workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate GitHub Actions workflows
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -69,6 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: docker compose --file compose.local.yaml config --quiet
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -97,7 +107,7 @@ jobs:
         working-directory: cloudflare
 
   e2e:
-    needs: [frontend, backend, infrastructure]
+    needs: [workflow, frontend, backend, infrastructure]
     runs-on: ubuntu-latest
     services:
       postgres:

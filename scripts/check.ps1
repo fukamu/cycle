@@ -88,6 +88,8 @@ if ($runBackend) {
 if ($runInfrastructure) {
     Assert-Command "terraform"
     Assert-Command "npm"
+    Assert-Command "docker"
+    Invoke-Checked docker compose --file (Join-Path $repoRoot "compose.local.yaml") config --quiet
     $terraformDataDirWasSet = Test-Path Env:TF_DATA_DIR
     $previousTerraformDataDir = $env:TF_DATA_DIR
     $env:TF_DATA_DIR = Join-Path $repoRoot ".tmp/terraform-check"
@@ -139,12 +141,50 @@ if ($E2E) {
     if ([string]::IsNullOrWhiteSpace($env:TEST_DATABASE_URL)) {
         throw "Set TEST_DATABASE_URL to a disposable PostgreSQL test database before running E2E."
     }
-    Push-Location (Join-Path $repoRoot "frontend")
+
+    $e2eSuffix = if ($IsWindows -or $env:OS -eq "Windows_NT") { ".exe" } else { "" }
+    $e2eMigrateBinary = Join-Path $repoRoot ".tmp/check/migrate$e2eSuffix"
+    $e2eServerBinary = Join-Path $repoRoot ".tmp/check/server$e2eSuffix"
+    if (-not (Test-Path -LiteralPath $e2eMigrateBinary) -or -not (Test-Path -LiteralPath $e2eServerBinary)) {
+        throw "E2E binaries are missing. Run E2E with -Scope all so the backend build runs first."
+    }
+
+    $databaseUrlWasSet = Test-Path Env:DATABASE_URL
+    $previousDatabaseUrl = $env:DATABASE_URL
+    $serverBinaryWasSet = Test-Path Env:PDCAI_SERVER_BINARY
+    $previousServerBinary = $env:PDCAI_SERVER_BINARY
     try {
-        Invoke-Checked npm run test:e2e
+        $env:DATABASE_URL = $env:TEST_DATABASE_URL
+        Push-Location (Join-Path $repoRoot "backend")
+        try {
+            Invoke-Checked $e2eMigrateBinary
+        }
+        finally {
+            Pop-Location
+        }
+
+        $env:PDCAI_SERVER_BINARY = $e2eServerBinary
+        Push-Location (Join-Path $repoRoot "frontend")
+        try {
+            Invoke-Checked npm run test:e2e
+        }
+        finally {
+            Pop-Location
+        }
     }
     finally {
-        Pop-Location
+        if ($databaseUrlWasSet) {
+            $env:DATABASE_URL = $previousDatabaseUrl
+        }
+        else {
+            Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
+        }
+        if ($serverBinaryWasSet) {
+            $env:PDCAI_SERVER_BINARY = $previousServerBinary
+        }
+        else {
+            Remove-Item Env:PDCAI_SERVER_BINARY -ErrorAction SilentlyContinue
+        }
     }
 }
 

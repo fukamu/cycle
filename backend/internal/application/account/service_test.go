@@ -14,8 +14,7 @@ var accountTestTime = time.Date(2026, time.August, 16, 1, 2, 3, 0, time.UTC)
 func TestUpgradeGoogleKeepsUserAndHashesRotatedCredentials(t *testing.T) {
 	t.Parallel()
 	repository := &fakeAccountRepository{result: AuthResult{
-		UserID:        user.ID("00000000-0000-4000-8000-000000000001"),
-		ActiveCycleID: "00000000-0000-4000-8000-000000000002",
+		UserID: user.ID("00000000-0000-4000-8000-000000000001"),
 	}}
 	service := accountTestService(repository, fakeGoogleVerifier{identity: GoogleIdentity{Subject: "google-sub"}})
 	view, err := service.UpgradeGoogle(context.Background(), repository.result.UserID, "old-session", "signed-token")

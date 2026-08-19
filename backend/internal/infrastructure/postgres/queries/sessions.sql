@@ -10,10 +10,8 @@ SELECT
         SELECT 1
         FROM auth_identities ai
         WHERE ai.user_id = s.user_id AND ai.provider = 'google'
-    ) AS google_connected,
-    c.id AS active_cycle_id
+    ) AS google_connected
 FROM sessions s
-JOIN pdca_cycles c ON c.user_id = s.user_id AND c.status = 'active'
 WHERE s.token_hash = $1
   AND s.revoked_at IS NULL
   AND s.idle_expires_at > $2

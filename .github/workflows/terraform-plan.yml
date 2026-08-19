@@ -133,6 +133,6 @@ jobs:
             echo
             echo "- Commit: \`${COMMIT_SHA}\`"
             echo "- Plan workflow run: \`${GITHUB_RUN_ID}\`"
-            echo '- Review the `Create saved Terraform plan` log, then manually run `Terraform Apply Staging` with this Plan workflow run ID.'
-            echo '- The saved plan expires after 7 days; rerun Plan after expiry.'
+            echo "- Review the \`Create saved Terraform plan\` log, then manually run \`Terraform Apply Staging\` with this Plan workflow run ID."
+            echo "- The saved plan expires after 7 days; rerun Plan after expiry."
           } >> "${GITHUB_STEP_SUMMARY}"

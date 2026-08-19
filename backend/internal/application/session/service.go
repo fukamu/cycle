@@ -39,14 +39,12 @@ type AuthenticatedSession struct {
 	IdleExpiresAt     time.Time
 	AbsoluteExpiresAt time.Time
 	GoogleConnected   bool
-	ActiveCycleID     string
 }
 
 type CreateAnonymousRecord struct {
 	BootstrapKeyHash  []byte
 	BootstrapExpires  time.Time
 	UserID            user.ID
-	CycleID           string
 	SessionID         string
 	SessionTokenHash  []byte
 	CSRFTokenHash     []byte
@@ -56,16 +54,14 @@ type CreateAnonymousRecord struct {
 }
 
 type AnonymousRecord struct {
-	UserID        user.ID
-	ActiveCycleID string
-	Created       bool
+	UserID  user.ID
+	Created bool
 }
 
 type View struct {
 	UserID          user.ID
 	GoogleConnected bool
 	CSRFToken       string
-	ActiveCycleID   string
 	SessionToken    string
 }
 
@@ -131,7 +127,6 @@ func (service *Service) Refresh(ctx context.Context, sessionToken string) (View,
 		UserID:          record.UserID,
 		GoogleConnected: record.GoogleConnected,
 		CSRFToken:       csrfToken,
-		ActiveCycleID:   record.ActiveCycleID,
 		SessionToken:    sessionToken,
 	}, nil
 }
@@ -149,7 +144,7 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 		return View{}, err
 	}
 
-	userID, cycleID, sessionID, err := service.newEntityIDs()
+	userID, sessionID, err := service.newEntityIDs()
 	if err != nil {
 		return View{}, err
 	}
@@ -166,7 +161,6 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 		BootstrapKeyHash:  keyedHash(service.settings.BootstrapHashKey, input.BootstrapID),
 		BootstrapExpires:  now.Add(service.settings.BootstrapTTL),
 		UserID:            user.ID(userID),
-		CycleID:           cycleID,
 		SessionID:         sessionID,
 		SessionTokenHash:  keyedHash(service.settings.SessionHashKey, sessionToken),
 		CSRFTokenHash:     keyedHash(service.settings.CSRFHashKey, csrfToken),
@@ -181,7 +175,6 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 		UserID:          record.UserID,
 		GoogleConnected: false,
 		CSRFToken:       csrfToken,
-		ActiveCycleID:   record.ActiveCycleID,
 		SessionToken:    sessionToken,
 	}, nil
 }
@@ -193,20 +186,16 @@ func (service *Service) VerifyCSRF(record AuthenticatedSession, token string) er
 	return nil
 }
 
-func (service *Service) newEntityIDs() (string, string, string, error) {
+func (service *Service) newEntityIDs() (string, string, error) {
 	userID, err := service.ids.NewID()
 	if err != nil {
-		return "", "", "", err
-	}
-	cycleID, err := service.ids.NewID()
-	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	sessionID, err := service.ids.NewID()
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
-	return userID, cycleID, sessionID, nil
+	return userID, sessionID, nil
 }
 
 func keyedHash(key []byte, value string) []byte {

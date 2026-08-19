@@ -65,14 +65,12 @@ type LoginRecord struct {
 }
 
 type AuthResult struct {
-	UserID        user.ID
-	ActiveCycleID string
+	UserID user.ID
 }
 
 type View struct {
 	UserID          user.ID
 	GoogleConnected bool
-	ActiveCycleID   string
 	SessionToken    string
 	CSRFToken       string
 }
@@ -184,7 +182,7 @@ func (service *Service) createSession(ctx context.Context, operation func(sessio
 		return View{}, err
 	}
 	return View{
-		UserID: result.UserID, GoogleConnected: true, ActiveCycleID: result.ActiveCycleID,
+		UserID: result.UserID, GoogleConnected: true,
 		SessionToken: token, CSRFToken: csrf,
 	}, nil
 }

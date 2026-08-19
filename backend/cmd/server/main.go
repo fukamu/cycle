@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/matoruru/PDCAI/backend/internal/ai/prompts"
 	"github.com/matoruru/PDCAI/backend/internal/application/account"
-	appai "github.com/matoruru/PDCAI/backend/internal/application/actionai"
-	appcycle "github.com/matoruru/PDCAI/backend/internal/application/cycle"
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
 	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
+	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
 	"github.com/matoruru/PDCAI/backend/internal/config"
 	"github.com/matoruru/PDCAI/backend/internal/httpapi"
 	"github.com/matoruru/PDCAI/backend/internal/infrastructure/aiprovider"
@@ -29,7 +29,15 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	settings, err := config.Load(os.LookupEnv)
 	if err != nil {
-		logger.Error("invalid configuration", "error_class", "configuration_invalid", "error", err)
+		logger.Error("invalid configuration", "error_class", "configuration_invalid")
+		os.Exit(1)
+	}
+	promptSet, err := prompts.Resolve(prompts.Versions{
+		GoalRefine: settings.AI.GoalPromptVersion, ActionGenerate: settings.AI.GeneratePromptVersion,
+		ActionRefine: settings.AI.RefinePromptVersion,
+	})
+	if err != nil {
+		logger.Error("invalid prompt configuration", "error_class", "prompt_configuration_invalid")
 		os.Exit(1)
 	}
 	observability.Setup()
@@ -38,7 +46,6 @@ func main() {
 		logger.Error("metrics unavailable", "error_class", "metrics_startup_failed")
 		os.Exit(1)
 	}
-
 	startupContext, cancelStartup := context.WithTimeout(context.Background(), 10*time.Second)
 	pool, err := postgres.Open(startupContext, settings.Database)
 	cancelStartup()
@@ -64,104 +71,83 @@ func main() {
 	sessionService := appsession.NewService(
 		postgres.NewSessionRepository(pool), system.Clock{}, random, random, antiAbuse,
 		appsession.Settings{
-			SessionHashKey:     []byte(settings.Session.TokenPepper),
-			CSRFHashKey:        []byte(settings.Session.CSRFTokenPepper),
-			BootstrapHashKey:   []byte(settings.Session.BootstrapIDPepper),
-			IdleTTL:            settings.Session.IdleTTL,
-			AbsoluteTTL:        settings.Session.AbsoluteTTL,
-			ActivityTouchAfter: settings.Session.ActivityTouchInterval,
-			BootstrapTTL:       settings.Session.AnonymousBootstrapTTL,
+			SessionHashKey: []byte(settings.Session.TokenPepper), CSRFHashKey: []byte(settings.Session.CSRFTokenPepper),
+			BootstrapHashKey: []byte(settings.Session.BootstrapIDPepper), IdleTTL: settings.Session.IdleTTL,
+			AbsoluteTTL: settings.Session.AbsoluteTTL, ActivityTouchAfter: settings.Session.ActivityTouchInterval,
+			BootstrapTTL: settings.Session.AnonymousBootstrapTTL,
 		},
 	)
-	cycleService := appcycle.NewService(
-		postgres.NewCycleRepository(pool), system.Clock{}, random, []byte(settings.Session.TokenPepper),
-	)
+	var aiProvider workspace.AIProvider = aiprovider.Fake{}
+	if settings.AI.APIKey != "" {
+		aiProvider = aiprovider.NewOpenAI(settings.AI.APIKey, settings.AI.Model, settings.AI.Timeout, settings.AI.ActionMaxOutputTokens,
+			settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens, promptSet)
+	}
 	tokenCounter, err := aiprovider.NewTokenCounter(settings.AI.TokenizerEncoding)
 	if err != nil {
-		logger.Error("AI tokenizer configuration failed", "error_class", "ai_tokenizer_invalid")
+		logger.Error("AI tokenizer unavailable", "error_class", "tokenizer_startup_failed")
 		os.Exit(1)
 	}
-	var actionProvider appai.ActionAI = aiprovider.FakeActionAI{}
-	if settings.AI.APIKey != "" {
-		actionProvider = aiprovider.NewOpenAIActionAI(settings.AI.APIKey, settings.AI.Model, settings.AI.Timeout)
-	}
-	aiRepository := postgres.NewAIRepository(pool)
-	aiSettings := appai.Settings{
-		Provider: settings.AI.Provider, Model: settings.AI.Model,
-		MaxInputTokens: settings.AI.MaxInputTokens, MaxOutputTokens: settings.AI.MaxOutputTokens,
-		ProviderTimeout: settings.AI.Timeout, MaxProviderAttempts: settings.AI.MaxProviderAttempts,
-		MaxGenerationsPerUser24h: settings.AI.MaxGenerationsPerUser24h,
-		GeneratePromptVersion:    settings.AI.GeneratePromptVersion, RefinePromptVersion: settings.AI.RefinePromptVersion,
-		MonthlyBudgetUSD:     settings.AI.MonthlyBudgetUSD,
-		InputUSDPerMillion:   settings.AI.Pricing.InputUSDPerMillionTokens,
-		OutputUSDPerMillion:  settings.AI.Pricing.OutputUSDPerMillionTokens,
-		RatePerUserMinute:    settings.RateLimit.AIPerUserMinute,
-		RatePerSessionMinute: settings.RateLimit.AIPerSessionMinute,
-		RatePerIPMinute:      settings.RateLimit.AIPerIPMinute,
-		RateLimitHMACKey:     []byte(settings.Session.RateLimitHMACSecret),
-		LeaseDuration:        60 * time.Second,
-	}
-	contextBuilder := appai.NewContextBuilder(tokenCounter, settings.AI.MaxInputTokens)
-	generateAction := appai.NewGenerateActionUseCase(aiRepository, actionProvider, contextBuilder, system.Clock{}, random, aiSettings)
-	refineAction := appai.NewRefineActionUseCase(aiRepository, actionProvider, contextBuilder, system.Clock{}, random, aiSettings)
-	generateAction.SetObserver(metrics)
-	refineAction.SetObserver(metrics)
+	reservationUSD := (float64(settings.AI.MaxInputTokens)*settings.AI.Pricing.InputUSDPerMillionTokens +
+		float64(settings.AI.ActionMaxOutputTokens)*settings.AI.Pricing.OutputUSDPerMillionTokens) / 1_000_000 * float64(settings.AI.MaxProviderAttempts)
+	workspaceStore := postgres.NewWorkspaceStore(pool, postgres.WorkspaceStoreSettings{
+		CursorSigningKey: []byte(settings.Session.CursorSigningSecret), Provider: settings.AI.Provider, Model: settings.AI.Model,
+		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
+		RefinePromptVersion: settings.AI.RefinePromptVersion, RollingLimit: settings.AI.MaxGenerationsPerUser24h,
+		MonthlyBudgetUSD: settings.AI.MonthlyBudgetUSD, ReservationUSD: reservationUSD, LeaseDuration: settings.AI.LeaseDuration,
+		RateHashKey: []byte(settings.Session.RateLimitHMACSecret), AIPerUserMinute: settings.RateLimit.AIPerUserMinute,
+		AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute, AIPerIPMinute: settings.RateLimit.AIPerIPMinute,
+	})
+	workspaceService := workspace.NewService(workspaceStore, aiProvider, system.Clock{}, random, workspace.Settings{
+		MaxProgressingGoals: settings.Goals.MaxProgressingGoals, MaxProviderAttempts: settings.AI.MaxProviderAttempts,
+		MaxRetryBackoff: settings.AI.MaxRetryBackoff, FinalizationGrace: settings.AI.FinalizationGrace, Model: settings.AI.Model,
+		MaxInputTokens: settings.AI.MaxInputTokens, GoalRefineMaxOutputTokens: settings.AI.GoalRefineMaxOutputTokens,
+		ActionMaxOutputTokens: settings.AI.ActionMaxOutputTokens, MaxContextCycles: settings.AI.MaxContextCycles,
+		GoalRefineInstructions: promptSet.GoalRefine, ActionGenerateInstructions: promptSet.ActionGenerate,
+		ActionRefineInstructions: promptSet.ActionRefine, TokenCounter: tokenCounter,
+		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
+		RefinePromptVersion: settings.AI.RefinePromptVersion, AIObserver: metrics,
+	})
 	var googleVerifier account.GoogleVerifier = googleidentity.NewVerifier(settings.Google.WebClientID)
 	if settings.App.Environment == "test" {
 		googleVerifier = googleidentity.FakeVerifier{}
 	}
 	accountService := account.NewService(
-		postgres.NewAccountRepository(pool), googleVerifier,
-		system.Clock{}, random, random,
+		postgres.NewAccountRepository(pool), googleVerifier, system.Clock{}, random, random,
 		account.Settings{
 			SessionHashKey: []byte(settings.Session.TokenPepper), CSRFHashKey: []byte(settings.Session.CSRFTokenPepper),
 			IdleTTL: settings.Session.IdleTTL, AbsoluteTTL: settings.Session.AbsoluteTTL,
 		},
 	)
 	router := httpapi.NewRouter(httpapi.Dependencies{
-		Sessions:       sessionService,
-		Cycles:         cycleService,
-		GenerateAction: generateAction,
-		RefineAction:   refineAction,
-		Account:        accountService,
-		RequestIDs:     random,
-		PublicOrigin:   settings.App.PublicOrigin.String(),
-		Ready:          pool.Ping,
-		Logger:         logger,
-		Production:     settings.App.Environment == "production",
-		TrustProxy:     settings.App.Environment == "production",
-		StaticDir:      settings.App.StaticDir,
-		Metrics:        metrics,
+		Sessions: sessionService, Workspace: workspaceService, Account: accountService, RequestIDs: random,
+		PublicOrigin: settings.App.PublicOrigin.String(), Ready: pool.Ping, Logger: logger,
+		Production: settings.App.Environment == "production", TrustProxy: settings.App.Environment == "production",
+		StaticDir: settings.App.StaticDir, Metrics: metrics,
 	})
 	server := &http.Server{
-		Addr:              settings.App.HTTPAddress,
-		Handler:           router,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		Addr: settings.App.HTTPAddress, Handler: router,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second,
+		WriteTimeout: settings.AI.LeaseDuration + settings.AI.FinalizationGrace, IdleTimeout: 120 * time.Second,
 	}
-
-	shutdownContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSignals()
 	serverErrors := make(chan error, 1)
-	go func() {
-		logger.Info("server starting", "address", server.Addr)
-		serverErrors <- server.ListenAndServe()
-	}()
+	go func() { serverErrors <- server.ListenAndServe() }()
+	logger.Info("server started", "address", settings.App.HTTPAddress, "environment", settings.App.Environment)
 
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	select {
-	case <-shutdownContext.Done():
-		gracefulContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := server.Shutdown(gracefulContext); err != nil {
-			logger.Error("server shutdown failed", "error_class", "shutdown_failed")
+	case received := <-signals:
+		logger.Info("shutdown requested", "signal", received.String())
+	case listenErr := <-serverErrors:
+		if !errors.Is(listenErr, http.ErrServerClosed) {
+			logger.Error("server stopped unexpectedly", "error_class", "http_server_failed")
 			os.Exit(1)
 		}
-	case err := <-serverErrors:
-		if !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server stopped", "error_class", "listen_failed")
-			os.Exit(1)
-		}
+	}
+	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelShutdown()
+	if err = server.Shutdown(shutdownContext); err != nil {
+		logger.Error("graceful shutdown failed", "error_class", "http_shutdown_failed")
+		os.Exit(1)
 	}
 }

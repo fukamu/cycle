@@ -104,9 +104,11 @@ jobs:
             exit 1
           fi
 
-          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
-          echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"
-          echo "plan_run_id=${PLAN_RUN_ID}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "artifact_name=${artifact_name}"
+            echo "commit_sha=${commit_sha}"
+            echo "plan_run_id=${PLAN_RUN_ID}"
+          } >> "${GITHUB_OUTPUT}"
 
   apply:
     needs: preflight
@@ -228,7 +230,7 @@ jobs:
             echo
             echo "- Commit: \`${COMMIT_SHA}\`"
             echo "- Turnstile site key (public): \`${sitekey}\`"
-            echo '- `Deploy Staging` will start automatically from this successful workflow.'
+            echo "- \`Deploy Staging\` will start automatically from this successful workflow."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Write deployment metadata

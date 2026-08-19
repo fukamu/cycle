@@ -15,6 +15,31 @@
 
 CIとContainer imageはNode.js 24、Go 1.26.6、PostgreSQL 17を前提にし、Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
 
+## Dockerによるローカル実機確認
+
+Docker DesktopとPowerShell 7だけで、Frontend、Backend、Migration、PostgreSQLを隔離環境へbuildし、ブラウザから操作できます。Repositoryの`.env`、`frontend/.env.local`、`node_modules`、`frontend/dist`、`.tmp`、既存の`pdcai-postgres`は使用・変更しません。
+
+```powershell
+pwsh ./scripts/local-app.ps1
+```
+
+ready確認後に`http://localhost:8080`を開きます。Enterで終了すると、`pdcai-local` Compose projectのcontainer、network、破棄可能DBだけを削除します。DBはtmpfsで永続化されず、Hostへport公開されません。Applicationは`127.0.0.1:8080`だけへ公開されます。Docker imageとBuildKit cacheは次回の高速化のため保持し、他projectを含むglobal pruneは実行しません。
+
+別portを使う場合は`-Port`を指定します。
+
+```powershell
+pwsh ./scripts/local-app.ps1 -Port 8081
+```
+
+Terminalを解放したまま起動する場合は`-Detached`を使い、終了時に専用の`-Down`を実行します。Terminalの強制終了等で自動cleanupされなかった場合も同じ`-Down`を使用します。
+
+```powershell
+pwsh ./scripts/local-app.ps1 -Detached
+pwsh ./scripts/local-app.ps1 -Down
+```
+
+このprofileは`APP_ENV=development`、空の`OPENAI_API_KEY`、無効なTurnstile、未設定のGoogle Client IDで起動します。AIは決定的なFake Adapterを使用し、Google連携以外のGoal/Cycle/Review操作を外部credentialなしで確認できます。これは手動の実機確認環境であり、format、lint、typecheck、unit/integration test、E2E、Terraform、Wranglerの品質checkを代替しません。
+
 ## 初回セットアップ
 
 リポジトリルートで次を実行します。
@@ -25,7 +50,7 @@ pwsh ./scripts/setup.ps1
 
 このスクリプトはNode/Goのバージョンを確認し、未作成の場合だけ `.env.example` から `.env`、`frontend/.env.example` から `frontend/.env.local` を作り、Frontend/Cloudflareの`npm ci`とBackendの`go mod download`を実行します。既存の環境ファイルを上書きしません。依存関係を入れず環境ファイルだけ準備する場合は `-SkipInstall` を指定できます。
 
-`.env` の4つのpepper/HMAC値は、ローカルでも24文字以上が必要です。example値をproductionで使ってはいけません。Frontendの `VITE_` 変数はブラウザへ公開されるため、秘密値を入れてはいけません。
+`.env` のSession/CSRF/bootstrap pepper、rate-limit HMAC、cursor署名secretは、ローカルでも24文字以上が必要です。example値をproductionで使ってはいけません。Frontendの `VITE_` 変数はブラウザへ公開されるため、秘密値を入れてはいけません。
 
 Backendはdotenvを暗黙ロードしません。Backendを操作する各PowerShellターミナルで、次のように現在のprocessへ読み込みます。値は画面へ表示されません。
 
@@ -52,7 +77,7 @@ go run ./cmd/migrate
 Pop-Location
 ```
 
-Migrationは再実行可能で、未適用分だけを適用します。seed処理はありません。初期データは不要で、画面から匿名sessionを作るとcycleが作成されます。
+Migrationは再実行可能で、未適用分だけを適用します。seed処理はありません。画面を開くと匿名sessionだけが作成され、HomeからGoal Creation Draftを作って開始した時点でGoal v1とCycle 1が同一transactionで作成されます。
 
 ## 開発サーバー
 
@@ -94,7 +119,7 @@ go run ./cmd/server
 pwsh ./scripts/check.ps1
 ```
 
-実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate build、Terraformのformat/init/validate、Wrangler config/typecheck/dry-runです。`TEST_DATABASE_URL` が未設定ならBackend integration testはskipされます。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
+実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate build、Dockerローカル実機Composeの構文確認、Terraformのformat/init/validate、Wrangler config/typecheck/dry-runです。`TEST_DATABASE_URL` が未設定ならBackend integration testはskipされます。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
 
 Frontend、Backend、Infrastructureだけを確認できます。
 
@@ -111,7 +136,7 @@ $env:TEST_DATABASE_URL = 'postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmo
 pwsh ./scripts/check.ps1 -Scope backend
 ```
 
-E2Eも同じ専用DBを使います。初回のみChromiumを導入し、`-E2E` を付けます。
+E2Eも同じ専用DBを使います。初回のみChromiumを導入し、`-E2E` を付けます。Check scriptはbuild済みのmigration/server binaryを使って事前migrationとPlaywright server起動を行い、Windowsでも子processを確実に終了します。
 
 ```powershell
 Push-Location frontend

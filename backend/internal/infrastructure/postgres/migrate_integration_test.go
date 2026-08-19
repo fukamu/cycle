@@ -11,7 +11,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS schema_migrations`)
-	down := filepath.Join("..", "..", "..", "migrations", "000001_init.down.sql")
+	down := filepath.Join("..", "..", "..", "migrations", "000001_pdcai_baseline.down.sql")
 	script, err := os.ReadFile(down)
 	if err != nil {
 		t.Fatal(err)

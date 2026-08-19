@@ -18,7 +18,7 @@ type AccountService interface {
 }
 
 type googleTokenRequest struct {
-	IDToken string `json:"idToken"`
+	IDToken string `json:"idToken" validate:"required"`
 }
 
 type deleteAccountRequest struct {
@@ -33,14 +33,14 @@ func (server *api) upgradeGoogle(writer http.ResponseWriter, request *http.Reque
 		}
 	}()
 	var input googleTokenRequest
-	if decodeJSON(writer, request, &input, googleTokenBodyLimit) != nil || input.IDToken == "" {
-		server.writeError(writer, request, account.ErrGoogleTokenInvalid, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, googleTokenBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	record, _ := authenticatedSession(request.Context())
 	view, err := server.dependencies.Account.UpgradeGoogle(request.Context(), record.UserID, record.ID, input.IDToken)
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errAccountUpgradeFailed), nil)
 		return
 	}
 	setSessionCookie(writer, view.SessionToken)
@@ -50,14 +50,14 @@ func (server *api) upgradeGoogle(writer http.ResponseWriter, request *http.Reque
 
 func (server *api) loginGoogle(writer http.ResponseWriter, request *http.Request) {
 	var input googleTokenRequest
-	if decodeJSON(writer, request, &input, googleTokenBodyLimit) != nil || input.IDToken == "" {
-		server.writeError(writer, request, account.ErrGoogleTokenInvalid, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, googleTokenBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	record, _ := authenticatedSession(request.Context())
 	view, err := server.dependencies.Account.LoginGoogle(request.Context(), record.ID, input.IDToken)
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errGoogleLoginFailed), nil)
 		return
 	}
 	setSessionCookie(writer, view.SessionToken)
@@ -72,8 +72,8 @@ func (server *api) deleteAccount(writer http.ResponseWriter, request *http.Reque
 		}
 	}()
 	var input deleteAccountRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil {
-		server.writeError(writer, request, account.ErrDeleteConfirmationRequired, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	record, _ := authenticatedSession(request.Context())
@@ -89,7 +89,7 @@ func (server *api) deleteAccount(writer http.ResponseWriter, request *http.Reque
 func sessionResponseFromAccount(view account.View) sessionResponse {
 	return mapSession(appsession.View{
 		UserID: view.UserID, GoogleConnected: view.GoogleConnected,
-		CSRFToken: view.CSRFToken, ActiveCycleID: view.ActiveCycleID, SessionToken: view.SessionToken,
+		CSRFToken: view.CSRFToken, SessionToken: view.SessionToken,
 	})
 }
 

@@ -44,7 +44,6 @@ func (repository *SessionRepository) FindByTokenHash(ctx context.Context, hash [
 		IdleExpiresAt:     row.IdleExpiresAt.Time,
 		AbsoluteExpiresAt: row.AbsoluteExpiresAt.Time,
 		GoogleConnected:   row.GoogleConnected,
-		ActiveCycleID:     uuidString(row.ActiveCycleID),
 	}, nil
 }
 
@@ -105,17 +104,12 @@ WHERE key_hash = $1
 FOR UPDATE`, input.BootstrapKeyHash).Scan(&existingUserID, &existingExpires)
 	switch {
 	case err == nil && existingExpires.After(input.Now):
-		var activeCycleID pgtype.UUID
-		err = tx.QueryRow(ctx, `SELECT id FROM pdca_cycles WHERE user_id = $1 AND status = 'active'`, existingUserID).Scan(&activeCycleID)
-		if err != nil {
-			return record, err
-		}
 		err = insertSession(ctx, tx, input, existingUserID)
 		if err != nil {
 			return record, err
 		}
 		err = tx.Commit(ctx)
-		return appsession.AnonymousRecord{UserID: user.ID(uuidString(existingUserID)), ActiveCycleID: uuidString(activeCycleID), Created: false}, err
+		return appsession.AnonymousRecord{UserID: user.ID(uuidString(existingUserID)), Created: false}, err
 	case err == nil:
 		if _, err = tx.Exec(ctx, `DELETE FROM anonymous_bootstraps WHERE key_hash = $1`, input.BootstrapKeyHash); err != nil {
 			return record, err
@@ -127,19 +121,9 @@ FOR UPDATE`, input.BootstrapKeyHash).Scan(&existingUserID, &existingExpires)
 	}
 
 	userID := mustUUID(string(input.UserID))
-	cycleID := mustUUID(input.CycleID)
 	if _, err = tx.Exec(ctx, `
 INSERT INTO users (id, last_active_at, created_at, updated_at)
 VALUES ($1, $2, $2, $2)`, userID, input.Now); err != nil {
-		return record, err
-	}
-	if _, err = tx.Exec(ctx, `
-INSERT INTO pdca_cycles (
-    id, user_id, sequence_number, status, started_at,
-    plan, do_text, check_text, action,
-    content_revision, plan_revision, do_revision, check_revision, action_revision,
-    action_user_modified_after_ai, created_at, updated_at
-) VALUES ($1, $2, 1, 'active', $3, '', '', '', '', 0, 0, 0, 0, 0, false, $3, $3)`, cycleID, userID, input.Now); err != nil {
 		return record, err
 	}
 	if err = insertSession(ctx, tx, input, userID); err != nil {
@@ -153,7 +137,7 @@ VALUES ($1, $2, $3, $4)`, input.BootstrapKeyHash, userID, input.BootstrapExpires
 	if err = tx.Commit(ctx); err != nil {
 		return record, err
 	}
-	return appsession.AnonymousRecord{UserID: input.UserID, ActiveCycleID: input.CycleID, Created: true}, nil
+	return appsession.AnonymousRecord{UserID: input.UserID, Created: true}, nil
 }
 
 func insertSession(ctx context.Context, tx pgx.Tx, input appsession.CreateAnonymousRecord, userID pgtype.UUID) error {

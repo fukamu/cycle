@@ -18,6 +18,15 @@
 
 同じruleを複数文書へcopyせず、専門のSource of Truthへlinkしてください。
 
+## Directory responsibilities
+
+- `frontend/`: React SPA、browser state、API DTO validation、Vitest / Playwright。
+- `backend/`: GoのDomain / Application / HTTP / Infrastructure、SQL query、Migration。
+- `cloudflare/`: Static Assets配信、Container routing、Wrangler bindings。
+- `infra/terraform/`: Terraformが所有するCloudflare基盤resource。Wrangler所有resourceと二重管理しない。
+- `scripts/`: Local setup、check、safe clean、明示確認付きlocal DB reset。
+- `.github/workflows/`: CI、saved Terraform plan/apply、migration-first deploy。
+
 ## 仕様変更と停止条件
 
 - 仕様へ影響する変更では、実装前に `docs/design.md` の関連sectionと全体整合性を確認し、恒久的な仕様変更なら更新要否を判断する。
@@ -38,6 +47,7 @@
 - Production deployはmigration-firstを維持し、migration成功前にapplication trafficを新versionへ移さない。
 - 未決のproduction capacity、backup、provider、budget/rate/security/alert値をexample/defaultから推測しない。
 - 実装・command・environment variable・workflowを変更したら、対応する専門文書とREADMEの導線が正しいか確認する。
+- `backend/internal/infrastructure/postgres/generated/`は手編集しない。Query/schema変更後に`Push-Location backend; sqlc generate; Pop-Location`で更新し、生成元と同じcommitへ含める。
 
 ## Verification
 
@@ -50,4 +60,4 @@
 
 Host tool不足で一部checkを実行できない場合は、実行できたcheck、未実行のcheck、理由を明記してください。Data消失やproduction変更を伴う操作をvalidationのために実行してはいけません。
 
-意味のある単位でcommitし、force pushや既存履歴の書き換えを行いません。
+Commit前に`git diff --check`、対象scopeのcheck、generated code差分、Secret/旧仕様の混入を確認します。意味のある単位でcommitし、force pushや既存履歴の書き換えを行いません。

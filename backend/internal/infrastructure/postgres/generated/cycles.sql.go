@@ -11,61 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const getActiveCycle = `-- name: GetActiveCycle :one
-SELECT id, user_id, sequence_number, status, started_at, completed_at, plan, do_text, check_text, action, content_revision, plan_revision, do_revision, check_revision, action_revision, action_last_ai_applied_content_revision, action_user_modified_after_ai, completion_operation_id, created_at, updated_at
-FROM pdca_cycles
-WHERE user_id = $1 AND status = 'active'
+const getActiveGoalCycle = `-- name: GetActiveGoalCycle :one
+SELECT c.id, c.user_id, c.goal_id, c.goal_version_id, c.sequence_number, c.status, c.started_at, c.completed_at, c.canceled_at, c.cancellation_reason, c.plan, c.do_text, c.check_text, c.action, c.content_revision, c.plan_revision, c.do_revision, c.check_revision, c.action_revision, c.action_last_ai_applied_content_revision, c.action_user_modified_after_ai, c.start_operation_id, c.start_request_hash, c.completion_operation_id, c.completion_request_hash, c.created_at, c.updated_at
+FROM pdca_cycles c
+JOIN goals g ON g.id = c.goal_id AND g.user_id = c.user_id
+WHERE c.goal_id = $1 AND c.user_id = $2
+  AND c.status = 'active' AND g.status = 'active_cycle'
 `
 
-func (q *Queries) GetActiveCycle(ctx context.Context, userID pgtype.UUID) (*PdcaCycle, error) {
-	row := q.db.QueryRow(ctx, getActiveCycle, userID)
-	var i PdcaCycle
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.SequenceNumber,
-		&i.Status,
-		&i.StartedAt,
-		&i.CompletedAt,
-		&i.Plan,
-		&i.DoText,
-		&i.CheckText,
-		&i.Action,
-		&i.ContentRevision,
-		&i.PlanRevision,
-		&i.DoRevision,
-		&i.CheckRevision,
-		&i.ActionRevision,
-		&i.ActionLastAiAppliedContentRevision,
-		&i.ActionUserModifiedAfterAi,
-		&i.CompletionOperationID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return &i, err
-}
-
-const getCompletedCycle = `-- name: GetCompletedCycle :one
-SELECT id, user_id, sequence_number, status, started_at, completed_at, plan, do_text, check_text, action, content_revision, plan_revision, do_revision, check_revision, action_revision, action_last_ai_applied_content_revision, action_user_modified_after_ai, completion_operation_id, created_at, updated_at
-FROM pdca_cycles
-WHERE id = $1 AND user_id = $2 AND status = 'completed'
-`
-
-type GetCompletedCycleParams struct {
-	ID     pgtype.UUID
+type GetActiveGoalCycleParams struct {
+	GoalID pgtype.UUID
 	UserID pgtype.UUID
 }
 
-func (q *Queries) GetCompletedCycle(ctx context.Context, arg GetCompletedCycleParams) (*PdcaCycle, error) {
-	row := q.db.QueryRow(ctx, getCompletedCycle, arg.ID, arg.UserID)
+func (q *Queries) GetActiveGoalCycle(ctx context.Context, arg GetActiveGoalCycleParams) (*PdcaCycle, error) {
+	row := q.db.QueryRow(ctx, getActiveGoalCycle, arg.GoalID, arg.UserID)
 	var i PdcaCycle
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
+		&i.GoalID,
+		&i.GoalVersionID,
 		&i.SequenceNumber,
 		&i.Status,
 		&i.StartedAt,
 		&i.CompletedAt,
+		&i.CanceledAt,
+		&i.CancellationReason,
 		&i.Plan,
 		&i.DoText,
 		&i.CheckText,
@@ -77,34 +49,43 @@ func (q *Queries) GetCompletedCycle(ctx context.Context, arg GetCompletedCyclePa
 		&i.ActionRevision,
 		&i.ActionLastAiAppliedContentRevision,
 		&i.ActionUserModifiedAfterAi,
+		&i.StartOperationID,
+		&i.StartRequestHash,
 		&i.CompletionOperationID,
+		&i.CompletionRequestHash,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return &i, err
 }
 
-const getOwnedCycle = `-- name: GetOwnedCycle :one
-SELECT id, user_id, sequence_number, status, started_at, completed_at, plan, do_text, check_text, action, content_revision, plan_revision, do_revision, check_revision, action_revision, action_last_ai_applied_content_revision, action_user_modified_after_ai, completion_operation_id, created_at, updated_at
-FROM pdca_cycles
-WHERE id = $1 AND user_id = $2
+const getGoalCycle = `-- name: GetGoalCycle :one
+SELECT c.id, c.user_id, c.goal_id, c.goal_version_id, c.sequence_number, c.status, c.started_at, c.completed_at, c.canceled_at, c.cancellation_reason, c.plan, c.do_text, c.check_text, c.action, c.content_revision, c.plan_revision, c.do_revision, c.check_revision, c.action_revision, c.action_last_ai_applied_content_revision, c.action_user_modified_after_ai, c.start_operation_id, c.start_request_hash, c.completion_operation_id, c.completion_request_hash, c.created_at, c.updated_at
+FROM pdca_cycles c
+JOIN goals g ON g.id = c.goal_id AND g.user_id = c.user_id
+WHERE c.id = $1 AND c.goal_id = $2 AND c.user_id = $3
 `
 
-type GetOwnedCycleParams struct {
+type GetGoalCycleParams struct {
 	ID     pgtype.UUID
+	GoalID pgtype.UUID
 	UserID pgtype.UUID
 }
 
-func (q *Queries) GetOwnedCycle(ctx context.Context, arg GetOwnedCycleParams) (*PdcaCycle, error) {
-	row := q.db.QueryRow(ctx, getOwnedCycle, arg.ID, arg.UserID)
+func (q *Queries) GetGoalCycle(ctx context.Context, arg GetGoalCycleParams) (*PdcaCycle, error) {
+	row := q.db.QueryRow(ctx, getGoalCycle, arg.ID, arg.GoalID, arg.UserID)
 	var i PdcaCycle
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
+		&i.GoalID,
+		&i.GoalVersionID,
 		&i.SequenceNumber,
 		&i.Status,
 		&i.StartedAt,
 		&i.CompletedAt,
+		&i.CanceledAt,
+		&i.CancellationReason,
 		&i.Plan,
 		&i.DoText,
 		&i.CheckText,
@@ -116,35 +97,40 @@ func (q *Queries) GetOwnedCycle(ctx context.Context, arg GetOwnedCycleParams) (*
 		&i.ActionRevision,
 		&i.ActionLastAiAppliedContentRevision,
 		&i.ActionUserModifiedAfterAi,
+		&i.StartOperationID,
+		&i.StartRequestHash,
 		&i.CompletionOperationID,
+		&i.CompletionRequestHash,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return &i, err
 }
 
-const listCompletedCycles = `-- name: ListCompletedCycles :many
-SELECT id, user_id, sequence_number, status, started_at, completed_at, plan, do_text, check_text, action, content_revision, plan_revision, do_revision, check_revision, action_revision, action_last_ai_applied_content_revision, action_user_modified_after_ai, completion_operation_id, created_at, updated_at
-FROM pdca_cycles
-WHERE user_id = $1
-  AND status = 'completed'
+const listGoalCycles = `-- name: ListGoalCycles :many
+SELECT c.id, c.user_id, c.goal_id, c.goal_version_id, c.sequence_number, c.status, c.started_at, c.completed_at, c.canceled_at, c.cancellation_reason, c.plan, c.do_text, c.check_text, c.action, c.content_revision, c.plan_revision, c.do_revision, c.check_revision, c.action_revision, c.action_last_ai_applied_content_revision, c.action_user_modified_after_ai, c.start_operation_id, c.start_request_hash, c.completion_operation_id, c.completion_request_hash, c.created_at, c.updated_at
+FROM pdca_cycles c
+JOIN goals g ON g.id = c.goal_id AND g.user_id = c.user_id
+WHERE c.goal_id = $1 AND c.user_id = $2
   AND (
-      $3::integer IS NULL
-      OR (sequence_number, id) < ($3::integer, $4::uuid)
+      $4::integer IS NULL
+      OR (c.sequence_number, c.id) < ($4::integer, $5::uuid)
   )
-ORDER BY sequence_number DESC, id DESC
-LIMIT $2
+ORDER BY c.sequence_number DESC, c.id DESC
+LIMIT $3
 `
 
-type ListCompletedCyclesParams struct {
+type ListGoalCyclesParams struct {
+	GoalID              pgtype.UUID
 	UserID              pgtype.UUID
 	Limit               int32
 	AfterSequenceNumber *int32
 	AfterCycleID        pgtype.UUID
 }
 
-func (q *Queries) ListCompletedCycles(ctx context.Context, arg ListCompletedCyclesParams) ([]*PdcaCycle, error) {
-	rows, err := q.db.Query(ctx, listCompletedCycles,
+func (q *Queries) ListGoalCycles(ctx context.Context, arg ListGoalCyclesParams) ([]*PdcaCycle, error) {
+	rows, err := q.db.Query(ctx, listGoalCycles,
+		arg.GoalID,
 		arg.UserID,
 		arg.Limit,
 		arg.AfterSequenceNumber,
@@ -160,10 +146,14 @@ func (q *Queries) ListCompletedCycles(ctx context.Context, arg ListCompletedCycl
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,
+			&i.GoalID,
+			&i.GoalVersionID,
 			&i.SequenceNumber,
 			&i.Status,
 			&i.StartedAt,
 			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.CancellationReason,
 			&i.Plan,
 			&i.DoText,
 			&i.CheckText,
@@ -175,7 +165,10 @@ func (q *Queries) ListCompletedCycles(ctx context.Context, arg ListCompletedCycl
 			&i.ActionRevision,
 			&i.ActionLastAiAppliedContentRevision,
 			&i.ActionUserModifiedAfterAi,
+			&i.StartOperationID,
+			&i.StartRequestHash,
 			&i.CompletionOperationID,
+			&i.CompletionRequestHash,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {

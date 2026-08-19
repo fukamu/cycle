@@ -11,6 +11,7 @@
 | `npm ci`失敗                          | Node不一致、lock不整合、network/cache | `node --version`; `npm --version`; npm error  | Node 24以上へ合わせる。lockを手編集せず、必要なら`clean.ps1 -All`後に再実行        |
 | 同名Docker container error            | `pdcai-postgres`が既に存在            | `docker ps -a --filter name=pdcai-postgres`   | 停止中なら`docker start pdcai-postgres`。保持dataを確認せずremoveしない            |
 | PowerShell scriptを実行できない       | PowerShell 7未導入、execution policy  | `pwsh --version`; `Get-ExecutionPolicy -List` | PowerShell 7を導入し、組織policyに従う。policyを無断で緩和しない                   |
+| Docker実機環境がremote contextを拒否 | 現在のDocker contextがremote host     | `docker context inspect`                      | Docker Desktopのlocal contextへ明示的に戻す。安全guardを削除しない                 |
 
 ## Development server / build
 
@@ -22,6 +23,7 @@
 | Production相当buildで画面404           | `STATIC_DIR`不正、`dist`未build                 | `Test-Path frontend/dist/index.html`; Backend startup env          | `npm run build`後にabsolute `STATIC_DIR`を設定                               |
 | Frontend build/typecheck失敗           | TypeScript error、stale dependency              | `pwsh ./scripts/check.ps1 -Scope frontend`                         | 最初のerrorを修正。必要なら`clean.ps1 -All`→`setup.ps1`                      |
 | format/lintだけ失敗                    | Prettier/ESLint規則違反                         | `npm run format:check`; `npm run lint`                             | `npm run format`後に差分をreviewし、lint errorを修正                         |
+| Docker実機環境がreadyにならない        | Port競合、image build、Migration、DB起動の失敗  | `docker compose -f compose.local.yaml logs`                        | 最初のerrorを修正し、`pwsh ./scripts/local-app.ps1 -Down`後に再実行           |
 
 ## Database / Migration
 
@@ -55,7 +57,7 @@
 | Anonymous session作成失敗  | Turnstile site/secret key、hostname/action不一致、token期限切れ/replay | Browser network、server error、Turnstile widget設定 | Site/secret keyとhostname/actionを合わせる。Tokenは再取得し、Productionで無効化しない |
 | Local AIが実APIを呼ばない  | `OPENAI_API_KEY`空のdevelopment/testは仕様どおりFake | APP_ENVとkeyの有無（値は表示しない）                  | 実APIが必要な明示的検証だけlocal secretをprocessへ設定。通常testはFakeを使う |
 | Production AI失敗          | Key、model、quota/spend/rate limit、provider障害     | AI error metrics/log、provider status/dashboard       | 設定とprovider制限を確認。Fakeへ切替えず、非AI機能と切り分ける               |
-| AI costが0/不正            | price vars未設定/旧単価、model不一致                 | Deploy variables、`AI_MODEL`/`AI_PRICE_MODEL`、確認日 | 当日の正式単価をreviewして新revisionをdeploy。推測値を入れない               |
+| AI costが0/不正            | price vars未設定/旧単価、model不一致                 | Deploy variables、`AI_MODEL`/`AI_PRICING_MODEL`、確認日 | 当日の正式単価をreviewして新revisionをdeploy。推測値を入れない               |
 
 ## CI / Cloudflare Deploy / Production
 
