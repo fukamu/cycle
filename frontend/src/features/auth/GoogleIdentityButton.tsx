@@ -30,13 +30,15 @@ export function GoogleIdentityButton({
   readonly disabled?: boolean;
 }) {
   const parent = useRef<HTMLDivElement>(null);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "failed">(
+    "loading",
+  );
   const clientId = import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID as
     | string
     | undefined;
 
   useEffect(() => {
-    if (!clientId || disabled) return;
+    if (!clientId) return;
     let active = true;
     void loadGoogleIdentity()
       .then(() => {
@@ -53,24 +55,27 @@ export function GoogleIdentityButton({
         parent.current.replaceChildren();
         accounts.id.renderButton(parent.current, {
           type: "standard",
+          size: "large",
           theme: "outline",
           text: "continue_with",
           shape: "pill",
           locale: "ja",
+          width: String(Math.min(parent.current.clientWidth || 320, 400)),
         });
+        setLoadState("ready");
       })
-      .catch(() => active && setLoadFailed(true));
+      .catch(() => active && setLoadState("failed"));
     return () => {
       active = false;
     };
-  }, [clientId, disabled, onCredential]);
+  }, [clientId, onCredential]);
 
   if (!clientId) {
     return (
       <p className="settings-hint">Google連携は運用設定後に利用できます。</p>
     );
   }
-  if (loadFailed) {
+  if (loadState === "failed") {
     return (
       <p className="inline-error" role="alert">
         Google認証を読み込めませんでした。
@@ -78,7 +83,22 @@ export function GoogleIdentityButton({
     );
   }
   return (
-    <div ref={parent} aria-label="Google Account 連携" aria-busy={disabled} />
+    <div
+      className="google-identity"
+      data-disabled={disabled || undefined}
+      aria-busy={loadState === "loading" || disabled}
+    >
+      <div
+        ref={parent}
+        className="google-identity__button"
+        aria-label="Google Account 連携"
+      />
+      {loadState === "loading" && (
+        <span className="settings-hint" role="status">
+          Google認証を読み込み中…
+        </span>
+      )}
+    </div>
   );
 }
 

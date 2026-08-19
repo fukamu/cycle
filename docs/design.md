@@ -757,8 +757,9 @@ Draftが変更されている場合、confirmationへ次を明示する。
 Route: `/settings`
 
 - User ID。
-- Google Account状態。
+- Google Account状態。連携済みの場合は検証済みEmailも併記し、Emailを取得できない場合はその旨を表示する。
 - Google Account連携。
+- Google Identity Servicesのbutton hostは描画前から高さと最大幅を確保し、外部Widgetの非同期初期描画が設定画面全体へはみ出さないようにする。
 - Account Delete。
 - Billing / Upgrade Plan UIは表示しない。
 
