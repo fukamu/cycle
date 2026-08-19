@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import {
@@ -30,13 +30,7 @@ describe("SettingsPage", () => {
   beforeEach(() => {
     vi.mocked(deleteAccount).mockReset();
     vi.mocked(clearUserDrafts).mockReset();
-    vi.stubGlobal(
-      "confirm",
-      vi.fn(() => true),
-    );
   });
-
-  afterEach(() => vi.unstubAllGlobals());
 
   it("keeps local drafts when server deletion fails", async () => {
     vi.mocked(deleteAccount).mockRejectedValue(new Error("network"));
@@ -45,11 +39,32 @@ describe("SettingsPage", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "アカウントを削除" }),
     );
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "アカウントを削除",
+      }),
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "アカウントを削除できませんでした",
     );
     expect(clearUserDrafts).not.toHaveBeenCalled();
+  });
+
+  it("does not delete the account when the in-app dialog is canceled", async () => {
+    renderPage();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "アカウントを削除" }),
+    );
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "キャンセル",
+      }),
+    );
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(deleteAccount).not.toHaveBeenCalled();
   });
 
   it("clears only this user's drafts after a successful 204", async () => {
@@ -59,6 +74,11 @@ describe("SettingsPage", () => {
 
     await userEvent.click(
       screen.getByRole("button", { name: "アカウントを削除" }),
+    );
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "アカウントを削除",
+      }),
     );
 
     await waitFor(() =>

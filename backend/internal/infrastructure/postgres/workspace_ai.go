@@ -403,8 +403,9 @@ FROM ai_generations WHERE id=$1 AND status='running' FOR UPDATE`, mustUUID(snaps
 	if providerErr != nil {
 		return workspace.AIResponse{}, providerErr
 	}
+	sourceDraftRevision := snapshot.TargetRevision
 	return workspace.AIResponse{
-		GenerationID: snapshot.GenerationID, SourceDraftRevision: snapshot.TargetRevision,
+		GenerationID: snapshot.GenerationID, SourceDraftRevision: &sourceDraftRevision,
 		SourceGoalRevision: snapshot.SourceGoalRevision, Suggestion: result.Output, ContextChanged: contextChanged,
 	}, nil
 }

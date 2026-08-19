@@ -150,6 +150,12 @@ export const aiResponseSchema = z.object({
 });
 export type AIResponse = z.infer<typeof aiResponseSchema>;
 
+export const goalRefineResponseSchema = aiResponseSchema.extend({
+  sourceDraftRevision: z.number().int().nonnegative(),
+  suggestion: z.string(),
+});
+export type GoalRefineResponse = z.infer<typeof goalRefineResponseSchema>;
+
 const apiErrorSchema = z.object({
   error: z.object({
     code: z.string(),

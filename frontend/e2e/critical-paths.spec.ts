@@ -27,8 +27,11 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(
     page.getByRole("textbox", { name: "A — Action" }),
   ).not.toHaveValue("");
-  page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "サイクルを完了" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "サイクルを完了" })
+    .click();
   await expect(
     page.getByRole("heading", { name: "平日は主要業務を18時までに終えたい" }),
   ).toBeVisible();
@@ -38,6 +41,16 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(
     page.getByText("Goal v1 · Cycle 1 を完了しました"),
   ).toBeVisible();
+
+  await page.getByRole("button", { name: "AIで目標を整える" }).click();
+  await expect(page.getByText("AIからの提案")).toBeVisible();
+  await expect(
+    page.getByText(
+      "提案後に下書きが変更されたため、この提案は採用できません。",
+    ),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "提案を採用" })).toBeEnabled();
+  await page.getByRole("button", { name: "元の目標を維持" }).click();
 
   await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
   await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
@@ -51,8 +64,11 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
 
   await page.getByRole("link", { name: /Cycle 2/ }).click();
   await page.getByText("目標の操作").click();
-  page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "目標を削除" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "目標を削除" })
+    .click();
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });
 
@@ -129,16 +145,12 @@ test("goal review termination discards an unversioned change explicitly", async 
     name: "次のサイクルで目指す目標",
   });
   await review.fill("次のCycleだけで試したかった変更案");
-  const dialogText = new Promise<string>((resolve) =>
-    page.once("dialog", async (dialog) => {
-      resolve(dialog.message());
-      await dialog.accept();
-    }),
-  );
   await page.getByRole("button", { name: "目標を達成として終了" }).click();
-  await expect(dialogText).resolves.toContain(
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText(
     "この変更案は、次のサイクルを開始しないため保存されません",
   );
+  await dialog.getByRole("button", { name: "目標を達成" }).click();
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });
 
@@ -243,8 +255,11 @@ async function createAndCompleteGoal(page: Page) {
   await saveFrame(page, "D — Do", "実行", "C");
   await saveFrame(page, "C — Check", "確認", "A");
   await saveFrame(page, "A — Action", "改善", "A");
-  page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "サイクルを完了" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "サイクルを完了" })
+    .click();
 }
 
 async function saveFrame(
