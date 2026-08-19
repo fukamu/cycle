@@ -593,7 +593,7 @@ Goal Review
 - Header logoでHomeへ戻る。
 - Active CycleのP/D/C/A Tabは自由移動可能。
 - AI Action処理中もP/D/C Tab編集・移動可能。Aのみread-only。
-- Goal Refine処理中もGoal Draft編集は可能。ただし編集後はAI suggestionがstaleとなり採用不可。
+- Goal Refine処理中もGoal Draft編集は可能。AI要求時の本文と現在の保存済み本文が異なる間はsuggestionをstaleとして採用不可にするが、完全に同じ本文へ戻して保存済みなら採用できる。
 - Pending / failed save中はAI実行、Goal開始、Review確定、Cycle完了を不可にする。
 - Active Cycle途中のGoal達成/終了はCycle save完了が必要。Goal Reviewからの達成/終了はDraftを破棄するためsave stateに依存しない。
 - HistoryのCompleted / Canceled Cycleに編集・削除buttonを表示しない。
@@ -658,7 +658,7 @@ AIからの提案
 
 - `元の目標を維持`: Suggestion Panelを閉じるだけでDraftを変更しない。
 - `提案を採用`: Adopt API成功後だけDraftを更新する。
-- AI実行中もTextarea編集は可能。ただし編集後はSuggestionをstaleとして採用不可にする。
+- AI実行中もTextarea編集は可能。AI要求時の本文と現在の保存済み本文が異なる間はSuggestionをstaleとして採用不可にするが、完全に同じ本文へ戻して保存済みなら採用できる。
 - `この目標で始める`はDraft保存済み、trim後非空、Goal Refine非実行中、`canStartProgressingGoal=true`の場合だけ有効。
 - 上限到達時もDraftの保存・Refine・破棄は可能であり、Startだけを無効化する。
 
@@ -4216,7 +4216,7 @@ SQLを1巨大Repository methodへ隠しすぎず、Transaction object内のtyped
 | Goal end vs new Goal create | transient limit error/race | User row lock first | progressing count serialized |
 | Action AI double execution | duplicate paid call | idempotency key + running unique | max1 running per Cycle |
 | Goal Refine double execution | duplicate paid call | idempotency key + running unique | max1 running per Draft |
-| Goal Refine vs Draft edit | AI overwrite | suggestion-only + source revision | no automatic overwrite |
+| Goal Refine vs Draft edit | AI overwrite | suggestion-only + source text comparison + current revision CAS | no automatic overwrite |
 | Goal suggestion adoption vs edit | newer text lost | Draft lock + source text comparison + current revision CAS | stale suggestion rejected、同一本文への復元は許可 |
 | AI result vs P/D/C edit | P/D/C overwritten | A-only update | current P/D/C preserved |
 | Goal Delete vs AI | late content restore | locks + cancel + existence recheck | deleted Aggregate not recreated |
