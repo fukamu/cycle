@@ -99,6 +99,7 @@ function GoalDraftEditor({
   const valid = editor.body.trim().length > 0 && count <= 500;
 
   async function requestRefine() {
+    const previousSuggestion = refine.kind === "suggested" ? refine : undefined;
     setError(undefined);
     setRefine({ kind: "running" });
     const sourceBody = editor.body;
@@ -114,7 +115,14 @@ function GoalDraftEditor({
         sourceBody,
       });
     } catch {
-      setRefine({ kind: "failed" });
+      if (previousSuggestion) {
+        setRefine(previousSuggestion);
+        setError(
+          "AIから新しい提案を取得できませんでした。前の提案を表示しています。",
+        );
+      } else {
+        setRefine({ kind: "failed" });
+      }
     }
   }
   async function adopt() {

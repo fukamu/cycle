@@ -76,6 +76,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     goal.currentVersion.body.replaceAll("\r\n", "\n").trim();
 
   async function requestRefine() {
+    const previousSuggestion = refine.kind === "suggested" ? refine : undefined;
     setRefine({ kind: "running" });
     setError(undefined);
     const sourceBody = editor.body;
@@ -92,7 +93,14 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         sourceBody,
       });
     } catch {
-      setRefine({ kind: "failed" });
+      if (previousSuggestion) {
+        setRefine(previousSuggestion);
+        setError(
+          "AIから新しい提案を取得できませんでした。前の提案を表示しています。",
+        );
+      } else {
+        setRefine({ kind: "failed" });
+      }
     }
   }
   async function adopt() {

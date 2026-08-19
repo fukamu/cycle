@@ -6040,6 +6040,7 @@ Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpa
 | AI-GR-14 | same idempotency replay | no duplicate logical operation |
 | AI-GR-15 | Goal Review termination after refine | Version unchanged、Draft/related AI content discarded、Usage quota retained |
 | AI-GR-16 | initial Draft abandon | Generation content削除、Usage quota維持 |
+| AI-GR-17 | displayed suggestion後の再Refine失敗 | 既存suggestionを維持し、再取得失敗を通知 |
 
 ## 48.12 Goal Refine quality rule tests
 

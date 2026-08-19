@@ -61,6 +61,16 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     ),
   ).toHaveCount(0);
   await expect(page.getByRole("button", { name: "提案を採用" })).toBeEnabled();
+  await page.route(
+    "**/api/v1/goals/*/review/refinements",
+    (route) => route.abort("connectionfailed"),
+    { times: 1 },
+  );
+  await page.getByRole("button", { name: "AIで目標を整える" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "前の提案を表示しています",
+  );
+  await expect(page.getByText("AIからの提案")).toBeVisible();
   await page.getByRole("button", { name: "元の目標を維持" }).click();
 
   await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
