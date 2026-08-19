@@ -855,6 +855,7 @@ type GoalRefineState =
       readonly kind: 'suggested';
       readonly generationId: string;
       readonly sourceRevision: number;
+      readonly sourceBody: string;
       readonly suggestion: string;
       readonly contextChanged: boolean;
     }
@@ -862,7 +863,8 @@ type GoalRefineState =
 ```
 
 - AI suggestionはDraftとは別stateで表示する。
-- `contextChanged=true`または現在Draft revisionと`sourceRevision`不一致なら採用buttonをdisabledにする。
+- 現在Draft本文が`sourceBody`と完全一致し、かつ保存済みの場合だけ採用buttonを有効にする。一度変更・保存してrevisionが進んでも、同じ本文へ戻して保存済みなら再び有効にする。
+- Adopt requestは現在のDraft revisionを送り、Backendでも現在本文とGeneration `sourceText`の一致を検証する。別tab等の未反映変更はrevision CASで拒否する。
 - 「元の目標を維持」はsuggestion panelを閉じるだけでDraftを変更しない。
 
 ## 11.4 Action AI State
@@ -2104,7 +2106,7 @@ Concurrent operation:
 | Cycle Auto Save different Frames | needless conflict | per-frame revisions | independent save可能 |
 | Goal Draft Auto Save | stale overwrite | draft revision CAS | old write rejected |
 | Goal Refine double execution | duplicate AI | running partial unique + idempotency | subjectごとmax1 |
-| Goal suggestion adoption | edited Draft overwrite | generation sourceRevision + draft CAS | stale adoption rejected |
+| Goal suggestion adoption | edited Draft overwrite | generation sourceText comparison + current draft revision CAS | stale adoption rejected、同一本文への復元は許可 |
 | Action AI double execution | duplicate paid call | running partial unique + idempotency | Cycleごとmax1 |
 | Action AI vs P/D/C edit | P/D/C loss | Aだけupdate | current P/D/C保持 |
 | Action AI vs A edit | User A loss | UI read-only + Backend reject | A競合なし |
@@ -2218,7 +2220,7 @@ Base path: `/api/v1`
 | PATCH | `/goal-drafts/{draftId}` | SaveGoalDraft | Session | owner + open | draft revision CAS |
 | DELETE | `/goal-drafts/{draftId}` | AbandonGoalCreationDraft | Session | owner + creation | repeated delete→404 |
 | POST | `/goal-drafts/{draftId}/refinements` | RefineGoalDraft | Session | owner + creation | Idempotency-Key + running unique |
-| POST | `/goal-drafts/{draftId}/refinements/{generationId}/adopt` | AdoptGoalSuggestion | Session | owner + generation target | source revision CAS |
+| POST | `/goal-drafts/{draftId}/refinements/{generationId}/adopt` | AdoptGoalSuggestion | Session | owner + generation target | source text + current revision CAS |
 | POST | `/goal-drafts/{draftId}/start` | StartGoal | Session | owner + creation | operationId + User row lock |
 | GET | `/goals` | ListGoals | Session | owner only | safe / cursor |
 | GET | `/goals/{goalId}` | GetGoal | Session | owner | safe |
@@ -2227,7 +2229,7 @@ Base path: `/api/v1`
 | GET | `/goals/{goalId}/review` | GetGoalReview | Session | owner + goal_review | safe |
 | PATCH | `/goals/{goalId}/review` | SaveGoalReviewDraft | Session | owner + goal_review | draft revision CAS |
 | POST | `/goals/{goalId}/review/refinements` | RefineGoalReviewDraft | Session | owner + goal_review | Idempotency-Key + running unique |
-| POST | `/goals/{goalId}/review/refinements/{generationId}/adopt` | AdoptReviewSuggestion | Session | owner + generation | source revision CAS |
+| POST | `/goals/{goalId}/review/refinements/{generationId}/adopt` | AdoptReviewSuggestion | Session | owner + generation | source text + current revision CAS |
 | POST | `/goals/{goalId}/review/continue` | ContinueGoal | Session | owner + goal_review | operationId + Goal lock |
 | GET | `/goals/{goalId}/cycles` | ListGoalCycles | Session | owner | safe / cursor |
 | GET | `/goals/{goalId}/cycles/{cycleId}` | GetCycle | Session | owner + same Goal | safe |
@@ -2587,7 +2589,7 @@ Transaction:
 
 1. Draft + Generation lock。
 2. Generation owner / operationType=`goal_refine` / target Draft / status succeededを検証。
-3. `generation.targetRevision == expectedDraftRevision == draft.revision`を検証。
+3. `expectedDraftRevision == draft.revision`、`generation.targetRevision <= draft.revision`、`generation.sourceText == draft.body`を検証。
 4. outputをDraft bodyへ設定、Draft revision+1。
 5. Generation `adoptedAt`とadopted revisionを記録。
 6. commit。
@@ -3055,7 +3057,7 @@ Transaction:
 
 1. Goal、Review Draft、AIGenerationをglobal lock orderでlockする。
 2. Goal status / revision、Draft revision、Generation owner / type=`goal_refine` / status=`succeeded` / target Draftを検証する。
-3. `generation.targetRevision == expectedDraftRevision == draft.revision`を要求する。
+3. `expectedDraftRevision == draft.revision`、`generation.targetRevision <= draft.revision`、`generation.sourceText == draft.body`を要求する。提案後に編集しても、元と完全に同じ本文へ戻して保存済みなら採用できる。
 4. Generation outputをReview Draft bodyへ設定し、Draft revisionを+1する。Goal Versionはこの時点では作成しない。
 5. Generation `adoptedAt` / `adoptedDraftRevision`を記録する。
 6. commit。
@@ -4215,7 +4217,7 @@ SQLを1巨大Repository methodへ隠しすぎず、Transaction object内のtyped
 | Action AI double execution | duplicate paid call | idempotency key + running unique | max1 running per Cycle |
 | Goal Refine double execution | duplicate paid call | idempotency key + running unique | max1 running per Draft |
 | Goal Refine vs Draft edit | AI overwrite | suggestion-only + source revision | no automatic overwrite |
-| Goal suggestion adoption vs edit | newer text lost | Draft lock + source revision CAS | stale suggestion rejected |
+| Goal suggestion adoption vs edit | newer text lost | Draft lock + source text comparison + current revision CAS | stale suggestion rejected、同一本文への復元は許可 |
 | AI result vs P/D/C edit | P/D/C overwritten | A-only update | current P/D/C preserved |
 | Goal Delete vs AI | late content restore | locks + cancel + existence recheck | deleted Aggregate not recreated |
 | Goal Delete retry | first success response loss | deletion receipt | same operation -> 204 |
@@ -4364,7 +4366,7 @@ Goal Refine成功時:
 - ユーザーが`adopt` endpointを実行するまでDraftへ反映しない。
 - AI処理中もDraft編集を許可するが、結果は開始時snapshotに対するsuggestionである。
 - Draftが開始後に変更された場合は`contextChanged=true`。
-- Adoptionは`sourceDraftRevision`一致を要求し、stale suggestionで新しいDraftを上書きしない。
+- Adoptionは現在Draft本文とGeneration `sourceText`の完全一致、およびcurrent Draft revisionのCASを要求し、異なる本文をstale suggestionで上書きしない。編集後に同一本文へ戻した場合は、revisionが進んでいても採用できる。
 
 ## 32.7 Action AI result
 
@@ -4684,7 +4686,7 @@ AIからの提案
 
 - 「元の目標を維持」はsuggestion panelを閉じるだけでDraftを変更しない。
 - 「提案を採用」は§22.6 / §23.8のadopt endpointを呼ぶ。
-- `expectedDraftRevision`とGenerationの`targetRevision`が一致する場合だけ採用する。
+- 現在Draft本文とGenerationの`sourceText`が完全一致する場合だけ採用する。編集後に同一本文へ戻して保存済みなら採用できる。
 - 採用はDraft saveと同じrevision CASを使い、Draft revisionを+1する。
 - staleなら`GOAL_REFINE_CONTEXT_STALE`。最新Draftを保持し、suggestionを勝手にmergeしない。
 - Adoption成功後もユーザーはDraftを編集できる。
@@ -6029,6 +6031,7 @@ Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpa
 | AI-GR-06 | Dismiss / keep original | Draft変更なし |
 | AI-GR-07 | edit Draft during AI | result `contextChanged=true` |
 | AI-GR-08 | adopt stale result | `GOAL_REFINE_CONTEXT_STALE` |
+| AI-GR-08a | edit Draft after suggestion, then restore exact source text | 保存完了後にadopt可能 |
 | AI-GR-09 | output 500 chars | valid |
 | AI-GR-10 | output 501 chars | no truncate、retry then failure |
 | AI-GR-11 | invalid schema | bounded retry |

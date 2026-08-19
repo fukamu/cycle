@@ -319,3 +319,41 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改�
 		t.Fatalf("adopt after edit error = %v", err)
 	}
 }
+
+func TestAdoptGoalSuggestionAcceptsDraftRestoredToSourceText(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const (
+		userID         = "10000000-0000-0000-0000-000000000001"
+		draftID        = "11000000-0000-0000-0000-000000000001"
+		generationID   = "b0000000-0000-0000-0000-000000000001"
+		idempotencyKey = "c0000000-0000-0000-0000-000000000001"
+	)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO goal_drafts(id,user_id,draft_type,body,created_at,updated_at)
+VALUES($1,$2,'creation','元の目標',$3,$3)`, draftID, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
+(id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
+output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,started_at,finished_at)
+VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改善した目標','fake','test','goal-refine-v1',$5,0,1,$6,$6)`,
+		generationID, userID, draftID, idempotencyKey, now.Format("2006-01-02"), now); err != nil {
+		t.Fatal(err)
+	}
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	if _, err := store.SaveDraft(context.Background(), userID, draftID, "一時的な変更", 0, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveDraft(context.Background(), userID, draftID, "元の目標", 1, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, generationID, 2, nil, now.Add(3*time.Minute))
+	if err != nil || adopted.Body != "改善した目標" || adopted.Revision != 3 {
+		t.Fatalf("adopted = %#v, error = %v", adopted, err)
+	}
+}

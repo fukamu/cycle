@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
+import { isGoalSuggestionStale } from "../features/goal-refine/suggestionState";
 import type { GoalRefineResponse, GoalReview } from "../shared/api/schemas";
 import {
   adoptReview,
@@ -36,7 +37,11 @@ export function GoalReviewPage() {
 type Refine =
   | { kind: "idle" }
   | { kind: "running" }
-  | { kind: "suggested"; response: GoalRefineResponse }
+  | {
+      kind: "suggested";
+      response: GoalRefineResponse;
+      sourceBody: string;
+    }
   | { kind: "failed" };
 
 type ReviewConfirmation =
@@ -52,7 +57,6 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const [pending, setPending] = useState(false);
   const [confirmation, setConfirmation] = useState<ReviewConfirmation>();
   const [error, setError] = useState<string>();
-  const requestBody = useRef("");
   const save = useCallback(
     async (body: string, revision: number) =>
       (await saveReview(goal.id, body, revision, session.csrfToken))
@@ -74,7 +78,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   async function requestRefine() {
     setRefine({ kind: "running" });
     setError(undefined);
-    requestBody.current = editor.body;
+    const sourceBody = editor.body;
     try {
       const response = await refineReview(
         goal.id,
@@ -84,11 +88,8 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       );
       setRefine({
         kind: "suggested",
-        response: {
-          ...response,
-          contextChanged:
-            response.contextChanged || requestBody.current !== editor.body,
-        },
+        response,
+        sourceBody,
       });
     } catch {
       setRefine({ kind: "failed" });
@@ -176,9 +177,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   }
   const stale =
     refine.kind === "suggested" &&
-    (refine.response.contextChanged ||
-      refine.response.sourceDraftRevision !== editor.revision ||
-      editor.state !== "saved");
+    isGoalSuggestionStale(editor.body, refine.sourceBody, editor.state);
   const valid = editor.body.trim().length > 0 && count <= 500;
   return (
     <main className="page review-page">

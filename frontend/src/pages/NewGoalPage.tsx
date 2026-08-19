@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
+import { isGoalSuggestionStale } from "../features/goal-refine/suggestionState";
 import type {
   GoalDraft,
   GoalRefineResponse,
@@ -61,7 +62,11 @@ export function NewGoalPage() {
 type Refine =
   | { kind: "idle" }
   | { kind: "running" }
-  | { kind: "suggested"; response: GoalRefineResponse }
+  | {
+      kind: "suggested";
+      response: GoalRefineResponse;
+      sourceBody: string;
+    }
   | { kind: "failed" };
 
 function GoalDraftEditor({
@@ -90,14 +95,13 @@ function GoalDraftEditor({
     initialRevision: draft.revision,
     save,
   });
-  const bodyAtRequest = useRef("");
   const count = Array.from(editor.body).length;
   const valid = editor.body.trim().length > 0 && count <= 500;
 
   async function requestRefine() {
     setError(undefined);
     setRefine({ kind: "running" });
-    bodyAtRequest.current = editor.body;
+    const sourceBody = editor.body;
     try {
       const response = await refineGoalDraft(
         draft.id,
@@ -106,11 +110,8 @@ function GoalDraftEditor({
       );
       setRefine({
         kind: "suggested",
-        response: {
-          ...response,
-          contextChanged:
-            response.contextChanged || bodyAtRequest.current !== editor.body,
-        },
+        response,
+        sourceBody,
       });
     } catch {
       setRefine({ kind: "failed" });
@@ -175,9 +176,7 @@ function GoalDraftEditor({
   }
   const suggestionStale =
     refine.kind === "suggested" &&
-    (refine.response.contextChanged ||
-      refine.response.sourceDraftRevision !== editor.revision ||
-      editor.state !== "saved");
+    isGoalSuggestionStale(editor.body, refine.sourceBody, editor.state);
   const canStart =
     valid &&
     editor.state === "saved" &&
