@@ -106,7 +106,7 @@ func (server *api) saveGoalDraft(writer http.ResponseWriter, request *http.Reque
 	}
 	view, err := server.dependencies.Workspace.SaveDraft(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), input.Body, input.ExpectedRevision)
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errGoalDraftSaveFailed), nil)
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"draft": view})
@@ -114,7 +114,7 @@ func (server *api) saveGoalDraft(writer http.ResponseWriter, request *http.Reque
 
 func (server *api) abandonGoalDraft(writer http.ResponseWriter, request *http.Request) {
 	if err := server.dependencies.Workspace.AbandonDraft(request.Context(), currentUserID(request), chi.URLParam(request, "draftId")); err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errGoalDraftDeleteFailed), nil)
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
@@ -128,7 +128,7 @@ func (server *api) startGoal(writer http.ResponseWriter, request *http.Request) 
 	}
 	view, err := server.dependencies.Workspace.StartGoal(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), input.OperationID, input.ExpectedDraftRevision)
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errGoalStartFailed), nil)
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
@@ -238,7 +238,7 @@ func (server *api) saveGoalReview(writer http.ResponseWriter, request *http.Requ
 	}
 	view, err := server.dependencies.Workspace.SaveReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.Body, input.ExpectedRevision)
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errGoalReviewDraftSaveFailed), nil)
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"reviewDraft": view})
@@ -252,7 +252,7 @@ func (server *api) continueGoalReview(writer http.ResponseWriter, request *http.
 	}
 	view, err := server.dependencies.Workspace.ContinueReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.OperationID, input.ExpectedGoalRevision, input.ExpectedDraftRevision)
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errGoalReviewContinueFailed), nil)
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
@@ -271,7 +271,7 @@ func (server *api) terminateGoal(writer http.ResponseWriter, request *http.Reque
 		ConfirmDiscardReviewDraft: input.ConfirmDiscardReviewDraft,
 	})
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errGoalTerminationFailed), nil)
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
@@ -289,7 +289,7 @@ func (server *api) deleteGoal(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	if err := server.dependencies.Workspace.DeleteGoal(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.Confirmed, input.ExpectedGoalRevision, key); err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errGoalDeleteFailed), nil)
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
@@ -329,7 +329,7 @@ func (server *api) saveGoalCycleFrame(writer http.ResponseWriter, request *http.
 		Frame: frame, Content: input.Content, ExpectedFrameRevision: input.ExpectedFrameRevision,
 	})
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errFrameSaveFailed), nil)
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
@@ -365,7 +365,7 @@ func (server *api) runActionAI(writer http.ResponseWriter, request *http.Request
 		IdempotencyKey: key, SessionID: sessionID(request), RemoteAddress: server.remoteIP(request),
 	})
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errCycleCompletionFailed), nil)
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)

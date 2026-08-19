@@ -40,7 +40,7 @@ func (server *api) upgradeGoogle(writer http.ResponseWriter, request *http.Reque
 	record, _ := authenticatedSession(request.Context())
 	view, err := server.dependencies.Account.UpgradeGoogle(request.Context(), record.UserID, record.ID, input.IDToken)
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errAccountUpgradeFailed), nil)
 		return
 	}
 	setSessionCookie(writer, view.SessionToken)
@@ -57,7 +57,7 @@ func (server *api) loginGoogle(writer http.ResponseWriter, request *http.Request
 	record, _ := authenticatedSession(request.Context())
 	view, err := server.dependencies.Account.LoginGoogle(request.Context(), record.ID, input.IDToken)
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errGoogleLoginFailed), nil)
 		return
 	}
 	setSessionCookie(writer, view.SessionToken)

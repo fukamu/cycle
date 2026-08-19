@@ -25,6 +25,20 @@ type apiError struct {
 	Details   map[string]any `json:"details,omitempty"`
 }
 
+var (
+	errAccountUpgradeFailed      = errors.New("account upgrade failed")
+	errGoogleLoginFailed         = errors.New("google login failed")
+	errGoalDraftSaveFailed       = errors.New("goal draft save failed")
+	errGoalDraftDeleteFailed     = errors.New("goal draft delete failed")
+	errGoalStartFailed           = errors.New("goal start failed")
+	errFrameSaveFailed           = errors.New("frame save failed")
+	errCycleCompletionFailed     = errors.New("cycle completion failed")
+	errGoalReviewDraftSaveFailed = errors.New("goal review draft save failed")
+	errGoalReviewContinueFailed  = errors.New("goal review continue failed")
+	errGoalTerminationFailed     = errors.New("goal termination failed")
+	errGoalDeleteFailed          = errors.New("goal delete failed")
+)
+
 func (server *api) writeError(writer http.ResponseWriter, request *http.Request, err error, details map[string]any) {
 	status, code, message := classifyError(err)
 	if server.dependencies.Metrics != nil {
@@ -150,9 +164,39 @@ func classifyError(err error) (int, string, string) {
 		return 503, "GOOGLE_IDENTITY_VERIFICATION_UNAVAILABLE", "Googleアカウントを確認できません。"
 	case errors.Is(err, account.ErrDeleteConfirmationRequired):
 		return 400, "ACCOUNT_DELETE_CONFIRMATION_REQUIRED", "アカウント削除の確認が必要です。"
+	case errors.Is(err, errAccountUpgradeFailed):
+		return 500, "ACCOUNT_UPGRADE_FAILED", "アカウントを接続できませんでした。匿名アカウントは維持されています。"
+	case errors.Is(err, errGoogleLoginFailed):
+		return 500, "GOOGLE_LOGIN_FAILED", "ログインできませんでした。現在のセッションは維持されています。"
+	case errors.Is(err, errGoalDraftSaveFailed):
+		return 500, "GOAL_DRAFT_SAVE_FAILED", "目標の下書きを保存できませんでした。入力内容は保持されています。"
+	case errors.Is(err, errGoalDraftDeleteFailed):
+		return 500, "GOAL_DRAFT_DELETE_FAILED", "目標の下書きを削除できませんでした。"
+	case errors.Is(err, errGoalStartFailed):
+		return 500, "GOAL_START_FAILED", "目標を開始できませんでした。下書きは維持されています。"
+	case errors.Is(err, errFrameSaveFailed):
+		return 500, "FRAME_SAVE_FAILED", "入力内容を保存できませんでした。"
+	case errors.Is(err, errCycleCompletionFailed):
+		return 500, "CYCLE_COMPLETION_FAILED", "サイクルを完了できませんでした。"
+	case errors.Is(err, errGoalReviewDraftSaveFailed):
+		return 500, "GOAL_REVIEW_DRAFT_SAVE_FAILED", "目標の見直し案を保存できませんでした。"
+	case errors.Is(err, errGoalReviewContinueFailed):
+		return 500, "GOAL_REVIEW_CONTINUE_FAILED", "次のサイクルを開始できませんでした。見直し案は維持されています。"
+	case errors.Is(err, errGoalTerminationFailed):
+		return 500, "GOAL_TERMINATION_FAILED", "目標を終了できませんでした。"
+	case errors.Is(err, errGoalDeleteFailed):
+		return 500, "GOAL_DELETE_FAILED", "目標を削除できませんでした。"
 	case errors.Is(err, account.ErrAccountDeleteFailed):
 		return 500, "ACCOUNT_DELETE_FAILED", "アカウントを削除できませんでした。データは保持されています。"
 	default:
 		return 500, "INTERNAL_ERROR", "処理中にエラーが発生しました。もう一度お試しください。"
 	}
+}
+
+func stableUseCaseError(err, fallback error) error {
+	status, code, _ := classifyError(err)
+	if status == http.StatusInternalServerError && code == "INTERNAL_ERROR" {
+		return fallback
+	}
+	return err
 }

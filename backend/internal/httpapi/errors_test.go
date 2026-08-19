@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
@@ -39,5 +40,17 @@ func TestClassifyErrorUsesStableReviewAndAIContractCodes(t *testing.T) {
 		if status != test.status || code != test.code {
 			t.Fatalf("%v classified as %d/%s", test.err, status, code)
 		}
+	}
+}
+
+func TestStableUseCaseErrorOnlyReclassifiesUnexpectedFailures(t *testing.T) {
+	known := stableUseCaseError(workspace.ErrDraftRevisionConflict, errGoalDraftSaveFailed)
+	if !errors.Is(known, workspace.ErrDraftRevisionConflict) {
+		t.Fatalf("known error changed to %v", known)
+	}
+	unexpected := stableUseCaseError(errors.New("database unavailable"), errGoalDraftSaveFailed)
+	status, code, _ := classifyError(unexpected)
+	if status != 500 || code != "GOAL_DRAFT_SAVE_FAILED" {
+		t.Fatalf("unexpected error classified as %d/%s", status, code)
 	}
 }
