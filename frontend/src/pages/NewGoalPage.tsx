@@ -3,7 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
-import type { AIResponse, GoalDraft, Home } from "../shared/api/schemas";
+import type {
+  GoalDraft,
+  GoalRefineResponse,
+  Home,
+} from "../shared/api/schemas";
 import {
   adoptGoalDraft,
   createGoalDraft,
@@ -18,6 +22,7 @@ import {
   PageLoading,
   SaveBadge,
 } from "../shared/components/AsyncState";
+import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
 import { goalCopy } from "../shared/copy/ja";
 import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
 
@@ -56,7 +61,7 @@ export function NewGoalPage() {
 type Refine =
   | { kind: "idle" }
   | { kind: "running" }
-  | { kind: "suggested"; response: AIResponse }
+  | { kind: "suggested"; response: GoalRefineResponse }
   | { kind: "failed" };
 
 function GoalDraftEditor({
@@ -71,6 +76,7 @@ function GoalDraftEditor({
   const cache = useQueryClient();
   const [refine, setRefine] = useState<Refine>({ kind: "idle" });
   const [pending, setPending] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [error, setError] = useState<string>();
   const save = useCallback(
     async (body: string, revision: number) =>
@@ -153,8 +159,8 @@ function GoalDraftEditor({
     }
   }
   async function discard() {
-    if (!window.confirm("この目標の下書きを破棄しますか？")) return;
     setPending(true);
+    setError(undefined);
     editor.pause();
     try {
       await discardGoalDraft(draft.id, session.csrfToken);
@@ -232,7 +238,7 @@ function GoalDraftEditor({
           className="text-button danger-link"
           type="button"
           disabled={pending}
-          onClick={() => void discard()}
+          onClick={() => setConfirmDiscard(true)}
         >
           下書きを破棄
         </button>
@@ -274,6 +280,20 @@ function GoalDraftEditor({
         <p className="inline-error" role="alert">
           {error}
         </p>
+      )}
+      {confirmDiscard && (
+        <ConfirmationDialog
+          title="下書きを破棄しますか？"
+          confirmLabel="下書きを破棄"
+          confirmTone="danger"
+          onCancel={() => setConfirmDiscard(false)}
+          onConfirm={() => {
+            setConfirmDiscard(false);
+            void discard();
+          }}
+        >
+          <p>入力した目標の下書きを破棄します。</p>
+        </ConfirmationDialog>
       )}
     </main>
   );

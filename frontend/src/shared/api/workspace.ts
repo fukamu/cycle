@@ -6,6 +6,7 @@ import {
   cyclePageSchema,
   cycleSchema,
   draftSchema,
+  goalRefineResponseSchema,
   goalPageSchema,
   goalSchema,
   homeSchema,
@@ -96,12 +97,16 @@ export const refineGoalDraft = (
   expectedDraftRevision: number,
   csrfToken: string,
 ) =>
-  requestJSON(`/api/v1/goal-drafts/${draftId}/refinements`, aiResponseSchema, {
-    method: "POST",
-    csrfToken,
-    idempotencyKey: operationId(),
-    body: { expectedDraftRevision },
-  });
+  requestJSON(
+    `/api/v1/goal-drafts/${draftId}/refinements`,
+    goalRefineResponseSchema,
+    {
+      method: "POST",
+      csrfToken,
+      idempotencyKey: operationId(),
+      body: { expectedDraftRevision },
+    },
+  );
 export const adoptGoalDraft = (
   draftId: string,
   generationId: string,
@@ -154,12 +159,16 @@ export const refineReview = (
   expectedGoalRevision: number,
   csrfToken: string,
 ) =>
-  requestJSON(`/api/v1/goals/${goalId}/review/refinements`, aiResponseSchema, {
-    method: "POST",
-    csrfToken,
-    idempotencyKey: operationId(),
-    body: { expectedDraftRevision, expectedGoalRevision },
-  });
+  requestJSON(
+    `/api/v1/goals/${goalId}/review/refinements`,
+    goalRefineResponseSchema,
+    {
+      method: "POST",
+      csrfToken,
+      idempotencyKey: operationId(),
+      body: { expectedDraftRevision, expectedGoalRevision },
+    },
+  );
 export const adoptReview = (
   goalId: string,
   generationId: string,

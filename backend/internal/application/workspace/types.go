@@ -375,7 +375,7 @@ type AIObservation struct {
 
 type AIResponse struct {
 	GenerationID        string `json:"generationId"`
-	SourceDraftRevision int64  `json:"sourceDraftRevision,omitempty"`
+	SourceDraftRevision *int64 `json:"sourceDraftRevision,omitempty"`
 	SourceGoalRevision  int64  `json:"sourceGoalRevision,omitempty"`
 	Suggestion          string `json:"suggestion,omitempty"`
 	Action              string `json:"action,omitempty"`

@@ -119,3 +119,18 @@ func TestAIInputErrorsAreSpecificToEachOperation(t *testing.T) {
 		}
 	}
 }
+
+func TestGoalRefineResponseIncludesZeroSourceDraftRevision(t *testing.T) {
+	zero := int64(0)
+	encoded, err := json.Marshal(AIResponse{
+		GenerationID:        "generation-id",
+		SourceDraftRevision: &zero,
+		Suggestion:          "提案",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"sourceDraftRevision":0`) {
+		t.Fatalf("zero source revision was omitted from response: %s", encoded)
+	}
+}

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
-import type { AIResponse, GoalReview } from "../shared/api/schemas";
+import type { GoalRefineResponse, GoalReview } from "../shared/api/schemas";
 import {
   adoptReview,
   continueReview,
@@ -18,6 +18,7 @@ import {
   PageLoading,
   SaveBadge,
 } from "../shared/components/AsyncState";
+import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
 import { frameCopy } from "../shared/copy/ja";
 import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
 
@@ -35,8 +36,12 @@ export function GoalReviewPage() {
 type Refine =
   | { kind: "idle" }
   | { kind: "running" }
-  | { kind: "suggested"; response: AIResponse }
+  | { kind: "suggested"; response: GoalRefineResponse }
   | { kind: "failed" };
+
+type ReviewConfirmation =
+  | { readonly kind: "terminate"; readonly outcome: "achieved" | "ended" }
+  | { readonly kind: "delete" };
 
 function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const { goal, reviewDraft, triggerCycle } = review;
@@ -45,6 +50,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const cache = useQueryClient();
   const [refine, setRefine] = useState<Refine>({ kind: "idle" });
   const [pending, setPending] = useState(false);
+  const [confirmation, setConfirmation] = useState<ReviewConfirmation>();
   const [error, setError] = useState<string>();
   const requestBody = useRef("");
   const save = useCallback(
@@ -133,10 +139,6 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   }
   async function terminate(outcome: "achieved" | "ended") {
     const label = outcome === "achieved" ? "達成として終了" : "終了";
-    const discard = changed
-      ? `\nこの変更案は、次のサイクルを開始しないため保存されません。\n現在の目標のまま${outcome === "achieved" ? "達成として終了" : "終了"}します。`
-      : "";
-    if (!window.confirm(`目標を${label}しますか？${discard}`)) return;
     setPending(true);
     setError(undefined);
     editor.pause();
@@ -158,13 +160,8 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     }
   }
   async function remove() {
-    if (
-      !window.confirm(
-        "この目標とすべてのCycle履歴を完全に削除します。この操作は取り消せません。",
-      )
-    )
-      return;
     setPending(true);
+    setError(undefined);
     editor.pause();
     try {
       await deleteGoal(goal.id, goal.revision, session.csrfToken);
@@ -292,14 +289,18 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           <button
             type="button"
             disabled={refine.kind === "running" || pending}
-            onClick={() => void terminate("achieved")}
+            onClick={() =>
+              setConfirmation({ kind: "terminate", outcome: "achieved" })
+            }
           >
             目標を達成として終了
           </button>
           <button
             type="button"
             disabled={refine.kind === "running" || pending}
-            onClick={() => void terminate("ended")}
+            onClick={() =>
+              setConfirmation({ kind: "terminate", outcome: "ended" })
+            }
           >
             目標を終了
           </button>
@@ -307,7 +308,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             className="danger-link"
             type="button"
             disabled={pending}
-            onClick={() => void remove()}
+            onClick={() => setConfirmation({ kind: "delete" })}
           >
             目標を削除
           </button>
@@ -317,6 +318,54 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         <p className="inline-error" role="alert">
           {error}
         </p>
+      )}
+      {confirmation?.kind === "terminate" && (
+        <ConfirmationDialog
+          title={`目標を${
+            confirmation.outcome === "achieved" ? "達成として終了" : "終了"
+          }しますか？`}
+          confirmLabel={
+            confirmation.outcome === "achieved" ? "目標を達成" : "目標を終了"
+          }
+          confirmTone="danger"
+          onCancel={() => setConfirmation(undefined)}
+          onConfirm={() => {
+            const { outcome } = confirmation;
+            setConfirmation(undefined);
+            void terminate(outcome);
+          }}
+        >
+          {changed ? (
+            <>
+              <p>この変更案は、次のサイクルを開始しないため保存されません。</p>
+              <p>
+                現在の目標のまま
+                {confirmation.outcome === "achieved"
+                  ? "達成として終了"
+                  : "終了"}
+                します。
+              </p>
+            </>
+          ) : (
+            <p>次のサイクルを開始せず、現在の目標を終了します。</p>
+          )}
+        </ConfirmationDialog>
+      )}
+      {confirmation?.kind === "delete" && (
+        <ConfirmationDialog
+          title="目標を削除しますか？"
+          confirmLabel="目標を削除"
+          confirmTone="danger"
+          onCancel={() => setConfirmation(undefined)}
+          onConfirm={() => {
+            setConfirmation(undefined);
+            void remove();
+          }}
+        >
+          <p>
+            この目標とすべてのCycle履歴を完全に削除します。この操作は取り消せません。
+          </p>
+        </ConfirmationDialog>
       )}
     </main>
   );

@@ -19,6 +19,7 @@ import {
   PageLoading,
   SaveBadge,
 } from "../shared/components/AsyncState";
+import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
 import { frameCopy } from "../shared/copy/ja";
 import {
   deleteBrowserDraft,
@@ -33,6 +34,11 @@ import {
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
 type Values = Record<Frame, string>;
 type SaveState = "dirty" | "saving" | "saved" | "failed";
+type WorkspaceConfirmation =
+  | { readonly kind: "replace-action" }
+  | { readonly kind: "complete-cycle" }
+  | { readonly kind: "terminate"; readonly outcome: "achieved" | "ended" }
+  | { readonly kind: "delete" };
 
 export function GoalWorkspacePage() {
   const { goalId, cycleId } = useParams();
@@ -99,6 +105,7 @@ function CycleWorkspace({
     "idle",
   );
   const [pendingAction, setPendingAction] = useState(false);
+  const [confirmation, setConfirmation] = useState<WorkspaceConfirmation>();
   const [error, setError] = useState<string>();
   const pending = useRef(new Map<Frame, string>());
   const saveInFlight = useRef(false);
@@ -230,10 +237,17 @@ function CycleWorkspace({
   );
   const allFrames = allPDC && values.action.trim();
   const aiReady = saveState === "saved" && aiState === "idle";
-  async function runAI(kind: "generating" | "refining") {
-    const replacing = kind === "generating" && Boolean(values.action.trim());
-    if (replacing && !window.confirm("現在のAをAI生成結果で置き換えますか？"))
+  function requestAI(kind: "generating" | "refining") {
+    if (kind === "generating" && values.action.trim()) {
+      setConfirmation({ kind: "replace-action" });
       return;
+    }
+    void runAI(kind, false);
+  }
+  async function runAI(
+    kind: "generating" | "refining",
+    confirmReplace: boolean,
+  ) {
     const sourcePDC = JSON.stringify([
       valuesRef.current.plan,
       valuesRef.current.do,
@@ -248,7 +262,7 @@ function CycleWorkspace({
               goal.id,
               cycle.id,
               contentRevision.current,
-              replacing,
+              confirmReplace,
               session.csrfToken,
             )
           : await refineAction(
@@ -283,8 +297,6 @@ function CycleWorkspace({
     }
   }
   async function finish() {
-    if (!window.confirm("このサイクルを完了し、目標の見直しへ進みますか？"))
-      return;
     setPendingAction(true);
     setError(undefined);
     try {
@@ -304,13 +316,8 @@ function CycleWorkspace({
   }
   async function terminate(outcome: "achieved" | "ended") {
     const wording = outcome === "achieved" ? "達成として終了" : "終了";
-    if (
-      !window.confirm(
-        `目標を${wording}しますか？現在のCycleはCanceledの読み取り専用履歴として残ります。`,
-      )
-    )
-      return;
     setPendingAction(true);
+    setError(undefined);
     try {
       await terminateGoal(
         goal.id,
@@ -328,13 +335,8 @@ function CycleWorkspace({
     }
   }
   async function remove() {
-    if (
-      !window.confirm(
-        "この目標とすべてのCycle履歴を完全に削除します。この操作は取り消せません。",
-      )
-    )
-      return;
     setPendingAction(true);
+    setError(undefined);
     try {
       await deleteGoal(goal.id, goal.revision, session.csrfToken);
       await cache.invalidateQueries({ refetchType: "none" });
@@ -412,7 +414,7 @@ function CycleWorkspace({
               className="button button--secondary"
               type="button"
               disabled={!allPDC || !aiReady}
-              onClick={() => void runAI("generating")}
+              onClick={() => requestAI("generating")}
             >
               {aiState === "generating"
                 ? "生成しています…"
@@ -422,7 +424,7 @@ function CycleWorkspace({
               className="button button--secondary"
               type="button"
               disabled={!allFrames || !aiReady}
-              onClick={() => void runAI("refining")}
+              onClick={() => requestAI("refining")}
             >
               {aiState === "refining" ? "推敲しています…" : "AIで推敲"}
             </button>
@@ -430,7 +432,7 @@ function CycleWorkspace({
               className="button button--primary"
               type="button"
               disabled={!allFrames || !aiReady || pendingAction}
-              onClick={() => void finish()}
+              onClick={() => setConfirmation({ kind: "complete-cycle" })}
             >
               サイクルを完了
             </button>
@@ -451,7 +453,9 @@ function CycleWorkspace({
               disabled={
                 saveState !== "saved" || aiState !== "idle" || pendingAction
               }
-              onClick={() => void terminate("achieved")}
+              onClick={() =>
+                setConfirmation({ kind: "terminate", outcome: "achieved" })
+              }
             >
               目標を達成として終了
             </button>
@@ -460,7 +464,9 @@ function CycleWorkspace({
               disabled={
                 saveState !== "saved" || aiState !== "idle" || pendingAction
               }
-              onClick={() => void terminate("ended")}
+              onClick={() =>
+                setConfirmation({ kind: "terminate", outcome: "ended" })
+              }
             >
               目標を終了
             </button>
@@ -468,12 +474,73 @@ function CycleWorkspace({
               className="danger-link"
               type="button"
               disabled={pendingAction}
-              onClick={() => void remove()}
+              onClick={() => setConfirmation({ kind: "delete" })}
             >
               目標を削除
             </button>
           </div>
         </details>
+      )}
+      {confirmation?.kind === "replace-action" && (
+        <ConfirmationDialog
+          title="現在のAを置き換えますか？"
+          confirmLabel="AIで置き換える"
+          onCancel={() => setConfirmation(undefined)}
+          onConfirm={() => {
+            setConfirmation(undefined);
+            void runAI("generating", true);
+          }}
+        >
+          <p>現在のAをAI生成結果で置き換えます。</p>
+        </ConfirmationDialog>
+      )}
+      {confirmation?.kind === "complete-cycle" && (
+        <ConfirmationDialog
+          title="サイクルを完了しますか？"
+          confirmLabel="サイクルを完了"
+          onCancel={() => setConfirmation(undefined)}
+          onConfirm={() => {
+            setConfirmation(undefined);
+            void finish();
+          }}
+        >
+          <p>このサイクルを完了し、目標の見直しへ進みます。</p>
+        </ConfirmationDialog>
+      )}
+      {confirmation?.kind === "terminate" && (
+        <ConfirmationDialog
+          title={`目標を${
+            confirmation.outcome === "achieved" ? "達成として終了" : "終了"
+          }しますか？`}
+          confirmLabel={
+            confirmation.outcome === "achieved" ? "目標を達成" : "目標を終了"
+          }
+          confirmTone="danger"
+          onCancel={() => setConfirmation(undefined)}
+          onConfirm={() => {
+            const { outcome } = confirmation;
+            setConfirmation(undefined);
+            void terminate(outcome);
+          }}
+        >
+          <p>現在のCycleはCanceledの読み取り専用履歴として残ります。</p>
+        </ConfirmationDialog>
+      )}
+      {confirmation?.kind === "delete" && (
+        <ConfirmationDialog
+          title="目標を削除しますか？"
+          confirmLabel="目標を削除"
+          confirmTone="danger"
+          onCancel={() => setConfirmation(undefined)}
+          onConfirm={() => {
+            setConfirmation(undefined);
+            void remove();
+          }}
+        >
+          <p>
+            この目標とすべてのCycle履歴を完全に削除します。この操作は取り消せません。
+          </p>
+        </ConfirmationDialog>
       )}
     </main>
   );

@@ -34,6 +34,40 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
       "@typescript-eslint/no-explicit-any": "error",
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "alert",
+          message: "Use an in-app status, error, or dialog component instead.",
+        },
+        {
+          name: "confirm",
+          message: "Use the shared in-app confirmation dialog instead.",
+        },
+      ],
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "window",
+          property: "alert",
+          message: "Use an in-app status, error, or dialog component instead.",
+        },
+        {
+          object: "window",
+          property: "confirm",
+          message: "Use the shared in-app confirmation dialog instead.",
+        },
+        {
+          object: "globalThis",
+          property: "alert",
+          message: "Use an in-app status, error, or dialog component instead.",
+        },
+        {
+          object: "globalThis",
+          property: "confirm",
+          message: "Use the shared in-app confirmation dialog instead.",
+        },
+      ],
     },
   },
 );

@@ -190,6 +190,7 @@ ArchitectureはMicroservicesではなく、Domain / Application / Infrastructure
 - 過去の積み重ねを尊重し、履歴を書き換えない。
 - 回復可能なErrorで入力を失わせない。
 - Mobile Firstとし、Desktopでも基本機能が破綻しない。
+- 通知・Error・確認操作はApplication内のUIとして表示し、Browser標準の`window.alert()` / `window.confirm()`へ依存しない。
 - 将来拡張を理由にMVPを過剰設計しない。
 
 ## 2.3 Non-goals
@@ -3995,6 +3996,16 @@ Actions:
 
 - `キャンセル`
 - `目標を達成`または`目標を終了`
+
+### 29.8.1 Application内Dialog / Notice
+
+**[実装契約]** Frontendは`window.alert()`および`window.confirm()`を使用してはならない。iOS等のBrowserによるJavaScript Dialog抑制の影響を受けず、Applicationが表示と操作を管理できるUIを使用する。
+
+- 確認が不要な成功通知はApplication内のstatus、ErrorはApplication内のalertとして表示する。
+- Userの明示確認が必要な操作はApplication共通のmodal Dialogを使用し、操作対象、結果、取り消し可否、確定ActionとCancel Actionを画面内に表示する。
+- Dialogは支援技術からtitleと説明を取得でき、開いている間はmodalとして扱い、Cancelへ安全な初期focusを置き、EscapeでCancelできるようにする。
+- Destructive Actionの確定buttonは、Cancelや通常Actionと文言・視覚表現の両方で区別する。
+- Lintで`alert` / `confirm`のglobal呼び出しと`window` / `globalThis`経由の参照を禁止し、再混入を防止する。
 
 ## 29.9 Infinite scroll
 

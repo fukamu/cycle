@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { completeCycle, listCycles, saveCycleFrame } from "./workspace";
+import {
+  completeCycle,
+  listCycles,
+  refineReview,
+  saveCycleFrame,
+} from "./workspace";
 
 const goalId = "00000000-0000-4000-8000-000000000001";
 const cycleId = "00000000-0000-4000-8000-000000000002";
@@ -80,5 +85,35 @@ describe("goal-scoped workspace API", () => {
       operation: "complete_cycle",
       currentWorkspace: { cycleId: nextCycleId },
     });
+  });
+
+  it("preserves revision zero in a goal review refinement response", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        generationId: "00000000-0000-4000-8000-000000000003",
+        sourceDraftRevision: 0,
+        sourceGoalRevision: 1,
+        suggestion: "AIからの提案",
+        contextChanged: false,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await refineReview(goalId, 0, 1, "csrf");
+
+    expect(result.sourceDraftRevision).toBe(0);
+  });
+
+  it("rejects a goal refinement response without its source revision", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        generationId: "00000000-0000-4000-8000-000000000003",
+        suggestion: "AIからの提案",
+        contextChanged: false,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(refineReview(goalId, 0, 1, "csrf")).rejects.toBeDefined();
   });
 });

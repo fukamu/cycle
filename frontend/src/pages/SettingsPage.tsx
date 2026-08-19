@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 
 import { GoogleIdentityButton } from "../features/auth/GoogleIdentityButton";
 import { useReplaceSession, useSession } from "../features/auth/sessionContext";
+import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
 import { clearUserDrafts } from "../shared/drafts/browserDraftCache";
 import {
   deleteAccount,
@@ -10,10 +11,15 @@ import {
 } from "../shared/api/account";
 import { APIError } from "../shared/api/client";
 
+type SettingsConfirmation =
+  | { readonly kind: "google-login"; readonly credential: string }
+  | { readonly kind: "delete-account" };
+
 export function SettingsPage() {
   const session = useSession();
   const replaceSession = useReplaceSession();
   const [pending, setPending] = useState(false);
+  const [confirmation, setConfirmation] = useState<SettingsConfirmation>();
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
 
@@ -28,22 +34,10 @@ export function SettingsPage() {
       } catch (cause) {
         if (
           cause instanceof APIError &&
-          cause.code === "GOOGLE_IDENTITY_ALREADY_LINKED" &&
-          window.confirm(
-            "このGoogle Accountは既存のPDCAIアカウントに連携されています。既存アカウントでログインしますか？現在の匿名データは統合されません。",
-          )
+          cause.code === "GOOGLE_IDENTITY_ALREADY_LINKED"
         ) {
-          try {
-            const loggedIn = await loginGoogle(credential, session.csrfToken);
-            replaceSession(loggedIn);
-            setMessage("既存のPDCAIアカウントへ切り替えました。");
-            return;
-          } catch (loginCause) {
-            setError(
-              errorMessage(loginCause, "Googleログインに失敗しました。"),
-            );
-            return;
-          }
+          setConfirmation({ kind: "google-login", credential });
+          return;
         }
         setError(errorMessage(cause, "Google Accountを連携できませんでした。"));
       } finally {
@@ -53,14 +47,21 @@ export function SettingsPage() {
     [replaceSession, session.csrfToken],
   );
 
-  async function removeAccount() {
-    if (
-      !window.confirm(
-        "目標・Goal Version・PDCAサイクルを含むすべてのアカウントデータを削除します。この操作は取り消せません。削除しますか？",
-      )
-    ) {
-      return;
+  async function loginExistingGoogle(credential: string) {
+    setPending(true);
+    setError(undefined);
+    try {
+      const loggedIn = await loginGoogle(credential, session.csrfToken);
+      replaceSession(loggedIn);
+      setMessage("既存のPDCAIアカウントへ切り替えました。");
+    } catch (cause) {
+      setError(errorMessage(cause, "Googleログインに失敗しました。"));
+    } finally {
+      setPending(false);
     }
+  }
+
+  async function removeAccount() {
     setPending(true);
     setError(undefined);
     try {
@@ -110,11 +111,45 @@ export function SettingsPage() {
         <button
           type="button"
           disabled={pending}
-          onClick={() => void removeAccount()}
+          onClick={() => setConfirmation({ kind: "delete-account" })}
         >
           {pending ? "処理中…" : "アカウントを削除"}
         </button>
       </section>
+      {confirmation?.kind === "google-login" && (
+        <ConfirmationDialog
+          title="既存のアカウントでログインしますか？"
+          confirmLabel="既存アカウントでログイン"
+          onCancel={() => setConfirmation(undefined)}
+          onConfirm={() => {
+            const { credential } = confirmation;
+            setConfirmation(undefined);
+            void loginExistingGoogle(credential);
+          }}
+        >
+          <p>
+            このGoogle
+            Accountは既存のPDCAIアカウントに連携されています。現在の匿名データは統合されません。
+          </p>
+        </ConfirmationDialog>
+      )}
+      {confirmation?.kind === "delete-account" && (
+        <ConfirmationDialog
+          title="アカウントを削除しますか？"
+          confirmLabel="アカウントを削除"
+          confirmTone="danger"
+          onCancel={() => setConfirmation(undefined)}
+          onConfirm={() => {
+            setConfirmation(undefined);
+            void removeAccount();
+          }}
+        >
+          <p>
+            目標・Goal
+            Version・PDCAサイクルを含むすべてのアカウントデータを削除します。この操作は取り消せません。
+          </p>
+        </ConfirmationDialog>
+      )}
     </main>
   );
 }

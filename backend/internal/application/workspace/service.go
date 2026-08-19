@@ -200,8 +200,9 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 		return AIResponse{}, specificAIInputError("goal_refine", resourceNotFound(err, missing))
 	}
 	if snapshot.ReplayedOutput != nil {
+		sourceDraftRevision := snapshot.TargetRevision
 		return AIResponse{
-			GenerationID: snapshot.GenerationID, SourceDraftRevision: snapshot.TargetRevision,
+			GenerationID: snapshot.GenerationID, SourceDraftRevision: &sourceDraftRevision,
 			SourceGoalRevision: snapshot.SourceGoalRevision, Suggestion: *snapshot.ReplayedOutput, Replayed: true,
 		}, nil
 	}
