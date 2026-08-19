@@ -15,6 +15,7 @@ var (
 	ErrGoalNotFound                  = errors.New("goal not found")
 	ErrCycleNotFound                 = errors.New("cycle not found")
 	ErrDraftAlreadyExists            = errors.New("goal creation draft already exists")
+	ErrDraftTypeMismatch             = errors.New("goal draft type mismatch")
 	ErrDraftRevisionConflict         = errors.New("goal draft revision conflict")
 	ErrReviewRevisionConflict        = errors.New("goal review draft revision conflict")
 	ErrGoalRevisionConflict          = errors.New("goal revision conflict")
@@ -48,6 +49,24 @@ var (
 	ErrIdempotencyKeyReused          = errors.New("idempotency key reused")
 	ErrInvalidCursor                 = errors.New("invalid cursor")
 )
+
+type DraftAlreadyExistsError struct {
+	DraftID string
+}
+
+func (err *DraftAlreadyExistsError) Error() string { return ErrDraftAlreadyExists.Error() }
+func (err *DraftAlreadyExistsError) Is(target error) bool {
+	return target == ErrDraftAlreadyExists
+}
+
+type AIOperationInProgressError struct {
+	GenerationID string
+}
+
+func (err *AIOperationInProgressError) Error() string { return ErrAIInProgress.Error() }
+func (err *AIOperationInProgressError) Is(target error) bool {
+	return target == ErrAIInProgress
+}
 
 type GoalVersionView struct {
 	ID            string    `json:"id"`

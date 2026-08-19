@@ -106,7 +106,7 @@ func (store *WorkspaceStore) CreateDraft(ctx context.Context, userID, draftID, b
 	var existing string
 	err = tx.QueryRow(ctx, `SELECT id FROM goal_drafts WHERE user_id=$1 AND draft_type='creation'`, mustUUID(userID)).Scan(&existing)
 	if err == nil {
-		return workspace.DraftView{}, workspace.ErrDraftAlreadyExists
+		return workspace.DraftView{}, &workspace.DraftAlreadyExistsError{DraftID: existing}
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return workspace.DraftView{}, err
@@ -128,8 +128,15 @@ VALUES($1,$2,'creation',$3,0,$4,$4)`, mustUUID(draftID), mustUUID(userID), norma
 }
 
 func (store *WorkspaceStore) GetDraft(ctx context.Context, userID, draftID string) (workspace.DraftView, error) {
-	return scanDraft(store.pool.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
-FROM goal_drafts WHERE id=$1 AND user_id=$2 AND draft_type='creation'`, mustUUID(draftID), mustUUID(userID)))
+	view, err := scanDraft(store.pool.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
+FROM goal_drafts WHERE id=$1 AND user_id=$2`, mustUUID(draftID), mustUUID(userID)))
+	if err != nil {
+		return workspace.DraftView{}, err
+	}
+	if view.DraftType != string(goal.DraftCreation) {
+		return workspace.DraftView{}, workspace.ErrDraftTypeMismatch
+	}
+	return view, nil
 }
 
 func (store *WorkspaceStore) SaveDraft(ctx context.Context, userID, draftID, body string, expectedRevision int64, now time.Time) (workspace.DraftView, error) {

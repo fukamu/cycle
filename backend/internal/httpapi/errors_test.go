@@ -34,12 +34,24 @@ func TestClassifyErrorUsesStableReviewAndAIContractCodes(t *testing.T) {
 		{workspace.ErrGoalRefineInputEmpty, 400, "GOAL_REFINE_INPUT_EMPTY"},
 		{workspace.ErrActionGenerateInputIncomplete, 400, "ACTION_GENERATE_INPUT_INCOMPLETE"},
 		{workspace.ErrActionRefineInputIncomplete, 400, "ACTION_REFINE_INPUT_INCOMPLETE"},
+		{workspace.ErrDraftTypeMismatch, 409, "GOAL_DRAFT_TYPE_MISMATCH"},
+		{workspace.ErrGoalVersionConflict, 409, "GOAL_VERSION_CONFLICT"},
+		{workspace.ErrGoalStateConflict, 409, "GOAL_STATE_CONFLICT"},
 	}
 	for _, test := range tests {
 		status, code, _ := classifyError(test.err)
 		if status != test.status || code != test.code {
 			t.Fatalf("%v classified as %d/%s", test.err, status, code)
 		}
+	}
+}
+
+func TestErrorDetailsExposeOnlyRecoveryIdentifiers(t *testing.T) {
+	if details := errorDetails(&workspace.DraftAlreadyExistsError{DraftID: "draft-id"}); details["draftId"] != "draft-id" {
+		t.Fatalf("draft details = %#v", details)
+	}
+	if details := errorDetails(&workspace.AIOperationInProgressError{GenerationID: "generation-id"}); details["generationId"] != "generation-id" {
+		t.Fatalf("AI details = %#v", details)
 	}
 }
 

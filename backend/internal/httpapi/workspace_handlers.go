@@ -155,6 +155,10 @@ func (server *api) refineGoal(writer http.ResponseWriter, request *http.Request,
 		server.writeError(writer, request, err, nil)
 		return
 	}
+	if (goalID == "" && input.ExpectedGoalRevision != nil) || (goalID != "" && input.ExpectedGoalRevision == nil) {
+		server.writeError(writer, request, errRequestValidation, nil)
+		return
+	}
 	if key == "" {
 		server.writeError(writer, request, errRequestValidation, nil)
 		return
@@ -188,6 +192,10 @@ func (server *api) adoptSuggestion(writer http.ResponseWriter, request *http.Req
 	var input adoptSuggestionRequest
 	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
 		server.writeError(writer, request, err, nil)
+		return
+	}
+	if (review && input.ExpectedGoalRevision == nil) || (!review && input.ExpectedGoalRevision != nil) {
+		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.AdoptGoalSuggestion(request.Context(), currentUserID(request), draftID,

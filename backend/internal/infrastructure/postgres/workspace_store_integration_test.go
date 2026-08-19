@@ -62,6 +62,29 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'request-hash',$5,$5)`, []any{cycleID, userI
 	}
 }
 
+func TestWorkspaceStoreDuplicateCreationDraftReturnsExistingIdentifier(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const (
+		userID      = "10000000-0000-0000-0000-000000000001"
+		firstDraft  = "11000000-0000-0000-0000-000000000001"
+		secondDraft = "11000000-0000-0000-0000-000000000002"
+	)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	if _, err := store.CreateDraft(context.Background(), userID, firstDraft, "", now); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.CreateDraft(context.Background(), userID, secondDraft, "", now)
+	var conflict *workspace.DraftAlreadyExistsError
+	if !errors.As(err, &conflict) || conflict.DraftID != firstDraft {
+		t.Fatalf("duplicate draft error = %#v", err)
+	}
+}
+
 func TestWorkspaceStoreListGoalsOrdersProgressingBeforeTerminalAcrossPages(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
@@ -198,6 +221,9 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	}
 	if _, err = store.CompleteCycle(context.Background(), completeInput); err != nil {
 		t.Fatal(err)
+	}
+	if _, err = store.GetDraft(context.Background(), userID, reviewDraftID); !errors.Is(err, workspace.ErrDraftTypeMismatch) {
+		t.Fatalf("review draft read through creation endpoint error = %v", err)
 	}
 	if _, err = store.ContinueReview(context.Background(), workspace.ContinueReviewInput{
 		UserID: userID, GoalID: goalID, OperationID: continueOperation, ExpectedGoalRevision: 1,

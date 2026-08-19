@@ -32,6 +32,9 @@ FROM goal_drafts WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(input.DraftID)
 	if err != nil {
 		return snapshot, err
 	}
+	if input.GoalID == "" && draft.DraftType != string(goal.DraftCreation) {
+		return snapshot, workspace.ErrDraftTypeMismatch
+	}
 	inputHash := hashGoalRefineRequest(input)
 	replayed, replayErr := existingGeneration(ctx, tx, input.UserID, "goal_refine", input.IdempotencyKey, inputHash)
 	if replayErr != nil {
@@ -291,7 +294,7 @@ WHERE generation.user_id=$1 AND generation.operation_type=$2 AND generation.idem
 		return nil, workspace.ErrIdempotencyKeyReused
 	}
 	if status == "running" {
-		return nil, workspace.ErrAIInProgress
+		return nil, &workspace.AIOperationInProgressError{GenerationID: generationID}
 	}
 	if status == "failed" {
 		return nil, aiFailureError(failureCode)
@@ -323,7 +326,7 @@ FROM ai_generations WHERE user_id=$1 AND operation_type=$2 AND idempotency_key=$
 		return nil, workspace.ErrIdempotencyKeyReused
 	}
 	if status == "running" {
-		return nil, workspace.ErrAIInProgress
+		return nil, &workspace.AIOperationInProgressError{GenerationID: generationID}
 	}
 	if status == "failed" {
 		return nil, aiFailureError(failureCode)
@@ -488,10 +491,13 @@ lease_expires_at=NULL,context_changed=$10,applied_at=$11,finished_at=$12 WHERE i
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd-$2,
+	command, err := tx.Exec(ctx, `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd-$2,
 actual_cost_usd=actual_cost_usd+$3,updated_at=$4 WHERE month_utc=$1::date AND reserved_cost_usd >= $2`, month, reserved, result.CostUSD, now)
 	if err != nil {
 		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("AI budget reservation invariant violated during settlement")
 	}
 	_, err = tx.Exec(ctx, `UPDATE ai_usage_events SET status=$2,input_tokens=$3,output_tokens=$4,estimated_cost_usd=$5,
 provider_usage_finalized_at=$6 WHERE operation_id=$1`, mustUUID(generationID), status, result.InputTokens, result.OutputTokens, result.CostUSD, now)

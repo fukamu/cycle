@@ -41,6 +41,9 @@ var (
 
 func (server *api) writeError(writer http.ResponseWriter, request *http.Request, err error, details map[string]any) {
 	status, code, message := classifyError(err)
+	if details == nil {
+		details = errorDetails(err)
+	}
 	if server.dependencies.Metrics != nil {
 		if errors.Is(err, workspace.ErrAIContextIsolation) {
 			server.dependencies.Metrics.AIContextIsolationViolation(request.Context())
@@ -92,6 +95,8 @@ func classifyError(err error) (int, string, string) {
 		return 404, "GOAL_NOT_FOUND", "対象が見つかりません。"
 	case errors.Is(err, workspace.ErrDraftAlreadyExists):
 		return 409, "GOAL_CREATION_DRAFT_ALREADY_EXISTS", "目標の下書きはすでにあります。"
+	case errors.Is(err, workspace.ErrDraftTypeMismatch):
+		return 409, "GOAL_DRAFT_TYPE_MISMATCH", "正しい目標画面を開き直してください。"
 	case errors.Is(err, workspace.ErrDraftRevisionConflict):
 		return 409, "GOAL_DRAFT_REVISION_CONFLICT", "別の保存が先に反映されています。入力内容は保持されています。"
 	case errors.Is(err, workspace.ErrReviewRevisionConflict):
@@ -104,7 +109,9 @@ func classifyError(err error) (int, string, string) {
 		return 409, "GOAL_REVIEW_NOT_ACTIVE", "目標の見直し画面を開き直してください。"
 	case errors.Is(err, workspace.ErrGoalReviewInvariant):
 		return 500, "GOAL_REVIEW_INVARIANT_BROKEN", "目標の見直し状態を確認できませんでした。"
-	case errors.Is(err, workspace.ErrGoalStateConflict), errors.Is(err, workspace.ErrGoalVersionConflict):
+	case errors.Is(err, workspace.ErrGoalVersionConflict):
+		return 409, "GOAL_VERSION_CONFLICT", "目標の版が更新されています。"
+	case errors.Is(err, workspace.ErrGoalStateConflict):
 		return 409, "GOAL_STATE_CONFLICT", "目標の状態が更新されています。"
 	case errors.Is(err, workspace.ErrGoalAlreadyTerminal):
 		return 409, "GOAL_ALREADY_TERMINAL", "この目標は終了しています。"
@@ -191,6 +198,18 @@ func classifyError(err error) (int, string, string) {
 	default:
 		return 500, "INTERNAL_ERROR", "処理中にエラーが発生しました。もう一度お試しください。"
 	}
+}
+
+func errorDetails(err error) map[string]any {
+	var draftConflict *workspace.DraftAlreadyExistsError
+	if errors.As(err, &draftConflict) && draftConflict.DraftID != "" {
+		return map[string]any{"draftId": draftConflict.DraftID}
+	}
+	var aiRunning *workspace.AIOperationInProgressError
+	if errors.As(err, &aiRunning) && aiRunning.GenerationID != "" {
+		return map[string]any{"generationId": aiRunning.GenerationID}
+	}
+	return nil
 }
 
 func stableUseCaseError(err, fallback error) error {
