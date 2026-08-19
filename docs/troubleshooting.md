@@ -55,7 +55,7 @@
 | Anonymous session作成失敗  | Turnstile site/secret key、hostname/action不一致、token期限切れ/replay | Browser network、server error、Turnstile widget設定 | Site/secret keyとhostname/actionを合わせる。Tokenは再取得し、Productionで無効化しない |
 | Local AIが実APIを呼ばない  | `OPENAI_API_KEY`空のdevelopment/testは仕様どおりFake | APP_ENVとkeyの有無（値は表示しない）                  | 実APIが必要な明示的検証だけlocal secretをprocessへ設定。通常testはFakeを使う |
 | Production AI失敗          | Key、model、quota/spend/rate limit、provider障害     | AI error metrics/log、provider status/dashboard       | 設定とprovider制限を確認。Fakeへ切替えず、非AI機能と切り分ける               |
-| AI costが0/不正            | price vars未設定/旧単価、model不一致                 | Deploy variables、`AI_MODEL`/`AI_PRICE_MODEL`、確認日 | 当日の正式単価をreviewして新revisionをdeploy。推測値を入れない               |
+| AI costが0/不正            | price vars未設定/旧単価、model不一致                 | Deploy variables、`AI_MODEL`/`AI_PRICING_MODEL`、確認日 | 当日の正式単価をreviewして新revisionをdeploy。推測値を入れない               |
 
 ## CI / Cloudflare Deploy / Production
 

@@ -179,7 +179,7 @@ OpenAI:
 
 - Staging専用keyをGitHub secret `OPENAI_API_KEY`へ登録する。
 - Provider側spend/rate limitとApplication budgetを両方設定する。
-- `AI_MODEL`と`AI_PRICE_MODEL`はworkflowが同じ値に揃える。Deploy日の公式token単価を確認してGitHub variablesへ設定する。
+- `AI_MODEL`と`AI_PRICING_MODEL`はworkflowが同じ値に揃える。Deploy日の公式token単価を確認してGitHub variablesへ設定する。
 
 ## 6. Cloudflare application deploy token
 

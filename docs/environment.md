@@ -8,6 +8,7 @@ Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging L
 
 - Local backendはuntracked `.env`、Viteはuntracked `frontend/.env.local`を使います。Backendが`.env`を暗黙loadする前提にせず、PowerShellでは `. ./scripts/import-env.ps1` を使います。
 - `VITE_`値はbundleへ埋め込まれ、全利用者から見えます。Secretを設定しません。
+- Stagingのnon-secret configurationはGitHub `staging` Environment variablesからWrangler `--var`で登録します。
 - Staging runtime secretsはGitHub `staging` Environmentからdeploy時の一時`--secrets-file`経由でCloudflare Worker Secretsへ登録します。一時fileはworkflowの`always()` stepで削除します。
 - Neon migration direct URLはGitHub Actionsだけが使い、Worker/Containerへ渡しません。Runtimeにはpooled URLだけを渡します。
 - R2 backend credential、Terraform/Turnstile token、Cloudflare deploy tokenは用途別に分離します。
@@ -61,7 +62,7 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | `AI_TOKENIZER_ENCODING` | `o200k_base` | implementation対応値 | GitHub variable |
 | `AI_MONTHLY_BUDGET_USD` | app budget、`100` | positive | GitHub variable |
 | `AI_WARNING_THRESHOLDS` | `0.5,0.8` | 0〜1の昇順 | GitHub variable |
-| `AI_PRICE_MODEL` | pricing対象model | `AI_MODEL`と一致 | Workerが`AI_MODEL`から設定 |
+| `AI_PRICING_MODEL` | pricing対象model | `AI_MODEL`と一致 | Workerが`AI_MODEL`から設定 |
 | `AI_PRICE_INPUT_USD_PER_MILLION` | input単価、`0` | deploy日の公式値を設定 | GitHub variable |
 | `AI_PRICE_OUTPUT_USD_PER_MILLION` | output単価、`0` | deploy日の公式値を設定 | GitHub variable |
 | `GOOGLE_WEB_CLIENT_ID` | GIS audience | Production profile必須 | 公開可、GitHub variable |

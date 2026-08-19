@@ -24,9 +24,9 @@ func TestLoadRejectsPricingModelMismatch(t *testing.T) {
 	t.Parallel()
 
 	environment := validEnvironment()
-	environment["AI_PRICE_MODEL"] = "different-model"
+	environment["AI_PRICING_MODEL"] = "different-model"
 	_, err := Load(mapLookup(environment))
-	if err == nil || !strings.Contains(err.Error(), "AI_MODEL and AI_PRICE_MODEL must match") {
+	if err == nil || !strings.Contains(err.Error(), "AI_MODEL and AI_PRICING_MODEL must match") {
 		t.Fatalf("Load() error = %v", err)
 	}
 }

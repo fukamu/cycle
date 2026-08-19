@@ -119,7 +119,7 @@ export class Backend extends Container {
       "AI_WARNING_THRESHOLDS",
       env.AI_WARNING_THRESHOLDS,
     ),
-    AI_PRICE_MODEL: required("AI_PRICE_MODEL", env.AI_PRICE_MODEL),
+    AI_PRICING_MODEL: required("AI_PRICING_MODEL", env.AI_PRICING_MODEL),
     AI_PRICE_INPUT_USD_PER_MILLION: required(
       "AI_PRICE_INPUT_USD_PER_MILLION",
       env.AI_PRICE_INPUT_USD_PER_MILLION,

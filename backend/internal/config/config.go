@@ -154,7 +154,7 @@ func Load(lookup LookupEnv) (Config, error) {
 			MonthlyBudgetUSD:          reader.floatValue("AI_MONTHLY_BUDGET_USD", 100),
 			WarningThresholds:         reader.floatList("AI_WARNING_THRESHOLDS", []float64{0.5, 0.8}),
 			Pricing: AIPricingConfig{
-				Model:                     reader.stringValue("AI_PRICE_MODEL", "gpt-5.6-luna"),
+				Model:                     reader.stringValue("AI_PRICING_MODEL", "gpt-5.6-luna"),
 				InputUSDPerMillionTokens:  reader.floatValue("AI_PRICE_INPUT_USD_PER_MILLION", 0),
 				OutputUSDPerMillionTokens: reader.floatValue("AI_PRICE_OUTPUT_USD_PER_MILLION", 0),
 			},
@@ -241,7 +241,7 @@ func (config Config) Validate() error {
 		problems = append(problems, "AI limits and monthly budget must be positive")
 	}
 	if config.AI.Model != config.AI.Pricing.Model {
-		problems = append(problems, "AI_MODEL and AI_PRICE_MODEL must match")
+		problems = append(problems, "AI_MODEL and AI_PRICING_MODEL must match")
 	}
 	if config.AI.Pricing.InputUSDPerMillionTokens < 0 || config.AI.Pricing.OutputUSDPerMillionTokens < 0 {
 		problems = append(problems, "AI prices cannot be negative")
