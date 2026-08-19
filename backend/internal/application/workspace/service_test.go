@@ -103,3 +103,19 @@ func TestRequestHashIsStableAndBodySensitive(t *testing.T) {
 		t.Fatal("different requests produced the same hash")
 	}
 }
+
+func TestAIInputErrorsAreSpecificToEachOperation(t *testing.T) {
+	tests := []struct {
+		operation string
+		want      error
+	}{
+		{"goal_refine", ErrGoalRefineInputEmpty},
+		{"action_generate", ErrActionGenerateInputIncomplete},
+		{"action_refine", ErrActionRefineInputIncomplete},
+	}
+	for _, test := range tests {
+		if got := specificAIInputError(test.operation, ErrAIInputIncomplete); !errors.Is(got, test.want) {
+			t.Fatalf("%s mapped to %v, want %v", test.operation, got, test.want)
+		}
+	}
+}

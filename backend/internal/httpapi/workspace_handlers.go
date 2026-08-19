@@ -17,53 +17,53 @@ type createDraftRequest struct {
 }
 type saveDraftRequest struct {
 	Body             string `json:"body"`
-	ExpectedRevision int64  `json:"expectedRevision"`
+	ExpectedRevision int64  `json:"expectedRevision" validate:"gte=0"`
 }
 type startGoalRequest struct {
-	OperationID           string `json:"operationId"`
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
+	OperationID           string `json:"operationId" validate:"required,canonical_uuid"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
 }
 type refineGoalRequest struct {
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
-	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
+	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty" validate:"omitempty,gte=0"`
 }
 type adoptSuggestionRequest struct {
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
-	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
+	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty" validate:"omitempty,gte=0"`
 }
 type continueReviewRequest struct {
-	OperationID           string `json:"operationId"`
-	ExpectedGoalRevision  int64  `json:"expectedGoalRevision"`
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
+	OperationID           string `json:"operationId" validate:"required,canonical_uuid"`
+	ExpectedGoalRevision  int64  `json:"expectedGoalRevision" validate:"gte=0"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
 }
 type saveFrameRequest struct {
 	Content               string `json:"content"`
-	ExpectedFrameRevision int64  `json:"expectedFrameRevision"`
+	ExpectedFrameRevision int64  `json:"expectedFrameRevision" validate:"gte=0"`
 }
 type actionGenerateRequest struct {
-	ExpectedContentRevision int64 `json:"expectedContentRevision"`
+	ExpectedContentRevision int64 `json:"expectedContentRevision" validate:"gte=0"`
 	ConfirmReplace          bool  `json:"confirmReplace"`
 }
 type actionRefineRequest struct {
-	ExpectedContentRevision int64 `json:"expectedContentRevision"`
+	ExpectedContentRevision int64 `json:"expectedContentRevision" validate:"gte=0"`
 }
 type completeCycleRequest struct {
-	OperationID             string `json:"operationId"`
-	ExpectedGoalRevision    int64  `json:"expectedGoalRevision"`
-	ExpectedContentRevision int64  `json:"expectedContentRevision"`
+	OperationID             string `json:"operationId" validate:"required,canonical_uuid"`
+	ExpectedGoalRevision    int64  `json:"expectedGoalRevision" validate:"gte=0"`
+	ExpectedContentRevision int64  `json:"expectedContentRevision" validate:"gte=0"`
 }
 type terminateGoalRequest struct {
-	OperationID                  string      `json:"operationId"`
-	Outcome                      goal.Status `json:"outcome"`
-	ExpectedGoalRevision         int64       `json:"expectedGoalRevision"`
-	ExpectedState                goal.Status `json:"expectedState"`
-	ActiveCycleID                string      `json:"activeCycleId,omitempty"`
-	ExpectedCycleContentRevision *int64      `json:"expectedCycleContentRevision,omitempty"`
+	OperationID                  string      `json:"operationId" validate:"required,canonical_uuid"`
+	Outcome                      goal.Status `json:"outcome" validate:"required,oneof=achieved ended"`
+	ExpectedGoalRevision         int64       `json:"expectedGoalRevision" validate:"gte=0"`
+	ExpectedState                goal.Status `json:"expectedState" validate:"required,oneof=active_cycle goal_review"`
+	ActiveCycleID                string      `json:"activeCycleId,omitempty" validate:"omitempty,canonical_uuid"`
+	ExpectedCycleContentRevision *int64      `json:"expectedCycleContentRevision,omitempty" validate:"omitempty,gte=0"`
 	ConfirmDiscardReviewDraft    bool        `json:"confirmDiscardReviewDraft,omitempty"`
 }
 type deleteGoalRequest struct {
 	Confirmed            bool  `json:"confirmed"`
-	ExpectedGoalRevision int64 `json:"expectedGoalRevision"`
+	ExpectedGoalRevision int64 `json:"expectedGoalRevision" validate:"gte=0"`
 }
 
 func (server *api) getHome(writer http.ResponseWriter, request *http.Request) {
@@ -77,8 +77,8 @@ func (server *api) getHome(writer http.ResponseWriter, request *http.Request) {
 
 func (server *api) createGoalDraft(writer http.ResponseWriter, request *http.Request) {
 	var input createDraftRequest
-	if err := decodeJSON(writer, request, &input, defaultBodyLimit); err != nil {
-		server.writeError(writer, request, goal.ErrForbiddenCharacter, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.CreateDraft(request.Context(), currentUserID(request), input.InitialBody)
@@ -100,8 +100,8 @@ func (server *api) getGoalDraft(writer http.ResponseWriter, request *http.Reques
 
 func (server *api) saveGoalDraft(writer http.ResponseWriter, request *http.Request) {
 	var input saveDraftRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil {
-		server.writeError(writer, request, goal.ErrForbiddenCharacter, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.SaveDraft(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), input.Body, input.ExpectedRevision)
@@ -122,8 +122,8 @@ func (server *api) abandonGoalDraft(writer http.ResponseWriter, request *http.Re
 
 func (server *api) startGoal(writer http.ResponseWriter, request *http.Request) {
 	var input startGoalRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil || !isCanonicalUUID(input.OperationID) {
-		server.writeError(writer, request, goal.ErrForbiddenCharacter, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.StartGoal(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), input.OperationID, input.ExpectedDraftRevision)
@@ -151,8 +151,12 @@ func (server *api) refineGoalReview(writer http.ResponseWriter, request *http.Re
 func (server *api) refineGoal(writer http.ResponseWriter, request *http.Request, draftID, goalID string) {
 	var input refineGoalRequest
 	key := idempotencyKey(request)
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil || key == "" {
-		server.writeError(writer, request, workspace.ErrIdempotencyKeyReused, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	if key == "" {
+		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.RefineGoal(request.Context(), workspace.GoalRefineInput{
@@ -182,8 +186,8 @@ func (server *api) adoptGoalReviewSuggestion(writer http.ResponseWriter, request
 
 func (server *api) adoptSuggestion(writer http.ResponseWriter, request *http.Request, draftID string, review bool) {
 	var input adoptSuggestionRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil {
-		server.writeError(writer, request, goal.ErrForbiddenCharacter, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.AdoptGoalSuggestion(request.Context(), currentUserID(request), draftID,
@@ -228,8 +232,8 @@ func (server *api) getGoalReview(writer http.ResponseWriter, request *http.Reque
 
 func (server *api) saveGoalReview(writer http.ResponseWriter, request *http.Request) {
 	var input saveDraftRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil {
-		server.writeError(writer, request, goal.ErrForbiddenCharacter, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.SaveReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.Body, input.ExpectedRevision)
@@ -242,8 +246,8 @@ func (server *api) saveGoalReview(writer http.ResponseWriter, request *http.Requ
 
 func (server *api) continueGoalReview(writer http.ResponseWriter, request *http.Request) {
 	var input continueReviewRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil || !isCanonicalUUID(input.OperationID) {
-		server.writeError(writer, request, goal.ErrForbiddenCharacter, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.ContinueReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.OperationID, input.ExpectedGoalRevision, input.ExpectedDraftRevision)
@@ -256,8 +260,8 @@ func (server *api) continueGoalReview(writer http.ResponseWriter, request *http.
 
 func (server *api) terminateGoal(writer http.ResponseWriter, request *http.Request) {
 	var input terminateGoalRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil || !isCanonicalUUID(input.OperationID) {
-		server.writeError(writer, request, goal.ErrForbiddenCharacter, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.Terminate(request.Context(), workspace.TerminateInput{
@@ -276,8 +280,12 @@ func (server *api) terminateGoal(writer http.ResponseWriter, request *http.Reque
 func (server *api) deleteGoal(writer http.ResponseWriter, request *http.Request) {
 	var input deleteGoalRequest
 	key := idempotencyKey(request)
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil || key == "" {
-		server.writeError(writer, request, workspace.ErrIdempotencyKeyReused, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	if key == "" {
+		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
 	if err := server.dependencies.Workspace.DeleteGoal(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.Confirmed, input.ExpectedGoalRevision, key); err != nil {
@@ -308,8 +316,12 @@ func (server *api) getGoalCycle(writer http.ResponseWriter, request *http.Reques
 func (server *api) saveGoalCycleFrame(writer http.ResponseWriter, request *http.Request) {
 	var input saveFrameRequest
 	frame, frameErr := cycle.ParseFrame(chi.URLParam(request, "frame"))
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil || frameErr != nil {
-		server.writeError(writer, request, cycle.ErrInvalidFrame, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	if frameErr != nil {
+		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.SaveFrame(request.Context(), workspace.SaveFrameInput{
@@ -325,8 +337,8 @@ func (server *api) saveGoalCycleFrame(writer http.ResponseWriter, request *http.
 
 func (server *api) generateAction(writer http.ResponseWriter, request *http.Request) {
 	var input actionGenerateRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil {
-		server.writeError(writer, request, workspace.ErrAIInputIncomplete, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	server.runActionAI(writer, request, "action_generate", input.ExpectedContentRevision, input.ConfirmReplace)
@@ -334,8 +346,8 @@ func (server *api) generateAction(writer http.ResponseWriter, request *http.Requ
 
 func (server *api) refineAction(writer http.ResponseWriter, request *http.Request) {
 	var input actionRefineRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil {
-		server.writeError(writer, request, workspace.ErrAIInputIncomplete, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	server.runActionAI(writer, request, "action_refine", input.ExpectedContentRevision, false)
@@ -344,7 +356,7 @@ func (server *api) refineAction(writer http.ResponseWriter, request *http.Reques
 func (server *api) runActionAI(writer http.ResponseWriter, request *http.Request, operation string, revision int64, confirmReplace bool) {
 	key := idempotencyKey(request)
 	if key == "" {
-		server.writeError(writer, request, workspace.ErrIdempotencyKeyReused, nil)
+		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.RunActionAI(request.Context(), workspace.ActionAIInput{
@@ -361,8 +373,8 @@ func (server *api) runActionAI(writer http.ResponseWriter, request *http.Request
 
 func (server *api) completeGoalCycle(writer http.ResponseWriter, request *http.Request) {
 	var input completeCycleRequest
-	if decodeJSON(writer, request, &input, defaultBodyLimit) != nil || !isCanonicalUUID(input.OperationID) {
-		server.writeError(writer, request, goal.ErrForbiddenCharacter, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	view, err := server.dependencies.Workspace.CompleteCycle(request.Context(), workspace.CompleteCycleInput{

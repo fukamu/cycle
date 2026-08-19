@@ -15,7 +15,7 @@ type sessionResponse struct {
 }
 
 type createAnonymousRequest struct {
-	BootstrapID    string `json:"bootstrapId"`
+	BootstrapID    string `json:"bootstrapId" validate:"required,canonical_uuid"`
 	TurnstileToken string `json:"turnstileToken"`
 }
 
@@ -48,8 +48,8 @@ func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Req
 		}
 	}
 	var input createAnonymousRequest
-	if err := decodeJSON(writer, request, &input, defaultBodyLimit); err != nil {
-		server.writeError(writer, request, appsession.ErrBootstrapID, nil)
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	view, err := server.dependencies.Sessions.CreateAnonymous(request.Context(), appsession.CreateAnonymousInput{

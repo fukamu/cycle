@@ -48,6 +48,8 @@ func (server *api) writeError(writer http.ResponseWriter, request *http.Request,
 
 func classifyError(err error) (int, string, string) {
 	switch {
+	case errors.Is(err, errRequestValidation):
+		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
 	case errors.Is(err, appsession.ErrSessionMissing):
 		return 401, "SESSION_MISSING", "セッションがありません。"
 	case errors.Is(err, appsession.ErrSessionExpired):
@@ -72,8 +74,6 @@ func classifyError(err error) (int, string, string) {
 		return 404, "GOAL_DRAFT_NOT_FOUND", "目標の下書きが見つかりません。"
 	case errors.Is(err, workspace.ErrCycleNotFound):
 		return 404, "CYCLE_NOT_FOUND", "サイクルが見つかりません。"
-	case errors.Is(err, workspace.ErrGoalReviewNotFound):
-		return 404, "GOAL_REVIEW_NOT_FOUND", "目標の見直しが見つかりません。"
 	case errors.Is(err, workspace.ErrGoalNotFound), errors.Is(err, workspace.ErrNotFound):
 		return 404, "GOAL_NOT_FOUND", "対象が見つかりません。"
 	case errors.Is(err, workspace.ErrDraftAlreadyExists):
@@ -88,6 +88,8 @@ func classifyError(err error) (int, string, string) {
 		return 409, "GOAL_ACTIVE_LIMIT_EXCEEDED", "現在取り組んでいる目標を先に完了してください。"
 	case errors.Is(err, workspace.ErrGoalReviewNotActive):
 		return 409, "GOAL_REVIEW_NOT_ACTIVE", "目標の見直し画面を開き直してください。"
+	case errors.Is(err, workspace.ErrGoalReviewInvariant):
+		return 500, "GOAL_REVIEW_INVARIANT_BROKEN", "目標の見直し状態を確認できませんでした。"
 	case errors.Is(err, workspace.ErrGoalStateConflict), errors.Is(err, workspace.ErrGoalVersionConflict):
 		return 409, "GOAL_STATE_CONFLICT", "目標の状態が更新されています。"
 	case errors.Is(err, workspace.ErrGoalAlreadyTerminal):
@@ -108,8 +110,12 @@ func classifyError(err error) (int, string, string) {
 		return 400, "CYCLE_COMPLETION_INPUT_INCOMPLETE", "P/D/C/Aをすべて入力してください。"
 	case errors.Is(err, workspace.ErrAIInProgress), errors.Is(err, cycle.ErrAIOperationRunning):
 		return 409, "AI_OPERATION_IN_PROGRESS", "AI処理の完了をお待ちください。"
-	case errors.Is(err, workspace.ErrAIInputIncomplete):
-		return 400, "AI_INPUT_INCOMPLETE", "必要な入力を保存してから実行してください。"
+	case errors.Is(err, workspace.ErrGoalRefineInputEmpty):
+		return 400, "GOAL_REFINE_INPUT_EMPTY", "目標を入力してから実行してください。"
+	case errors.Is(err, workspace.ErrActionGenerateInputIncomplete):
+		return 400, "ACTION_GENERATE_INPUT_INCOMPLETE", "P/D/Cを保存してから実行してください。"
+	case errors.Is(err, workspace.ErrActionRefineInputIncomplete):
+		return 400, "ACTION_REFINE_INPUT_INCOMPLETE", "P/D/C/Aを保存してから実行してください。"
 	case errors.Is(err, workspace.ErrAIReplacementRequired):
 		return 409, "ACTION_REPLACEMENT_CONFIRMATION_REQUIRED", "現在のアクションを置き換える確認が必要です。"
 	case errors.Is(err, workspace.ErrAIContextStale):

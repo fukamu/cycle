@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-playground/validator/v10"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
@@ -73,10 +74,13 @@ type Dependencies struct {
 	Metrics      Metrics
 }
 
-type api struct{ dependencies Dependencies }
+type api struct {
+	dependencies Dependencies
+	validate     *validator.Validate
+}
 
 func NewRouter(dependencies Dependencies) http.Handler {
-	server := &api{dependencies: dependencies}
+	server := &api{dependencies: dependencies, validate: newRequestValidator()}
 	router := chi.NewRouter()
 	router.Use(server.requestIDMiddleware, server.requestLogMiddleware, server.securityHeaders)
 	router.Get("/healthz", healthHandler)
@@ -125,6 +129,14 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		router.Handle("/*", newSPAHandler(dependencies.StaticDir))
 	}
 	return otelhttp.NewHandler(router, "http.request")
+}
+
+func newRequestValidator() *validator.Validate {
+	validate := validator.New(validator.WithRequiredStructEnabled())
+	_ = validate.RegisterValidation("canonical_uuid", func(field validator.FieldLevel) bool {
+		return isCanonicalUUID(field.Field().String())
+	})
+	return validate
 }
 
 type healthResponse struct {

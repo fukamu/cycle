@@ -313,6 +313,9 @@ terminal_operation_id,terminal_request_hash,created_at,updated_at FROM goals WHE
 	draftView, err := scanDraft(tx.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
 FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND draft_type='review' FOR UPDATE`, mustUUID(input.UserID), mustUUID(input.GoalID)))
 	if err != nil {
+		if errors.Is(err, workspace.ErrNotFound) {
+			return result, workspace.ErrGoalReviewInvariant
+		}
 		return result, err
 	}
 	if draftView.Revision != input.ExpectedDraftRevision {

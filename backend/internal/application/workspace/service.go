@@ -100,12 +100,12 @@ func (service *Service) GetGoal(ctx context.Context, userID, goalID string) (Goa
 
 func (service *Service) GetReview(ctx context.Context, userID, goalID string) (ReviewView, error) {
 	view, err := service.store.GetReview(ctx, userID, goalID)
-	return view, resourceNotFound(err, ErrGoalReviewNotFound)
+	return view, resourceNotFound(err, ErrGoalNotFound)
 }
 
 func (service *Service) SaveReview(ctx context.Context, userID, goalID, body string, expectedRevision int64) (DraftView, error) {
 	view, err := service.store.SaveReview(ctx, userID, goalID, body, expectedRevision, service.clock.Now().UTC())
-	return view, resourceNotFound(err, ErrGoalReviewNotFound)
+	return view, resourceNotFound(err, ErrGoalNotFound)
 }
 
 func (service *Service) ContinueReview(ctx context.Context, userID, goalID, operationID string, expectedGoalRevision, expectedDraftRevision int64) (ContinueReviewResult, error) {
@@ -123,7 +123,7 @@ func (service *Service) ContinueReview(ctx context.Context, userID, goalID, oper
 		ExpectedGoalRevision: expectedGoalRevision, ExpectedDraftRevision: expectedDraftRevision,
 		RequestHash: requestHash, VersionID: versionID, CycleID: cycleID, Now: service.clock.Now().UTC(),
 	})
-	return result, resourceNotFound(err, ErrGoalReviewNotFound)
+	return result, resourceNotFound(err, ErrGoalNotFound)
 }
 
 func (service *Service) Terminate(ctx context.Context, input TerminateInput) (TerminateResult, error) {
@@ -195,9 +195,9 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	if err != nil {
 		missing := ErrGoalDraftNotFound
 		if input.GoalID != "" {
-			missing = ErrGoalReviewNotFound
+			missing = ErrGoalNotFound
 		}
-		return AIResponse{}, resourceNotFound(err, missing)
+		return AIResponse{}, specificAIInputError("goal_refine", resourceNotFound(err, missing))
 	}
 	if snapshot.ReplayedOutput != nil {
 		return AIResponse{GenerationID: snapshot.GenerationID, SourceDraftRevision: snapshot.TargetRevision, Suggestion: *snapshot.ReplayedOutput}, nil
@@ -210,9 +210,9 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	service.observeAI(ctx, snapshot, result, providerErr, finishErr, startedAt)
 	missing := ErrGoalDraftNotFound
 	if input.GoalID != "" {
-		missing = ErrGoalReviewNotFound
+		missing = ErrGoalNotFound
 	}
-	return response, resourceNotFound(finishErr, missing)
+	return response, specificAIInputError("goal_refine", resourceNotFound(finishErr, missing))
 }
 
 func (service *Service) AdoptGoalSuggestion(ctx context.Context, userID, draftID, generationID string, expectedDraftRevision int64, expectedGoalRevision *int64) (DraftView, error) {
@@ -229,7 +229,7 @@ func (service *Service) RunActionAI(ctx context.Context, input ActionAIInput) (A
 	input.Now = service.clock.Now().UTC()
 	snapshot, err := service.store.BeginActionAI(ctx, input, service.selectAIContext)
 	if err != nil {
-		return AIResponse{}, resourceNotFound(err, ErrCycleNotFound)
+		return AIResponse{}, specificAIInputError(input.Operation, resourceNotFound(err, ErrCycleNotFound))
 	}
 	if snapshot.ReplayedOutput != nil {
 		return AIResponse{GenerationID: snapshot.GenerationID, Action: *snapshot.ReplayedOutput}, nil
@@ -240,7 +240,7 @@ func (service *Service) RunActionAI(ctx context.Context, input ActionAIInput) (A
 	defer cancel()
 	response, finishErr := service.store.FinishActionAI(finishContext, snapshot, result, providerErr, service.clock.Now().UTC())
 	service.observeAI(ctx, snapshot, result, providerErr, finishErr, startedAt)
-	return response, resourceNotFound(finishErr, ErrCycleNotFound)
+	return response, specificAIInputError(input.Operation, resourceNotFound(finishErr, ErrCycleNotFound))
 }
 
 func (service *Service) executeProvider(ctx context.Context, snapshot AISnapshot) (AIProviderResult, error) {
@@ -377,4 +377,20 @@ func resourceNotFound(err, replacement error) error {
 		return replacement
 	}
 	return err
+}
+
+func specificAIInputError(operation string, err error) error {
+	if !errors.Is(err, ErrAIInputIncomplete) {
+		return err
+	}
+	switch operation {
+	case "goal_refine":
+		return ErrGoalRefineInputEmpty
+	case "action_generate":
+		return ErrActionGenerateInputIncomplete
+	case "action_refine":
+		return ErrActionRefineInputIncomplete
+	default:
+		return err
+	}
 }

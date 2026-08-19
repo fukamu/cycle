@@ -137,10 +137,17 @@ func (store *WorkspaceStore) SaveDraft(ctx context.Context, userID, draftID, bod
 }
 
 func (store *WorkspaceStore) SaveReview(ctx context.Context, userID, goalID, body string, expectedRevision int64, now time.Time) (workspace.DraftView, error) {
-	var draftID string
-	err := store.pool.QueryRow(ctx, `SELECT id FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND draft_type='review'`, mustUUID(userID), mustUUID(goalID)).Scan(&draftID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	view, err := store.GetGoal(ctx, userID, goalID)
+	if err != nil {
+		return workspace.DraftView{}, err
+	}
+	if view.Status != goal.StatusGoalReview {
 		return workspace.DraftView{}, workspace.ErrGoalReviewNotActive
+	}
+	var draftID string
+	err = store.pool.QueryRow(ctx, `SELECT id FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND draft_type='review'`, mustUUID(userID), mustUUID(goalID)).Scan(&draftID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspace.DraftView{}, workspace.ErrGoalReviewInvariant
 	}
 	if err != nil {
 		return workspace.DraftView{}, err
@@ -293,10 +300,19 @@ func (store *WorkspaceStore) GetReview(ctx context.Context, userID, goalID strin
 	draft, err := scanDraft(store.pool.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
 FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND draft_type='review'`, mustUUID(userID), mustUUID(goalID)))
 	if err != nil {
+		if errors.Is(err, workspace.ErrNotFound) {
+			return workspace.ReviewView{}, workspace.ErrGoalReviewInvariant
+		}
 		return workspace.ReviewView{}, err
+	}
+	if draft.ReviewCycleID == nil {
+		return workspace.ReviewView{}, workspace.ErrGoalReviewInvariant
 	}
 	trigger, err := getCycleView(ctx, store.pool, userID, goalID, *draft.ReviewCycleID)
 	if err != nil {
+		if errors.Is(err, workspace.ErrNotFound) {
+			return workspace.ReviewView{}, workspace.ErrGoalReviewInvariant
+		}
 		return workspace.ReviewView{}, err
 	}
 	return workspace.ReviewView{Goal: view, ReviewDraft: draft, TriggerCycle: trigger}, nil
