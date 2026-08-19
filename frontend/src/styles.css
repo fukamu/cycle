@@ -353,6 +353,7 @@ textarea[readonly] {
   border-color: #9db9af;
 }
 .suggestion-panel > p:not(.eyebrow) {
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .suggestion-panel .button-row {

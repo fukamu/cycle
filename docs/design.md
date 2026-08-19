@@ -4686,6 +4686,7 @@ AIからの提案
 
 - 「元の目標を維持」はsuggestion panelを閉じるだけでDraftを変更しない。
 - 「提案を採用」は§22.6 / §23.8のadopt endpointを呼ぶ。
+- Suggestion領域には見出しを付け、結果はpoliteなstatus、取得失敗とstale状態はalertとして支援技術へ通知する。Suggestion本文の改行は維持する。
 - 現在Draft本文とGenerationの`sourceText`が完全一致する場合だけ採用する。編集後に同一本文へ戻して保存済みなら採用できる。
 - 採用はDraft saveと同じrevision CASを使い、Draft revisionを+1する。
 - staleなら`GOAL_REFINE_CONTEXT_STALE`。最新Draftを保持し、suggestionを勝手にmergeしない。

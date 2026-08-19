@@ -37,7 +37,9 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   ).toBeVisible();
 
   await page.getByRole("button", { name: "AIで目標を整える" }).click();
-  await expect(page.getByText("AIからの提案")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "AIからの提案" }),
+  ).toBeVisible();
   await expect(
     page.getByText(
       "提案後に下書きが変更されたため、この提案は採用できません。",
@@ -70,7 +72,9 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(page.getByRole("alert")).toContainText(
     "前の提案を表示しています",
   );
-  await expect(page.getByText("AIからの提案")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "AIからの提案" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "元の目標を維持" }).click();
 
   await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();

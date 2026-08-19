@@ -257,11 +257,18 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         </p>
       </section>
       {refine.kind === "suggested" && (
-        <section className="suggestion-panel">
-          <p className="eyebrow">AIからの提案</p>
-          <p>{refine.response.suggestion}</p>
+        <section
+          className="suggestion-panel"
+          aria-labelledby="review-suggestion-title"
+        >
+          <h2 className="eyebrow" id="review-suggestion-title">
+            AIからの提案
+          </h2>
+          <p className="suggestion-text" role="status">
+            {refine.response.suggestion}
+          </p>
           {stale && (
-            <p className="inline-error">
+            <p className="inline-error" role="alert">
               提案後に下書きが変更されたため、この提案は採用できません。
             </p>
           )}
@@ -285,7 +292,9 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         </section>
       )}
       {refine.kind === "failed" && (
-        <p className="inline-error">AIから提案を取得できませんでした。</p>
+        <p className="inline-error" role="alert">
+          AIから提案を取得できませんでした。
+        </p>
       )}
       <section className="terminal-actions">
         <h2>この目標を終える</h2>

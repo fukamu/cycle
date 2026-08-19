@@ -251,11 +251,18 @@ function GoalDraftEditor({
         </button>
       </section>
       {refine.kind === "suggested" && (
-        <section className="suggestion-panel" aria-live="polite">
-          <p className="eyebrow">AIからの提案</p>
-          <p>{refine.response.suggestion}</p>
+        <section
+          className="suggestion-panel"
+          aria-labelledby="goal-suggestion-title"
+        >
+          <h2 className="eyebrow" id="goal-suggestion-title">
+            AIからの提案
+          </h2>
+          <p className="suggestion-text" role="status">
+            {refine.response.suggestion}
+          </p>
           {suggestionStale && (
-            <p className="inline-error">
+            <p className="inline-error" role="alert">
               提案後に下書きが変更されたため、この提案は採用できません。
             </p>
           )}
