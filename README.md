@@ -72,6 +72,7 @@ npm run dev
 | 全品質check                           | `pwsh ./scripts/check.ps1`                                                         |
 | Frontend / Backend / Infrastructureだけcheck | `pwsh ./scripts/check.ps1 -Scope frontend` / `-Scope backend` / `-Scope infrastructure` |
 | E2Eを含むcheck                        | `pwsh ./scripts/check.ps1 -E2E`                                                    |
+| AI quality evaluation手順             | [`docs/ai-evaluation.md`](docs/ai-evaluation.md)                                   |
 | Safe clean                            | `pwsh ./scripts/clean.ps1`                                                         |
 | 依存関係を含むfull clean              | `pwsh ./scripts/clean.ps1 -All`                                                    |
 | Local Docker DB reset                 | `pwsh ./scripts/reset-local-db.ps1 -DatabaseName pdcai -ConfirmDatabaseName pdcai` |

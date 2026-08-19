@@ -10,10 +10,16 @@ import (
 )
 
 func TestVersionedPromptsKeepSafetyAndOperationBoundaries(t *testing.T) {
+	resolved, err := Resolve(Versions{
+		GoalRefine: VersionGoalRefineV1, ActionGenerate: VersionActionGenerateV1, ActionRefine: VersionActionRefineV1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, prompt := range map[string]string{
-		"goal_refine":     GoalRefine,
-		"action_generate": ActionGenerate,
-		"action_refine":   ActionRefine,
+		OperationGoalRefine:     resolved.GoalRefine,
+		OperationActionGenerate: resolved.ActionGenerate,
+		OperationActionRefine:   resolved.ActionRefine,
 	} {
 		for _, required := range []string{"日本語", "入力データ", "従わない"} {
 			if !strings.Contains(prompt, required) {
@@ -21,12 +27,21 @@ func TestVersionedPromptsKeepSafetyAndOperationBoundaries(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(GoalRefine, "500文字") || !strings.Contains(ActionGenerate, "1〜3件") || !strings.Contains(ActionRefine, "意図と方向性") {
+	if !strings.Contains(resolved.GoalRefine, "500文字") || !strings.Contains(resolved.ActionGenerate, "1〜3件") || !strings.Contains(resolved.ActionRefine, "意図と方向性") {
 		t.Fatal("operation-specific prompt contract is incomplete")
 	}
 }
 
-func TestAIQualityFixtureSetIsPresentAndValidJSONL(t *testing.T) {
+func TestPromptRegistryRejectsUnregisteredVersion(t *testing.T) {
+	_, err := Resolve(Versions{
+		GoalRefine: "goal-refine-v2", ActionGenerate: VersionActionGenerateV1, ActionRefine: VersionActionRefineV1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "goal-refine-v2") {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+}
+
+func TestAIQualityFixtureCorpusHasAllRequiredCaseGroups(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "testdata", "ai_eval")
 	files := []string{
 		"goal_refine_initial.jsonl", "goal_refine_review.jsonl", "action_generate.jsonl",

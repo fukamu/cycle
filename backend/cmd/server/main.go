@@ -32,6 +32,14 @@ func main() {
 		logger.Error("invalid configuration", "error_class", "configuration_invalid")
 		os.Exit(1)
 	}
+	promptSet, err := prompts.Resolve(prompts.Versions{
+		GoalRefine: settings.AI.GoalPromptVersion, ActionGenerate: settings.AI.GeneratePromptVersion,
+		ActionRefine: settings.AI.RefinePromptVersion,
+	})
+	if err != nil {
+		logger.Error("invalid prompt configuration", "error_class", "prompt_configuration_invalid")
+		os.Exit(1)
+	}
 	observability.Setup()
 	metrics, err := observability.NewMetrics(logger, settings.AI.WarningThresholds)
 	if err != nil {
@@ -72,7 +80,7 @@ func main() {
 	var aiProvider workspace.AIProvider = aiprovider.Fake{}
 	if settings.AI.APIKey != "" {
 		aiProvider = aiprovider.NewOpenAI(settings.AI.APIKey, settings.AI.Model, settings.AI.Timeout, settings.AI.ActionMaxOutputTokens,
-			settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
+			settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens, promptSet)
 	}
 	tokenCounter, err := aiprovider.NewTokenCounter(settings.AI.TokenizerEncoding)
 	if err != nil {
@@ -94,8 +102,8 @@ func main() {
 		MaxRetryBackoff: settings.AI.MaxRetryBackoff, FinalizationGrace: settings.AI.FinalizationGrace, Model: settings.AI.Model,
 		MaxInputTokens: settings.AI.MaxInputTokens, GoalRefineMaxOutputTokens: settings.AI.GoalRefineMaxOutputTokens,
 		ActionMaxOutputTokens: settings.AI.ActionMaxOutputTokens, MaxContextCycles: settings.AI.MaxContextCycles,
-		GoalRefineInstructions: prompts.GoalRefine, ActionGenerateInstructions: prompts.ActionGenerate,
-		ActionRefineInstructions: prompts.ActionRefine, TokenCounter: tokenCounter,
+		GoalRefineInstructions: promptSet.GoalRefine, ActionGenerateInstructions: promptSet.ActionGenerate,
+		ActionRefineInstructions: promptSet.ActionRefine, TokenCounter: tokenCounter,
 		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
 		RefinePromptVersion: settings.AI.RefinePromptVersion, AIObserver: metrics,
 	})

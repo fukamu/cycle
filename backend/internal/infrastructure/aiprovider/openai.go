@@ -25,18 +25,19 @@ type OpenAI struct {
 	maxOutputTokens int64
 	inputPrice      float64
 	outputPrice     float64
+	prompts         prompts.Set
 }
 
-func NewOpenAI(apiKey, model string, timeout time.Duration, maxOutputTokens int, inputUSDPerMillion, outputUSDPerMillion float64) *OpenAI {
+func NewOpenAI(apiKey, model string, timeout time.Duration, maxOutputTokens int, inputUSDPerMillion, outputUSDPerMillion float64, promptSet prompts.Set) *OpenAI {
 	client := openai.NewClient(
 		option.WithAPIKey(apiKey), option.WithMaxRetries(0),
 		option.WithHTTPClient(&http.Client{Timeout: timeout}),
 	)
-	return &OpenAI{client: client, model: openai.ResponsesModel(model), maxOutputTokens: int64(maxOutputTokens), inputPrice: inputUSDPerMillion, outputPrice: outputUSDPerMillion}
+	return &OpenAI{client: client, model: openai.ResponsesModel(model), maxOutputTokens: int64(maxOutputTokens), inputPrice: inputUSDPerMillion, outputPrice: outputUSDPerMillion, prompts: promptSet}
 }
 
 func (provider *OpenAI) Execute(ctx context.Context, input workspace.AIProviderRequest) (workspace.AIProviderResult, error) {
-	instructions, schemaName, schema, decode := operationContract(input.Operation)
+	instructions, schemaName, schema, decode := operationContract(input.Operation, provider.prompts)
 	if instructions == "" {
 		return workspace.AIProviderResult{}, workspace.ErrAIInvalidResponse
 	}
@@ -73,14 +74,14 @@ func (provider *OpenAI) Execute(ctx context.Context, input workspace.AIProviderR
 
 type outputDecoder func(string) (string, error)
 
-func operationContract(operation string) (string, string, map[string]any, outputDecoder) {
+func operationContract(operation string, promptSet prompts.Set) (string, string, map[string]any, outputDecoder) {
 	switch operation {
 	case "goal_refine":
-		return prompts.GoalRefine, "pdcai_goal_suggestion", textSchema("suggestion"), decodeField("suggestion")
+		return promptSet.GoalRefine, "pdcai_goal_suggestion", textSchema("suggestion"), decodeField("suggestion")
 	case "action_refine":
-		return prompts.ActionRefine, "pdcai_refined_action", textSchema("refinedAction"), decodeField("refinedAction")
+		return promptSet.ActionRefine, "pdcai_refined_action", textSchema("refinedAction"), decodeField("refinedAction")
 	case "action_generate":
-		return prompts.ActionGenerate, "pdcai_generated_actions", map[string]any{
+		return promptSet.ActionGenerate, "pdcai_generated_actions", map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{"actions": map[string]any{
 				"type": "array", "minItems": 1, "maxItems": 3,
