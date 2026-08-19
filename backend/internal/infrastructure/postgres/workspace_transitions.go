@@ -37,6 +37,7 @@ WHERE user_id=$1 AND start_operation_id=$2`, mustUUID(input.UserID), mustUUID(in
 			return result, err
 		}
 		result.Cycle, err = getCycleView(ctx, tx, input.UserID, replayGoalID, replayCycleID)
+		result.Replayed = true
 		return result, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -202,8 +203,17 @@ WHERE user_id=$1 AND completion_operation_id=$2`, mustUUID(input.UserID), mustUU
 		result.ReviewDraft, err = scanDraft(tx.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
 FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND review_cycle_id=$3 AND draft_type='review'`, mustUUID(input.UserID), mustUUID(replayGoalID), mustUUID(replayCycleID)))
 		if err != nil {
+			if errors.Is(err, workspace.ErrNotFound) {
+				result.Replay = &workspace.CommandReplayResponse{
+					Replayed: true, Operation: "complete_cycle",
+					ResourceIDs:      workspace.CommandReplayResourceIDs{GoalID: replayGoalID, CycleID: replayCycleID},
+					CurrentGoalState: result.Goal.Status, CurrentWorkspace: result.Goal.CurrentWork,
+				}
+				return result, tx.Commit(ctx)
+			}
 			return result, err
 		}
+		result.Replayed = true
 		return result, tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -288,6 +298,7 @@ func (store *WorkspaceStore) ContinueReview(ctx context.Context, input workspace
 		}
 		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM goal_versions WHERE user_id=$1 AND goal_id=$2 AND created_by_operation_id=$3)`,
 			mustUUID(input.UserID), mustUUID(input.GoalID), mustUUID(input.OperationID)).Scan(&result.VersionCreated)
+		result.Replayed = true
 		return result, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -406,6 +417,7 @@ WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(input.U
 				return result, workspace.ErrIdempotencyKeyReused
 			}
 			result.Goal, err = getGoalView(ctx, tx, input.UserID, input.GoalID)
+			result.Replayed = true
 			return result, err
 		}
 		return result, workspace.ErrGoalAlreadyTerminal

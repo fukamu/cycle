@@ -32,6 +32,14 @@ FROM goal_drafts WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(input.DraftID)
 	if err != nil {
 		return snapshot, err
 	}
+	inputHash := hashGoalRefineRequest(input)
+	replayed, replayErr := existingGeneration(ctx, tx, input.UserID, "goal_refine", input.IdempotencyKey, inputHash)
+	if replayErr != nil {
+		return snapshot, replayErr
+	}
+	if replayed != nil {
+		return *replayed, tx.Commit(ctx)
+	}
 	if draft.Revision != input.ExpectedDraftRevision {
 		return snapshot, workspace.ErrDraftRevisionConflict
 	}
@@ -40,6 +48,7 @@ FROM goal_drafts WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(input.DraftID)
 	}
 	var goalVersionID *string
 	goalBody := ""
+	var sourceGoalRevision int64
 	contextCycles := []workspace.AIContextCycle{}
 	goalID := draft.GoalID
 	if draft.DraftType == "review" {
@@ -58,6 +67,7 @@ WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(inp
 			return snapshot, workspace.ErrGoalRevisionConflict
 		}
 		goalVersionID = draft.BaseGoalVersionID
+		sourceGoalRevision = revision
 		contextCycles, err = loadAIContextCycles(ctx, tx, input.UserID, input.GoalID, "", 10)
 		if err != nil {
 			return snapshot, err
@@ -65,7 +75,7 @@ WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(inp
 	}
 	snapshot = workspace.AISnapshot{
 		GenerationID: input.GenerationID, Operation: "goal_refine", TargetRevision: draft.Revision,
-		GoalBody: goalBody, SourceText: draft.Body, PastCycles: contextCycles,
+		SourceGoalRevision: sourceGoalRevision, GoalBody: goalBody, SourceText: draft.Body, PastCycles: contextCycles,
 	}
 	if goalID != nil {
 		snapshot.GoalID = *goalID
@@ -76,14 +86,6 @@ WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(inp
 	snapshot, err = selectContext(ctx, snapshot)
 	if err != nil {
 		return workspace.AISnapshot{}, err
-	}
-	inputHash := digestAIInput(store.settings.GoalPromptVersion, store.settings.Model, "goal_refine", draft.Revision, snapshot.GoalBody, snapshot.SourceText, nil, snapshot.PastCycles)
-	replayed, replayErr := existingGeneration(ctx, tx, input.UserID, "goal_refine", input.IdempotencyKey, inputHash)
-	if replayErr != nil {
-		return snapshot, replayErr
-	}
-	if replayed != nil {
-		return *replayed, tx.Commit(ctx)
 	}
 	if err = store.reserveAI(ctx, tx, input.UserID, input.GenerationID, "goal_refine", input.IdempotencyKey,
 		inputHash, draft.ID, goalID, goalVersionID, nil, draft.Revision, draft.Body, store.settings.GoalPromptVersion,
@@ -107,6 +109,14 @@ func (store *WorkspaceStore) BeginActionAI(ctx context.Context, input workspace.
 	defer rollback(ctx, tx)
 	if err = lockUser(ctx, tx, user.ID(input.UserID)); err != nil {
 		return snapshot, workspace.ErrNotFound
+	}
+	inputHash := hashActionAIRequest(input)
+	replayed, replayErr := existingActionGeneration(ctx, tx, input, inputHash)
+	if replayErr != nil {
+		return snapshot, replayErr
+	}
+	if replayed != nil {
+		return *replayed, tx.Commit(ctx)
 	}
 	var goalStatus goal.Status
 	var versionID, goalBody string
@@ -166,14 +176,6 @@ WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(inp
 	snapshot, err = selectContext(ctx, snapshot)
 	if err != nil {
 		return workspace.AISnapshot{}, err
-	}
-	inputHash := digestAIInput(promptVersion, store.settings.Model, input.Operation, current.Revisions.Content, snapshot.GoalBody, snapshot.SourceText, snapshot.CurrentCycle, snapshot.PastCycles)
-	replayed, replayErr := existingGeneration(ctx, tx, input.UserID, input.Operation, input.IdempotencyKey, inputHash)
-	if replayErr != nil {
-		return snapshot, replayErr
-	}
-	if replayed != nil {
-		return *replayed, tx.Commit(ctx)
 	}
 	if err = store.reserveAI(ctx, tx, input.UserID, input.GenerationID, input.Operation, input.IdempotencyKey,
 		inputHash, "", &input.GoalID, &versionID, &input.CycleID, current.Revisions.Content, pointerValue(sourceText), promptVersion,
@@ -269,12 +271,16 @@ VALUES($1,$2,$3,$4,'accepted',$5,$6,$7,$8,$9)`, mustUUID(generationID), mustUUID
 }
 
 func existingGeneration(ctx context.Context, tx pgx.Tx, userID, operation, key, inputHash string) (*workspace.AISnapshot, error) {
-	var generationID, storedHash, status string
+	var generationID, storedHash, status, failureCode string
 	var target int64
+	var sourceGoalRevision int64
 	var output *string
-	err := tx.QueryRow(ctx, `SELECT id,input_hash,status,target_revision,output FROM ai_generations
-WHERE user_id=$1 AND operation_type=$2 AND idempotency_key=$3`, mustUUID(userID), operation, mustUUID(key)).Scan(
-		&generationID, &storedHash, &status, &target, &output)
+	err := tx.QueryRow(ctx, `SELECT generation.id,generation.input_hash,generation.status,generation.target_revision,
+generation.output,COALESCE(generation.failure_code,''),COALESCE(goal.revision,0)
+FROM ai_generations generation LEFT JOIN goals goal ON goal.id=generation.goal_id
+WHERE generation.user_id=$1 AND generation.operation_type=$2 AND generation.idempotency_key=$3`,
+		mustUUID(userID), operation, mustUUID(key)).Scan(
+		&generationID, &storedHash, &status, &target, &output, &failureCode, &sourceGoalRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -287,10 +293,73 @@ WHERE user_id=$1 AND operation_type=$2 AND idempotency_key=$3`, mustUUID(userID)
 	if status == "running" {
 		return nil, workspace.ErrAIInProgress
 	}
-	if status == "failed" || output == nil {
-		return nil, workspace.ErrAIProviderUnavailable
+	if status == "failed" {
+		return nil, aiFailureError(failureCode)
 	}
-	return &workspace.AISnapshot{GenerationID: generationID, Operation: operation, TargetRevision: target, ReplayedOutput: output}, nil
+	if output == nil {
+		return nil, workspace.ErrAIInvalidResponse
+	}
+	return &workspace.AISnapshot{
+		GenerationID: generationID, Operation: operation, TargetRevision: target,
+		SourceGoalRevision: sourceGoalRevision, ReplayedOutput: output,
+	}, nil
+}
+
+func existingActionGeneration(ctx context.Context, tx pgx.Tx, input workspace.ActionAIInput, inputHash string) (*workspace.AISnapshot, error) {
+	var generationID, status, goalID, cycleID, storedHash, failureCode string
+	var target int64
+	var output *string
+	err := tx.QueryRow(ctx, `SELECT id,status,target_revision,output,COALESCE(failure_code,''),goal_id,cycle_id,input_hash
+FROM ai_generations WHERE user_id=$1 AND operation_type=$2 AND idempotency_key=$3`,
+		mustUUID(input.UserID), input.Operation, mustUUID(input.IdempotencyKey)).Scan(
+		&generationID, &status, &target, &output, &failureCode, &goalID, &cycleID, &storedHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if storedHash != inputHash || goalID != input.GoalID || cycleID != input.CycleID || target != input.ExpectedContentRevision {
+		return nil, workspace.ErrIdempotencyKeyReused
+	}
+	if status == "running" {
+		return nil, workspace.ErrAIInProgress
+	}
+	if status == "failed" {
+		return nil, aiFailureError(failureCode)
+	}
+	if output == nil {
+		return nil, workspace.ErrAIInvalidResponse
+	}
+	var contentRevision, actionRevision int64
+	err = tx.QueryRow(ctx, `SELECT content_revision,action_revision FROM pdca_cycles
+WHERE id=$1 AND goal_id=$2 AND user_id=$3`, mustUUID(cycleID), mustUUID(input.GoalID), mustUUID(input.UserID)).Scan(
+		&contentRevision, &actionRevision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, workspace.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &workspace.AISnapshot{
+		GenerationID: generationID, Operation: input.Operation, TargetRevision: target, ReplayedOutput: output,
+		ReplayedContentRevision: contentRevision, ReplayedActionRevision: actionRevision,
+	}, nil
+}
+
+func aiFailureError(code string) error {
+	switch code {
+	case "invalid_response":
+		return workspace.ErrAIInvalidResponse
+	case "provider_timeout":
+		return workspace.ErrAIProviderTimeout
+	case "target_deleted":
+		return workspace.ErrNotFound
+	case "goal_version_conflict":
+		return workspace.ErrGoalVersionConflict
+	default:
+		return workspace.ErrAIProviderUnavailable
+	}
 }
 
 func (store *WorkspaceStore) FinishGoalRefine(ctx context.Context, snapshot workspace.AISnapshot, result workspace.AIProviderResult, providerErr error, now time.Time) (workspace.AIResponse, error) {
@@ -331,7 +400,10 @@ FROM ai_generations WHERE id=$1 AND status='running' FOR UPDATE`, mustUUID(snaps
 	if providerErr != nil {
 		return workspace.AIResponse{}, providerErr
 	}
-	return workspace.AIResponse{GenerationID: snapshot.GenerationID, SourceDraftRevision: snapshot.TargetRevision, Suggestion: result.Output, ContextChanged: contextChanged}, nil
+	return workspace.AIResponse{
+		GenerationID: snapshot.GenerationID, SourceDraftRevision: snapshot.TargetRevision,
+		SourceGoalRevision: snapshot.SourceGoalRevision, Suggestion: result.Output, ContextChanged: contextChanged,
+	}, nil
 }
 
 func (store *WorkspaceStore) FinishActionAI(ctx context.Context, snapshot workspace.AISnapshot, result workspace.AIProviderResult, providerErr error, now time.Time) (workspace.AIResponse, error) {
@@ -482,9 +554,10 @@ FROM goal_drafts WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(draftID), must
 	var targetRevision int64
 	var output string
 	var adoptedAt *time.Time
-	err = tx.QueryRow(ctx, `SELECT target_revision,output,adopted_at FROM ai_generations
+	var adoptedDraftRevision *int64
+	err = tx.QueryRow(ctx, `SELECT target_revision,output,adopted_at,adopted_draft_revision FROM ai_generations
 WHERE id=$1 AND user_id=$2 AND operation_type='goal_refine' AND source_goal_draft_id=$3 AND status='succeeded' FOR UPDATE`,
-		mustUUID(generationID), mustUUID(userID), mustUUID(draftID)).Scan(&targetRevision, &output, &adoptedAt)
+		mustUUID(generationID), mustUUID(userID), mustUUID(draftID)).Scan(&targetRevision, &output, &adoptedAt, &adoptedDraftRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspace.DraftView{}, workspace.ErrAISuggestionNotFound
 	}
@@ -492,6 +565,10 @@ WHERE id=$1 AND user_id=$2 AND operation_type='goal_refine' AND source_goal_draf
 		return workspace.DraftView{}, err
 	}
 	if adoptedAt != nil {
+		if adoptedDraftRevision != nil && draft.Revision == *adoptedDraftRevision && draft.Body == output {
+			draft.Replayed = true
+			return draft, tx.Commit(ctx)
+		}
 		return workspace.DraftView{}, workspace.ErrAIResultAlreadyAdopted
 	}
 	if draft.Revision != expectedDraftRevision || targetRevision != expectedDraftRevision {
@@ -551,18 +628,29 @@ func aiFailureCode(err error) string {
 	}
 }
 
-func digestAIInput(promptVersion, model, operation string, revision int64, goalBody, sourceText string,
-	current *workspace.AIContextCycle, past []workspace.AIContextCycle) string {
+func hashGoalRefineRequest(input workspace.GoalRefineInput) string {
 	canonical, _ := json.Marshal(struct {
-		PromptVersion string                     `json:"promptVersion"`
-		Model         string                     `json:"model"`
-		Operation     string                     `json:"operation"`
-		Revision      int64                      `json:"revision"`
-		GoalBody      string                     `json:"goalBody"`
-		SourceText    string                     `json:"sourceText"`
-		Current       *workspace.AIContextCycle  `json:"current,omitempty"`
-		Past          []workspace.AIContextCycle `json:"past"`
-	}{promptVersion, model, operation, revision, goalBody, sourceText, current, past})
+		Operation             string `json:"operation"`
+		DraftID               string `json:"draftId"`
+		GoalID                string `json:"goalId,omitempty"`
+		ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
+		ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty"`
+	}{"goal_refine", input.DraftID, input.GoalID, input.ExpectedDraftRevision, input.ExpectedGoalRevision})
+	return sha256Hex(canonical)
+}
+
+func hashActionAIRequest(input workspace.ActionAIInput) string {
+	canonical, _ := json.Marshal(struct {
+		Operation               string `json:"operation"`
+		GoalID                  string `json:"goalId"`
+		CycleID                 string `json:"cycleId"`
+		ExpectedContentRevision int64  `json:"expectedContentRevision"`
+		ConfirmReplace          bool   `json:"confirmReplace,omitempty"`
+	}{input.Operation, input.GoalID, input.CycleID, input.ExpectedContentRevision, input.ConfirmReplace})
+	return sha256Hex(canonical)
+}
+
+func sha256Hex(canonical []byte) string {
 	digest := sha256.Sum256(canonical)
 	return fmt.Sprintf("%x", digest[:])
 }

@@ -200,7 +200,10 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 		return AIResponse{}, specificAIInputError("goal_refine", resourceNotFound(err, missing))
 	}
 	if snapshot.ReplayedOutput != nil {
-		return AIResponse{GenerationID: snapshot.GenerationID, SourceDraftRevision: snapshot.TargetRevision, Suggestion: *snapshot.ReplayedOutput}, nil
+		return AIResponse{
+			GenerationID: snapshot.GenerationID, SourceDraftRevision: snapshot.TargetRevision,
+			SourceGoalRevision: snapshot.SourceGoalRevision, Suggestion: *snapshot.ReplayedOutput, Replayed: true,
+		}, nil
 	}
 	startedAt := service.clock.Now()
 	result, providerErr := service.executeProvider(ctx, snapshot)
@@ -232,7 +235,11 @@ func (service *Service) RunActionAI(ctx context.Context, input ActionAIInput) (A
 		return AIResponse{}, specificAIInputError(input.Operation, resourceNotFound(err, ErrCycleNotFound))
 	}
 	if snapshot.ReplayedOutput != nil {
-		return AIResponse{GenerationID: snapshot.GenerationID, Action: *snapshot.ReplayedOutput}, nil
+		return AIResponse{
+			GenerationID: snapshot.GenerationID, Action: *snapshot.ReplayedOutput,
+			ContentRevision: snapshot.ReplayedContentRevision, ActionRevision: snapshot.ReplayedActionRevision,
+			Replayed: true,
+		}, nil
 	}
 	startedAt := service.clock.Now()
 	result, providerErr := service.executeProvider(ctx, snapshot)

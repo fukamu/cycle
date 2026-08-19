@@ -61,4 +61,24 @@ describe("goal-scoped workspace API", () => {
     expect(body).toHaveProperty("operationId");
     expect(body).not.toHaveProperty("nextCycleId");
   });
+
+  it("accepts a command replay response after the workspace has already advanced", async () => {
+    const nextCycleId = "00000000-0000-4000-8000-000000000003";
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        replayed: true,
+        operation: "complete_cycle",
+        resourceIds: { goalId, cycleId },
+        currentGoalState: "active_cycle",
+        currentWorkspace: { kind: "active_cycle", cycleId: nextCycleId },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await completeCycle(goalId, cycleId, 4, 9, "csrf");
+    expect(result).toMatchObject({
+      replayed: true,
+      operation: "complete_cycle",
+      currentWorkspace: { cycleId: nextCycleId },
+    });
+  });
 });

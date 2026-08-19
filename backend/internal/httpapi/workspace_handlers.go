@@ -200,7 +200,11 @@ func (server *api) adoptSuggestion(writer http.ResponseWriter, request *http.Req
 	if review {
 		key = "reviewDraft"
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{key: view, "adoptedGenerationId": chi.URLParam(request, "generationId")})
+	response := map[string]any{key: view, "adoptedGenerationId": chi.URLParam(request, "generationId")}
+	if view.Replayed {
+		response["replayed"] = true
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (server *api) listGoals(writer http.ResponseWriter, request *http.Request) {
@@ -385,7 +389,11 @@ func (server *api) completeGoalCycle(writer http.ResponseWriter, request *http.R
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	if server.dependencies.Metrics != nil {
+	if view.Replay != nil {
+		writeJSON(writer, http.StatusOK, view.Replay)
+		return
+	}
+	if !view.Replayed && server.dependencies.Metrics != nil {
 		server.dependencies.Metrics.CycleCompleted(request.Context())
 	}
 	writeJSON(writer, http.StatusOK, view)

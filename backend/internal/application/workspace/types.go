@@ -65,6 +65,7 @@ type DraftView struct {
 	Body              string    `json:"body"`
 	Revision          int64     `json:"revision"`
 	UpdatedAt         time.Time `json:"updatedAt"`
+	Replayed          bool      `json:"-"`
 }
 
 type CycleView struct {
@@ -161,8 +162,9 @@ type StartGoalInput struct {
 }
 
 type StartGoalResult struct {
-	Goal  GoalView  `json:"goal"`
-	Cycle CycleView `json:"cycle"`
+	Goal     GoalView  `json:"goal"`
+	Cycle    CycleView `json:"cycle"`
+	Replayed bool      `json:"replayed,omitempty"`
 }
 
 type ContinueReviewInput struct {
@@ -181,6 +183,7 @@ type ContinueReviewResult struct {
 	Goal           GoalView  `json:"goal"`
 	VersionCreated bool      `json:"versionCreated"`
 	Cycle          CycleView `json:"cycle"`
+	Replayed       bool      `json:"replayed,omitempty"`
 }
 
 type CompleteCycleInput struct {
@@ -196,9 +199,11 @@ type CompleteCycleInput struct {
 }
 
 type CompleteCycleResult struct {
-	CompletedCycle CycleView `json:"completedCycle"`
-	Goal           GoalView  `json:"goal"`
-	ReviewDraft    DraftView `json:"reviewDraft"`
+	CompletedCycle CycleView              `json:"completedCycle"`
+	Goal           GoalView               `json:"goal"`
+	ReviewDraft    DraftView              `json:"reviewDraft"`
+	Replayed       bool                   `json:"replayed,omitempty"`
+	Replay         *CommandReplayResponse `json:"-"`
 }
 
 type TerminateInput struct {
@@ -218,6 +223,20 @@ type TerminateInput struct {
 type TerminateResult struct {
 	Goal          GoalView   `json:"goal"`
 	CanceledCycle *CycleView `json:"canceledCycle"`
+	Replayed      bool       `json:"replayed,omitempty"`
+}
+
+type CommandReplayResourceIDs struct {
+	GoalID  string `json:"goalId"`
+	CycleID string `json:"cycleId,omitempty"`
+}
+
+type CommandReplayResponse struct {
+	Replayed         bool                     `json:"replayed"`
+	Operation        string                   `json:"operation"`
+	ResourceIDs      CommandReplayResourceIDs `json:"resourceIds"`
+	CurrentGoalState goal.Status              `json:"currentGoalState"`
+	CurrentWorkspace *CurrentWorkView         `json:"currentWorkspace"`
 }
 
 type SaveFrameInput struct {
@@ -279,16 +298,19 @@ type AIContextCycle struct {
 }
 
 type AISnapshot struct {
-	GenerationID     string
-	Operation        string
-	TargetRevision   int64
-	GoalID           string
-	GoalBody         string
-	SourceText       string
-	CurrentCycle     *AIContextCycle
-	PastCycles       []AIContextCycle
-	CurrentTruncated bool
-	ReplayedOutput   *string
+	GenerationID            string
+	Operation               string
+	TargetRevision          int64
+	SourceGoalRevision      int64
+	GoalID                  string
+	GoalBody                string
+	SourceText              string
+	CurrentCycle            *AIContextCycle
+	PastCycles              []AIContextCycle
+	CurrentTruncated        bool
+	ReplayedOutput          *string
+	ReplayedContentRevision int64
+	ReplayedActionRevision  int64
 }
 
 type AIProviderCycle struct {
@@ -341,6 +363,7 @@ type AIResponse struct {
 	ContentRevision     int64  `json:"contentRevision,omitempty"`
 	ActionRevision      int64  `json:"actionRevision,omitempty"`
 	ContextChanged      bool   `json:"contextChanged"`
+	Replayed            bool   `json:"replayed,omitempty"`
 }
 
 type AIProvider interface {

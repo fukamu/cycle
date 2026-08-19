@@ -146,6 +146,7 @@ export const aiResponseSchema = z.object({
   contentRevision: z.number().int().nonnegative().optional(),
   actionRevision: z.number().int().nonnegative().optional(),
   contextChanged: z.boolean(),
+  replayed: z.boolean().optional(),
 });
 export type AIResponse = z.infer<typeof aiResponseSchema>;
 

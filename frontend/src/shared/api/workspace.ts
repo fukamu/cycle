@@ -16,22 +16,52 @@ import {
 
 const draftEnvelope = z.object({ draft: draftSchema });
 const reviewDraftEnvelope = z.object({ reviewDraft: draftSchema });
+const adoptedDraftEnvelope = draftEnvelope.extend({
+  replayed: z.boolean().optional(),
+});
+const adoptedReviewDraftEnvelope = reviewDraftEnvelope.extend({
+  replayed: z.boolean().optional(),
+});
 const goalEnvelope = z.object({ goal: goalSchema });
 const cycleEnvelope = z.object({ cycle: cycleSchema });
-const startEnvelope = z.object({ goal: goalSchema, cycle: cycleSchema });
+const startEnvelope = z.object({
+  goal: goalSchema,
+  cycle: cycleSchema,
+  replayed: z.boolean().optional(),
+});
 const completeEnvelope = z.object({
   completedCycle: cycleSchema,
   goal: goalSchema,
   reviewDraft: draftSchema,
+  replayed: z.boolean().optional(),
+});
+const commandReplayEnvelope = z.object({
+  replayed: z.literal(true),
+  operation: z.string(),
+  resourceIds: z.object({
+    goalId: z.string().uuid(),
+    cycleId: z.string().uuid().optional(),
+  }),
+  currentGoalState: z.enum([
+    "active_cycle",
+    "goal_review",
+    "achieved",
+    "ended",
+  ]),
+  currentWorkspace: z
+    .object({ kind: z.string(), cycleId: z.string().uuid().optional() })
+    .nullable(),
 });
 const continueEnvelope = z.object({
   goal: goalSchema,
   versionCreated: z.boolean(),
   cycle: cycleSchema,
+  replayed: z.boolean().optional(),
 });
 const terminateEnvelope = z.object({
   goal: goalSchema,
   canceledCycle: cycleSchema.nullable(),
+  replayed: z.boolean().optional(),
 });
 
 export const operationId = () => crypto.randomUUID();
@@ -80,7 +110,7 @@ export const adoptGoalDraft = (
 ) =>
   requestJSON(
     `/api/v1/goal-drafts/${draftId}/refinements/${generationId}/adopt`,
-    draftEnvelope,
+    adoptedDraftEnvelope,
     {
       method: "POST",
       csrfToken,
@@ -139,7 +169,7 @@ export const adoptReview = (
 ) =>
   requestJSON(
     `/api/v1/goals/${goalId}/review/refinements/${generationId}/adopt`,
-    reviewDraftEnvelope,
+    adoptedReviewDraftEnvelope,
     {
       method: "POST",
       csrfToken,
@@ -263,7 +293,7 @@ export const completeCycle = (
 ) =>
   requestJSON(
     `/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
-    completeEnvelope,
+    z.union([completeEnvelope, commandReplayEnvelope]),
     {
       method: "POST",
       csrfToken,
