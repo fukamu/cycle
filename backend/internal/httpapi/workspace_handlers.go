@@ -208,7 +208,12 @@ func (server *api) adoptSuggestion(writer http.ResponseWriter, request *http.Req
 }
 
 func (server *api) listGoals(writer http.ResponseWriter, request *http.Request) {
-	view, err := server.dependencies.Workspace.ListGoals(request.Context(), currentUserID(request), request.URL.Query().Get("scope"), request.URL.Query().Get("cursor"), pageLimit(request))
+	scope, limit, err := goalListQuery(request)
+	if err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	view, err := server.dependencies.Workspace.ListGoals(request.Context(), currentUserID(request), scope, request.URL.Query().Get("cursor"), limit)
 	if err != nil {
 		server.writeError(writer, request, err, nil)
 		return
@@ -300,7 +305,12 @@ func (server *api) deleteGoal(writer http.ResponseWriter, request *http.Request)
 }
 
 func (server *api) listGoalCycles(writer http.ResponseWriter, request *http.Request) {
-	view, err := server.dependencies.Workspace.ListCycles(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), request.URL.Query().Get("cursor"), pageLimit(request))
+	limit, err := pageLimit(request)
+	if err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	view, err := server.dependencies.Workspace.ListCycles(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), request.URL.Query().Get("cursor"), limit)
 	if err != nil {
 		server.writeError(writer, request, err, nil)
 		return
@@ -369,7 +379,7 @@ func (server *api) runActionAI(writer http.ResponseWriter, request *http.Request
 		IdempotencyKey: key, SessionID: sessionID(request), RemoteAddress: server.remoteIP(request),
 	})
 	if err != nil {
-		server.writeError(writer, request, stableUseCaseError(err, errCycleCompletionFailed), nil)
+		server.writeError(writer, request, err, nil)
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
@@ -386,7 +396,7 @@ func (server *api) completeGoalCycle(writer http.ResponseWriter, request *http.R
 		OperationID: input.OperationID, ExpectedGoalRevision: input.ExpectedGoalRevision, ExpectedContentRevision: input.ExpectedContentRevision,
 	})
 	if err != nil {
-		server.writeError(writer, request, err, nil)
+		server.writeError(writer, request, stableUseCaseError(err, errCycleCompletionFailed), nil)
 		return
 	}
 	if view.Replay != nil {
@@ -399,12 +409,28 @@ func (server *api) completeGoalCycle(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, view)
 }
 
-func pageLimit(request *http.Request) int {
-	value, err := strconv.Atoi(request.URL.Query().Get("limit"))
-	if err != nil || value <= 0 {
-		return 20
+func goalListQuery(request *http.Request) (string, int, error) {
+	scope := request.URL.Query().Get("scope")
+	if scope == "" {
+		scope = "all"
 	}
-	return value
+	if scope != "all" && scope != "progressing" && scope != "history" {
+		return "", 0, errRequestValidation
+	}
+	limit, err := pageLimit(request)
+	return scope, limit, err
+}
+
+func pageLimit(request *http.Request) (int, error) {
+	raw := request.URL.Query().Get("limit")
+	if raw == "" {
+		return 20, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 || value > 50 {
+		return 0, errRequestValidation
+	}
+	return value, nil
 }
 
 func idempotencyKey(request *http.Request) string {

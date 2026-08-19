@@ -3,7 +3,10 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func TestHealth(t *testing.T) {
@@ -19,6 +22,26 @@ func TestHealth(t *testing.T) {
 	}
 	if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
 		t.Fatalf("Content-Type = %q", got)
+	}
+}
+
+func TestPathUUIDValidationRejectsNonCanonicalIdentifiers(t *testing.T) {
+	server := &api{}
+	router := chi.NewRouter()
+	called := false
+	router.Get("/goals/{goalId}", server.validatedPath(func(writer http.ResponseWriter, _ *http.Request) {
+		called = true
+		writer.WriteHeader(http.StatusNoContent)
+	}, "goalId"))
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/goals/NOT-A-UUID", nil))
+
+	if called {
+		t.Fatal("handler was called for an invalid path UUID")
+	}
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"VALIDATION_ERROR"`) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 }
 

@@ -62,6 +62,66 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'request-hash',$5,$5)`, []any{cycleID, userI
 	}
 }
 
+func TestWorkspaceStoreListGoalsOrdersProgressingBeforeTerminalAcrossPages(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const (
+		userID         = "10000000-0000-0000-0000-000000000001"
+		activeGoalID   = "20000000-0000-0000-0000-000000000001"
+		latestGoalID   = "20000000-0000-0000-0000-000000000002"
+		oldGoalID      = "20000000-0000-0000-0000-000000000003"
+		activeVersion  = "30000000-0000-0000-0000-000000000001"
+		latestVersion  = "30000000-0000-0000-0000-000000000002"
+		oldVersion     = "30000000-0000-0000-0000-000000000003"
+		activeCycle    = "40000000-0000-0000-0000-000000000001"
+		activeStart    = "50000000-0000-0000-0000-000000000001"
+		latestTerminal = "50000000-0000-0000-0000-000000000002"
+		oldTerminal    = "50000000-0000-0000-0000-000000000003"
+	)
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, []any{userID, now}},
+		{`INSERT INTO goals(id,user_id,status,current_version_number,next_cycle_sequence_number,created_at,updated_at)
+VALUES($1,$2,'active_cycle',1,2,$3,$3)`, []any{activeGoalID, userID, now.Add(-72 * time.Hour)}},
+		{`INSERT INTO goals(id,user_id,status,current_version_number,next_cycle_sequence_number,terminal_at,terminal_operation_id,terminal_request_hash,created_at,updated_at)
+VALUES($1,$2,'ended',1,2,$3,$4,'latest-hash',$5,$3)`, []any{latestGoalID, userID, now, latestTerminal, now.Add(-7 * 24 * time.Hour)}},
+		{`INSERT INTO goals(id,user_id,status,current_version_number,next_cycle_sequence_number,terminal_at,terminal_operation_id,terminal_request_hash,created_at,updated_at)
+VALUES($1,$2,'ended',1,2,$3,$4,'old-hash',$5,$3)`, []any{oldGoalID, userID, now.Add(-time.Hour), oldTerminal, now.Add(-7 * 24 * time.Hour)}},
+		{`INSERT INTO goal_versions(id,user_id,goal_id,version_number,body,created_by_operation_id,created_at)
+VALUES($1,$2,$3,1,'Active goal',$4,$5)`, []any{activeVersion, userID, activeGoalID, activeStart, now.Add(-72 * time.Hour)}},
+		{`INSERT INTO goal_versions(id,user_id,goal_id,version_number,body,created_by_operation_id,created_at)
+VALUES($1,$2,$3,1,'Latest terminal goal',$4,$5)`, []any{latestVersion, userID, latestGoalID, latestTerminal, now.Add(-7 * 24 * time.Hour)}},
+		{`INSERT INTO goal_versions(id,user_id,goal_id,version_number,body,created_by_operation_id,created_at)
+VALUES($1,$2,$3,1,'Old terminal goal',$4,$5)`, []any{oldVersion, userID, oldGoalID, oldTerminal, now.Add(-7 * 24 * time.Hour)}},
+		{`INSERT INTO pdca_cycles(id,user_id,goal_id,goal_version_id,sequence_number,status,started_at,start_operation_id,start_request_hash,created_at,updated_at)
+VALUES($1,$2,$3,$4,1,'active',$5,$6,'active-hash',$5,$5)`, []any{activeCycle, userID, activeGoalID, activeVersion, now.Add(-72 * time.Hour), activeStart}},
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(context.Background(), statement.sql, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	first, err := store.ListGoals(context.Background(), userID, "all", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.Items[0].ID != activeGoalID || first.Items[1].ID != latestGoalID || first.NextCursor == nil {
+		t.Fatalf("first page = %#v", first)
+	}
+	second, err := store.ListGoals(context.Background(), userID, "all", *first.NextCursor, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID != oldGoalID || second.NextCursor != nil {
+		t.Fatalf("second page = %#v", second)
+	}
+}
+
 func TestWorkspaceCommandReplayConvergesAfterLaterStateTransition(t *testing.T) {
 	// INV-CYCLE-GOAL-001 / INV-REVIEW-GATE-001: replay never creates a second Goal or skips the review gate.
 	pool := integrationPool(t)

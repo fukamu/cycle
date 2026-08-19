@@ -108,6 +108,19 @@ func (server *api) authenticateMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func (server *api) validatedPath(next http.HandlerFunc, names ...string) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		for _, name := range names {
+			value := chi.URLParam(request, name)
+			if !isCanonicalUUID(value) {
+				server.writeError(writer, request, errRequestValidation, nil)
+				return
+			}
+		}
+		next.ServeHTTP(writer, request)
+	}
+}
+
 func (server *api) csrfMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if !server.validOrigin(request) {

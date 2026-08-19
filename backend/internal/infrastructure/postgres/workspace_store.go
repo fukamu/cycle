@@ -238,26 +238,37 @@ func (store *WorkspaceStore) ListGoals(ctx context.Context, userID, scope, encod
 	if err != nil {
 		return workspace.GoalPage{}, err
 	}
+	var cursorCategory any
+	if cursor.Category != nil {
+		cursorCategory = *cursor.Category
+	}
 	var cursorID any
 	if cursor.ID != "" {
 		cursorID = cursor.ID
 	}
-	rows, err := store.pool.Query(ctx, `SELECT id,updated_at FROM goals
+	rows, err := store.pool.Query(ctx, `SELECT id,
+CASE WHEN status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END AS category,
+CASE WHEN status IN ('active_cycle','goal_review') THEN updated_at ELSE terminal_at END AS sort_time
+FROM goals
 WHERE user_id=$1
 AND ($2='all' OR ($2='progressing' AND status IN ('active_cycle','goal_review')) OR ($2='history' AND status IN ('achieved','ended')))
-AND ($3::timestamptz IS NULL OR (updated_at,id)<($3,$4::uuid))
-ORDER BY updated_at DESC,id DESC LIMIT $5`, mustUUID(userID), scope, cursor.Time, cursorID, limit+1)
+AND ($3::smallint IS NULL
+  OR CASE WHEN status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END > $3
+  OR (CASE WHEN status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END = $3
+    AND (CASE WHEN status IN ('active_cycle','goal_review') THEN updated_at ELSE terminal_at END,id)<($4,$5::uuid)))
+ORDER BY category ASC,sort_time DESC,id DESC LIMIT $6`, mustUUID(userID), scope, cursorCategory, cursor.Time, cursorID, limit+1)
 	if err != nil {
 		return workspace.GoalPage{}, err
 	}
 	type row struct {
-		id string
-		at time.Time
+		id       string
+		category int16
+		at       time.Time
 	}
 	var found []row
 	for rows.Next() {
 		var item row
-		if err = rows.Scan(&item.id, &item.at); err != nil {
+		if err = rows.Scan(&item.id, &item.category, &item.at); err != nil {
 			rows.Close()
 			return workspace.GoalPage{}, err
 		}
@@ -272,7 +283,7 @@ ORDER BY updated_at DESC,id DESC LIMIT $5`, mustUUID(userID), scope, cursor.Time
 	for index, item := range found {
 		if index == limit {
 			last := found[index-1]
-			next := store.encodeCursor(cursorPayload{Scope: scope, Time: &last.at, ID: last.id})
+			next := store.encodeCursor(cursorPayload{Scope: scope, Category: &last.category, Time: &last.at, ID: last.id})
 			page.NextCursor = &next
 			break
 		}
@@ -464,6 +475,7 @@ func scanDraft(row pgx.Row) (workspace.DraftView, error) {
 
 type cursorPayload struct {
 	Scope    string     `json:"scope"`
+	Category *int16     `json:"category,omitempty"`
 	Time     *time.Time `json:"time,omitempty"`
 	Sequence *int32     `json:"sequence,omitempty"`
 	ID       string     `json:"id,omitempty"`
