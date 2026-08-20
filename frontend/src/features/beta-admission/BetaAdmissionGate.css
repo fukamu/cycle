@@ -1,0 +1,70 @@
+.beta-admission {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 32px 16px;
+  background:
+    radial-gradient(circle at top, rgb(220 236 229 / 78%), transparent 48%),
+    var(--paper);
+}
+
+.beta-admission__card {
+  width: min(520px, 100%);
+  padding: clamp(28px, 6vw, 48px);
+  background: rgb(255 254 249 / 96%);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+}
+
+.beta-admission__eyebrow {
+  margin: 0 0 10px;
+  color: var(--brand);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.08em;
+}
+
+.beta-admission h1 {
+  margin: 0;
+  font-size: var(--font-size-title);
+  line-height: 1.45;
+}
+
+.beta-admission__description {
+  margin: 18px 0 28px;
+  color: var(--muted);
+}
+
+.beta-admission form {
+  display: grid;
+  gap: 12px;
+}
+
+.beta-admission label {
+  font-weight: var(--font-weight-medium);
+}
+
+.beta-admission input {
+  min-height: 48px;
+  width: 100%;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid #9db9af;
+  border-radius: 10px;
+}
+
+.beta-admission input:focus-visible {
+  outline: 3px solid #79aa99;
+  outline-offset: 3px;
+}
+
+.beta-admission button {
+  margin-top: 8px;
+}
+
+.beta-admission__error {
+  margin: 0;
+  color: var(--danger);
+}
