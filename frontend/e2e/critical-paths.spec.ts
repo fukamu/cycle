@@ -7,9 +7,14 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await page.goto("/");
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
   const goal = page.getByRole("textbox", { name: "あなたの目標" });
+  await expect(goal).toHaveAttribute("maxlength", "80");
+  await expect(page.getByText("0 / 80")).toBeVisible();
   await saveText(page, goal, goalText, "/api/v1/goal-drafts/");
   await page.getByRole("button", { name: "この目標で始める" }).click();
   await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
+  const planEditor = page.getByRole("textbox", { name: "P — Plan" });
+  await expect(planEditor).toHaveAttribute("maxlength", "200");
+  await expect(page.getByText("0 / 200")).toBeVisible();
 
   await saveFrame(
     page,
@@ -116,6 +121,73 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   await expect(page.getByText("保存済み")).toBeVisible();
   await page.reload();
   await expect(editor).toHaveValue("失敗しても保持する目標");
+});
+
+test("free users can progress two goals while a third start is rejected without losing its draft", async ({
+  page,
+}) => {
+  const firstGoal = "並行して進める最初の目標";
+  const secondGoal = "並行して進める二つ目の目標";
+  const thirdGoal = "上限到達後も保持する三つ目の目標";
+
+  await createProgressingGoal(page, firstGoal);
+  await createProgressingGoal(page, secondGoal);
+  await page.goto("/");
+  await expect(page.getByText("2 / 2")).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: new RegExp(firstGoal) }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: new RegExp(secondGoal) }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "新しい目標を設定" }).click();
+  const editor = page.getByRole("textbox", { name: "あなたの目標" });
+  await saveText(page, editor, thirdGoal, "/api/v1/goal-drafts/");
+  await expect(
+    page.getByRole("button", { name: "この目標で始める" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("取り組んでいる目標が上限の2件に達しています。", {
+      exact: false,
+    }),
+  ).toBeVisible();
+
+  const limitAttempt = await page.evaluate(async () => {
+    const sessionResponse = await fetch("/api/v1/session");
+    const session = (await sessionResponse.json()) as { csrfToken: string };
+    const homeResponse = await fetch("/api/v1/home");
+    const home = (await homeResponse.json()) as {
+      creationDraft: { id: string; revision: number };
+    };
+    const response = await fetch(
+      `/api/v1/goal-drafts/${home.creationDraft.id}/start`,
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-CSRF-Token": session.csrfToken,
+        },
+        body: JSON.stringify({
+          operationId: crypto.randomUUID(),
+          expectedDraftRevision: home.creationDraft.revision,
+        }),
+      },
+    );
+    const payload = (await response.json()) as { error: { code: string } };
+    return { status: response.status, code: payload.error.code };
+  });
+  expect(limitAttempt).toEqual({
+    status: 409,
+    code: "GOAL_ACTIVE_LIMIT_EXCEEDED",
+  });
+
+  await page.reload();
+  await expect(editor).toHaveValue(thirdGoal);
+  await expect(
+    page.getByRole("button", { name: "この目標で始める" }),
+  ).toBeDisabled();
 });
 
 test("cycle autosave serializes an edit made during a slow save", async ({
@@ -283,6 +355,19 @@ async function createAndCompleteGoal(page: Page) {
     .getByRole("dialog")
     .getByRole("button", { name: "サイクルを完了" })
     .click();
+}
+
+async function createProgressingGoal(page: Page, goalText: string) {
+  await page.goto("/");
+  await page.getByRole("button", { name: "新しい目標を設定" }).click();
+  await saveText(
+    page,
+    page.getByRole("textbox", { name: "あなたの目標" }),
+    goalText,
+    "/api/v1/goal-drafts/",
+  );
+  await page.getByRole("button", { name: "この目標で始める" }).click();
+  await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
 }
 
 async function saveFrame(

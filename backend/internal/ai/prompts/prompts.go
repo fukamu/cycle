@@ -13,6 +13,9 @@ const (
 	VersionGoalRefineV1     = "goal-refine-v1"
 	VersionActionGenerateV1 = "action-generate-v1"
 	VersionActionRefineV1   = "action-refine-v1"
+	VersionGoalRefineV2     = "goal-refine-v2"
+	VersionActionGenerateV2 = "action-generate-v2"
+	VersionActionRefineV2   = "action-refine-v2"
 )
 
 //go:embed goal-refine-v1.txt
@@ -23,6 +26,15 @@ var actionGenerateV1 string
 
 //go:embed action-refine-v1.txt
 var actionRefineV1 string
+
+//go:embed goal-refine-v2.txt
+var goalRefineV2 string
+
+//go:embed action-generate-v2.txt
+var actionGenerateV2 string
+
+//go:embed action-refine-v2.txt
+var actionRefineV2 string
 
 type Versions struct {
 	GoalRefine     string
@@ -45,6 +57,9 @@ var registry = map[registryKey]string{
 	{OperationGoalRefine, VersionGoalRefineV1}:         goalRefineV1,
 	{OperationActionGenerate, VersionActionGenerateV1}: actionGenerateV1,
 	{OperationActionRefine, VersionActionRefineV1}:     actionRefineV1,
+	{OperationGoalRefine, VersionGoalRefineV2}:         goalRefineV2,
+	{OperationActionGenerate, VersionActionGenerateV2}: actionGenerateV2,
+	{OperationActionRefine, VersionActionRefineV2}:     actionRefineV2,
 }
 
 func Resolve(versions Versions) (Set, error) {

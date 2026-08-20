@@ -9,7 +9,7 @@ import (
 	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
 )
 
-const MaxGoalCodePoints = 500
+const MaxGoalCodePoints = 80
 
 var (
 	ErrTextRequired       = errors.New("goal text is required")

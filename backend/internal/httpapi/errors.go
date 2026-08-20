@@ -82,9 +82,9 @@ func classifyError(err error) (int, string, string) {
 	case errors.Is(err, goal.ErrTextRequired):
 		return 400, "GOAL_TEXT_REQUIRED", "目標を入力してください。"
 	case errors.Is(err, goal.ErrTextTooLong):
-		return 400, "GOAL_TEXT_TOO_LONG", "目標は500文字以内で入力してください。"
+		return 400, "GOAL_TEXT_TOO_LONG", "目標は80文字以内で入力してください。"
 	case errors.Is(err, cycle.ErrFrameTextTooLong):
-		return 400, "FRAME_TEXT_TOO_LONG", "各項目は2,000文字以内で入力してください。"
+		return 400, "FRAME_TEXT_TOO_LONG", "各項目は200文字以内で入力してください。"
 	case errors.Is(err, goal.ErrForbiddenCharacter), errors.Is(err, cycle.ErrForbiddenCharacter), errors.Is(err, cycle.ErrInvalidFrame):
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
 	case errors.Is(err, workspace.ErrGoalDraftNotFound):
@@ -104,7 +104,7 @@ func classifyError(err error) (int, string, string) {
 	case errors.Is(err, workspace.ErrGoalRevisionConflict):
 		return 409, "GOAL_VERSION_CONFLICT", "目標の状態が更新されています。"
 	case errors.Is(err, workspace.ErrGoalActiveLimit):
-		return 409, "GOAL_ACTIVE_LIMIT_EXCEEDED", "現在取り組んでいる目標を先に完了してください。"
+		return 409, "GOAL_ACTIVE_LIMIT_EXCEEDED", "取り組んでいる目標が上限に達しています。いずれかの目標を達成・終了・削除してください。"
 	case errors.Is(err, workspace.ErrGoalReviewNotActive):
 		return 409, "GOAL_REVIEW_NOT_ACTIVE", "目標の見直し画面を開き直してください。"
 	case errors.Is(err, workspace.ErrGoalReviewInvariant):

@@ -26,10 +26,10 @@ func TestInitialStartCreatesGoalVersionAndCycleAtomically(t *testing.T) {
 }
 
 func TestGoalTextLimitUsesCodePoints(t *testing.T) {
-	if _, err := NormalizeText(strings.Repeat("界", 500), false); err != nil {
+	if _, err := NormalizeText(strings.Repeat("界", 80), false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NormalizeText(strings.Repeat("界", 501), false); !errors.Is(err, ErrTextTooLong) {
+	if _, err := NormalizeText(strings.Repeat("界", 81), false); !errors.Is(err, ErrTextTooLong) {
 		t.Fatalf("expected oversize error, got %v", err)
 	}
 }

@@ -7,7 +7,234 @@ import (
 	"time"
 
 	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
+	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
 )
+
+func TestWorkspaceStoreEnforcesConfigurableProgressingGoalBoundary(t *testing.T) {
+	tests := []struct {
+		name  string
+		limit int
+	}{
+		{name: "free", limit: 2},
+		{name: "paid boundary", limit: 3},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pool := integrationPool(t)
+			resetDatabase(t, pool)
+			now := integrationNow()
+			const userID = "10000000-0000-0000-0000-000000000001"
+			if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+				t.Fatal(err)
+			}
+			store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+			fixtures := progressingGoalFixtures()
+			for index := 0; index < test.limit; index++ {
+				startProgressingGoal(t, store, userID, fixtures[index], test.limit, now.Add(time.Duration(index)*time.Minute))
+			}
+			if test.limit == 2 {
+				if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET status='completed',completed_at=$2,
+completion_operation_id=$3,completion_request_hash='completion-hash',updated_at=$2 WHERE id=$1`,
+					fixtures[0].cycleID, now.Add(30*time.Minute), "61000000-0000-0000-0000-000000000001"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(context.Background(), `UPDATE goals SET status='goal_review',updated_at=$2 WHERE id=$1`,
+					fixtures[0].goalID, now.Add(30*time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(context.Background(), `INSERT INTO goal_drafts
+(id,user_id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,created_at,updated_at)
+VALUES($1,$2,'review',$3,$4,$5,$6,$7,$7)`,
+					"61000000-0000-0000-0000-000000000002", userID, fixtures[0].goalID,
+					fixtures[0].versionID, fixtures[0].cycleID, fixtures[0].body, now.Add(30*time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			overflow := fixtures[test.limit]
+			if _, err := store.CreateDraft(context.Background(), userID, overflow.draftID, overflow.body, now.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.StartGoal(context.Background(), overflow.startInput(userID, now.Add(time.Hour)), test.limit)
+			if !errors.Is(err, workspace.ErrGoalActiveLimit) {
+				t.Fatalf("overflow start error = %v, want %v", err, workspace.ErrGoalActiveLimit)
+			}
+
+			home, err := store.Home(context.Background(), userID, test.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(home.ProgressingGoals) != test.limit || home.ProgressingGoalLimit != test.limit || home.CanStartProgressingGoal {
+				t.Fatalf("home limit state = %#v", home)
+			}
+			if home.CreationDraft == nil || home.CreationDraft.ID != overflow.draftID || home.CreationDraft.Body != overflow.body {
+				t.Fatalf("overflow draft was not preserved: %#v", home.CreationDraft)
+			}
+			if test.limit == 2 {
+				statuses := map[goal.Status]bool{}
+				for _, progressing := range home.ProgressingGoals {
+					statuses[progressing.Status] = true
+				}
+				if !statuses[goal.StatusActiveCycle] || !statuses[goal.StatusGoalReview] {
+					t.Fatalf("free limit did not count active and review goals together: %#v", statuses)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const userID = "10000000-0000-0000-0000-000000000001"
+	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	fixtures := progressingGoalFixtures()
+	first := startProgressingGoal(t, store, userID, fixtures[0], 2, now)
+	startProgressingGoal(t, store, userID, fixtures[1], 2, now.Add(time.Minute))
+	if _, err := store.CreateDraft(context.Background(), userID, fixtures[2].draftID, fixtures[2].body, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	zero := int64(0)
+	startInput := fixtures[2].startInput(userID, now.Add(3*time.Minute))
+	terminateInput := workspace.TerminateInput{
+		UserID: userID, GoalID: first.Goal.ID, OperationID: "70000000-0000-0000-0000-000000000001",
+		Outcome: goal.StatusEnded, ExpectedGoalRevision: 0, ExpectedState: goal.StatusActiveCycle,
+		ActiveCycleID: first.Cycle.ID, ExpectedCycleContentRevision: &zero,
+		RequestHash: "terminate-request-hash", Now: now.Add(3 * time.Minute),
+	}
+	startBarrier := make(chan struct{})
+	startResult := make(chan error, 1)
+	terminateResult := make(chan error, 1)
+	go func() {
+		<-startBarrier
+		_, err := store.StartGoal(context.Background(), startInput, 2)
+		startResult <- err
+	}()
+	go func() {
+		<-startBarrier
+		_, err := store.Terminate(context.Background(), terminateInput)
+		terminateResult <- err
+	}()
+	close(startBarrier)
+	startErr := <-startResult
+	terminateErr := <-terminateResult
+	if terminateErr != nil {
+		t.Fatalf("terminate error = %v", terminateErr)
+	}
+	if startErr != nil && !errors.Is(startErr, workspace.ErrGoalActiveLimit) {
+		t.Fatalf("start error = %v", startErr)
+	}
+
+	home, err := store.Home(context.Background(), userID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(home.ProgressingGoals) > 2 {
+		t.Fatalf("progressing goal count = %d, want at most 2", len(home.ProgressingGoals))
+	}
+	if startErr == nil && len(home.ProgressingGoals) != 2 {
+		t.Fatalf("successful start left %d progressing goals, want 2", len(home.ProgressingGoals))
+	}
+	if errors.Is(startErr, workspace.ErrGoalActiveLimit) && len(home.ProgressingGoals) != 1 {
+		t.Fatalf("limit-first ordering left %d progressing goals, want 1", len(home.ProgressingGoals))
+	}
+}
+
+func TestWorkspaceStoreSharesAIQuotaWithoutMixingContextAcrossProgressingGoals(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const userID = "10000000-0000-0000-0000-000000000001"
+	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{
+		CursorSigningKey:      []byte("test-cursor-key"),
+		Provider:              "fake",
+		Model:                 "test",
+		GeneratePromptVersion: "action-generate-v1",
+		RollingLimit:          1,
+	})
+	fixtures := progressingGoalFixtures()
+	startProgressingGoal(t, store, userID, fixtures[0], 2, now)
+	startProgressingGoal(t, store, userID, fixtures[1], 2, now.Add(time.Minute))
+	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',
+content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, fixtures[1].cycleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_usage_events
+(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
+VALUES($1,$2,$3,'action_generate','accepted','fake','test','action-generate-v1',$4,$5)`,
+		"81000000-0000-0000-0000-000000000001", userID, fixtures[0].goalID, now, now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	var selected workspace.AISnapshot
+	_, err := store.BeginActionAI(context.Background(), workspace.ActionAIInput{
+		UserID: userID, GoalID: fixtures[1].goalID, CycleID: fixtures[1].cycleID,
+		Operation: "action_generate", ExpectedContentRevision: 3,
+		IdempotencyKey: "82000000-0000-0000-0000-000000000001",
+		GenerationID:   "83000000-0000-0000-0000-000000000001",
+		Now:            now.Add(2 * time.Minute),
+	}, func(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
+		selected = snapshot
+		return snapshot, nil
+	})
+	if !errors.Is(err, workspace.ErrAIUserLimit) {
+		t.Fatalf("second-goal AI error = %v, want shared user quota error", err)
+	}
+	if selected.GoalID != fixtures[1].goalID || selected.CurrentCycle == nil || selected.CurrentCycle.GoalID != fixtures[1].goalID {
+		t.Fatalf("AI snapshot target = %#v", selected)
+	}
+	for _, past := range selected.PastCycles {
+		if past.GoalID != fixtures[1].goalID {
+			t.Fatalf("AI snapshot mixed another goal: %#v", past)
+		}
+	}
+}
+
+type progressingGoalFixture struct {
+	draftID     string
+	goalID      string
+	versionID   string
+	cycleID     string
+	operationID string
+	body        string
+}
+
+func progressingGoalFixtures() []progressingGoalFixture {
+	return []progressingGoalFixture{
+		{draftID: "11000000-0000-0000-0000-000000000001", goalID: "21000000-0000-0000-0000-000000000001", versionID: "31000000-0000-0000-0000-000000000001", cycleID: "41000000-0000-0000-0000-000000000001", operationID: "51000000-0000-0000-0000-000000000001", body: "最初の目標"},
+		{draftID: "11000000-0000-0000-0000-000000000002", goalID: "21000000-0000-0000-0000-000000000002", versionID: "31000000-0000-0000-0000-000000000002", cycleID: "41000000-0000-0000-0000-000000000002", operationID: "51000000-0000-0000-0000-000000000002", body: "二つ目の目標"},
+		{draftID: "11000000-0000-0000-0000-000000000003", goalID: "21000000-0000-0000-0000-000000000003", versionID: "31000000-0000-0000-0000-000000000003", cycleID: "41000000-0000-0000-0000-000000000003", operationID: "51000000-0000-0000-0000-000000000003", body: "三つ目の目標"},
+		{draftID: "11000000-0000-0000-0000-000000000004", goalID: "21000000-0000-0000-0000-000000000004", versionID: "31000000-0000-0000-0000-000000000004", cycleID: "41000000-0000-0000-0000-000000000004", operationID: "51000000-0000-0000-0000-000000000004", body: "四つ目の目標"},
+	}
+}
+
+func (fixture progressingGoalFixture) startInput(userID string, now time.Time) workspace.StartGoalInput {
+	return workspace.StartGoalInput{
+		UserID: userID, DraftID: fixture.draftID, OperationID: fixture.operationID,
+		ExpectedDraftRevision: 0, RequestHash: "request-" + fixture.operationID,
+		GoalID: fixture.goalID, VersionID: fixture.versionID, CycleID: fixture.cycleID, Now: now,
+	}
+}
+
+func startProgressingGoal(t *testing.T, store *WorkspaceStore, userID string, fixture progressingGoalFixture, limit int, now time.Time) workspace.StartGoalResult {
+	t.Helper()
+	if _, err := store.CreateDraft(context.Background(), userID, fixture.draftID, fixture.body, now); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.StartGoal(context.Background(), fixture.startInput(userID, now), limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
 
 func TestWorkspaceStoreListGoalsReturnsInitialPageWithoutCursor(t *testing.T) {
 	pool := integrationPool(t)

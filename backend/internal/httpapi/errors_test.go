@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
+	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
+	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
 )
 
 func TestClassifyErrorKeepsResourceSpecificNotFoundCodes(t *testing.T) {
@@ -42,6 +44,23 @@ func TestClassifyErrorUsesStableReviewAndAIContractCodes(t *testing.T) {
 		status, code, _ := classifyError(test.err)
 		if status != test.status || code != test.code {
 			t.Fatalf("%v classified as %d/%s", test.err, status, code)
+		}
+	}
+}
+
+func TestClassifyErrorReportsCurrentTextLimits(t *testing.T) {
+	tests := []struct {
+		err     error
+		code    string
+		message string
+	}{
+		{goal.ErrTextTooLong, "GOAL_TEXT_TOO_LONG", "目標は80文字以内で入力してください。"},
+		{cycle.ErrFrameTextTooLong, "FRAME_TEXT_TOO_LONG", "各項目は200文字以内で入力してください。"},
+	}
+	for _, test := range tests {
+		status, code, message := classifyError(test.err)
+		if status != 400 || code != test.code || message != test.message {
+			t.Fatalf("%v classified as %d/%s/%s", test.err, status, code, message)
 		}
 	}
 }

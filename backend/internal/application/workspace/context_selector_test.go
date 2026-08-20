@@ -66,7 +66,7 @@ func TestSelectAIContextIncludesNewestCyclesAsWholeUnitsWithinBudget(t *testing.
 
 func TestSelectAIContextTruncatesOnlyProviderCopyWhenCurrentInputExceedsBudget(t *testing.T) {
 	service := contextTestService()
-	snapshot := AISnapshot{Operation: "goal_refine", SourceText: strings.Repeat("あ", 500), GoalBody: strings.Repeat("い", 100)}
+	snapshot := AISnapshot{Operation: "goal_refine", SourceText: strings.Repeat("あ", 80), GoalBody: strings.Repeat("い", 80)}
 	empty := snapshot
 	empty.SourceText = ""
 	empty.GoalBody = ""
@@ -74,7 +74,7 @@ func TestSelectAIContextTruncatesOnlyProviderCopyWhenCurrentInputExceedsBudget(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	service.settings.MaxInputTokens = fixed + 80
+	service.settings.MaxInputTokens = fixed + 20
 
 	selected, err := service.selectAIContext(context.Background(), snapshot)
 	if err != nil {
@@ -83,7 +83,7 @@ func TestSelectAIContextTruncatesOnlyProviderCopyWhenCurrentInputExceedsBudget(t
 	if !selected.CurrentTruncated || selected.SourceText == snapshot.SourceText {
 		t.Fatalf("selected snapshot was not truncated: %#v", selected)
 	}
-	if snapshot.SourceText != strings.Repeat("あ", 500) {
+	if snapshot.SourceText != strings.Repeat("あ", 80) {
 		t.Fatal("saved snapshot source was mutated")
 	}
 	count, err := service.countProviderInput(context.Background(), selected)

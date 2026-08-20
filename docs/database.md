@@ -6,6 +6,7 @@
 
 - Database: PostgreSQL 17
 - Migration runner: `backend/cmd/migrate`（`golang-migrate`）
+- `000002_tighten_content_limits` はGoalを80 code points、各PDCA Frameを200 code pointsへ制限する。既存行が新上限を超える場合は自動切り捨てせずMigration全体を失敗させるため、対象データを確認し、明示的な運用判断を得てから修正して再実行する。
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
 - 現在のbaseline schema: `000001_pdcai_baseline.up.sql`
