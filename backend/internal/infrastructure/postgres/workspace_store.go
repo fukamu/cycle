@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
@@ -42,38 +43,46 @@ type WorkspaceStore struct {
 	settings WorkspaceStoreSettings
 }
 
+const goalViewQuery = `SELECT g.id,g.status,g.revision,g.next_cycle_sequence_number,g.created_at,g.terminal_at,
+gv.id,gv.version_number,gv.body,gv.created_at,
+(SELECT count(*) FROM pdca_cycles counted WHERE counted.goal_id=g.id)::integer,
+active_cycle.id,active_cycle.sequence_number,
+review_draft.id,trigger_cycle.id,trigger_cycle.sequence_number,
+(CASE WHEN g.status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END)::smallint AS category,
+CASE WHEN g.status IN ('active_cycle','goal_review') THEN g.updated_at ELSE g.terminal_at END AS sort_time
+FROM goals g
+JOIN goal_versions gv ON gv.goal_id=g.id AND gv.version_number=g.current_version_number
+LEFT JOIN pdca_cycles active_cycle
+  ON active_cycle.user_id=g.user_id AND active_cycle.goal_id=g.id AND active_cycle.status='active'
+LEFT JOIN goal_drafts review_draft
+  ON review_draft.user_id=g.user_id AND review_draft.goal_id=g.id AND review_draft.draft_type='review'
+LEFT JOIN pdca_cycles trigger_cycle
+  ON trigger_cycle.user_id=g.user_id AND trigger_cycle.goal_id=g.id AND trigger_cycle.id=review_draft.review_cycle_id`
+
 func NewWorkspaceStore(pool *pgxpool.Pool, settings WorkspaceStoreSettings) *WorkspaceStore {
 	return &WorkspaceStore{pool: pool, settings: settings}
 }
 
 func (store *WorkspaceStore) Home(ctx context.Context, userID string, limit int) (workspace.HomeView, error) {
 	view := workspace.HomeView{ProgressingGoals: []workspace.GoalView{}, ProgressingGoalLimit: limit}
-	rows, err := store.pool.Query(ctx, `SELECT g.id FROM goals g
+	rows, err := store.pool.Query(ctx, goalViewQuery+`
 WHERE g.user_id=$1 AND g.status IN ('active_cycle','goal_review')
 ORDER BY g.updated_at DESC,g.id DESC`, mustUUID(userID))
 	if err != nil {
 		return view, err
 	}
-	var ids []string
 	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
+		item, scanErr := scanGoalView(rows)
+		if scanErr != nil {
 			rows.Close()
-			return view, err
+			return view, scanErr
 		}
-		ids = append(ids, id)
+		view.ProgressingGoals = append(view.ProgressingGoals, item.View)
 	}
 	rowErr := rows.Err()
 	rows.Close()
 	if rowErr != nil {
 		return view, rowErr
-	}
-	for _, id := range ids {
-		item, getErr := store.GetGoal(ctx, userID, id)
-		if getErr != nil {
-			return view, getErr
-		}
-		view.ProgressingGoals = append(view.ProgressingGoals, item)
 	}
 	var draft workspace.DraftView
 	err = store.pool.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
@@ -253,31 +262,23 @@ func (store *WorkspaceStore) ListGoals(ctx context.Context, userID, scope, encod
 	if cursor.ID != "" {
 		cursorID = cursor.ID
 	}
-	rows, err := store.pool.Query(ctx, `SELECT id,
-CASE WHEN status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END AS category,
-CASE WHEN status IN ('active_cycle','goal_review') THEN updated_at ELSE terminal_at END AS sort_time
-FROM goals
-WHERE user_id=$1
-AND ($2='all' OR ($2='progressing' AND status IN ('active_cycle','goal_review')) OR ($2='history' AND status IN ('achieved','ended')))
+	rows, err := store.pool.Query(ctx, goalViewQuery+`
+WHERE g.user_id=$1
+AND ($2='all' OR ($2='progressing' AND g.status IN ('active_cycle','goal_review')) OR ($2='history' AND g.status IN ('achieved','ended')))
 AND ($3::smallint IS NULL
-  OR CASE WHEN status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END > $3
-  OR (CASE WHEN status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END = $3
-    AND (CASE WHEN status IN ('active_cycle','goal_review') THEN updated_at ELSE terminal_at END,id)<($4,$5::uuid)))
-ORDER BY category ASC,sort_time DESC,id DESC LIMIT $6`, mustUUID(userID), scope, cursorCategory, cursor.Time, cursorID, limit+1)
+  OR CASE WHEN g.status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END > $3
+  OR (CASE WHEN g.status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END = $3
+    AND (CASE WHEN g.status IN ('active_cycle','goal_review') THEN g.updated_at ELSE g.terminal_at END,g.id)<($4,$5::uuid)))
+ORDER BY category ASC,sort_time DESC,g.id DESC LIMIT $6`, mustUUID(userID), scope, cursorCategory, cursor.Time, cursorID, limit+1)
 	if err != nil {
 		return workspace.GoalPage{}, err
 	}
-	type row struct {
-		id       string
-		category int16
-		at       time.Time
-	}
-	var found []row
+	var found []goalViewRow
 	for rows.Next() {
-		var item row
-		if err = rows.Scan(&item.id, &item.category, &item.at); err != nil {
+		item, scanErr := scanGoalView(rows)
+		if scanErr != nil {
 			rows.Close()
-			return workspace.GoalPage{}, err
+			return workspace.GoalPage{}, scanErr
 		}
 		found = append(found, item)
 	}
@@ -287,18 +288,14 @@ ORDER BY category ASC,sort_time DESC,id DESC LIMIT $6`, mustUUID(userID), scope,
 		return workspace.GoalPage{}, rowErr
 	}
 	page := workspace.GoalPage{Items: []workspace.GoalView{}}
-	for index, item := range found {
-		if index == limit {
-			last := found[index-1]
-			next := store.encodeCursor(cursorPayload{Scope: scope, Category: &last.category, Time: &last.at, ID: last.id})
-			page.NextCursor = &next
-			break
-		}
-		view, getErr := store.GetGoal(ctx, userID, item.id)
-		if getErr != nil {
-			return page, getErr
-		}
-		page.Items = append(page.Items, view)
+	if len(found) > limit {
+		last := found[limit-1]
+		next := store.encodeCursor(cursorPayload{Scope: scope, Category: &last.Category, Time: &last.SortTime, ID: last.View.ID})
+		page.NextCursor = &next
+		found = found[:limit]
+	}
+	for _, item := range found {
+		page.Items = append(page.Items, item.View)
 	}
 	return page, nil
 }
@@ -337,8 +334,12 @@ FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND draft_type='review'`, mustU
 }
 
 func (store *WorkspaceStore) ListCycles(ctx context.Context, userID, goalID, encodedCursor string, limit int) (workspace.CyclePage, error) {
-	if _, err := store.GetGoal(ctx, userID, goalID); err != nil {
+	var goalExists bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM goals WHERE id=$1 AND user_id=$2)`, mustUUID(goalID), mustUUID(userID)).Scan(&goalExists); err != nil {
 		return workspace.CyclePage{}, err
+	}
+	if !goalExists {
+		return workspace.CyclePage{}, workspace.ErrNotFound
 	}
 	if limit <= 0 {
 		limit = 20
@@ -358,21 +359,29 @@ func (store *WorkspaceStore) ListCycles(ctx context.Context, userID, goalID, enc
 	if cursor.ID != "" {
 		cursorID = cursor.ID
 	}
-	rows, err := store.pool.Query(ctx, `SELECT c.id FROM pdca_cycles c
+	rows, err := store.pool.Query(ctx, `SELECT c.id,c.sequence_number,c.status,c.started_at,c.completed_at,c.canceled_at,
+gv.id,gv.version_number,gv.body,gv.created_at,
+CASE WHEN char_length(c.plan)>120 THEN left(c.plan,120)||'…' ELSE c.plan END
+FROM pdca_cycles c
+JOIN goal_versions gv ON gv.id=c.goal_version_id AND gv.goal_id=c.goal_id
 WHERE c.user_id=$1 AND c.goal_id=$2
 AND ($3::integer=0 OR (c.sequence_number,c.id)<($3,$4::uuid))
 ORDER BY c.sequence_number DESC,c.id DESC LIMIT $5`, mustUUID(userID), mustUUID(goalID), sequence, cursorID, limit+1)
 	if err != nil {
 		return workspace.CyclePage{}, err
 	}
-	var ids []string
+	var found []workspace.CycleSummary
 	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
+		var item workspace.CycleSummary
+		if err = rows.Scan(
+			&item.ID, &item.SequenceNumber, &item.Status, &item.StartedAt, &item.CompletedAt, &item.CanceledAt,
+			&item.GoalVersion.ID, &item.GoalVersion.VersionNumber, &item.GoalVersion.Body, &item.GoalVersion.CreatedAt,
+			&item.PlanPreview,
+		); err != nil {
 			rows.Close()
 			return workspace.CyclePage{}, err
 		}
-		ids = append(ids, id)
+		found = append(found, item)
 	}
 	rowErr := rows.Err()
 	rows.Close()
@@ -380,27 +389,13 @@ ORDER BY c.sequence_number DESC,c.id DESC LIMIT $5`, mustUUID(userID), mustUUID(
 		return workspace.CyclePage{}, rowErr
 	}
 	page := workspace.CyclePage{Items: []workspace.CycleSummary{}}
-	for index, id := range ids {
-		if index == limit {
-			last := page.Items[len(page.Items)-1]
-			next := store.encodeCursor(cursorPayload{Scope: "cycles:" + goalID, Sequence: &last.SequenceNumber, ID: last.ID})
-			page.NextCursor = &next
-			break
-		}
-		item, getErr := store.GetCycle(ctx, userID, goalID, id)
-		if getErr != nil {
-			return page, getErr
-		}
-		preview := []rune(item.Plan)
-		if len(preview) > 120 {
-			preview = append(preview[:120], []rune("…")...)
-		}
-		page.Items = append(page.Items, workspace.CycleSummary{
-			ID: item.ID, SequenceNumber: item.SequenceNumber, Status: item.Status,
-			StartedAt: item.StartedAt, CompletedAt: item.CompletedAt, CanceledAt: item.CanceledAt,
-			GoalVersion: item.GoalVersion, PlanPreview: string(preview),
-		})
+	if len(found) > limit {
+		last := found[limit-1]
+		next := store.encodeCursor(cursorPayload{Scope: "cycles:" + goalID, Sequence: &last.SequenceNumber, ID: last.ID})
+		page.NextCursor = &next
+		found = found[:limit]
 	}
+	page.Items = append(page.Items, found...)
 	return page, nil
 }
 
@@ -412,43 +407,66 @@ type rowQuerier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+type rowScanner interface {
+	Scan(...any) error
+}
+
+type goalViewRow struct {
+	View     workspace.GoalView
+	Category int16
+	SortTime time.Time
+}
+
+func scanGoalView(scanner rowScanner) (goalViewRow, error) {
+	var result goalViewRow
+	var activeCycleID, reviewDraftID, triggerCycleID pgtype.UUID
+	var activeCycleSequence, triggerCycleSequence pgtype.Int4
+	err := scanner.Scan(
+		&result.View.ID, &result.View.Status, &result.View.Revision, &result.View.NextCycleSequenceNumber,
+		&result.View.CreatedAt, &result.View.TerminalAt,
+		&result.View.CurrentVersion.ID, &result.View.CurrentVersion.VersionNumber, &result.View.CurrentVersion.Body,
+		&result.View.CurrentVersion.CreatedAt, &result.View.CycleCount,
+		&activeCycleID, &activeCycleSequence,
+		&reviewDraftID, &triggerCycleID, &triggerCycleSequence,
+		&result.Category, &result.SortTime,
+	)
+	if err != nil {
+		return goalViewRow{}, err
+	}
+	switch result.View.Status {
+	case goal.StatusActiveCycle:
+		if !activeCycleID.Valid || !activeCycleSequence.Valid {
+			return goalViewRow{}, fmt.Errorf("active goal invariant: current cycle missing")
+		}
+		result.View.CurrentWork = &workspace.CurrentWorkView{
+			Kind:                "active_cycle",
+			CycleID:             uuidString(activeCycleID),
+			CycleSequenceNumber: activeCycleSequence.Int32,
+		}
+	case goal.StatusGoalReview:
+		if !reviewDraftID.Valid || !triggerCycleID.Valid || !triggerCycleSequence.Valid {
+			return goalViewRow{}, fmt.Errorf("review goal invariant: current review missing")
+		}
+		result.View.CurrentWork = &workspace.CurrentWorkView{
+			Kind:                       "goal_review",
+			ReviewDraftID:              uuidString(reviewDraftID),
+			TriggerCycleID:             uuidString(triggerCycleID),
+			TriggerCycleSequenceNumber: triggerCycleSequence.Int32,
+		}
+	}
+	return result, nil
+}
+
 func getGoalView(ctx context.Context, query rowQuerier, userID, goalID string) (workspace.GoalView, error) {
-	var view workspace.GoalView
-	err := query.QueryRow(ctx, `SELECT g.id,g.status,g.revision,g.next_cycle_sequence_number,g.created_at,g.terminal_at,
-gv.id,gv.version_number,gv.body,gv.created_at,
-(SELECT count(*) FROM pdca_cycles c WHERE c.goal_id=g.id)::integer
-FROM goals g JOIN goal_versions gv ON gv.goal_id=g.id AND gv.version_number=g.current_version_number
-WHERE g.id=$1 AND g.user_id=$2`, mustUUID(goalID), mustUUID(userID)).Scan(
-		&view.ID, &view.Status, &view.Revision, &view.NextCycleSequenceNumber, &view.CreatedAt, &view.TerminalAt,
-		&view.CurrentVersion.ID, &view.CurrentVersion.VersionNumber, &view.CurrentVersion.Body, &view.CurrentVersion.CreatedAt,
-		&view.CycleCount)
+	result, err := scanGoalView(query.QueryRow(ctx, goalViewQuery+`
+WHERE g.id=$1 AND g.user_id=$2`, mustUUID(goalID), mustUUID(userID)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspace.GoalView{}, workspace.ErrNotFound
 	}
 	if err != nil {
 		return workspace.GoalView{}, err
 	}
-	switch view.Status {
-	case goal.StatusActiveCycle:
-		work := workspace.CurrentWorkView{Kind: "active_cycle"}
-		err = query.QueryRow(ctx, `SELECT id,sequence_number FROM pdca_cycles
-WHERE user_id=$1 AND goal_id=$2 AND status='active'`, mustUUID(userID), mustUUID(goalID)).Scan(&work.CycleID, &work.CycleSequenceNumber)
-		if err != nil {
-			return workspace.GoalView{}, fmt.Errorf("active goal invariant: %w", err)
-		}
-		view.CurrentWork = &work
-	case goal.StatusGoalReview:
-		work := workspace.CurrentWorkView{Kind: "goal_review"}
-		err = query.QueryRow(ctx, `SELECT d.id,c.id,c.sequence_number FROM goal_drafts d
-JOIN pdca_cycles c ON c.id=d.review_cycle_id AND c.goal_id=d.goal_id
-WHERE d.user_id=$1 AND d.goal_id=$2 AND d.draft_type='review'`, mustUUID(userID), mustUUID(goalID)).Scan(
-			&work.ReviewDraftID, &work.TriggerCycleID, &work.TriggerCycleSequenceNumber)
-		if err != nil {
-			return workspace.GoalView{}, fmt.Errorf("review goal invariant: %w", err)
-		}
-		view.CurrentWork = &work
-	}
-	return view, nil
+	return result.View, nil
 }
 
 func getCycleView(ctx context.Context, query rowQuerier, userID, goalID, cycleID string) (workspace.CycleView, error) {

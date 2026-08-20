@@ -1,7 +1,13 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
+import { AppReferralPromotion } from "../features/app-referral/AppReferralPromotion";
+import {
+  cacheCreationDraft,
+  cacheGoals,
+} from "../features/goal-collection/goalCache";
 import { createGoalDraft, getHome } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
 import { statusLabel } from "../shared/copy/ja";
@@ -13,11 +19,15 @@ export function HomePage() {
   const query = useQuery({ queryKey: ["home"], queryFn: getHome });
   const create = useMutation({
     mutationFn: () => createGoalDraft("", session.csrfToken),
-    onSuccess: async () => {
-      await cache.invalidateQueries({ queryKey: ["home"] });
+    onSuccess: ({ draft }) => {
+      cacheCreationDraft(cache, draft);
       navigate("/goals/new");
     },
   });
+  useEffect(() => {
+    if (query.data)
+      cacheGoals(cache, query.data.progressingGoals, query.dataUpdatedAt);
+  }, [cache, query.data, query.dataUpdatedAt]);
   if (query.isPending) return <PageLoading />;
   if (query.isError) return <PageError retry={() => void query.refetch()} />;
   const home = query.data;
@@ -92,6 +102,7 @@ export function HomePage() {
       <Link className="history-link" to="/history">
         すべての目標と履歴を見る →
       </Link>
+      <AppReferralPromotion />
     </main>
   );
 }

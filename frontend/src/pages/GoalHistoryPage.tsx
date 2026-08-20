@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
+import { cacheGoals } from "../features/goal-collection/goalCache";
 import { listGoals } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
 import { statusLabel } from "../shared/copy/ja";
@@ -11,6 +12,7 @@ import {
 } from "../shared/date/format";
 
 export function GoalHistoryPage() {
+  const cache = useQueryClient();
   const query = useInfiniteQuery({
     queryKey: ["goals", "all"],
     queryFn: ({ pageParam }) => listGoals("all", pageParam),
@@ -19,6 +21,15 @@ export function GoalHistoryPage() {
   });
   const sentinel = useRef<HTMLDivElement>(null);
   const { fetchNextPage, hasNextPage, isFetchingNextPage } = query;
+  useEffect(() => {
+    if (query.data) {
+      cacheGoals(
+        cache,
+        query.data.pages.flatMap((page) => page.items),
+        query.dataUpdatedAt,
+      );
+    }
+  }, [cache, query.data, query.dataUpdatedAt]);
   useEffect(() => {
     const element = sentinel.current;
     if (!element) return;

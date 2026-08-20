@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 
+import { goalQueryKey } from "../features/goal-collection/goalCache";
 import type { CycleSummary, GoalVersion } from "../shared/api/schemas";
 import { getGoal, listCycles } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
@@ -14,7 +15,7 @@ import {
 export function GoalTimelinePage() {
   const { goalId = "" } = useParams();
   const goal = useQuery({
-    queryKey: ["goal", goalId],
+    queryKey: goalQueryKey(goalId),
     queryFn: () => getGoal(goalId),
   });
   const cycles = useInfiniteQuery({

@@ -1,0 +1,27 @@
+.app-referral {
+  margin-top: 40px;
+  padding: clamp(20px, 4vw, 28px);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.app-referral h2 {
+  margin: 0;
+  font-size: 1.12rem;
+}
+
+.app-referral__description {
+  margin: 10px 0 18px;
+  color: var(--muted);
+}
+
+.app-referral__status {
+  margin: 12px 0 0;
+  color: var(--brand-dark);
+}
+
+.app-referral__error {
+  margin: 12px 0 0;
+  color: var(--danger);
+}
