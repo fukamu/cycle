@@ -99,7 +99,7 @@ export function GoalTimelinePage() {
                 {index > 0 && (
                   <p className="version-change">目標を変更しました</p>
                 )}
-                <p className="eyebrow">GOAL V{group.version.versionNumber}</p>
+                <p className="eyebrow">Goal v{group.version.versionNumber}</p>
                 <h2>{group.version.body}</h2>
                 {group.version.createdAt && (
                   <time dateTime={group.version.createdAt}>
