@@ -24,8 +24,8 @@ const (
 func (server *api) requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestID := strings.ToLower(strings.TrimSpace(request.Header.Get("X-Request-ID")))
-		if !isCanonicalUUID(requestID) {
-			requestID = "00000000-0000-4000-8000-000000000000"
+		if !isCanonicalUUIDv7(requestID) {
+			requestID = "00000000-0000-7000-8000-000000000000"
 			if server.dependencies.RequestIDs != nil {
 				if generated, err := server.dependencies.RequestIDs.NewID(); err == nil {
 					requestID = generated
@@ -112,7 +112,7 @@ func (server *api) validatedPath(next http.HandlerFunc, names ...string) http.Ha
 	return func(writer http.ResponseWriter, request *http.Request) {
 		for _, name := range names {
 			value := chi.URLParam(request, name)
-			if !isCanonicalUUID(value) {
+			if !isCanonicalUUIDv7(value) {
 				server.writeError(writer, request, errRequestValidation, nil)
 				return
 			}
@@ -159,8 +159,11 @@ func (server *api) remoteIP(request *http.Request) string {
 	return request.RemoteAddr
 }
 
-func isCanonicalUUID(value string) bool {
+func isCanonicalUUIDv7(value string) bool {
 	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	if value[14] != '7' || !strings.ContainsRune("89ab", rune(value[19])) {
 		return false
 	}
 	for index, character := range value {

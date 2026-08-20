@@ -31,18 +31,18 @@ vi.mock("../shared/drafts/browserDraftCache", () => ({
 }));
 
 const goal: Goal = {
-  id: "20000000-0000-4000-8000-000000000001",
+  id: "20000000-0000-7000-8000-000000000001",
   status: "active_cycle",
   revision: 0,
   currentVersion: {
-    id: "30000000-0000-4000-8000-000000000001",
+    id: "30000000-0000-7000-8000-000000000001",
     versionNumber: 1,
     body: "目標",
     createdAt: "2026-08-20T00:00:00.000Z",
   },
   currentWork: {
     kind: "active_cycle",
-    cycleId: "40000000-0000-4000-8000-000000000001",
+    cycleId: "40000000-0000-7000-8000-000000000001",
     cycleSequenceNumber: 1,
   },
   nextCycleSequenceNumber: 2,
@@ -52,7 +52,7 @@ const goal: Goal = {
 };
 
 const cycle: Cycle = {
-  id: "40000000-0000-4000-8000-000000000001",
+  id: "40000000-0000-7000-8000-000000000001",
   goalId: goal.id,
   sequenceNumber: 1,
   status: "active",
@@ -71,7 +71,7 @@ const cycle: Cycle = {
 
 const session: Session = {
   user: {
-    id: "10000000-0000-4000-8000-000000000001",
+    id: "10000000-0000-7000-8000-000000000001",
     googleConnected: false,
     googleEmail: null,
   },

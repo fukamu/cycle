@@ -18,7 +18,7 @@ func TestVerifierAcceptsMatchingResponseAndHashesNormalizedIP(t *testing.T) {
 	client := &fakeHTTPClient{response: response(http.StatusOK, `{"success":true,"hostname":"pdcai.example","action":"anonymous_bootstrap"}`)}
 	verifier := testVerifier(client, limiter)
 	err := verifier.VerifyAnonymousCreation(context.Background(), ports.AnonymousAbuseInput{
-		TurnstileToken: "opaque-token", RemoteAddress: "203.0.113.10:54321", BootstrapID: "00000000-0000-4000-8000-000000000001",
+		TurnstileToken: "opaque-token", RemoteAddress: "203.0.113.10:54321", BootstrapID: "00000000-0000-7000-8000-000000000001",
 	})
 	if err != nil {
 		t.Fatal(err)

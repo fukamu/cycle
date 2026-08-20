@@ -20,7 +20,7 @@ type saveDraftRequest struct {
 	ExpectedRevision int64  `json:"expectedRevision" validate:"gte=0"`
 }
 type startGoalRequest struct {
-	OperationID           string `json:"operationId" validate:"required,canonical_uuid"`
+	OperationID           string `json:"operationId" validate:"required,uuid_v7"`
 	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
 }
 type refineGoalRequest struct {
@@ -32,7 +32,7 @@ type adoptSuggestionRequest struct {
 	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty" validate:"omitempty,gte=0"`
 }
 type continueReviewRequest struct {
-	OperationID           string `json:"operationId" validate:"required,canonical_uuid"`
+	OperationID           string `json:"operationId" validate:"required,uuid_v7"`
 	ExpectedGoalRevision  int64  `json:"expectedGoalRevision" validate:"gte=0"`
 	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
 }
@@ -48,16 +48,16 @@ type actionRefineRequest struct {
 	ExpectedContentRevision int64 `json:"expectedContentRevision" validate:"gte=0"`
 }
 type completeCycleRequest struct {
-	OperationID             string `json:"operationId" validate:"required,canonical_uuid"`
+	OperationID             string `json:"operationId" validate:"required,uuid_v7"`
 	ExpectedGoalRevision    int64  `json:"expectedGoalRevision" validate:"gte=0"`
 	ExpectedContentRevision int64  `json:"expectedContentRevision" validate:"gte=0"`
 }
 type terminateGoalRequest struct {
-	OperationID                  string      `json:"operationId" validate:"required,canonical_uuid"`
+	OperationID                  string      `json:"operationId" validate:"required,uuid_v7"`
 	Outcome                      goal.Status `json:"outcome" validate:"required,oneof=achieved ended"`
 	ExpectedGoalRevision         int64       `json:"expectedGoalRevision" validate:"gte=0"`
 	ExpectedState                goal.Status `json:"expectedState" validate:"required,oneof=active_cycle goal_review"`
-	ActiveCycleID                string      `json:"activeCycleId,omitempty" validate:"omitempty,canonical_uuid"`
+	ActiveCycleID                string      `json:"activeCycleId,omitempty" validate:"omitempty,uuid_v7"`
 	ExpectedCycleContentRevision *int64      `json:"expectedCycleContentRevision,omitempty" validate:"omitempty,gte=0"`
 	ConfirmDiscardReviewDraft    bool        `json:"confirmDiscardReviewDraft,omitempty"`
 }
@@ -443,7 +443,7 @@ func pageLimit(request *http.Request) (int, error) {
 
 func idempotencyKey(request *http.Request) string {
 	value := strings.ToLower(strings.TrimSpace(request.Header.Get("Idempotency-Key")))
-	if !isCanonicalUUID(value) {
+	if !isCanonicalUUIDv7(value) {
 		return ""
 	}
 	return value

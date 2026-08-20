@@ -17,7 +17,7 @@ vi.mock("../features/app-referral/AppReferralPromotion", () => ({
 
 const session: Session = {
   user: {
-    id: "00000000-0000-4000-8000-000000000001",
+    id: "00000000-0000-7000-8000-000000000001",
     googleConnected: false,
     googleEmail: null,
   },
@@ -25,28 +25,28 @@ const session: Session = {
 };
 
 const firstGoal = makeGoal({
-  id: "10000000-0000-4000-8000-000000000001",
+  id: "10000000-0000-7000-8000-000000000001",
   body: "最初の目標",
-  cycleId: "20000000-0000-4000-8000-000000000001",
+  cycleId: "20000000-0000-7000-8000-000000000001",
 });
 const secondGoal: Goal = {
   ...makeGoal({
-    id: "10000000-0000-4000-8000-000000000002",
+    id: "10000000-0000-7000-8000-000000000002",
     body: "二つ目の目標",
-    cycleId: "20000000-0000-4000-8000-000000000002",
+    cycleId: "20000000-0000-7000-8000-000000000002",
   }),
   status: "goal_review",
   currentWork: {
     kind: "goal_review",
-    reviewDraftId: "30000000-0000-4000-8000-000000000002",
-    triggerCycleId: "20000000-0000-4000-8000-000000000002",
+    reviewDraftId: "30000000-0000-7000-8000-000000000002",
+    triggerCycleId: "20000000-0000-7000-8000-000000000002",
     triggerCycleSequenceNumber: 1,
   },
 };
 const thirdGoal = makeGoal({
-  id: "10000000-0000-4000-8000-000000000003",
+  id: "10000000-0000-7000-8000-000000000003",
   body: "三つ目の目標",
-  cycleId: "20000000-0000-4000-8000-000000000003",
+  cycleId: "20000000-0000-7000-8000-000000000003",
 });
 
 describe("HomePage progressing goal collection", () => {

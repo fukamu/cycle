@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matoruru/PDCAI/backend/internal/application/ports"
@@ -135,7 +136,7 @@ func (service *Service) Refresh(ctx context.Context, sessionToken string) (View,
 }
 
 func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymousInput) (View, error) {
-	if !isCanonicalUUID(input.BootstrapID) {
+	if !isCanonicalUUIDv7(input.BootstrapID) {
 		return View{}, ErrBootstrapID
 	}
 	if err := service.abuse.VerifyAnonymousCreation(ctx, ports.AnonymousAbuseInput{
@@ -207,8 +208,11 @@ func keyedHash(key []byte, value string) []byte {
 	return hash.Sum(nil)
 }
 
-func isCanonicalUUID(value string) bool {
+func isCanonicalUUIDv7(value string) bool {
 	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	if value[14] != '7' || !strings.ContainsRune("89ab", rune(value[19])) {
 		return false
 	}
 	for index, character := range value {

@@ -7,8 +7,8 @@ import {
   saveCycleFrame,
 } from "./workspace";
 
-const goalId = "00000000-0000-4000-8000-000000000001";
-const cycleId = "00000000-0000-4000-8000-000000000002";
+const goalId = "00000000-0000-7000-8000-000000000001";
+const cycleId = "00000000-0000-7000-8000-000000000002";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -68,7 +68,7 @@ describe("goal-scoped workspace API", () => {
   });
 
   it("accepts a command replay response after the workspace has already advanced", async () => {
-    const nextCycleId = "00000000-0000-4000-8000-000000000003";
+    const nextCycleId = "00000000-0000-7000-8000-000000000003";
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json({
         replayed: true,
@@ -90,7 +90,7 @@ describe("goal-scoped workspace API", () => {
   it("preserves revision zero in a goal review refinement response", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json({
-        generationId: "00000000-0000-4000-8000-000000000003",
+        generationId: "00000000-0000-7000-8000-000000000003",
         sourceDraftRevision: 0,
         sourceGoalRevision: 1,
         suggestion: "AIからの提案",
@@ -107,7 +107,7 @@ describe("goal-scoped workspace API", () => {
   it("rejects a goal refinement response without its source revision", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json({
-        generationId: "00000000-0000-4000-8000-000000000003",
+        generationId: "00000000-0000-7000-8000-000000000003",
         suggestion: "AIからの提案",
         contextChanged: false,
       }),

@@ -13,9 +13,10 @@ func TestDecodeAndValidateJSONRejectsCommonFormatErrors(t *testing.T) {
 		name string
 		body string
 	}{
-		{"unknown field", `{"operationId":"123e4567-e89b-42d3-a456-426614174000","expectedDraftRevision":0,"extra":true}`},
-		{"negative revision", `{"operationId":"123e4567-e89b-42d3-a456-426614174000","expectedDraftRevision":-1}`},
-		{"non-canonical UUID", `{"operationId":"123E4567-E89B-42D3-A456-426614174000","expectedDraftRevision":0}`},
+		{"unknown field", `{"operationId":"0198c20b-7b95-7000-8000-000000000001","expectedDraftRevision":0,"extra":true}`},
+		{"negative revision", `{"operationId":"0198c20b-7b95-7000-8000-000000000001","expectedDraftRevision":-1}`},
+		{"non-canonical UUID", `{"operationId":"0198C20B-7B95-7000-8000-000000000001","expectedDraftRevision":0}`},
+		{"UUID v4", `{"operationId":"123e4567-e89b-42d3-a456-426614174000","expectedDraftRevision":0}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -31,7 +32,7 @@ func TestDecodeAndValidateJSONRejectsCommonFormatErrors(t *testing.T) {
 
 func TestDecodeAndValidateJSONAcceptsContractShape(t *testing.T) {
 	server := &api{validate: newRequestValidator()}
-	request := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{"operationId":"123e4567-e89b-42d3-a456-426614174000","expectedDraftRevision":0}`))
+	request := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{"operationId":"0198c20b-7b95-7000-8000-000000000001","expectedDraftRevision":0}`))
 	var input startGoalRequest
 	if err := server.decodeAndValidateJSON(httptest.NewRecorder(), request, &input, defaultBodyLimit); err != nil {
 		t.Fatal(err)

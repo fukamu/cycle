@@ -2,6 +2,7 @@ package system
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ func TestRandomGenerator(t *testing.T) {
 
 	generator := RandomGenerator{}
 	id, err := generator.NewID()
-	if err != nil || len(id) != 36 || id[14] != '4' {
+	if err != nil || len(id) != 36 || id[14] != '7' || !strings.ContainsRune("89ab", rune(id[19])) {
 		t.Fatalf("NewID() = %q, %v", id, err)
 	}
 	token, err := generator.NewToken(32)

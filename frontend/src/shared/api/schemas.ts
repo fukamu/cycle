@@ -1,6 +1,8 @@
 import { z } from "zod";
 
-const uuid = z.string().uuid();
+import { UUID_V7_PATTERN } from "../id/uuid";
+
+const uuid = z.string().regex(UUID_V7_PATTERN);
 const instant = z.string().datetime({ offset: true });
 
 export const frameSchema = z.enum(["plan", "do", "check", "action"]);
@@ -164,7 +166,7 @@ const apiErrorSchema = z.object({
   error: z.object({
     code: z.string(),
     message: z.string(),
-    requestId: z.string(),
+    requestId: uuid,
     details: z.record(z.string(), z.unknown()).optional(),
   }),
 });

@@ -21,7 +21,7 @@ vi.mock("../shared/drafts/browserDraftCache", () => ({
 
 const session: Session = {
   user: {
-    id: "00000000-0000-4000-8000-000000000001",
+    id: "00000000-0000-7000-8000-000000000001",
     googleConnected: false,
     googleEmail: null,
   },
