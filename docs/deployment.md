@@ -276,6 +276,7 @@ Custom domainは [`cloudflare/wrangler.jsonc`](../cloudflare/wrangler.jsonc) の
 
 - `https://pdcai.matoruru.com/healthz` が200。
 - `https://pdcai.matoruru.com/readyz` が200。
+- 配信されたHTMLに`<meta name="robots" content="noindex, nofollow">`があり、Stagingが検索engineへindex/follow拒否を指示している。
 - Browserでcertificate/mixed-content/CSP errorがない。
 - Anonymous bootstrapがTurnstile hostname/action検証を通る。
 - Google login/upgrade、save、AI generate/refine、account deletionを検証dataで最小回数確認する。

@@ -216,6 +216,7 @@ jobs:
       - name: Build static frontend
         working-directory: frontend
         env:
+          VITE_DEPLOYMENT_ENV: staging
           VITE_APP_REFERRAL_URL: ${{ env.APP_REFERRAL_URL }}
           VITE_GOOGLE_WEB_CLIENT_ID: ${{ env.GOOGLE_WEB_CLIENT_ID }}
           VITE_TURNSTILE_SITE_KEY: ${{ env.TURNSTILE_SITE_KEY }}

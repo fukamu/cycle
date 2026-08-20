@@ -79,11 +79,14 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 
 | Variable | Purpose | Exposure / source |
 |---|---|---|
+| `VITE_DEPLOYMENT_ENV` | Search engine indexing制御。`staging`ではHTMLへ`noindex, nofollow`を追加し、`production`または未設定では追加しない | **public**、Staging deploy workflowが`staging`に固定。Production deployでは`production`を明示 |
 | `VITE_APP_REFERRAL_URL` | HomeのApplication紹介導線を有効化し、共有するtop page URL。空ならComponentを非表示 | **public**、local `.env.local` / Staging `APP_REFERRAL_URL`。HTTPS absolute root URLのみ |
 | `VITE_GOOGLE_WEB_CLIENT_ID` | Google Identity JS client | **public**、local `.env.local` / Staging `GOOGLE_WEB_CLIENT_ID` |
 | `VITE_TURNSTILE_SITE_KEY` | Turnstile widget | **public**、local `.env.local` / Staging `TURNSTILE_SITE_KEY` |
 
 Frontend public valueとBackendの対応値は同じGitHub Environment入力からbuild/deployします。
+
+`VITE_DEPLOYMENT_ENV`はBackendのsecurity profileを表す`APP_ENV`とは別です。Staging Lightは`APP_ENV=production`を維持しつつ、Frontend buildだけ`VITE_DEPLOYMENT_ENV=staging`として検索engineへ`noindex, nofollow`を指示します。未知の値はbuild errorにします。Production buildでは`production`を明示し、検索除外meta tagを生成しません。
 
 `VITE_APP_REFERRAL_URL`は任意です。Stagingで紹介導線を表示する場合だけGitHub `staging` Environment variable `APP_REFERRAL_URL`へ`https://pdcai.matoruru.com/`を明示します。未設定時は紹介Componentが画面へ表示されません。検証環境を意図せず紹介しないため、deploy workflowは空値または`PUBLIC_ORIGIN`のroot URLだけを許可します。紹介payloadへ現在routeやUser Dataを追加しません。
 
