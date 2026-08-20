@@ -14,7 +14,6 @@ PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal 
 | Database・Migration       | [`docs/database.md`](docs/database.md)               |
 | Deployment                | [`docs/deployment.md`](docs/deployment.md)           |
 | Staging / Production運用  | [`docs/operations.md`](docs/operations.md)           |
-| インフラ改善レビュー用資料 | [`docs/infrastructure-review-context.md`](docs/infrastructure-review-context.md) / [`prompt`](docs/infrastructure-review-prompt.md) |
 | Troubleshooting           | [`docs/troubleshooting.md`](docs/troubleshooting.md) |
 | Coding agent向け規則      | [`AGENTS.md`](AGENTS.md)                             |
 
