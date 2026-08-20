@@ -3,7 +3,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
-import { cacheCycle } from "../features/goal-collection/goalCache";
+import {
+  cacheCycle,
+  cacheReviewDraft,
+} from "../features/goal-collection/goalCache";
 import { GoalRefinementPanel } from "../features/goal-refine/GoalRefinementPanel";
 import { useGoalRefinement } from "../features/goal-refine/useGoalRefinement";
 import type { GoalReview } from "../shared/api/schemas";
@@ -50,10 +53,14 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const [confirmation, setConfirmation] = useState<ReviewConfirmation>();
   const [error, setError] = useState<string>();
   const save = useCallback(
-    async (body: string, revision: number) =>
-      (await saveReview(goal.id, body, revision, session.csrfToken))
-        .reviewDraft,
-    [goal.id, session.csrfToken],
+    async (body: string, revision: number) => {
+      const saved = (
+        await saveReview(goal.id, body, revision, session.csrfToken)
+      ).reviewDraft;
+      cacheReviewDraft(cache, goal.id, saved);
+      return saved;
+    },
+    [cache, goal.id, session.csrfToken],
   );
   const editor = useDraftAutoSave({
     userId: session.user.id,
@@ -85,6 +92,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         session.csrfToken,
       );
       editor.synchronize(result.reviewDraft.body, result.reviewDraft.revision);
+      cacheReviewDraft(cache, goal.id, result.reviewDraft);
       refinement.dismiss();
     } catch {
       setError("提案を採用できませんでした。現在の下書きを確認してください。");

@@ -3955,7 +3955,7 @@ TanStack Query key例:
 ['cycle', goalId, cycleId]
 ```
 
-Create / Continue / Terminate / Delete成功時は関連collection/detail cacheを明示更新またはinvalidateする。Goalを単一global variableとして保持しない。
+Create / Continue / Terminate / Deleteに加え、Frame/Draft Auto SaveとAI提案Adoptを含むserver mutation成功時は、responseを関連collection/detail cacheへ明示反映するかinvalidateする。保存済みserver stateをeditor local stateだけに保持せず、route往復でfreshな旧cacheを再表示しない。未保存入力はeditor local stateとBrowser Draft Cache、保存済みserver stateはTanStack Queryを正とする。Goalを単一global variableとして保持しない。
 
 ## 29.5 Goal workspace resolver
 

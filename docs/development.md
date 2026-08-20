@@ -154,7 +154,7 @@ CIと同じ個別コマンドが必要な場合は [`.github/workflows/ci.yml`](
 
 DB-backed collection endpointは、page内のitem数に比例してSQL round tripが増えないよう、JOINまたはbatch queryで必要なsummaryを取得します。Home、Goal一覧、Cycle一覧を変更するときは、itemごとのdetail query（N+1 query）を追加してはいけません。
 
-Frontendのroute別code splittingとasset sizeは`npm run build`のchunk一覧で確認します。Mutation responseが遷移先と同じDTOを含む場合は、TanStack Query cacheへ反映してから遷移し、直後に同じresourceを再取得するnetwork round tripを避けます。Mutationの影響を受けるcollection/detail cacheは、引き続き明示的に更新またはinvalidateします。
+Frontendのroute別code splittingとasset sizeは`npm run build`のchunk一覧で確認します。Mutation responseが遷移先と同じDTOを含む場合は、TanStack Query cacheへ反映してから遷移し、直後に同じresourceを再取得するnetwork round tripを避けます。Mutationの影響を受けるcollection/detail cacheは、引き続き明示的に更新またはinvalidateします。Auto SaveやAI提案Adoptも同じserver mutationとして扱い、成功responseをeditor local stateだけに反映しません。未保存入力はeditor/Browser Draft Cache、保存済みstateはTanStack Queryへ同期し、route往復の回帰testで古いfresh cacheが復元されないことを確認します。
 
 ### GitHub Actionsの更新
 
