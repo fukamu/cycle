@@ -83,6 +83,37 @@ VALUES($1,$2,'review',$3,$4,$5,$6,$7,$7)`,
 	}
 }
 
+func TestWorkspaceStoreHomeOrdersProgressingGoalsByCreationTime(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const userID = "10000000-0000-0000-0000-000000000001"
+	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	fixtures := progressingGoalFixtures()
+	for index := 0; index < 3; index++ {
+		startProgressingGoal(t, store, userID, fixtures[index], 3, now.Add(time.Duration(index)*time.Minute))
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE goals SET updated_at=$2 WHERE id=$1`, fixtures[0].goalID, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	home, err := store.Home(context.Background(), userID, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(home.ProgressingGoals) != 3 {
+		t.Fatalf("progressing goal count = %d, want 3", len(home.ProgressingGoals))
+	}
+	for index, fixture := range fixtures[:3] {
+		if home.ProgressingGoals[index].ID != fixture.goalID {
+			t.Fatalf("progressing goal at index %d = %s, want %s", index, home.ProgressingGoals[index].ID, fixture.goalID)
+		}
+	}
+}
+
 func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)

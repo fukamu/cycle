@@ -560,6 +560,7 @@ Hamburger Menu:
 
 Homeは`progressingGoals: ProgressingGoalSummary[]`をCollectionとして扱う。Freeでは0〜2件だが、型・API・Componentを固定長にしない。
 
+- `progressingGoals`はGoalの作成日時が古い順（`created_at ASC, id ASC`）で返し、Goalの更新によってCard位置を変えない。
 - Progressing Goal 0件: Creation Draftがあれば「目標の設定を続ける」、なければ「新しい目標を設定」。
 - Progressing Goal 1〜2件: GoalごとにCardを表示する。Creation Draftがある場合はDraft Cardも別に表示する。
 - Open Creation Draftがなければ、Progressing Goal上限到達中でもDraft作成自体は可能とする。Creation DraftはGoal Entityではなく、Progressing Goalではないためである。

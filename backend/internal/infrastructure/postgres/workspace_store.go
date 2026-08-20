@@ -67,7 +67,7 @@ func (store *WorkspaceStore) Home(ctx context.Context, userID string, limit int)
 	view := workspace.HomeView{ProgressingGoals: []workspace.GoalView{}, ProgressingGoalLimit: limit}
 	rows, err := store.pool.Query(ctx, goalViewQuery+`
 WHERE g.user_id=$1 AND g.status IN ('active_cycle','goal_review')
-ORDER BY g.updated_at DESC,g.id DESC`, mustUUID(userID))
+ORDER BY g.created_at ASC,g.id ASC`, mustUUID(userID))
 	if err != nil {
 		return view, err
 	}
