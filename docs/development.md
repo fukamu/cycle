@@ -168,6 +168,10 @@ Frontendのroute別code splittingとasset sizeは`npm run build`のchunk一覧�
 
 Workflowで利用する公式Actionは、特別な互換性制約がない限り、Node.js runtimeとsecurity fixを含む最新のstable majorを使います。更新時は各Actionの公式release noteでbreaking changeとGitHub-hosted runnerの要件を確認し、`.github/workflows/ci.yml`のactionlintを通します。Stable majorを据え置く必要がある場合は、理由と解除条件を該当Workflowへcommentで記録します。
 
+Pull request CIはGitHubのmerge refをcheckoutして全checkを実行し、成功時に検証済みtree SHA、PR番号、head SHAを30日保持のartifact名へ記録します。mainの`CI` workflowは、マージ後commitに対応するPR、成功した同一head SHAのPR CI、未期限切れartifact、検証済みtreeとmain treeの完全一致をGitHub APIで確認できた場合だけ重いjobをskipします。判定job自体がmain SHAの成功CIとなるため、Terraform PlanとDeployの同一SHA gateは維持されます。
+
+直接push、複数・不明な関連PR、base更新後にPR CIを再実行せずmergeした場合、API障害、artifact欠落・期限切れ、tree不一致では再利用せず、mainで全CIを実行します。高速化のためにこのfail-safe fallbackやtree完全一致を緩和してはいけません。
+
 ## クリーンアップ
 
 通常のsafe cleanは再生成できるbuild/test出力と `.tmp` だけを削除します。対象を事前確認するには `-WhatIf` を使えます。

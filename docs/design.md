@@ -5604,7 +5604,7 @@ Production data/secretをStagingへcopyしない。Staging dataは破棄可能�
 
 ## 44.3 CI
 
-PR / main push:
+PR:
 
 ```text
 frontend format/lint/typecheck/unit/component/build
@@ -5615,6 +5615,8 @@ security/static analysis
 Mermaid/Markdown link/fence validation
 Docker/Container build
 ```
+
+main pushでは、PR CIが実際に検証したmerge treeとmain commitのtreeが完全一致すると証明できる場合だけ、上記の重いcheck結果を再利用してよい。main SHA自身の成功CI runは残し、Terraform Plan / Deployの同一SHA gateを維持する。直接push、base更新、検証記録の欠落・期限切れ、API障害、tree不一致など、再利用を証明できない場合はmainで全checkを実行する。
 
 External OpenAI / Google / Turnstileの実callを通常PR必須testにしない。Fake adapterを使い、limited contract testはStaging/manualで行う。
 

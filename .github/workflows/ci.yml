@@ -6,19 +6,63 @@ on:
     branches: [main]
 
 permissions:
+  actions: read
   contents: read
+  pull-requests: read
 
 jobs:
+  reuse_pr_ci:
+    name: Reuse verified PR CI
+    runs-on: ubuntu-latest
+    outputs:
+      reuse_pr_ci: ${{ steps.resolve.outputs.reuse_pr_ci }}
+      source_pr_number: ${{ steps.resolve.outputs.source_pr_number }}
+      source_run_id: ${{ steps.resolve.outputs.source_run_id }}
+      tested_tree: ${{ steps.resolve.outputs.tested_tree }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve reusable PR CI attestation
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/resolve-ci-reuse.sh "${GITHUB_SHA}" "${GITHUB_REPOSITORY}" "${GITHUB_OUTPUT}"
+      - name: Publish reuse decision
+        shell: bash
+        env:
+          REUSE_PR_CI: ${{ steps.resolve.outputs.reuse_pr_ci }}
+          SOURCE_PR_NUMBER: ${{ steps.resolve.outputs.source_pr_number }}
+          SOURCE_RUN_ID: ${{ steps.resolve.outputs.source_run_id }}
+          TESTED_TREE: ${{ steps.resolve.outputs.tested_tree }}
+        run: |
+          if [[ "${REUSE_PR_CI}" == "true" ]]; then
+            {
+              echo '## Reused verified pull request CI'
+              echo
+              echo "- Pull request: #${SOURCE_PR_NUMBER}"
+              echo "- CI run: ${SOURCE_RUN_ID}"
+              echo "- Exact tested tree: \`${TESTED_TREE}\`"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo 'PR CI could not be safely reused; the full CI suite will run.' >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
   workflow:
+    needs: reuse_pr_ci
+    if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Test CI reuse resolver
+        run: bash .github/scripts/resolve-ci-reuse.test.sh
       - name: Validate GitHub Actions workflows
         uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -color
 
   frontend:
+    needs: reuse_pr_ci
+    if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -38,6 +82,8 @@ jobs:
       - run: npm run build
 
   backend:
+    needs: reuse_pr_ci
+    if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -75,6 +121,8 @@ jobs:
       - run: go build ./cmd/migrate
 
   infrastructure:
+    needs: reuse_pr_ci
+    if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -107,7 +155,14 @@ jobs:
         working-directory: cloudflare
 
   e2e:
-    needs: [workflow, frontend, backend, infrastructure]
+    needs: [reuse_pr_ci, workflow, frontend, backend, infrastructure]
+    if: >-
+      always() &&
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true' &&
+      needs.workflow.result == 'success' &&
+      needs.frontend.result == 'success' &&
+      needs.backend.result == 'success' &&
+      needs.infrastructure.result == 'success'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -144,3 +199,47 @@ jobs:
         working-directory: frontend
         env:
           TEST_DATABASE_URL: postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmode=disable
+
+  attest_pr_ci:
+    name: Attest tested PR tree
+    needs: [reuse_pr_ci, workflow, frontend, backend, infrastructure, e2e]
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      needs.reuse_pr_ci.result == 'success' &&
+      needs.workflow.result == 'success' &&
+      needs.frontend.result == 'success' &&
+      needs.backend.result == 'success' &&
+      needs.infrastructure.result == 'success' &&
+      needs.e2e.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Write tested tree attestation
+        id: metadata
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          tested_tree="$(git rev-parse 'HEAD^{tree}')"
+          artifact_name="pr-ci-${PR_NUMBER}-${HEAD_SHA}-${tested_tree}"
+          mkdir -p "${RUNNER_TEMP}/pdcai-pr-ci-attestation"
+          {
+            echo "pull_request=${PR_NUMBER}"
+            echo "head_sha=${HEAD_SHA}"
+            echo "tested_commit=${GITHUB_SHA}"
+            echo "tested_tree=${tested_tree}"
+            echo "workflow_run=${GITHUB_RUN_ID}"
+          } > "${RUNNER_TEMP}/pdcai-pr-ci-attestation/attestation.txt"
+          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+      - name: Upload tested tree attestation
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.metadata.outputs.artifact_name }}
+          path: ${{ runner.temp }}/pdcai-pr-ci-attestation/attestation.txt
+          if-no-files-found: error
+          retention-days: 30

@@ -63,7 +63,7 @@
 
 | 症状                              | 原因候補                                                              | 確認方法                                        | 解決方法                                                                           |
 | --------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Terraform Planが開始しない        | main以外、同一SHAのCI未成功、workflow disabled | ActionsのCI/Plan conclusion、branch | mainの同一SHAでCIを成功させる。必要ならmainからPlanをmanual dispatchする |
+| Terraform Planが開始しない        | main以外、同一SHAのCI未成功、workflow disabled | ActionsのCI/Plan conclusion、branch | mainの同一SHAでCIを成功させる。PR CI再利用を証明できない場合はmain全CIの完了を待つ。必要ならmainからPlanをmanual dispatchする |
 | Terraform Apply preflightで停止   | actor/approver不一致、誤ったPlan run ID、artifact期限切れ、mainが進んだ | repository variable、Plan run、errorのSHA | 指定owner本人が成功Planのrun IDを入力する。stale/expiredなら最新mainでPlanを再作成し、approvalを迂回しない |
 | Terraform Applyがapproval待ち     | optional Required reviewer gateが有効 | Apply runの`Review deployments` | Plan logを確認し、指定ownerがApprove/Rejectする。7日を超えたら新しいPlanを使う |
 | Deployが開始しない                | Apply失敗、Apply metadataなし、mainが進んだ、workflow disabled | ActionsのApply/Deploy conclusion、errorのSHA | 最新mainのCI→Plan→Applyを成功させる。Terraform変更をmanual Deployで迂回しない |
