@@ -132,7 +132,7 @@ func Load(lookup LookupEnv) (Config, error) {
 			ActivityTouchInterval: reader.durationMinutes("SESSION_ACTIVITY_TOUCH_MINUTES", 15),
 			AnonymousBootstrapTTL: reader.durationMinutes("ANONYMOUS_BOOTSTRAP_TTL_MINUTES", 10),
 		},
-		Goals: GoalConfig{MaxProgressingGoals: reader.intValue("MAX_PROGRESSING_GOALS", 1)},
+		Goals: GoalConfig{MaxProgressingGoals: reader.intValue("MAX_PROGRESSING_GOALS", 2)},
 		AI: AIConfig{
 			APIKey:                    reader.stringValue("OPENAI_API_KEY", ""),
 			Provider:                  reader.stringValue("AI_PROVIDER", "openai"),

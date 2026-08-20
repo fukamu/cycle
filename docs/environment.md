@@ -37,7 +37,7 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | `SESSION_ABSOLUTE_DAYS` | absolute TTL、`180` | idle以上 | GitHub variable |
 | `SESSION_ACTIVITY_TOUCH_MINUTES` | activity更新間隔、`15` | positive | GitHub variable |
 | `ANONYMOUS_BOOTSTRAP_TTL_MINUTES` | bootstrap idempotency TTL、`10` | positive | GitHub variable |
-| `MAX_PROGRESSING_GOALS` | 同時進行Goal上限、MVP `1` | positive | GitHub variable |
+| `MAX_PROGRESSING_GOALS` | 同時進行Goal上限、Free `2` | positive。Paid entitlementは`3`以上 | GitHub variable |
 
 ## AI / authentication / abuse prevention
 

@@ -104,7 +104,7 @@ func classifyError(err error) (int, string, string) {
 	case errors.Is(err, workspace.ErrGoalRevisionConflict):
 		return 409, "GOAL_VERSION_CONFLICT", "目標の状態が更新されています。"
 	case errors.Is(err, workspace.ErrGoalActiveLimit):
-		return 409, "GOAL_ACTIVE_LIMIT_EXCEEDED", "現在取り組んでいる目標を先に完了してください。"
+		return 409, "GOAL_ACTIVE_LIMIT_EXCEEDED", "取り組んでいる目標が上限に達しています。いずれかの目標を達成・終了・削除してください。"
 	case errors.Is(err, workspace.ErrGoalReviewNotActive):
 		return 409, "GOAL_REVIEW_NOT_ACTIVE", "目標の見直し画面を開き直してください。"
 	case errors.Is(err, workspace.ErrGoalReviewInvariant):

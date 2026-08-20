@@ -213,7 +213,9 @@ function GoalDraftEditor({
           </button>
         </div>
         {!home.canStartProgressingGoal && (
-          <p className="limit-notice">{goalCopy.limit}</p>
+          <p className="limit-notice">
+            {goalCopy.limit(home.progressingGoalLimit)}
+          </p>
         )}
         <button
           className="text-button danger-link"

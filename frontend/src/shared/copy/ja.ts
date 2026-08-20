@@ -42,8 +42,8 @@ export const goalCopy = {
   guide:
     "これから良くしたいことや、目指したい状態を書いてみましょう。最初から完璧である必要はありません。",
   placeholder: "例：仕事の優先順位を整理し、平日に余裕を持てるようになりたい。",
-  limit:
-    "現在取り組んでいる目標があります。この目標を始めるには、現在の目標を達成・終了・削除してください。",
+  limit: (progressingGoalLimit: number) =>
+    `取り組んでいる目標が上限の${progressingGoalLimit}件に達しています。この目標を始めるには、いずれかの目標を達成・終了・削除してください。`,
 } as const;
 
 export const statusLabel = {

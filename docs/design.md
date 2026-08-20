@@ -174,7 +174,7 @@ ArchitectureはMicroservicesではなく、Domain / Application / Infrastructure
 8. Recoverable ErrorでGoal Creation Draft、Goal Review Draft、P/D/C/Aの未保存入力を失わせない。
 9. Anonymousでもすぐ利用でき、後から同じApplication UserへGoogle Identityを追加できる。
 10. AI費用・AbuseをMVPから制御する。
-11. MVPからUser : N Goalsを表現し、将来Paidで複数Progressing Goalを解放しても基本Data Modelを変更しない。
+11. MVPからUser : N Goalsを表現し、FreeではProgressing Goalを2件まで、将来Paidでは3件以上を利用できても基本Data Modelを変更しない。
 12. 日本語UI・日本語長文入力で読みやすく、将来Locale / Script追加時にTypographyを差し替え可能にする。
 
 ## 2.2 UX Principles
@@ -199,7 +199,6 @@ ArchitectureはMicroservicesではなく、Domain / Application / Infrastructure
 
 - Stripe / Subscription / Billing UI
 - Paid Planの実課金処理
-- 複数Progressing Goalの利用解放
 - Upgrade UI
 - Account Merge
 - Google連携解除
@@ -227,7 +226,7 @@ ArchitectureはMicroservicesではなく、Domain / Application / Infrastructure
 | Anonymous bootstrap | Anonymous User + Sessionのみ作成。Cycleは作らない |
 | Goal Draft | Creation Draft作成、500文字、Auto Save、復旧、破棄 |
 | Goal Start | Goal + Goal Version 1 + Cycle 1を1 Transactionで作成 |
-| Goal | User : N Goals、Progressing Goal最大1、terminal Goal保持 |
+| Goal | User : N Goals、FreeのProgressing Goal最大2、terminal Goal保持 |
 | Goal Version | 本文変更時のみ追加、過去Version Immutable |
 | Goal Review | Cycle完了後必須。維持 / 修正 / achieved / ended |
 | Cycle | Goal単位連番、active / completed / canceled |
@@ -247,7 +246,7 @@ ArchitectureはMicroservicesではなく、Domain / Application / Infrastructure
 ## 3.2 MVPへ入れてはいけない実装
 
 - `users.current_goal_id`のような単数Goal固定Field
-- User単位でProgressing Goal最大1を固定するDB unique index
+- User単位でProgressing Goal最大2を固定するDB unique index
 - User単位Active Cycle unique constraint
 - GoalなしCycle
 - Cycle完了時の次Cycle自動生成
@@ -457,7 +456,7 @@ flowchart TD
 8. Goal status=`active_cycle`ならActive Cycleが1件、`goal_review`ならActive Cycleが0件かつOpen Review Draftが1件である。
 9. status=`achieved`または`ended`ならActive CycleとOpen Review Draftは0件である。
 10. Progressing Goal上限はData ModelではなくEntitlement + Transactionで保証する。
-11. MVPの`maxProgressingGoals=1`をUser単位unique indexにしない。
+11. Freeの`maxProgressingGoals=2`をUser単位unique indexにしない。
 12. Goal Reviewで本文が変わった場合だけ新Versionを作る。
 13. Goal Reviewからterminalへ遷移する場合、Draft変更をVersion化せず、Draftと紐づくGoal Refine contentを削除する。User quota判定用の本文を含まないUsage EventだけはRetention ruleに従って維持する。
 14. Completed / Canceled Cycleは個別更新・削除・再Open不可。
@@ -559,14 +558,14 @@ Hamburger Menu:
 
 ## 9.1 Home behavior
 
-Homeは`progressingGoals: ProgressingGoalSummary[]`をCollectionとして扱う。MVPでは通常0または1件だが、型・API・Componentを単数にしない。
+Homeは`progressingGoals: ProgressingGoalSummary[]`をCollectionとして扱う。Freeでは0〜2件だが、型・API・Componentを固定長にしない。
 
 - Progressing Goal 0件: Creation Draftがあれば「目標の設定を続ける」、なければ「新しい目標を設定」。
-- Progressing Goal 1件: Goal Cardを表示する。Creation Draftがある場合はDraft Cardも別に表示する。
+- Progressing Goal 1〜2件: GoalごとにCardを表示する。Creation Draftがある場合はDraft Cardも別に表示する。
 - Open Creation Draftがなければ、Progressing Goal上限到達中でもDraft作成自体は可能とする。Creation DraftはGoal Entityではなく、Progressing Goalではないためである。
 - Creation Draftの`この目標で始める`は`canStartProgressingGoal=true`のときだけ有効にする。
-- 上限到達中はUpgrade UIを出さず、`現在取り組んでいる目標があります。この目標を始めるには、現在の目標を達成・終了・削除してください。`と案内する。
-- 将来2件以上: 同じCard listで表示できる。
+- 上限到達中はUpgrade UIを出さず、Home read modelの`progressingGoalLimit`を使って`取り組んでいる目標が上限の{N}件に達しています。この目標を始めるには、いずれかの目標を達成・終了・削除してください。`と案内する。Freeでは`N=2`、将来Paidでは`N>=3`である。
+- 将来Paidで3件以上を許可する場合も、同じCard listとAPI contractを使う。
 - Application紹介導線はPDCA Domainから独立した任意Componentとし、公開build-time URLが設定された場合だけHome末尾へ表示する。共有payloadはApplication名、固定紹介文、設定済みtop page URLだけとし、現在route、Goal、Cycle、Draft、User/Session情報を含めない。MVPでは紹介操作や紹介linkの利用履歴を収集しない。設定を外すだけでPDCA機能へ影響せず非表示にできること。
 
 ## 9.2 Goal Card
@@ -3631,7 +3630,7 @@ Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除す�
 | 404 | `CYCLE_NOT_FOUND` | owner/Goal mismatchも同じ |
 | 404 | `AI_SUGGESTION_NOT_FOUND` | generation/target mismatch含む |
 | 404 | `GOOGLE_ACCOUNT_NOT_LINKED` | current User維持 |
-| 409 | `GOAL_ACTIVE_LIMIT_EXCEEDED` | 現Goalを終了/削除案内 |
+| 409 | `GOAL_ACTIVE_LIMIT_EXCEEDED` | 上限2件のいずれかを達成/終了/削除するよう案内 |
 | 409 | `GOAL_CREATION_DRAFT_ALREADY_EXISTS` | 既存Draftへ移動 |
 | 409 | `GOAL_DRAFT_TYPE_MISMATCH` | 正しい画面へreload |
 | 409 | `GOAL_DRAFT_REVISION_CONFLICT` | local draft保持 |
@@ -4953,15 +4952,15 @@ type Entitlements struct {
 MVP `FreeEntitlementPolicy`:
 
 ```text
-MaxProgressingGoals = 1
+MaxProgressingGoals = 2
 MaxAIOperationsPer24Hours = config default
 ```
 
-Post-MVPではPaid Policyへ差し替える。MVPではSubscription table、Stripe SDK、Plan entity、Upgrade UI、Feature Flag serviceを作らない。
+Post-MVPでは3件以上を返すPaid Policyへ差し替える。Paidの最小値は`MaxProgressingGoals = 3`とし、Freeと同じ2件以下をPaid entitlementとして扱わない。MVPではSubscription table、Stripe SDK、Plan entity、Upgrade UI、Feature Flag serviceを作らない。
 
 ## 38.7 Goal-limit concurrency
 
-Creation Draftは上限へ算入せず、Progressing Goal上限判定は`StartGoal`のUser row lock下で行う。`MaxProgressingGoals=1`をDB unique indexとして埋め込まない。Paidで上限を増やす際はPolicy戻り値だけを変え、Goal/Cycle Schemaを変更しない。
+Creation Draftは上限へ算入せず、Progressing Goal上限判定は`StartGoal`のUser row lock下で行う。`MaxProgressingGoals=2`をDB unique indexとして埋め込まない。Paidで3件以上へ上限を増やす際はPolicy戻り値だけを変え、Goal/Cycle Schemaを変更しない。
 
 ---
 
@@ -5829,7 +5828,7 @@ Goal / Version / Cycle / Review / AI Usageは強いtransactional consistencyを�
 2. **Goal DraftをCreation / Reviewで同一tableにする。** Auto Save・AI suggestion・revision CASを再利用できる一方、`draft_type`ごとのCHECKとApplication invariantが必要。意味のないnullableを避けるCHECKを必須とする。
 3. **Goal Review終了時のDraft変更を破棄する。** 最終編集案を履歴に残さないが、次Cycleの指針として使われないGoal Versionを作らず、Product上の意味を一貫させる。
 4. **CycleはGoal Versionを直接参照する。** FKとVersion管理が増えるが、後のGoal変更で過去Cycleの対象Goalが変わらない。
-5. **MVP上限1をPolicy + User row lockで保証する。** DB unique indexより処理が複雑だが、将来Paid上限をSchema変更なしで増やせる。
+5. **Free上限2をPolicy + User row lockで保証する。** DB unique indexより処理が複雑だが、将来Paid上限を3件以上へSchema変更なしで増やせる。
 6. **Goal Refineはsuggestion-only。** Userに採用操作が必要で1 click増えるが、AIがGoalを自動上書きせず主体性を保証する。
 7. **Action AIはAへ直接反映する。** Goal Refineのsuggestion-only方式とは異なるが、A Frameの単一Textarea中心の操作を保ち、AI処理中のread-only制御とBackend rejectionによって上書き事故を防ぐ。
 8. **AIUsageEventをAIGenerationからlifecycle分離する。** Schemaとcleanupが増えるが、Goal Delete後にContentを消しつつQuota回避を防げる。
@@ -5895,18 +5894,18 @@ Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpa
 
 | ID | Case | Expected |
 |---|---|---|
-| G-LIMIT-01 | no progressing Goal, max=1 | start可 |
-| G-LIMIT-02 | active_cycle exists, max=1 | second start拒否 |
-| G-LIMIT-03 | goal_review exists, max=1 | second start拒否 |
-| G-LIMIT-04 | achieved only | new Goal start可 |
-| G-LIMIT-05 | ended only | new Goal start可 |
-| G-LIMIT-06 | two concurrent start requests | exactly one success、count=1 |
-| G-LIMIT-07 | terminal transition concurrent with start | User lock順で最終count<=1 |
-| G-LIMIT-08 | fake Paid policy max=3 | 3件までSchema変更なしで作成可 |
+| G-LIMIT-01 | no progressing Goal, max=2 | start可 |
+| G-LIMIT-02 | active_cycle 1件、max=2 | second start可 |
+| G-LIMIT-03 | goal_review 1件、max=2 | second start可 |
+| G-LIMIT-04 | active_cycle / goal_reviewが合計2件、max=2 | third start拒否、Creation Draft維持 |
+| G-LIMIT-05 | achieved / ended only | new Goal start可 |
+| G-LIMIT-06 | progressing Goal 1件から同一Draftへtwo concurrent start requests、max=2 | exactly one success、count=2以下 |
+| G-LIMIT-07 | 2件到達時のterminal transition concurrent with start | User lock順で最終count<=2 |
+| G-LIMIT-08 | fake Paid policy max=3 | 3件までSchema変更なしで作成可、4件目拒否 |
 | G-LIMIT-09 | DB schema inspection | User単位progressing Goal unique indexがない |
 | G-LIMIT-10 | API type | `/goals` / `/home`がCollectionを返す |
 | G-LIMIT-11 | Frontend reducer | 0..N Goal cardを扱える |
-| G-LIMIT-12 | `active_cycle` Goal + Creation Draft | Draftは上限に算入されず共存可能、Startは拒否 |
+| G-LIMIT-12 | Progressing Goal 2件 + Creation Draft | Draftは上限に算入されず共存可能、Startだけ拒否 |
 
 ## 48.5 Goal Version tests
 
@@ -6087,6 +6086,7 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 ## 48.14 AI Context isolation tests
 
 - Repository query SQLに`goal_id` predicateがある。
+- Progressing Goalが2件あっても、AI snapshotへtarget Goal以外のCurrent/Past Cycleを含めない。
 - Application builderへ別Goal Cycleを混ぜたfake resultを渡すとprovider call前にfailする。
 - `contextCycleIds`の全Cycleがtarget Goalに属する。
 - Goal Review Refineはsource Completed Cycleを最優先で含める。
@@ -6115,6 +6115,7 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 | Q-15 | model-price mismatch | startup fail |
 | Q-16 | Goal Delete後のlate provider result | reservation再減算なし、actual costはCASで一度だけ計上 |
 | Q-17 | Account Delete中のrunning AI | reservationをunattributed costへ一度だけ移し、late resultは再計上しない |
+| Q-18 | Progressing Goal 2件で一方のquotaを消費後、他方からAI実行 | Goal別に増枠せずUser rolling quotaで拒否 |
 
 ## 48.16 Goal Delete tests
 
@@ -6192,6 +6193,7 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 14. Save network failure → draft recovery。
 15. AI failure →原文維持・retry可。
 16. Account Delete →再訪で新User、削除前Dataなし。
+17. Progressing Goalを2件開始 → Homeで両方表示 → 3件目Start拒否、Creation Draft維持。
 
 ## 48.21 Acceptance test environment
 
@@ -6380,7 +6382,7 @@ Repositoryは最低限次の論理領域を持つ。各領域の物理Directory�
 7. **Initial Goal Start**
    - Goal + Version 1 + Cycle 1 Transaction、Idempotency、Concurrency Test。
 8. **Home / Goal collection**
-   - Collection API / State、MVP上限1のUI、新Goalを開始できない理由の案内。
+   - Collection API / State、Free上限2のUI、新Goalを開始できない理由の案内。
 9. **Cycle editor**
    - P/D/C/A Tab、Frame別Revision、Auto Save、Draft Recovery。
 10. **Cycle completion / Goal Review**
@@ -6545,8 +6547,8 @@ Repositoryは最低限次の論理領域を持つ。各領域の物理Directory�
 - [ ] GoalなしでCycleを開始できない
 - [ ] Goal + Version1 + Cycle1が1 Transaction
 - [ ] Failure時にDraftを維持する
-- [ ] MVP Progressing Goal上限1をconcurrent requestでも保証
-- [ ] User単位unique indexに上限1を埋め込んでいない
+- [ ] Free Progressing Goal上限2をconcurrent requestでも保証
+- [ ] User単位unique indexに上限2を埋め込んでいない
 
 ## Version / Cycle / Review
 
@@ -6644,7 +6646,7 @@ AIコーディングエージェントと実装者は、次のInvariantを実装
 3. CycleはGoal確定Transactionでのみ作成し、すべて`goalId`と`goalVersionId`を必須で持つ。
 4. Cycleの`sequenceNumber`はGoal単位で採番する。
 5. Active Cycle一意性はGoal単位で保証し、User全体へActive Cycle 1件のDatabase制約を置かない。
-6. MVPのProgressing Goal上限1は`GoalLimitPolicy`、User row lock、Transactionで保証し、User : 1 GoalのData ModelやUser単位Unique Indexで表現しない。
+6. FreeのProgressing Goal上限2は`GoalLimitPolicy`、User row lock、Transactionで保証し、固定長のData ModelやUser単位Unique Indexで表現しない。Paidは同じ境界から3件以上を返す。
 7. Goal APIとFrontend StateはCollectionを扱い、単一Goal専用Contractだけで構成しない。
 8. Cycle CompletionはCycleをCompletedにし、Goal Review Draftを作成する。次Cycleは作成しない。
 9. 次CycleはGoal Review Continue Transactionだけが作成する。

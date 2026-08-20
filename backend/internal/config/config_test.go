@@ -18,6 +18,23 @@ func TestLoadDevelopmentConfig(t *testing.T) {
 	if config.Database.MaxOpenConns != 10 {
 		t.Fatalf("MaxOpenConns = %d", config.Database.MaxOpenConns)
 	}
+	if config.Goals.MaxProgressingGoals != 2 {
+		t.Fatalf("MaxProgressingGoals = %d, want free limit 2", config.Goals.MaxProgressingGoals)
+	}
+}
+
+func TestLoadAcceptsPaidProgressingGoalBoundary(t *testing.T) {
+	t.Parallel()
+
+	environment := validEnvironment()
+	environment["MAX_PROGRESSING_GOALS"] = "3"
+	config, err := Load(mapLookup(environment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Goals.MaxProgressingGoals != 3 {
+		t.Fatalf("MaxProgressingGoals = %d, want paid boundary 3", config.Goals.MaxProgressingGoals)
+	}
 }
 
 func TestLoadRejectsPricingModelMismatch(t *testing.T) {
