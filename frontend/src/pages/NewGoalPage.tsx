@@ -3,12 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
-import { isGoalSuggestionStale } from "../features/goal-refine/suggestionState";
-import type {
-  GoalDraft,
-  GoalRefineResponse,
-  Home,
-} from "../shared/api/schemas";
+import { GoalRefinementPanel } from "../features/goal-refine/GoalRefinementPanel";
+import { useGoalRefinement } from "../features/goal-refine/useGoalRefinement";
+import type { GoalDraft, Home } from "../shared/api/schemas";
 import {
   adoptGoalDraft,
   createGoalDraft,
@@ -59,16 +56,6 @@ export function NewGoalPage() {
   return <GoalDraftEditor draft={query.data.creationDraft} home={query.data} />;
 }
 
-type Refine =
-  | { kind: "idle" }
-  | { kind: "running" }
-  | {
-      kind: "suggested";
-      response: GoalRefineResponse;
-      sourceBody: string;
-    }
-  | { kind: "failed" };
-
 function GoalDraftEditor({
   draft,
   home,
@@ -79,7 +66,7 @@ function GoalDraftEditor({
   const session = useSession();
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const [refine, setRefine] = useState<Refine>({ kind: "idle" });
+  const refinement = useGoalRefinement();
   const [pending, setPending] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [error, setError] = useState<string>();
@@ -99,45 +86,24 @@ function GoalDraftEditor({
   const valid = editor.body.trim().length > 0 && count <= 500;
 
   async function requestRefine() {
-    const previousSuggestion = refine.kind === "suggested" ? refine : undefined;
     setError(undefined);
-    setRefine({ kind: "running" });
-    const sourceBody = editor.body;
-    try {
-      const response = await refineGoalDraft(
-        draft.id,
-        editor.revision,
-        session.csrfToken,
-      );
-      setRefine({
-        kind: "suggested",
-        response,
-        sourceBody,
-      });
-    } catch {
-      if (previousSuggestion) {
-        setRefine(previousSuggestion);
-        setError(
-          "AIから新しい提案を取得できませんでした。前の提案を表示しています。",
-        );
-      } else {
-        setRefine({ kind: "failed" });
-      }
-    }
+    await refinement.request(editor.body, () =>
+      refineGoalDraft(draft.id, editor.revision, session.csrfToken),
+    );
   }
   async function adopt() {
-    if (refine.kind !== "suggested") return;
+    if (refinement.state.kind !== "suggested") return;
     setPending(true);
     setError(undefined);
     try {
       const result = await adoptGoalDraft(
         draft.id,
-        refine.response.generationId,
+        refinement.state.response.generationId,
         editor.revision,
         session.csrfToken,
       );
       editor.synchronize(result.draft.body, result.draft.revision);
-      setRefine({ kind: "idle" });
+      refinement.dismiss();
     } catch {
       setError("提案を採用できませんでした。現在の下書きを確認してください。");
     } finally {
@@ -182,13 +148,10 @@ function GoalDraftEditor({
       setPending(false);
     }
   }
-  const suggestionStale =
-    refine.kind === "suggested" &&
-    isGoalSuggestionStale(editor.body, refine.sourceBody, editor.state);
   const canStart =
     valid &&
     editor.state === "saved" &&
-    refine.kind !== "running" &&
+    refinement.state.kind !== "running" &&
     home.canStartProgressingGoal &&
     !pending;
   return (
@@ -220,12 +183,12 @@ function GoalDraftEditor({
             disabled={
               !valid ||
               editor.state !== "saved" ||
-              refine.kind === "running" ||
+              refinement.state.kind === "running" ||
               pending
             }
             onClick={() => void requestRefine()}
           >
-            {refine.kind === "running"
+            {refinement.state.kind === "running"
               ? "AIが整理しています…"
               : "AIで目標を整える"}
           </button>
@@ -250,49 +213,19 @@ function GoalDraftEditor({
           下書きを破棄
         </button>
       </section>
-      {refine.kind === "suggested" && (
-        <section
-          className="suggestion-panel"
-          aria-labelledby="goal-suggestion-title"
-        >
-          <h2 className="eyebrow" id="goal-suggestion-title">
-            AIからの提案
-          </h2>
-          <p className="suggestion-text" role="status">
-            {refine.response.suggestion}
-          </p>
-          {suggestionStale && (
-            <p className="inline-error" role="alert">
-              提案後に下書きが変更されたため、この提案は採用できません。
-            </p>
-          )}
-          <div className="button-row">
-            <button
-              type="button"
-              className="button button--secondary"
-              onClick={() => setRefine({ kind: "idle" })}
-            >
-              元の目標を維持
-            </button>
-            <button
-              type="button"
-              className="button button--primary"
-              disabled={suggestionStale || pending}
-              onClick={() => void adopt()}
-            >
-              提案を採用
-            </button>
-          </div>
-        </section>
-      )}
-      {refine.kind === "failed" && (
+      <GoalRefinementPanel
+        id="goal"
+        state={refinement.state}
+        currentBody={editor.body}
+        saveState={editor.state}
+        pending={pending}
+        failureMessage="AIから提案を取得できませんでした。下書きは保存されています。"
+        onDismiss={refinement.dismiss}
+        onAdopt={() => void adopt()}
+      />
+      {(refinement.requestError || error) && (
         <p className="inline-error" role="alert">
-          AIから提案を取得できませんでした。下書きは保存されています。
-        </p>
-      )}
-      {error && (
-        <p className="inline-error" role="alert">
-          {error}
+          {error ?? refinement.requestError}
         </p>
       )}
       {confirmDiscard && (

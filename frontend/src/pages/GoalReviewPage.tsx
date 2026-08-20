@@ -3,8 +3,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
-import { isGoalSuggestionStale } from "../features/goal-refine/suggestionState";
-import type { GoalRefineResponse, GoalReview } from "../shared/api/schemas";
+import { GoalRefinementPanel } from "../features/goal-refine/GoalRefinementPanel";
+import { useGoalRefinement } from "../features/goal-refine/useGoalRefinement";
+import type { GoalReview } from "../shared/api/schemas";
 import {
   adoptReview,
   continueReview,
@@ -34,16 +35,6 @@ export function GoalReviewPage() {
   return <ReviewEditor key={query.data.reviewDraft.id} review={query.data} />;
 }
 
-type Refine =
-  | { kind: "idle" }
-  | { kind: "running" }
-  | {
-      kind: "suggested";
-      response: GoalRefineResponse;
-      sourceBody: string;
-    }
-  | { kind: "failed" };
-
 type ReviewConfirmation =
   | { readonly kind: "terminate"; readonly outcome: "achieved" | "ended" }
   | { readonly kind: "delete" };
@@ -53,7 +44,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const session = useSession();
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const [refine, setRefine] = useState<Refine>({ kind: "idle" });
+  const refinement = useGoalRefinement();
   const [pending, setPending] = useState(false);
   const [confirmation, setConfirmation] = useState<ReviewConfirmation>();
   const [error, setError] = useState<string>();
@@ -76,46 +67,24 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     goal.currentVersion.body.replaceAll("\r\n", "\n").trim();
 
   async function requestRefine() {
-    const previousSuggestion = refine.kind === "suggested" ? refine : undefined;
-    setRefine({ kind: "running" });
     setError(undefined);
-    const sourceBody = editor.body;
-    try {
-      const response = await refineReview(
-        goal.id,
-        editor.revision,
-        goal.revision,
-        session.csrfToken,
-      );
-      setRefine({
-        kind: "suggested",
-        response,
-        sourceBody,
-      });
-    } catch {
-      if (previousSuggestion) {
-        setRefine(previousSuggestion);
-        setError(
-          "AIから新しい提案を取得できませんでした。前の提案を表示しています。",
-        );
-      } else {
-        setRefine({ kind: "failed" });
-      }
-    }
+    await refinement.request(editor.body, () =>
+      refineReview(goal.id, editor.revision, goal.revision, session.csrfToken),
+    );
   }
   async function adopt() {
-    if (refine.kind !== "suggested") return;
+    if (refinement.state.kind !== "suggested") return;
     setPending(true);
     try {
       const result = await adoptReview(
         goal.id,
-        refine.response.generationId,
+        refinement.state.response.generationId,
         editor.revision,
         goal.revision,
         session.csrfToken,
       );
       editor.synchronize(result.reviewDraft.body, result.reviewDraft.revision);
-      setRefine({ kind: "idle" });
+      refinement.dismiss();
     } catch {
       setError("提案を採用できませんでした。現在の下書きを確認してください。");
     } finally {
@@ -183,9 +152,6 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       setPending(false);
     }
   }
-  const stale =
-    refine.kind === "suggested" &&
-    isGoalSuggestionStale(editor.body, refine.sourceBody, editor.state);
   const valid = editor.body.trim().length > 0 && count <= 500;
   return (
     <main className="page review-page">
@@ -227,12 +193,12 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             disabled={
               !valid ||
               editor.state !== "saved" ||
-              refine.kind === "running" ||
+              refinement.state.kind === "running" ||
               pending
             }
             onClick={() => void requestRefine()}
           >
-            {refine.kind === "running"
+            {refinement.state.kind === "running"
               ? "AIが整理しています…"
               : "AIで目標を整える"}
           </button>
@@ -242,7 +208,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             disabled={
               !valid ||
               editor.state !== "saved" ||
-              refine.kind === "running" ||
+              refinement.state.kind === "running" ||
               pending
             }
             onClick={() => void nextCycle()}
@@ -256,46 +222,16 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             : `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`}
         </p>
       </section>
-      {refine.kind === "suggested" && (
-        <section
-          className="suggestion-panel"
-          aria-labelledby="review-suggestion-title"
-        >
-          <h2 className="eyebrow" id="review-suggestion-title">
-            AIからの提案
-          </h2>
-          <p className="suggestion-text" role="status">
-            {refine.response.suggestion}
-          </p>
-          {stale && (
-            <p className="inline-error" role="alert">
-              提案後に下書きが変更されたため、この提案は採用できません。
-            </p>
-          )}
-          <div className="button-row">
-            <button
-              className="button button--secondary"
-              type="button"
-              onClick={() => setRefine({ kind: "idle" })}
-            >
-              元の目標を維持
-            </button>
-            <button
-              className="button button--primary"
-              type="button"
-              disabled={stale || pending}
-              onClick={() => void adopt()}
-            >
-              提案を採用
-            </button>
-          </div>
-        </section>
-      )}
-      {refine.kind === "failed" && (
-        <p className="inline-error" role="alert">
-          AIから提案を取得できませんでした。
-        </p>
-      )}
+      <GoalRefinementPanel
+        id="review"
+        state={refinement.state}
+        currentBody={editor.body}
+        saveState={editor.state}
+        pending={pending}
+        failureMessage="AIから提案を取得できませんでした。"
+        onDismiss={refinement.dismiss}
+        onAdopt={() => void adopt()}
+      />
       <section className="terminal-actions">
         <h2>この目標を終える</h2>
         {changed && (
@@ -304,7 +240,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         <div className="button-row">
           <button
             type="button"
-            disabled={refine.kind === "running" || pending}
+            disabled={refinement.state.kind === "running" || pending}
             onClick={() =>
               setConfirmation({ kind: "terminate", outcome: "achieved" })
             }
@@ -313,7 +249,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           </button>
           <button
             type="button"
-            disabled={refine.kind === "running" || pending}
+            disabled={refinement.state.kind === "running" || pending}
             onClick={() =>
               setConfirmation({ kind: "terminate", outcome: "ended" })
             }
@@ -330,9 +266,9 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           </button>
         </div>
       </section>
-      {error && (
+      {(refinement.requestError || error) && (
         <p className="inline-error" role="alert">
-          {error}
+          {error ?? refinement.requestError}
         </p>
       )}
       {confirmation?.kind === "terminate" && (
