@@ -75,9 +75,14 @@ function GoalDraftEditor({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [error, setError] = useState<string>();
   const save = useCallback(
-    async (body: string, revision: number) =>
-      (await saveGoalDraft(draft.id, body, revision, session.csrfToken)).draft,
-    [draft.id, session.csrfToken],
+    async (body: string, revision: number) => {
+      const saved = (
+        await saveGoalDraft(draft.id, body, revision, session.csrfToken)
+      ).draft;
+      cacheCreationDraft(cache, saved);
+      return saved;
+    },
+    [cache, draft.id, session.csrfToken],
   );
   const editor = useDraftAutoSave({
     userId: session.user.id,
@@ -107,6 +112,7 @@ function GoalDraftEditor({
         session.csrfToken,
       );
       editor.synchronize(result.draft.body, result.draft.revision);
+      cacheCreationDraft(cache, result.draft);
       refinement.dismiss();
     } catch {
       setError("提案を採用できませんでした。現在の下書きを確認してください。");

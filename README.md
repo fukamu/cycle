@@ -37,7 +37,7 @@ PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal 
 - Node.js 24以上とnpm
 - Go 1.26.6
 - PostgreSQL 17
-- sqlc 1.31.1（Backend check/SQL生成）
+- sqlc 1.31.1またはDocker（Backend check/SQL生成。Go fallbackあり）
 - Docker（local PostgreSQL/Container image buildに使う場合）
 - Chromium（E2Eに必要）
 - Terraform 1.15.8（Staging基盤と全体checkに必要）

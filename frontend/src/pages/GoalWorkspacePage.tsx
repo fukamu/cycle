@@ -4,6 +4,7 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
 import {
+  cacheCycleFrame,
   cacheReview,
   cycleQueryKey,
   goalQueryKey,
@@ -96,7 +97,7 @@ function CycleWorkspace({
   const session = useSession();
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const [cycle, setCycle] = useState(initial);
+  const cycle = initial;
   const [values, setValues] = useState<Values>({
     plan: initial.plan,
     do: initial.do,
@@ -161,17 +162,15 @@ function CycleWorkspace({
         revisions.current[frame],
         session.csrfToken,
       );
-      revisions.current[frame] = result.frameRevision;
-      contentRevision.current = result.contentRevision;
-      setCycle((current) => ({
-        ...current,
-        [frame]: result.content,
-        contentRevision: result.contentRevision,
-        frameRevisions: {
-          ...current.frameRevisions,
-          [frame]: result.frameRevision,
-        },
-      }));
+      revisions.current[frame] = Math.max(
+        revisions.current[frame],
+        result.frameRevision,
+      );
+      contentRevision.current = Math.max(
+        contentRevision.current,
+        result.contentRevision,
+      );
+      cacheCycleFrame(cache, goal.id, result);
       if (!pending.current.has(frame))
         await deleteBrowserDraft(session.user.id, `cycle:${cycle.id}:${frame}`);
       else
@@ -196,7 +195,7 @@ function CycleWorkspace({
         setSaveState("saved");
       }
     }
-  }, [cycle.id, editable, goal.id, session.csrfToken, session.user.id]);
+  }, [cache, cycle.id, editable, goal.id, session.csrfToken, session.user.id]);
 
   useEffect(() => {
     if (saveState !== "dirty") return;
@@ -225,14 +224,21 @@ function CycleWorkspace({
   ) {
     valuesRef.current = { ...valuesRef.current, action };
     setValues(valuesRef.current);
-    revisions.current.action = actionRevision;
-    contentRevision.current = nextContentRevision;
-    setCycle((current) => ({
-      ...current,
-      action,
+    revisions.current.action = Math.max(
+      revisions.current.action,
+      actionRevision,
+    );
+    contentRevision.current = Math.max(
+      contentRevision.current,
+      nextContentRevision,
+    );
+    cacheCycleFrame(cache, goal.id, {
+      cycleId: cycle.id,
+      frame: "action",
+      content: action,
+      frameRevision: actionRevision,
       contentRevision: nextContentRevision,
-      frameRevisions: { ...current.frameRevisions, action: actionRevision },
-    }));
+    });
     pending.current.delete("action");
     void deleteBrowserDraft(session.user.id, `cycle:${cycle.id}:action`);
     setSaveState(pending.current.size ? "dirty" : "saved");

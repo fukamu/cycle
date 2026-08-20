@@ -55,12 +55,10 @@ if ($runFrontend) {
 
 if ($runBackend) {
     Assert-Command "go"
-    Assert-Command "sqlc"
     Assert-Command "git"
+    & (Join-Path $PSScriptRoot "invoke-sqlc.ps1") compile generate
     Push-Location (Join-Path $repoRoot "backend")
     try {
-        Invoke-Checked sqlc compile
-        Invoke-Checked sqlc generate
         Invoke-Checked git diff --exit-code -- internal/infrastructure/postgres/generated
 
         $unformatted = @(& gofmt -l .)

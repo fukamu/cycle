@@ -18,7 +18,7 @@ Migration runnerは `DATABASE_URL` と、任意の `MIGRATIONS_DIR`（default `m
 2. 次の未使用番号で `.up.sql` と `.down.sql` を同時に作る。例: `000002_add_example.up.sql` / `000002_add_example.down.sql`。
 3. 1 migrationをtransactionで安全に適用できる場合は、既存fileと同様に `BEGIN;` / `COMMIT;` で囲む。PostgreSQLでtransaction非対応の操作が必要なら、影響と復旧手順をmigrationのcommentとPRへ明記する。
 4. Query変更があれば `backend/internal/infrastructure/postgres/queries` を更新する。
-5. `sqlc compile`、`sqlc generate`を実行し、生成差分をcommitする。
+5. Repository rootで`pwsh ./scripts/invoke-sqlc.ps1 compile generate`を実行し、生成差分をcommitする。実行環境の選択は[`development.md`](development.md)を参照する。
 6. 空のtest DBと、可能ならproduction相当データ量のcopyではない匿名化fixtureでupを検証する。downはローカルの破棄可能DBでのみ検証する。
 7. backward incompatibleな変更は一度に行わず、expand → application切替 → contractを複数releaseに分ける。
 
