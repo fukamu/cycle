@@ -3,6 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
+import {
+  cacheReview,
+  cycleQueryKey,
+  goalQueryKey,
+} from "../features/goal-collection/goalCache";
 import type { Cycle, Frame, Goal } from "../shared/api/schemas";
 import {
   completeCycle,
@@ -43,12 +48,12 @@ type WorkspaceConfirmation =
 export function GoalWorkspacePage() {
   const { goalId, cycleId } = useParams();
   const goalQuery = useQuery({
-    queryKey: ["goal", goalId],
+    queryKey: goalQueryKey(goalId ?? ""),
     queryFn: () => getGoal(goalId ?? ""),
     enabled: Boolean(goalId),
   });
   const cycleQuery = useQuery({
-    queryKey: ["goal", goalId, "cycle", cycleId],
+    queryKey: cycleQueryKey(goalId ?? "", cycleId ?? ""),
     queryFn: () => getCycle(goalId ?? "", cycleId ?? ""),
     enabled: Boolean(goalId && cycleId),
   });
@@ -300,7 +305,7 @@ function CycleWorkspace({
     setPendingAction(true);
     setError(undefined);
     try {
-      await completeCycle(
+      const result = await completeCycle(
         goal.id,
         cycle.id,
         goal.revision,
@@ -308,6 +313,13 @@ function CycleWorkspace({
         session.csrfToken,
       );
       await cache.invalidateQueries({ refetchType: "none" });
+      if ("goal" in result) {
+        cacheReview(cache, {
+          goal: result.goal,
+          reviewDraft: result.reviewDraft,
+          triggerCycle: result.completedCycle,
+        });
+      }
       navigate(`/goals/${goal.id}/review`, { replace: true });
     } catch {
       setError("サイクルを完了できませんでした。入力内容を確認してください。");

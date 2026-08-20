@@ -3,6 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
+import {
+  cacheCreationDraft,
+  cacheCycle,
+} from "../features/goal-collection/goalCache";
 import { GoalRefinementPanel } from "../features/goal-refine/GoalRefinementPanel";
 import { useGoalRefinement } from "../features/goal-refine/useGoalRefinement";
 import type { GoalDraft, Home } from "../shared/api/schemas";
@@ -30,7 +34,7 @@ export function NewGoalPage() {
   const query = useQuery({ queryKey: ["home"], queryFn: getHome });
   const create = useMutation({
     mutationFn: () => createGoalDraft("", session.csrfToken),
-    onSuccess: () => cache.invalidateQueries({ queryKey: ["home"] }),
+    onSuccess: ({ draft }) => cacheCreationDraft(cache, draft),
   });
   if (query.isPending) return <PageLoading />;
   if (query.isError) return <PageError retry={() => void query.refetch()} />;
@@ -122,6 +126,7 @@ function GoalDraftEditor({
       );
       await editor.discard();
       await cache.invalidateQueries({ refetchType: "none" });
+      cacheCycle(cache, result.goal, result.cycle);
       navigate(`/goals/${result.goal.id}/cycles/${result.cycle.id}`, {
         replace: true,
       });

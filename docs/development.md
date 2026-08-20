@@ -150,6 +150,12 @@ Playwright自身の既定portは55432です。このリポジトリのDocker例�
 
 CIと同じ個別コマンドが必要な場合は [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) を参照してください。
 
+### 性能変更の確認
+
+DB-backed collection endpointは、page内のitem数に比例してSQL round tripが増えないよう、JOINまたはbatch queryで必要なsummaryを取得します。Home、Goal一覧、Cycle一覧を変更するときは、itemごとのdetail query（N+1 query）を追加してはいけません。
+
+Frontendのroute別code splittingとasset sizeは`npm run build`のchunk一覧で確認します。Mutation responseが遷移先と同じDTOを含む場合は、TanStack Query cacheへ反映してから遷移し、直後に同じresourceを再取得するnetwork round tripを避けます。Mutationの影響を受けるcollection/detail cacheは、引き続き明示的に更新またはinvalidateします。
+
 ## クリーンアップ
 
 通常のsafe cleanは再生成できるbuild/test出力と `.tmp` だけを削除します。対象を事前確認するには `-WhatIf` を使えます。

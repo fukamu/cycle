@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
+import { cacheCycle } from "../features/goal-collection/goalCache";
 import { GoalRefinementPanel } from "../features/goal-refine/GoalRefinementPanel";
 import { useGoalRefinement } from "../features/goal-refine/useGoalRefinement";
 import type { GoalReview } from "../shared/api/schemas";
@@ -104,6 +105,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       );
       await editor.discard();
       await cache.invalidateQueries({ refetchType: "none" });
+      cacheCycle(cache, result.goal, result.cycle);
       navigate(`/goals/${goal.id}/cycles/${result.cycle.id}`, {
         replace: true,
       });
