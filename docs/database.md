@@ -14,6 +14,8 @@
 
 Migration runnerは `DATABASE_URL` と、任意の `MIGRATIONS_DIR`（default `migrations`）だけを読み、未適用のup migrationを順番に適用します。適用履歴はDBの `schema_migrations` で管理されます。
 
+Migration runnerは、正常に適用した各fileについて`migration_version`、`migration_direction`、`migration_file`、`migration_duration_ms`をJSON logへ記録します。完了logには`migration_applied_count`と`migration_no_change`を記録し、未適用fileがなかった実行も判別できます。Database URL、SQL本文、接続credentialはlogへ記録しません。
+
 ## Schema変更手順
 
 1. 変更が保存データ、ユーザー挙動、API制約、認証・削除仕様に影響するか確認する。影響する場合は、先に [`design.md`](design.md) との整合性と更新要否を判断する。
