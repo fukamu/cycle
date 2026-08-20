@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
+import { AppReferralPromotion } from "../features/app-referral/AppReferralPromotion";
 import {
   cacheCreationDraft,
   cacheGoals,
@@ -101,6 +102,7 @@ export function HomePage() {
       <Link className="history-link" to="/history">
         すべての目標と履歴を見る →
       </Link>
+      <AppReferralPromotion />
     </main>
   );
 }

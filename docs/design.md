@@ -541,7 +541,7 @@ flowchart TD
 
 | Route | Screen | 主な責務 |
 |---|---|---|
-| `/` | Home | Progressing Goal collection、Creation Draft導線 |
+| `/` | Home | Progressing Goal collection、Creation Draft導線、任意のApplication紹介導線 |
 | `/goals/new` | New Goal | Goal Creation Draft、Goal Refine、Goal開始 |
 | `/goals/:goalId` | Goal Overview | Goal状態に応じactive cycle / reviewへ案内 |
 | `/goals/:goalId/cycles/:cycleId` | Cycle Editor / Cycle Detail | Active編集またはCompleted/Canceled read-only |
@@ -567,6 +567,7 @@ Homeは`progressingGoals: ProgressingGoalSummary[]`をCollectionとして扱う�
 - Creation Draftの`この目標で始める`は`canStartProgressingGoal=true`のときだけ有効にする。
 - 上限到達中はUpgrade UIを出さず、`現在取り組んでいる目標があります。この目標を始めるには、現在の目標を達成・終了・削除してください。`と案内する。
 - 将来2件以上: 同じCard listで表示できる。
+- Application紹介導線はPDCA Domainから独立した任意Componentとし、公開build-time URLが設定された場合だけHome末尾へ表示する。共有payloadはApplication名、固定紹介文、設定済みtop page URLだけとし、現在route、Goal、Cycle、Draft、User/Session情報を含めない。MVPでは紹介操作や紹介linkの利用履歴を収集しない。設定を外すだけでPDCA機能へ影響せず非表示にできること。
 
 ## 9.2 Goal Card
 

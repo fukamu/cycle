@@ -63,7 +63,7 @@ Worker/ContainerをTerraformとWranglerの両方で管理しません。Applicat
 | Google | Staging専用Web Client ID、authorized origin |
 | Turnstile | widget site key、secret owner、hostname/action |
 | OpenAI | project/key owner、model、確認日、token単価、provider spend/rate limit |
-| App controls | AI monthly budget、rolling/rate limit、tester、公開期間 |
+| App controls | AI monthly budget、rolling/rate limit、tester、公開期間、任意のApplication紹介導線をStagingで公開するか |
 | Operations | Terraform Apply approver、logs/traces確認者、cost確認、teardown/継続判断日 |
 
 ## 1. Prerequisites
@@ -244,6 +244,8 @@ RATE_AI_PER_IP_MINUTE
 ```
 
 Workflowは空値と誤った`PUBLIC_ORIGIN`をdeploy前に拒否します。Example/defaultは運用承認値ではありません。
+
+Application紹介導線は任意です。Stagingで意図して公開する場合だけ`APP_REFERRAL_URL=https://pdcai.matoruru.com/`を追加します。未設定ならFrontend Componentは表示されません。Workflowは別domain、path、query、fragmentを持つ紹介URLを拒否し、共有payloadにはUser Dataを含めません。
 
 ## 8. First CI/CD deployment
 

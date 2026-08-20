@@ -88,6 +88,7 @@ jobs:
     env:
       COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
       PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
+      APP_REFERRAL_URL: ${{ vars.APP_REFERRAL_URL }}
       GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
       TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
       DB_MAX_OPEN_CONNS: ${{ vars.DB_MAX_OPEN_CONNS }}
@@ -189,6 +190,10 @@ jobs:
             echo "::error::PUBLIC_ORIGIN must be exactly https://pdcai.matoruru.com"
             missing=1
           fi
+          if [[ -n "${APP_REFERRAL_URL}" && "${APP_REFERRAL_URL}" != "${PUBLIC_ORIGIN}/" ]]; then
+            echo "::error::APP_REFERRAL_URL must be empty or exactly ${PUBLIC_ORIGIN}/"
+            missing=1
+          fi
           exit "${missing}"
 
       - uses: actions/setup-node@v7
@@ -211,6 +216,7 @@ jobs:
       - name: Build static frontend
         working-directory: frontend
         env:
+          VITE_APP_REFERRAL_URL: ${{ env.APP_REFERRAL_URL }}
           VITE_GOOGLE_WEB_CLIENT_ID: ${{ env.GOOGLE_WEB_CLIENT_ID }}
           VITE_TURNSTILE_SITE_KEY: ${{ env.TURNSTILE_SITE_KEY }}
         run: npm run build
