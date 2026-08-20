@@ -8,7 +8,7 @@
 |---|---|---|---|
 | Development | local開発 | 手動起動 | local PostgreSQL、Fake AI/Turnstile可 |
 | Test | CI / E2E | GitHub Actions内 | job専用PostgreSQL、external providerはtest double |
-| Staging Light | external integration検証 | main CI → Terraform Plan → owner承認Apply → migration-first Cloudflare deploy | `pdcai.matoruru.com`、専用Cloudflare/Neon/provider設定 |
+| Staging Light | external integration検証 | main SHAの成功CI（検証済みPR tree再利用または全check）→ Terraform Plan → owner承認Apply → migration-first Cloudflare deploy | `pdcai.matoruru.com`、専用Cloudflare/Neon/provider設定 |
 | Production | 正式公開 | 未構築 | `pdcai.io`確定後にStagingと別resource/stateで設計 |
 
 Staging Lightは `APP_ENV=production` でproduction security validationを通しますが、Production相当のSLA、backup、data retentionは保証しません。破棄可能な検証dataだけを使い、StagingのDB、session、IndexedDB、credentialをProductionへ移しません。
@@ -26,7 +26,7 @@ Browser
              -> Google Identity / Turnstile / OpenAI
 
 GitHub Actions
-  -> successful main CIからTerraform saved planを作成
+  -> successful main SHA CIからTerraform saved planを作成
   -> owner承認後、同一planでCloudflare Turnstile widgetをApply
   -> Neon direct connectionでmigration
   -> WranglerでWorker + Container + assets + runtime secretsをdeploy
@@ -124,7 +124,7 @@ TERRAFORM_APPLY_APPROVER=<your GitHub login>
 通常のsequence:
 
 ```text
-CI (main HEAD)
+CI (main HEAD。完全一致するPR検証treeを再利用、証明不能なら全check)
 -> Terraform Plan Staging
    -> R2 state lock/read
    -> terraform plan -out=staging.tfplan

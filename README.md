@@ -101,6 +101,6 @@ Local/Testでは`OPENAI_API_KEY`を空にすると、外部通信しない決定
 
 ## CI/CD
 
-Pull requestとmainへのpushで`CI`がformat、lint、typecheck、unit/integration test、build、E2Eを実行します。CIはjob専用PostgreSQLとtest doubleを使い、productionへ接続しません。
+Pull requestでは`CI`がformat、lint、typecheck、unit/integration test、build、E2Eを実行し、実際に検証したmerge treeを記録します。mainへのpushでは、マージ後treeとその記録が完全一致する場合だけ重いcheckを再利用し、直接push、base更新、記録欠落・期限切れなどでは全CIを再実行します。CIはjob専用PostgreSQLとtest doubleを使い、productionへ接続しません。
 
 Staging Lightはmain HEADのCI成功後にTerraform Planを自動作成し、repository variableで指定したowner本人がPlan run IDを指定して承認した同一saved planだけをApplyします。Apply成功後、Neon direct connectionでmigrationが成功した場合だけWranglerがWorker、Container、static assets、runtime secretsを自動deployします。Production deploymentは正式domain `pdcai.io`と専用resourceが決まるまで未構築です。GitHub Environment、R2 backend、repository secret/variableを含む初回手順は [`docs/deployment.md`](docs/deployment.md) を参照してください。
