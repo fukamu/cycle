@@ -1321,6 +1321,7 @@ Goal Deleteのnetwork retryをidempotentにするcontent-free短命record。
 ## 16.2 Normative Logical DDL
 
 実migrationは以下と同等以上の制約を持つこと。DB enum型はmigration変更が重いため、MVPでは`TEXT + CHECK`を使う。
+全UUID値は§19.1のUUID v7制約に従う。Primary/standalone UUID列はversion/variantの`CHECK`で強制し、FK列は参照先の同制約によりUUID v7へ収束させる。UUID配列も各要素を同様に検証する。
 
 ```sql
 CREATE TABLE users (
@@ -2124,7 +2125,8 @@ Concurrent operation:
 
 ## 19.1 ID
 
-- Entity ID / operation IDはUUID v4をApplication側で生成する。
+- Serviceが扱うEntity ID、operation ID、idempotency key、bootstrap ID、request IDを含む全UUIDはUUID v7へ統一し、Application側で生成する。
+- APIはUUID v7以外のUUIDをvalidation errorとして拒否し、DBもPrimary/standalone UUID列とUUID配列をversion/variantの`CHECK`で強制する。FK列はUUID v7制約済みの参照先へ限定する。
 - `sequenceNumber` / `versionNumber`はUI連番でありEntity IDではない。
 - JSONではcanonical lower-case UUID string。
 - Path parameterはparse→validate→typed ID。
@@ -2195,7 +2197,7 @@ Base path: `/api/v1`
   "error": {
     "code": "GOAL_DRAFT_REVISION_CONFLICT",
     "message": "別の保存が先に反映されています。入力内容は保持されています。",
-    "requestId": "c4f5f980-acde-4ad0-9851-3df2cd1288bf",
+    "requestId": "0198c20b-7b95-7000-8000-000000000001",
     "details": {
       "serverRevision": 5
     }
@@ -2315,14 +2317,14 @@ Request:
 
 ```json
 {
-  "bootstrapId": "c683d6a9-6c10-44a0-b673-55b0ff3e6594",
+  "bootstrapId": "0198c20b-7b95-7000-8000-000000000002",
   "turnstileToken": "opaque-client-token"
 }
 ```
 
 Validation:
 
-- `bootstrapId`: UUID。
+- `bootstrapId`: UUID v7。
 - `turnstileToken`: production required。
 - Originはconfigured public originと一致。
 - Turnstile action / hostname / token validityを検証。
@@ -2528,7 +2530,7 @@ Errors: `404 GOAL_DRAFT_NOT_FOUND`, `409 AI_OPERATION_IN_PROGRESS`, `500 GOAL_DR
 
 **Use Case:** RefineGoalDraft  
 **Auth:** Session  
-**Header:** `Idempotency-Key: UUID`
+**Header:** `Idempotency-Key: UUID v7`
 
 Request:
 
@@ -2864,7 +2866,7 @@ Errors:
 
 **Use Case:** DeleteGoalAggregate  
 **Auth:** Session  
-**Header:** `Idempotency-Key: UUID`
+**Header:** `Idempotency-Key: UUID v7`
 
 Request:
 
@@ -2986,7 +2988,7 @@ Idempotency / ordering: `expectedRevision` CASで古い保存を拒否する。�
 **Use Case:** RefineGoalReviewDraft  
 **Auth:** Session  
 **Authorization:** owner + Goal status=`goal_review` + Review Draft belongs to path Goal  
-**Header:** `Idempotency-Key: UUID`
+**Header:** `Idempotency-Key: UUID v7`
 
 Request:
 
@@ -3288,7 +3290,7 @@ Errors:
 **Use Case:** GenerateAction  
 **Auth:** Session  
 **Authorization:** owner + path Goal/Cycle一致 + Goal status=`active_cycle` + Cycle status=`active`  
-**Header:** `Idempotency-Key: UUID`
+**Header:** `Idempotency-Key: UUID v7`
 
 Request:
 
@@ -3345,7 +3347,7 @@ Idempotency: 同Key / 同hashは同logical Generationへ収束し、Quotaを追�
 **Use Case:** RefineAction  
 **Auth:** Session  
 **Authorization:** owner + path Goal/Cycle一致 + Goal status=`active_cycle` + Cycle status=`active`  
-**Header:** `Idempotency-Key: UUID`
+**Header:** `Idempotency-Key: UUID v7`
 
 Request:
 

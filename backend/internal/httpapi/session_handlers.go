@@ -16,7 +16,7 @@ type sessionResponse struct {
 }
 
 type createAnonymousRequest struct {
-	BootstrapID    string `json:"bootstrapId" validate:"required,canonical_uuid"`
+	BootstrapID    string `json:"bootstrapId" validate:"required,uuid_v7"`
 	TurnstileToken string `json:"turnstileToken"`
 }
 

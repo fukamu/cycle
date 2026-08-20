@@ -23,7 +23,7 @@ func TestWorkspaceStoreEnforcesConfigurableProgressingGoalBoundary(t *testing.T)
 			pool := integrationPool(t)
 			resetDatabase(t, pool)
 			now := integrationNow()
-			const userID = "10000000-0000-0000-0000-000000000001"
+			const userID = "10000000-0000-7000-8000-000000000001"
 			if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 				t.Fatal(err)
 			}
@@ -35,7 +35,7 @@ func TestWorkspaceStoreEnforcesConfigurableProgressingGoalBoundary(t *testing.T)
 			if test.limit == 2 {
 				if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET status='completed',completed_at=$2,
 completion_operation_id=$3,completion_request_hash='completion-hash',updated_at=$2 WHERE id=$1`,
-					fixtures[0].cycleID, now.Add(30*time.Minute), "61000000-0000-0000-0000-000000000001"); err != nil {
+					fixtures[0].cycleID, now.Add(30*time.Minute), "61000000-0000-7000-8000-000000000001"); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := pool.Exec(context.Background(), `UPDATE goals SET status='goal_review',updated_at=$2 WHERE id=$1`,
@@ -45,7 +45,7 @@ completion_operation_id=$3,completion_request_hash='completion-hash',updated_at=
 				if _, err := pool.Exec(context.Background(), `INSERT INTO goal_drafts
 (id,user_id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,created_at,updated_at)
 VALUES($1,$2,'review',$3,$4,$5,$6,$7,$7)`,
-					"61000000-0000-0000-0000-000000000002", userID, fixtures[0].goalID,
+					"61000000-0000-7000-8000-000000000002", userID, fixtures[0].goalID,
 					fixtures[0].versionID, fixtures[0].cycleID, fixtures[0].body, now.Add(30*time.Minute)); err != nil {
 					t.Fatal(err)
 				}
@@ -87,7 +87,7 @@ func TestWorkspaceStoreHomeOrdersProgressingGoalsByCreationTime(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	now := integrationNow()
-	const userID = "10000000-0000-0000-0000-000000000001"
+	const userID = "10000000-0000-7000-8000-000000000001"
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	now := integrationNow()
-	const userID = "10000000-0000-0000-0000-000000000001"
+	const userID = "10000000-0000-7000-8000-000000000001"
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
 	zero := int64(0)
 	startInput := fixtures[2].startInput(userID, now.Add(3*time.Minute))
 	terminateInput := workspace.TerminateInput{
-		UserID: userID, GoalID: first.Goal.ID, OperationID: "70000000-0000-0000-0000-000000000001",
+		UserID: userID, GoalID: first.Goal.ID, OperationID: "70000000-0000-7000-8000-000000000001",
 		Outcome: goal.StatusEnded, ExpectedGoalRevision: 0, ExpectedState: goal.StatusActiveCycle,
 		ActiveCycleID: first.Cycle.ID, ExpectedCycleContentRevision: &zero,
 		RequestHash: "terminate-request-hash", Now: now.Add(3 * time.Minute),
@@ -180,7 +180,7 @@ func TestWorkspaceStoreSharesAIQuotaWithoutMixingContextAcrossProgressingGoals(t
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	now := integrationNow()
-	const userID = "10000000-0000-0000-0000-000000000001"
+	const userID = "10000000-0000-7000-8000-000000000001"
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_usage_events
 (operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
 VALUES($1,$2,$3,'action_generate','accepted','fake','test','action-generate-v1',$4,$5)`,
-		"81000000-0000-0000-0000-000000000001", userID, fixtures[0].goalID, now, now.Add(24*time.Hour)); err != nil {
+		"81000000-0000-7000-8000-000000000001", userID, fixtures[0].goalID, now, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -209,8 +209,8 @@ VALUES($1,$2,$3,'action_generate','accepted','fake','test','action-generate-v1',
 	_, err := store.BeginActionAI(context.Background(), workspace.ActionAIInput{
 		UserID: userID, GoalID: fixtures[1].goalID, CycleID: fixtures[1].cycleID,
 		Operation: "action_generate", ExpectedContentRevision: 3,
-		IdempotencyKey: "82000000-0000-0000-0000-000000000001",
-		GenerationID:   "83000000-0000-0000-0000-000000000001",
+		IdempotencyKey: "82000000-0000-7000-8000-000000000001",
+		GenerationID:   "83000000-0000-7000-8000-000000000001",
 		Now:            now.Add(2 * time.Minute),
 	}, func(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
 		selected = snapshot
@@ -240,10 +240,10 @@ type progressingGoalFixture struct {
 
 func progressingGoalFixtures() []progressingGoalFixture {
 	return []progressingGoalFixture{
-		{draftID: "11000000-0000-0000-0000-000000000001", goalID: "21000000-0000-0000-0000-000000000001", versionID: "31000000-0000-0000-0000-000000000001", cycleID: "41000000-0000-0000-0000-000000000001", operationID: "51000000-0000-0000-0000-000000000001", body: "最初の目標"},
-		{draftID: "11000000-0000-0000-0000-000000000002", goalID: "21000000-0000-0000-0000-000000000002", versionID: "31000000-0000-0000-0000-000000000002", cycleID: "41000000-0000-0000-0000-000000000002", operationID: "51000000-0000-0000-0000-000000000002", body: "二つ目の目標"},
-		{draftID: "11000000-0000-0000-0000-000000000003", goalID: "21000000-0000-0000-0000-000000000003", versionID: "31000000-0000-0000-0000-000000000003", cycleID: "41000000-0000-0000-0000-000000000003", operationID: "51000000-0000-0000-0000-000000000003", body: "三つ目の目標"},
-		{draftID: "11000000-0000-0000-0000-000000000004", goalID: "21000000-0000-0000-0000-000000000004", versionID: "31000000-0000-0000-0000-000000000004", cycleID: "41000000-0000-0000-0000-000000000004", operationID: "51000000-0000-0000-0000-000000000004", body: "四つ目の目標"},
+		{draftID: "11000000-0000-7000-8000-000000000001", goalID: "21000000-0000-7000-8000-000000000001", versionID: "31000000-0000-7000-8000-000000000001", cycleID: "41000000-0000-7000-8000-000000000001", operationID: "51000000-0000-7000-8000-000000000001", body: "最初の目標"},
+		{draftID: "11000000-0000-7000-8000-000000000002", goalID: "21000000-0000-7000-8000-000000000002", versionID: "31000000-0000-7000-8000-000000000002", cycleID: "41000000-0000-7000-8000-000000000002", operationID: "51000000-0000-7000-8000-000000000002", body: "二つ目の目標"},
+		{draftID: "11000000-0000-7000-8000-000000000003", goalID: "21000000-0000-7000-8000-000000000003", versionID: "31000000-0000-7000-8000-000000000003", cycleID: "41000000-0000-7000-8000-000000000003", operationID: "51000000-0000-7000-8000-000000000003", body: "三つ目の目標"},
+		{draftID: "11000000-0000-7000-8000-000000000004", goalID: "21000000-0000-7000-8000-000000000004", versionID: "31000000-0000-7000-8000-000000000004", cycleID: "41000000-0000-7000-8000-000000000004", operationID: "51000000-0000-7000-8000-000000000004", body: "四つ目の目標"},
 	}
 }
 
@@ -272,11 +272,11 @@ func TestWorkspaceStoreListGoalsReturnsInitialPageWithoutCursor(t *testing.T) {
 	resetDatabase(t, pool)
 	now := integrationNow()
 	const (
-		userID    = "10000000-0000-0000-0000-000000000001"
-		goalID    = "20000000-0000-0000-0000-000000000001"
-		versionID = "30000000-0000-0000-0000-000000000001"
-		cycleID   = "40000000-0000-0000-0000-000000000001"
-		operation = "50000000-0000-0000-0000-000000000001"
+		userID    = "10000000-0000-7000-8000-000000000001"
+		goalID    = "20000000-0000-7000-8000-000000000001"
+		versionID = "30000000-0000-7000-8000-000000000001"
+		cycleID   = "40000000-0000-7000-8000-000000000001"
+		operation = "50000000-0000-7000-8000-000000000001"
 	)
 	statements := []struct {
 		sql  string
@@ -325,9 +325,9 @@ func TestWorkspaceStoreDuplicateCreationDraftReturnsExistingIdentifier(t *testin
 	resetDatabase(t, pool)
 	now := integrationNow()
 	const (
-		userID      = "10000000-0000-0000-0000-000000000001"
-		firstDraft  = "11000000-0000-0000-0000-000000000001"
-		secondDraft = "11000000-0000-0000-0000-000000000002"
+		userID      = "10000000-0000-7000-8000-000000000001"
+		firstDraft  = "11000000-0000-7000-8000-000000000001"
+		secondDraft = "11000000-0000-7000-8000-000000000002"
 	)
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
@@ -348,17 +348,17 @@ func TestWorkspaceStoreListGoalsOrdersProgressingBeforeTerminalAcrossPages(t *te
 	resetDatabase(t, pool)
 	now := integrationNow()
 	const (
-		userID         = "10000000-0000-0000-0000-000000000001"
-		activeGoalID   = "20000000-0000-0000-0000-000000000001"
-		latestGoalID   = "20000000-0000-0000-0000-000000000002"
-		oldGoalID      = "20000000-0000-0000-0000-000000000003"
-		activeVersion  = "30000000-0000-0000-0000-000000000001"
-		latestVersion  = "30000000-0000-0000-0000-000000000002"
-		oldVersion     = "30000000-0000-0000-0000-000000000003"
-		activeCycle    = "40000000-0000-0000-0000-000000000001"
-		activeStart    = "50000000-0000-0000-0000-000000000001"
-		latestTerminal = "50000000-0000-0000-0000-000000000002"
-		oldTerminal    = "50000000-0000-0000-0000-000000000003"
+		userID         = "10000000-0000-7000-8000-000000000001"
+		activeGoalID   = "20000000-0000-7000-8000-000000000001"
+		latestGoalID   = "20000000-0000-7000-8000-000000000002"
+		oldGoalID      = "20000000-0000-7000-8000-000000000003"
+		activeVersion  = "30000000-0000-7000-8000-000000000001"
+		latestVersion  = "30000000-0000-7000-8000-000000000002"
+		oldVersion     = "30000000-0000-7000-8000-000000000003"
+		activeCycle    = "40000000-0000-7000-8000-000000000001"
+		activeStart    = "50000000-0000-7000-8000-000000000001"
+		latestTerminal = "50000000-0000-7000-8000-000000000002"
+		oldTerminal    = "50000000-0000-7000-8000-000000000003"
 	)
 	statements := []struct {
 		sql  string
@@ -409,19 +409,19 @@ func TestWorkspaceCommandReplayConvergesAfterLaterStateTransition(t *testing.T) 
 	resetDatabase(t, pool)
 	now := integrationNow()
 	const (
-		userID            = "10000000-0000-0000-0000-000000000001"
-		draftID           = "11000000-0000-0000-0000-000000000001"
-		goalID            = "20000000-0000-0000-0000-000000000001"
-		versionID         = "30000000-0000-0000-0000-000000000001"
-		cycleID           = "40000000-0000-0000-0000-000000000001"
-		startOperation    = "50000000-0000-0000-0000-000000000001"
-		reviewDraftID     = "60000000-0000-0000-0000-000000000001"
-		completeOperation = "70000000-0000-0000-0000-000000000001"
-		nextVersionID     = "80000000-0000-0000-0000-000000000001"
-		nextCycleID       = "90000000-0000-0000-0000-000000000001"
-		continueOperation = "a0000000-0000-0000-0000-000000000001"
-		generationID      = "b0000000-0000-0000-0000-000000000001"
-		idempotencyKey    = "c0000000-0000-0000-0000-000000000001"
+		userID            = "10000000-0000-7000-8000-000000000001"
+		draftID           = "11000000-0000-7000-8000-000000000001"
+		goalID            = "20000000-0000-7000-8000-000000000001"
+		versionID         = "30000000-0000-7000-8000-000000000001"
+		cycleID           = "40000000-0000-7000-8000-000000000001"
+		startOperation    = "50000000-0000-7000-8000-000000000001"
+		reviewDraftID     = "60000000-0000-7000-8000-000000000001"
+		completeOperation = "70000000-0000-7000-8000-000000000001"
+		nextVersionID     = "80000000-0000-7000-8000-000000000001"
+		nextCycleID       = "90000000-0000-7000-8000-000000000001"
+		continueOperation = "a0000000-0000-7000-8000-000000000001"
+		generationID      = "b0000000-0000-7000-8000-000000000001"
+		idempotencyKey    = "c0000000-0000-7000-8000-000000000001"
 	)
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
@@ -504,10 +504,10 @@ func TestGoalRefineReplayPrecedesLaterDraftRevisionConflict(t *testing.T) {
 	resetDatabase(t, pool)
 	now := integrationNow()
 	const (
-		userID         = "10000000-0000-0000-0000-000000000001"
-		draftID        = "11000000-0000-0000-0000-000000000001"
-		generationID   = "b0000000-0000-0000-0000-000000000001"
-		idempotencyKey = "c0000000-0000-0000-0000-000000000001"
+		userID         = "10000000-0000-7000-8000-000000000001"
+		draftID        = "11000000-0000-7000-8000-000000000001"
+		generationID   = "b0000000-0000-7000-8000-000000000001"
+		idempotencyKey = "c0000000-0000-7000-8000-000000000001"
 	)
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
@@ -541,10 +541,10 @@ func TestAdoptGoalSuggestionReplayIsIdempotentUntilDraftChanges(t *testing.T) {
 	resetDatabase(t, pool)
 	now := integrationNow()
 	const (
-		userID         = "10000000-0000-0000-0000-000000000001"
-		draftID        = "11000000-0000-0000-0000-000000000001"
-		generationID   = "b0000000-0000-0000-0000-000000000001"
-		idempotencyKey = "c0000000-0000-0000-0000-000000000001"
+		userID         = "10000000-0000-7000-8000-000000000001"
+		draftID        = "11000000-0000-7000-8000-000000000001"
+		generationID   = "b0000000-0000-7000-8000-000000000001"
+		idempotencyKey = "c0000000-0000-7000-8000-000000000001"
 	)
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
@@ -583,10 +583,10 @@ func TestAdoptGoalSuggestionAcceptsDraftRestoredToSourceText(t *testing.T) {
 	resetDatabase(t, pool)
 	now := integrationNow()
 	const (
-		userID         = "10000000-0000-0000-0000-000000000001"
-		draftID        = "11000000-0000-0000-0000-000000000001"
-		generationID   = "b0000000-0000-0000-0000-000000000001"
-		idempotencyKey = "c0000000-0000-0000-0000-000000000001"
+		userID         = "10000000-0000-7000-8000-000000000001"
+		draftID        = "11000000-0000-7000-8000-000000000001"
+		generationID   = "b0000000-0000-7000-8000-000000000001"
+		idempotencyKey = "c0000000-0000-7000-8000-000000000001"
 	)
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)

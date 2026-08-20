@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { newUUIDv7 } from "../id/uuid";
 import { requestJSON } from "./client";
 import {
   aiResponseSchema,
@@ -65,7 +66,7 @@ const terminateEnvelope = z.object({
   replayed: z.boolean().optional(),
 });
 
-export const operationId = () => crypto.randomUUID();
+export const operationId = () => newUUIDv7();
 
 export const getHome = () => requestJSON("/api/v1/home", homeSchema);
 export const createGoalDraft = (initialBody: string, csrfToken: string) =>

@@ -1,3 +1,5 @@
+import { isUUIDv7, newUUIDv7 } from "../../shared/id/uuid";
+
 const databaseName = "pdcai-bootstrap";
 const storeName = "bootstrap";
 const key = "pending";
@@ -13,10 +15,10 @@ export async function getOrCreateBootstrapID(): Promise<string> {
     request.onerror = () =>
       reject(request.error ?? new Error("bootstrap read failed"));
   });
-  if (existing !== undefined) {
+  if (existing !== undefined && isUUIDv7(existing)) {
     return existing;
   }
-  const created = crypto.randomUUID();
+  const created = newUUIDv7();
   await new Promise<void>((resolve, reject) => {
     const request = database
       .transaction(storeName, "readwrite")

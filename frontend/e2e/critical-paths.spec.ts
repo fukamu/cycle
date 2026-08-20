@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { newUUIDv7 } from "../src/shared/id/uuid";
+
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
 }) => {
@@ -153,7 +155,7 @@ test("free users can progress two goals while a third start is rejected without 
     }),
   ).toBeVisible();
 
-  const limitAttempt = await page.evaluate(async () => {
+  const limitAttempt = await page.evaluate(async (operationId) => {
     const sessionResponse = await fetch("/api/v1/session");
     const session = (await sessionResponse.json()) as { csrfToken: string };
     const homeResponse = await fetch("/api/v1/home");
@@ -170,14 +172,14 @@ test("free users can progress two goals while a third start is rejected without 
           "X-CSRF-Token": session.csrfToken,
         },
         body: JSON.stringify({
-          operationId: crypto.randomUUID(),
+          operationId,
           expectedDraftRevision: home.creationDraft.revision,
         }),
       },
     );
     const payload = (await response.json()) as { error: { code: string } };
     return { status: response.status, code: payload.error.code };
-  });
+  }, newUUIDv7());
   expect(limitAttempt).toEqual({
     status: 409,
     code: "GOAL_ACTIVE_LIMIT_EXCEEDED",
@@ -307,22 +309,25 @@ test("cross-user draft, goal, cycle, and delete access is rejected", async ({
       "CYCLE_NOT_FOUND",
     );
 
-    const deleteAttempt = await outsider.evaluate(async (targetGoalId) => {
-      const sessionResponse = await fetch("/api/v1/session");
-      const session = (await sessionResponse.json()) as { csrfToken: string };
-      const response = await fetch(`/api/v1/goals/${targetGoalId}`, {
-        method: "DELETE",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json; charset=utf-8",
-          "X-CSRF-Token": session.csrfToken,
-          "Idempotency-Key": crypto.randomUUID(),
-        },
-        body: JSON.stringify({ confirmed: true, expectedGoalRevision: 0 }),
-      });
-      const payload = (await response.json()) as { error: { code: string } };
-      return { status: response.status, code: payload.error.code };
-    }, goalId);
+    const deleteAttempt = await outsider.evaluate(
+      async (input) => {
+        const sessionResponse = await fetch("/api/v1/session");
+        const session = (await sessionResponse.json()) as { csrfToken: string };
+        const response = await fetch(`/api/v1/goals/${input.targetGoalId}`, {
+          method: "DELETE",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "X-CSRF-Token": session.csrfToken,
+            "Idempotency-Key": input.idempotencyKey,
+          },
+          body: JSON.stringify({ confirmed: true, expectedGoalRevision: 0 }),
+        });
+        const payload = (await response.json()) as { error: { code: string } };
+        return { status: response.status, code: payload.error.code };
+      },
+      { targetGoalId: goalId, idempotencyKey: newUUIDv7() },
+    );
     expect(deleteAttempt).toEqual({ status: 404, code: "GOAL_NOT_FOUND" });
 
     const ownerReadStatus = await owner.evaluate(async (targetGoalId) => {

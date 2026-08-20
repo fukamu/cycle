@@ -15,6 +15,11 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	resetDatabase(t, pool)
 	_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS schema_migrations`)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	uuidV7Down, err := os.ReadFile(filepath.Join(directory, "000003_enforce_uuid_v7.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, uuidV7Down)
 	down := filepath.Join(directory, "000001_pdcai_baseline.down.sql")
 	script, err := os.ReadFile(down)
 	if err != nil {
@@ -38,12 +43,12 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	}
 	legacyBody := strings.Repeat("界", 81)
 	_, err = pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at)
-VALUES('10000000-0000-4000-8000-000000000001',now(),now(),now())`)
+VALUES('10000000-0000-7000-8000-000000000001',now(),now(),now())`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = pool.Exec(context.Background(), `INSERT INTO goal_drafts(id,user_id,draft_type,body,created_at,updated_at)
-VALUES('20000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','creation',$1,now(),now())`, legacyBody)
+VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000001','creation',$1,now(),now())`, legacyBody)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +56,7 @@ VALUES('20000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000
 		t.Fatalf("oversize legacy migration error = %v", err)
 	}
 	var preserved string
-	if err := pool.QueryRow(context.Background(), `SELECT body FROM goal_drafts WHERE id='20000000-0000-4000-8000-000000000001'`).Scan(&preserved); err != nil {
+	if err := pool.QueryRow(context.Background(), `SELECT body FROM goal_drafts WHERE id='20000000-0000-7000-8000-000000000001'`).Scan(&preserved); err != nil {
 		t.Fatal(err)
 	}
 	if preserved != legacyBody {
@@ -69,10 +74,36 @@ VALUES('20000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 2 || users != 0 {
+	if version != 3 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
+	assertUUIDv7Constraints(t, pool)
+}
+
+func assertUUIDv7Constraints(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_constraint WHERE conname LIKE '%\_uuid\_v7' ESCAPE '\'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 17 {
+		t.Fatalf("UUID v7 constraint count = %d, want 17", count)
+	}
+	var validArray, rejectsV4Array, rejectsNullElement bool
+	if err := pool.QueryRow(context.Background(), `SELECT
+    pdcai_uuid_array_is_v7(ARRAY['0198c20b-7b95-7000-8000-000000000001']::uuid[]),
+    NOT pdcai_uuid_array_is_v7(ARRAY['123e4567-e89b-42d3-a456-426614174000']::uuid[]),
+    NOT pdcai_uuid_array_is_v7(ARRAY[NULL]::uuid[])`).Scan(&validArray, &rejectsV4Array, &rejectsNullElement); err != nil {
+		t.Fatal(err)
+	}
+	if !validArray || !rejectsV4Array || !rejectsNullElement {
+		t.Fatalf("UUID v7 array validation = valid:%t v4:%t null:%t", validArray, rejectsV4Array, rejectsNullElement)
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at)
+VALUES('123e4567-e89b-42d3-a456-426614174000',now(),now(),now())`); err == nil {
+		t.Fatal("UUID v4 insert unexpectedly succeeded")
+	}
 }
 
 func assertTightContentConstraints(t *testing.T, pool *pgxpool.Pool) {

@@ -133,8 +133,8 @@ func NewRouter(dependencies Dependencies) http.Handler {
 
 func newRequestValidator() *validator.Validate {
 	validate := validator.New(validator.WithRequiredStructEnabled())
-	_ = validate.RegisterValidation("canonical_uuid", func(field validator.FieldLevel) bool {
-		return isCanonicalUUID(field.Field().String())
+	_ = validate.RegisterValidation("uuid_v7", func(field validator.FieldLevel) bool {
+		return isCanonicalUUIDv7(field.Field().String())
 	})
 	return validate
 }

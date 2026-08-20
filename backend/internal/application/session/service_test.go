@@ -16,12 +16,12 @@ func TestCreateAnonymousHashesCredentialsAndReturnsPlainTokens(t *testing.T) {
 	repository := &fakeRepository{}
 	service := testService(repository)
 	view, err := service.CreateAnonymous(context.Background(), CreateAnonymousInput{
-		BootstrapID: "c683d6a9-6c10-44a0-b673-55b0ff3e6594",
+		BootstrapID: "0198c20b-7b95-7000-8000-000000000001",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.UserID != "00000000-0000-4000-8000-000000000001" || view.SessionToken == "" || view.CSRFToken == "" {
+	if view.UserID != "00000000-0000-7000-8000-000000000001" || view.SessionToken == "" || view.CSRFToken == "" {
 		t.Fatalf("view = %#v", view)
 	}
 	if string(repository.created.SessionTokenHash) == view.SessionToken || string(repository.created.CSRFTokenHash) == view.CSRFToken {
@@ -35,10 +35,12 @@ func TestCreateAnonymousHashesCredentialsAndReturnsPlainTokens(t *testing.T) {
 func TestCreateAnonymousRejectsInvalidBootstrapBeforeAbuseCheck(t *testing.T) {
 	t.Parallel()
 
-	service := testService(&fakeRepository{})
-	_, err := service.CreateAnonymous(context.Background(), CreateAnonymousInput{BootstrapID: "not-a-uuid"})
-	if !errors.Is(err, ErrBootstrapID) {
-		t.Fatalf("error = %v", err)
+	for _, bootstrapID := range []string{"not-a-uuid", "123e4567-e89b-42d3-a456-426614174000"} {
+		service := testService(&fakeRepository{})
+		_, err := service.CreateAnonymous(context.Background(), CreateAnonymousInput{BootstrapID: bootstrapID})
+		if !errors.Is(err, ErrBootstrapID) {
+			t.Fatalf("bootstrap ID %q error = %v", bootstrapID, err)
+		}
 	}
 }
 
@@ -47,8 +49,8 @@ func TestRefreshRotatesCSRFAndVerifyCSRF(t *testing.T) {
 	email := "person@example.com"
 
 	repository := &fakeRepository{found: AuthenticatedSession{
-		ID:              "00000000-0000-4000-8000-000000000009",
-		UserID:          user.ID("00000000-0000-4000-8000-000000000001"),
+		ID:              "00000000-0000-7000-8000-000000000009",
+		UserID:          user.ID("00000000-0000-7000-8000-000000000001"),
 		LastSeenAt:      testTime.Add(-time.Hour),
 		CSRFTokenHash:   keyedHash([]byte("csrf-key"), "token-2"),
 		GoogleConnected: true,
@@ -104,7 +106,7 @@ type fakeGenerator struct{ next int }
 
 func (generator *fakeGenerator) NewID() (string, error) {
 	generator.next++
-	return "00000000-0000-4000-8000-00000000000" + string(rune('0'+generator.next)), nil
+	return "00000000-0000-7000-8000-00000000000" + string(rune('0'+generator.next)), nil
 }
 
 func (generator *fakeGenerator) NewToken(int) (string, error) {
