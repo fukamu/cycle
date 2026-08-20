@@ -58,10 +58,10 @@ func TestCancelAllowsIncompleteContentAndIsImmutable(t *testing.T) {
 }
 
 func TestTextLimitsUseCodePointsAndNeverTruncate(t *testing.T) {
-	if _, err := NormalizeAndValidateText(strings.Repeat("界", 2000)); err != nil {
+	if _, err := NormalizeAndValidateText(strings.Repeat("界", 200)); err != nil {
 		t.Fatal(err)
 	}
-	value := strings.Repeat("界", 2001)
+	value := strings.Repeat("界", 201)
 	if normalized, err := NormalizeAndValidateText(value); !errors.Is(err, ErrFrameTextTooLong) || normalized != "" {
 		t.Fatalf("oversize output was not rejected: %d, %v", len(normalized), err)
 	}

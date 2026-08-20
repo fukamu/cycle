@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 )
 
-const MaxFrameCodePoints = 2000
+const MaxFrameCodePoints = 200
 
 var (
 	ErrInvalidFrame       = errors.New("invalid PDCA frame")

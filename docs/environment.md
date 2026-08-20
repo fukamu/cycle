@@ -56,9 +56,9 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | `AI_FINALIZATION_GRACE_SECONDS` | DB finalization余裕、`15` | positive | GitHub variable |
 | `AI_LEASE_SECONDS` | running generation lease、`120` | timeout×attempts+backoff+graceより大 | GitHub variable |
 | `AI_MAX_GENERATIONS_PER_USER_24H` | rolling limit、`10` | positive | GitHub variable |
-| `AI_GOAL_REFINE_PROMPT_VERSION` | `goal-refine-v1` | matching prompt file必須 | GitHub variable |
-| `AI_GENERATE_PROMPT_VERSION` | `action-generate-v1` | matching prompt file必須 | GitHub variable |
-| `AI_REFINE_PROMPT_VERSION` | `action-refine-v1` | matching prompt file必須 | GitHub variable |
+| `AI_GOAL_REFINE_PROMPT_VERSION` | `goal-refine-v2` | matching prompt file必須 | GitHub variable |
+| `AI_GENERATE_PROMPT_VERSION` | `action-generate-v2` | matching prompt file必須 | GitHub variable |
+| `AI_REFINE_PROMPT_VERSION` | `action-refine-v2` | matching prompt file必須 | GitHub variable |
 | `AI_TOKENIZER_ENCODING` | `o200k_base` | implementation対応値 | GitHub variable |
 | `AI_MONTHLY_BUDGET_USD` | app budget、`100` | positive | GitHub variable |
 | `AI_WARNING_THRESHOLDS` | `0.5,0.8` | 0〜1の昇順 | GitHub variable |

@@ -162,7 +162,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       setPending(false);
     }
   }
-  const valid = editor.body.trim().length > 0 && count <= 500;
+  const valid = editor.body.trim().length > 0 && count <= 80;
   return (
     <main className="page review-page">
       <header className="goal-context">
@@ -189,12 +189,12 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         <textarea
           id="review-goal"
           value={editor.body}
-          maxLength={500}
+          maxLength={80}
           onChange={(event) => editor.setBody(event.target.value)}
         />
         <div className="editor-meta">
           <SaveBadge state={editor.state} retry={editor.retry} />
-          <span>{count} / 500</span>
+          <span>{count} / 80</span>
         </div>
         <div className="button-row">
           <button

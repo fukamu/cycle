@@ -15,6 +15,9 @@ func TestLoadDevelopmentConfig(t *testing.T) {
 	if config.AI.MaxInputTokens != 12000 || config.AI.GoalRefineMaxOutputTokens != 400 || config.AI.ActionMaxOutputTokens != 800 || config.AI.MaxContextCycles != 10 {
 		t.Fatalf("AI token defaults = %#v", config.AI)
 	}
+	if config.AI.GoalPromptVersion != "goal-refine-v2" || config.AI.GeneratePromptVersion != "action-generate-v2" || config.AI.RefinePromptVersion != "action-refine-v2" {
+		t.Fatalf("AI prompt defaults = %#v", config.AI)
+	}
 	if config.Database.MaxOpenConns != 10 {
 		t.Fatalf("MaxOpenConns = %d", config.Database.MaxOpenConns)
 	}

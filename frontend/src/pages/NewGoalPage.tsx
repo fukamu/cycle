@@ -92,7 +92,7 @@ function GoalDraftEditor({
     save,
   });
   const count = Array.from(editor.body).length;
-  const valid = editor.body.trim().length > 0 && count <= 500;
+  const valid = editor.body.trim().length > 0 && count <= 80;
 
   async function requestRefine() {
     setError(undefined);
@@ -177,14 +177,14 @@ function GoalDraftEditor({
         <textarea
           id="goal-body"
           value={editor.body}
-          maxLength={500}
+          maxLength={80}
           placeholder={goalCopy.placeholder}
           onChange={(event) => editor.setBody(event.target.value)}
         />
         <div className="editor-meta">
           <SaveBadge state={editor.state} retry={editor.retry} />
-          <span className={count > 500 ? "counter counter--error" : "counter"}>
-            {count} / 500
+          <span className={count > 80 ? "counter counter--error" : "counter"}>
+            {count} / 80
           </span>
         </div>
         <div className="button-row">

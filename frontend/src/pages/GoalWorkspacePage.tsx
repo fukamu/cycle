@@ -204,7 +204,7 @@ function CycleWorkspace({
   }, [pump, saveQueueNonce, saveState]);
 
   function change(frame: Frame, value: string) {
-    if (Array.from(value).length > 2000) return;
+    if (Array.from(value).length > 200) return;
     valuesRef.current = { ...valuesRef.current, [frame]: value };
     setValues(valuesRef.current);
     pending.current.set(frame, value);
@@ -408,6 +408,7 @@ function CycleWorkspace({
         <textarea
           aria-label={`${copy.label} — ${copy.name}`}
           value={values[selected]}
+          maxLength={200}
           placeholder={copy.placeholder}
           readOnly={!editable || (selected === "action" && aiState !== "idle")}
           onChange={(event) => change(selected, event.target.value)}
@@ -424,7 +425,7 @@ function CycleWorkspace({
           ) : (
             <span className="read-only-badge">読み取り専用</span>
           )}
-          <span>{Array.from(values[selected]).length} / 2,000</span>
+          <span>{Array.from(values[selected]).length} / 200</span>
         </div>
         {editable && selected === "action" && (
           <div className="action-controls">

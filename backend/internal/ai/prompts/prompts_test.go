@@ -11,7 +11,7 @@ import (
 
 func TestVersionedPromptsKeepSafetyAndOperationBoundaries(t *testing.T) {
 	resolved, err := Resolve(Versions{
-		GoalRefine: VersionGoalRefineV1, ActionGenerate: VersionActionGenerateV1, ActionRefine: VersionActionRefineV1,
+		GoalRefine: VersionGoalRefineV2, ActionGenerate: VersionActionGenerateV2, ActionRefine: VersionActionRefineV2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -27,16 +27,16 @@ func TestVersionedPromptsKeepSafetyAndOperationBoundaries(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(resolved.GoalRefine, "500文字") || !strings.Contains(resolved.ActionGenerate, "1〜3件") || !strings.Contains(resolved.ActionRefine, "意図と方向性") {
+	if !strings.Contains(resolved.GoalRefine, "80文字") || !strings.Contains(resolved.ActionGenerate, "合計200文字") || !strings.Contains(resolved.ActionRefine, "200文字") {
 		t.Fatal("operation-specific prompt contract is incomplete")
 	}
 }
 
 func TestPromptRegistryRejectsUnregisteredVersion(t *testing.T) {
 	_, err := Resolve(Versions{
-		GoalRefine: "goal-refine-v2", ActionGenerate: VersionActionGenerateV1, ActionRefine: VersionActionRefineV1,
+		GoalRefine: "goal-refine-v3", ActionGenerate: VersionActionGenerateV2, ActionRefine: VersionActionRefineV2,
 	})
-	if err == nil || !strings.Contains(err.Error(), "goal-refine-v2") {
+	if err == nil || !strings.Contains(err.Error(), "goal-refine-v3") {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 }
