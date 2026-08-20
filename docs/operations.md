@@ -80,6 +80,10 @@ Cloudflare DashboardでWorker `pdcai-staging`、deploy時刻/version、Container
 3. DDoS event/mitigationとApplication 429/403を混同しない。
 4. Wrangler deploy後の失敗はschema互換性を確認し、直前の成功commitから再deployする。
 
+### Temporary Closed Beta Admission
+
+初期ProductionのInvite発行・新規redeem停止・Cookie key rotation・一般公開切替は [`closed-beta-admission.md`](closed-beta-admission.md) を参照します。Raw Invite Token、Allowlist digest、Admission Cookie、Cookie keyをlogへ追加しません。`closed`の設定不備は既存Sessionではなく新規Anonymous bootstrapだけをfail-closedにすることを確認します。
+
 ## Environment / secret rotation
 
 1. [`environment.md`](environment.md)でserver/client、secret/public、validation、影響を確認。

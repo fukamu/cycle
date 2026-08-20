@@ -207,6 +207,7 @@ GitHub Environment `staging`を作り、deployment branchを`main`だけに制�
 
 ```text
 PUBLIC_ORIGIN=https://pdcai.matoruru.com
+BETA_ADMISSION_MODE=off
 GOOGLE_WEB_CLIENT_ID
 TURNSTILE_SITE_KEY
 DB_MAX_OPEN_CONNS
@@ -243,7 +244,7 @@ RATE_AI_PER_SESSION_MINUTE
 RATE_AI_PER_IP_MINUTE
 ```
 
-Workflowは空値と誤った`PUBLIC_ORIGIN`をdeploy前に拒否します。Example/defaultは運用承認値ではありません。
+Workflowは空値と誤った`PUBLIC_ORIGIN`をdeploy前に拒否します。Example/defaultは運用承認値ではありません。Stagingで一時Admissionを検証するときだけ [`closed-beta-admission.md`](closed-beta-admission.md) に従い、`BETA_ADMISSION_MODE=closed`、TTL、Allowlist、Cookie keyを同じdeployへ設定します。
 
 Application紹介導線は任意です。Stagingで意図して公開する場合だけ`APP_REFERRAL_URL=https://pdcai.matoruru.com/`を追加します。未設定ならFrontend Componentは表示されません。Workflowは別domain、path、query、fragmentを持つ紹介URLを拒否し、共有payloadにはUser Dataを含めません。
 
@@ -313,4 +314,4 @@ Staging停止は通常deployとは分離します。次の順でdata/secret所�
 
 ## Production
 
-Production infrastructureと自動deployはまだありません。`pdcai.io`確定後に、Production専用のCloudflare Worker/Container config、Neon project、Turnstile widget、Google client、R2 state、GitHub Environment、capacity/backup/alert値を設計します。Stagingのhostname、secret、DB、state、provider limitをcopyしてProduction扱いにしません。
+Production infrastructureと自動deployはまだありません。公開domainは`app.pdcai.io`とし、Production専用のCloudflare Worker/Container config、Neon project、Turnstile widget、Google client、R2 state、GitHub Environment、capacity/backup/alert値を設計します。初回公開時は [`closed-beta-admission.md`](closed-beta-admission.md) のAdmission inputsを`closed`で設定し、未招待Anonymous bootstrapをfail-closedにします。Stagingのhostname、secret、DB、state、provider limitをcopyしてProduction扱いにしません。
