@@ -47,7 +47,7 @@
 - Production deployはmigration-firstを維持し、migration成功前にapplication trafficを新versionへ移さない。
 - 未決のproduction capacity、backup、provider、budget/rate/security/alert値をexample/defaultから推測しない。
 - 実装・command・environment variable・workflowを変更したら、対応する専門文書とREADMEの導線が正しいか確認する。
-- `backend/internal/infrastructure/postgres/generated/`は手編集しない。Query/schema変更後に`Push-Location backend; sqlc generate; Pop-Location`で更新し、生成元と同じcommitへ含める。
+- `backend/internal/infrastructure/postgres/generated/`は手編集しない。Query/schema変更後に`pwsh ./scripts/invoke-sqlc.ps1 compile generate`で検証・更新し、生成元と同じcommitへ含める。実行方法の詳細は[`docs/development.md`](docs/development.md)を参照する。
 
 ## Verification
 

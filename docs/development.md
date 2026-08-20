@@ -8,12 +8,20 @@
 - Node.js 24以上、npm（lock fileは `frontend/package-lock.json` と `cloudflare/package-lock.json`）
 - Go 1.26.6
 - PostgreSQL 17
-- sqlc 1.31.1（Backendの品質チェックとSQL生成に必要）
+- sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.26.6によるfallbackも利用可能）
 - Docker（PostgreSQLの簡易起動とCloudflare Container imageのbuildに使う場合）
 - Chromium（E2Eを実行する場合）
 - Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
 
 CIとContainer imageはNode.js 24、Go 1.26.6、PostgreSQL 17を前提にし、Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
+
+sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1.31.1がHostにあればそれを使い、なければ`sqlc/sqlc:1.31.1`を`docker run --rm`で起動します。Docker serverも利用できない場合は、Goでpin済みの一時toolを`.tmp/tools`へbuildしてfallbackします。これによりsqlcをHostへ常設する必要はありません。Docker/Goはいずれも初回だけimageまたはmoduleのdownloadが必要で、一時toolは通常のsafe clean対象です。
+
+```powershell
+pwsh ./scripts/invoke-sqlc.ps1 compile generate
+```
+
+特定の実行方法を検証する場合は`-Runner Host`、`-Runner Docker`、`-Runner Go`を指定できます。Docker実行では`backend/`だけを書き込み可能でmountし、containerは実行後に削除します。Linux/macOSではHost user IDを渡し、生成物がroot所有になることを防ぎます。
 
 ## Dockerによるローカル実機確認
 
@@ -113,7 +121,7 @@ go run ./cmd/server
 
 ## 品質チェック
 
-全チェックは次の1コマンドです。Frontend依存関係とsqlc 1.31.1が事前に必要です。
+全チェックは次の1コマンドです。Frontend依存関係に加え、Backend checkにはHostのsqlc 1.31.1、Docker、Goのいずれかが必要です。
 
 ```powershell
 pwsh ./scripts/check.ps1
