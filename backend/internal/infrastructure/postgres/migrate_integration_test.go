@@ -38,7 +38,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 		}
 	}
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if err := Migrate(databaseURL, baselineDirectory); err != nil {
+	if _, err := Migrate(databaseURL, baselineDirectory); err != nil {
 		t.Fatal(err)
 	}
 	legacyBody := strings.Repeat("界", 81)
@@ -52,7 +52,7 @@ VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(databaseURL, directory); err == nil || !strings.Contains(err.Error(), "content exceeds the new goal") {
+	if _, err := Migrate(databaseURL, directory); err == nil || !strings.Contains(err.Error(), "content exceeds the new goal") {
 		t.Fatalf("oversize legacy migration error = %v", err)
 	}
 	var preserved string
@@ -65,11 +65,30 @@ VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000
 
 	executeMigrationScript(t, pool, script)
 	_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS schema_migrations`)
-	if err := Migrate(databaseURL, directory); err != nil {
+	result, err := Migrate(databaseURL, directory)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(databaseURL, directory); err != nil {
+	if len(result.Applied) != 3 {
+		t.Fatalf("applied migrations = %v, want 3", result.Applied)
+	}
+	wantFiles := []string{
+		"000001_pdcai_baseline.up.sql",
+		"000002_tighten_content_limits.up.sql",
+		"000003_enforce_uuid_v7.up.sql",
+	}
+	for index, migration := range result.Applied {
+		wantVersion := uint(index + 1)
+		if migration.Version != wantVersion || migration.Direction != "up" || migration.File != wantFiles[index] {
+			t.Fatalf("applied migration %d = %+v", index, migration)
+		}
+	}
+	result, err = Migrate(databaseURL, directory)
+	if err != nil {
 		t.Fatalf("second migration: %v", err)
+	}
+	if !result.NoChange() {
+		t.Fatalf("second migration applied = %v, want no change", result.Applied)
 	}
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)

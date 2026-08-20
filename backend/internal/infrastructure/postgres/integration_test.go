@@ -16,7 +16,7 @@ func integrationPool(t *testing.T) *pgxpool.Pool {
 	if databaseURL == "" {
 		t.Skip("TEST_DATABASE_URL is not set; use only a disposable PostgreSQL database")
 	}
-	if err := Migrate(databaseURL, filepath.Join("..", "..", "..", "migrations")); err != nil {
+	if _, err := Migrate(databaseURL, filepath.Join("..", "..", "..", "migrations")); err != nil {
 		t.Fatal(err)
 	}
 	pool, err := pgxpool.New(context.Background(), databaseURL)

@@ -5286,6 +5286,12 @@ estimated_cost_usd
 provider_latency_ms
 context_cycle_count
 context_changed
+migration_version
+migration_direction
+migration_file
+migration_duration_ms
+migration_applied_count
+migration_no_change
 ```
 
 禁止:
