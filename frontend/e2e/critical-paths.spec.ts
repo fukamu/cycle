@@ -3,15 +3,11 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
 }) => {
+  const goalText = "平日は主要業務を18時までに終えたい";
   await page.goto("/");
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
   const goal = page.getByRole("textbox", { name: "あなたの目標" });
-  await saveText(
-    page,
-    goal,
-    "平日は主要業務を18時までに終えたい",
-    "/api/v1/goal-drafts/",
-  );
+  await saveText(page, goal, goalText, "/api/v1/goal-drafts/");
   await page.getByRole("button", { name: "この目標で始める" }).click();
   await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
 
@@ -32,9 +28,7 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     .getByRole("dialog")
     .getByRole("button", { name: "サイクルを完了" })
     .click();
-  await expect(
-    page.getByRole("heading", { name: "平日は主要業務を18時までに終えたい" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: goalText })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "この目標で次のサイクルへ" }),
   ).toBeVisible();
@@ -43,21 +37,50 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   ).toBeVisible();
 
   await page.getByRole("button", { name: "AIで目標を整える" }).click();
-  await expect(page.getByText("AIからの提案")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "AIからの提案" }),
+  ).toBeVisible();
   await expect(
     page.getByText(
       "提案後に下書きが変更されたため、この提案は採用できません。",
     ),
   ).toHaveCount(0);
   await expect(page.getByRole("button", { name: "提案を採用" })).toBeEnabled();
+  const reviewGoal = page.getByRole("textbox", {
+    name: "次のサイクルで目指す目標",
+  });
+  await saveText(page, reviewGoal, "一時的に変更した目標", "/review");
+  await expect(
+    page.getByText(
+      "提案後に下書きが変更されたため、この提案は採用できません。",
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "提案を採用" })).toBeDisabled();
+  await saveText(page, reviewGoal, goalText, "/review");
+  await expect(
+    page.getByText(
+      "提案後に下書きが変更されたため、この提案は採用できません。",
+    ),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "提案を採用" })).toBeEnabled();
+  await page.route(
+    "**/api/v1/goals/*/review/refinements",
+    (route) => route.abort("connectionfailed"),
+    { times: 1 },
+  );
+  await page.getByRole("button", { name: "AIで目標を整える" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "前の提案を表示しています",
+  );
+  await expect(
+    page.getByRole("heading", { name: "AIからの提案" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "元の目標を維持" }).click();
 
   await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
   await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
   await page.goto("/history");
-  await page
-    .getByRole("link", { name: /平日は主要業務を18時までに終えたい/ })
-    .click();
+  await page.getByRole("link", { name: new RegExp(goalText) }).click();
   await expect(page.getByText("GOAL V1")).toBeVisible();
   await expect(page.getByRole("link", { name: /Cycle 1/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /Cycle 2/ })).toBeVisible();

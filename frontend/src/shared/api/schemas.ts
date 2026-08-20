@@ -14,7 +14,11 @@ export const goalStatusSchema = z.enum([
 export type GoalStatus = z.infer<typeof goalStatusSchema>;
 
 export const sessionSchema = z.object({
-  user: z.object({ id: uuid, googleConnected: z.boolean() }),
+  user: z.object({
+    id: uuid,
+    googleConnected: z.boolean(),
+    googleEmail: z.string().min(1).nullable(),
+  }),
   csrfToken: z.string().min(1),
 });
 export type Session = z.infer<typeof sessionSchema>;

@@ -100,6 +100,12 @@ export function SettingsPage() {
           <strong>
             {session.user.googleConnected ? "連携済み" : "未連携"}
           </strong>
+          {session.user.googleConnected && (
+            <span className="settings-account-detail">
+              {session.user.googleEmail ??
+                "連携したメールアドレスは取得できませんでした"}
+            </span>
+          )}
         </div>
         {!session.user.googleConnected && (
           <GoogleIdentityButton onCredential={connect} disabled={pending} />

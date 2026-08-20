@@ -65,12 +65,14 @@ type LoginRecord struct {
 }
 
 type AuthResult struct {
-	UserID user.ID
+	UserID      user.ID
+	GoogleEmail *string
 }
 
 type View struct {
 	UserID          user.ID
 	GoogleConnected bool
+	GoogleEmail     *string
 	SessionToken    string
 	CSRFToken       string
 }
@@ -183,6 +185,7 @@ func (service *Service) createSession(ctx context.Context, operation func(sessio
 	}
 	return View{
 		UserID: result.UserID, GoogleConnected: true,
+		GoogleEmail:  result.GoogleEmail,
 		SessionToken: token, CSRFToken: csrf,
 	}, nil
 }

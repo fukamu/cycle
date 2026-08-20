@@ -8,8 +8,9 @@ import (
 
 type sessionResponse struct {
 	User struct {
-		ID              string `json:"id"`
-		GoogleConnected bool   `json:"googleConnected"`
+		ID              string  `json:"id"`
+		GoogleConnected bool    `json:"googleConnected"`
+		GoogleEmail     *string `json:"googleEmail"`
 	} `json:"user"`
 	CSRFToken string `json:"csrfToken"`
 }
@@ -69,6 +70,7 @@ func mapSession(view appsession.View) sessionResponse {
 	var response sessionResponse
 	response.User.ID = string(view.UserID)
 	response.User.GoogleConnected = view.GoogleConnected
+	response.User.GoogleEmail = view.GoogleEmail
 	response.CSRFToken = view.CSRFToken
 	return response
 }

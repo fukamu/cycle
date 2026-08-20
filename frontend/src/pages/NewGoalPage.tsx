@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
+import { isGoalSuggestionStale } from "../features/goal-refine/suggestionState";
 import type {
   GoalDraft,
   GoalRefineResponse,
@@ -61,7 +62,11 @@ export function NewGoalPage() {
 type Refine =
   | { kind: "idle" }
   | { kind: "running" }
-  | { kind: "suggested"; response: GoalRefineResponse }
+  | {
+      kind: "suggested";
+      response: GoalRefineResponse;
+      sourceBody: string;
+    }
   | { kind: "failed" };
 
 function GoalDraftEditor({
@@ -90,14 +95,14 @@ function GoalDraftEditor({
     initialRevision: draft.revision,
     save,
   });
-  const bodyAtRequest = useRef("");
   const count = Array.from(editor.body).length;
   const valid = editor.body.trim().length > 0 && count <= 500;
 
   async function requestRefine() {
+    const previousSuggestion = refine.kind === "suggested" ? refine : undefined;
     setError(undefined);
     setRefine({ kind: "running" });
-    bodyAtRequest.current = editor.body;
+    const sourceBody = editor.body;
     try {
       const response = await refineGoalDraft(
         draft.id,
@@ -106,14 +111,18 @@ function GoalDraftEditor({
       );
       setRefine({
         kind: "suggested",
-        response: {
-          ...response,
-          contextChanged:
-            response.contextChanged || bodyAtRequest.current !== editor.body,
-        },
+        response,
+        sourceBody,
       });
     } catch {
-      setRefine({ kind: "failed" });
+      if (previousSuggestion) {
+        setRefine(previousSuggestion);
+        setError(
+          "AIから新しい提案を取得できませんでした。前の提案を表示しています。",
+        );
+      } else {
+        setRefine({ kind: "failed" });
+      }
     }
   }
   async function adopt() {
@@ -175,9 +184,7 @@ function GoalDraftEditor({
   }
   const suggestionStale =
     refine.kind === "suggested" &&
-    (refine.response.contextChanged ||
-      refine.response.sourceDraftRevision !== editor.revision ||
-      editor.state !== "saved");
+    isGoalSuggestionStale(editor.body, refine.sourceBody, editor.state);
   const canStart =
     valid &&
     editor.state === "saved" &&
@@ -244,11 +251,18 @@ function GoalDraftEditor({
         </button>
       </section>
       {refine.kind === "suggested" && (
-        <section className="suggestion-panel" aria-live="polite">
-          <p className="eyebrow">AIからの提案</p>
-          <p>{refine.response.suggestion}</p>
+        <section
+          className="suggestion-panel"
+          aria-labelledby="goal-suggestion-title"
+        >
+          <h2 className="eyebrow" id="goal-suggestion-title">
+            AIからの提案
+          </h2>
+          <p className="suggestion-text" role="status">
+            {refine.response.suggestion}
+          </p>
           {suggestionStale && (
-            <p className="inline-error">
+            <p className="inline-error" role="alert">
               提案後に下書きが変更されたため、この提案は採用できません。
             </p>
           )}

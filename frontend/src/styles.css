@@ -353,6 +353,7 @@ textarea[readonly] {
   border-color: #9db9af;
 }
 .suggestion-panel > p:not(.eyebrow) {
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .suggestion-panel .button-row {
@@ -592,6 +593,31 @@ textarea[readonly] {
 }
 .settings-card code {
   overflow-wrap: anywhere;
+}
+.settings-account-detail {
+  overflow-wrap: anywhere;
+  color: var(--ink) !important;
+}
+.google-identity {
+  width: min(400px, 100%);
+  min-height: 44px;
+  overflow: hidden;
+}
+.google-identity[data-disabled="true"] {
+  pointer-events: none;
+  opacity: 0.65;
+}
+.google-identity__button {
+  width: 100%;
+  height: 44px;
+  overflow: hidden;
+}
+.google-identity__button:empty {
+  display: none;
+}
+.google-identity__button iframe {
+  max-width: 100% !important;
+  max-height: 44px !important;
 }
 .danger-zone {
   margin-top: 22px;

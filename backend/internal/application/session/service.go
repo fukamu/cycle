@@ -39,6 +39,7 @@ type AuthenticatedSession struct {
 	IdleExpiresAt     time.Time
 	AbsoluteExpiresAt time.Time
 	GoogleConnected   bool
+	GoogleEmail       *string
 }
 
 type CreateAnonymousRecord struct {
@@ -61,6 +62,7 @@ type AnonymousRecord struct {
 type View struct {
 	UserID          user.ID
 	GoogleConnected bool
+	GoogleEmail     *string
 	CSRFToken       string
 	SessionToken    string
 }
@@ -126,6 +128,7 @@ func (service *Service) Refresh(ctx context.Context, sessionToken string) (View,
 	return View{
 		UserID:          record.UserID,
 		GoogleConnected: record.GoogleConnected,
+		GoogleEmail:     record.GoogleEmail,
 		CSRFToken:       csrfToken,
 		SessionToken:    sessionToken,
 	}, nil

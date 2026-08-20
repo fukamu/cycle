@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
+import { isGoalSuggestionStale } from "../features/goal-refine/suggestionState";
 import type { GoalRefineResponse, GoalReview } from "../shared/api/schemas";
 import {
   adoptReview,
@@ -36,7 +37,11 @@ export function GoalReviewPage() {
 type Refine =
   | { kind: "idle" }
   | { kind: "running" }
-  | { kind: "suggested"; response: GoalRefineResponse }
+  | {
+      kind: "suggested";
+      response: GoalRefineResponse;
+      sourceBody: string;
+    }
   | { kind: "failed" };
 
 type ReviewConfirmation =
@@ -52,7 +57,6 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const [pending, setPending] = useState(false);
   const [confirmation, setConfirmation] = useState<ReviewConfirmation>();
   const [error, setError] = useState<string>();
-  const requestBody = useRef("");
   const save = useCallback(
     async (body: string, revision: number) =>
       (await saveReview(goal.id, body, revision, session.csrfToken))
@@ -72,9 +76,10 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     goal.currentVersion.body.replaceAll("\r\n", "\n").trim();
 
   async function requestRefine() {
+    const previousSuggestion = refine.kind === "suggested" ? refine : undefined;
     setRefine({ kind: "running" });
     setError(undefined);
-    requestBody.current = editor.body;
+    const sourceBody = editor.body;
     try {
       const response = await refineReview(
         goal.id,
@@ -84,14 +89,18 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       );
       setRefine({
         kind: "suggested",
-        response: {
-          ...response,
-          contextChanged:
-            response.contextChanged || requestBody.current !== editor.body,
-        },
+        response,
+        sourceBody,
       });
     } catch {
-      setRefine({ kind: "failed" });
+      if (previousSuggestion) {
+        setRefine(previousSuggestion);
+        setError(
+          "AIから新しい提案を取得できませんでした。前の提案を表示しています。",
+        );
+      } else {
+        setRefine({ kind: "failed" });
+      }
     }
   }
   async function adopt() {
@@ -176,9 +185,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   }
   const stale =
     refine.kind === "suggested" &&
-    (refine.response.contextChanged ||
-      refine.response.sourceDraftRevision !== editor.revision ||
-      editor.state !== "saved");
+    isGoalSuggestionStale(editor.body, refine.sourceBody, editor.state);
   const valid = editor.body.trim().length > 0 && count <= 500;
   return (
     <main className="page review-page">
@@ -250,11 +257,18 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         </p>
       </section>
       {refine.kind === "suggested" && (
-        <section className="suggestion-panel">
-          <p className="eyebrow">AIからの提案</p>
-          <p>{refine.response.suggestion}</p>
+        <section
+          className="suggestion-panel"
+          aria-labelledby="review-suggestion-title"
+        >
+          <h2 className="eyebrow" id="review-suggestion-title">
+            AIからの提案
+          </h2>
+          <p className="suggestion-text" role="status">
+            {refine.response.suggestion}
+          </p>
           {stale && (
-            <p className="inline-error">
+            <p className="inline-error" role="alert">
               提案後に下書きが変更されたため、この提案は採用できません。
             </p>
           )}
@@ -278,7 +292,9 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         </section>
       )}
       {refine.kind === "failed" && (
-        <p className="inline-error">AIから提案を取得できませんでした。</p>
+        <p className="inline-error" role="alert">
+          AIから提案を取得できませんでした。
+        </p>
       )}
       <section className="terminal-actions">
         <h2>この目標を終える</h2>

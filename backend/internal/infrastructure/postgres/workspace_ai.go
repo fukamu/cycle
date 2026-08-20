@@ -559,12 +559,13 @@ FROM goal_drafts WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(draftID), must
 		}
 	}
 	var targetRevision int64
+	var sourceText string
 	var output string
 	var adoptedAt *time.Time
 	var adoptedDraftRevision *int64
-	err = tx.QueryRow(ctx, `SELECT target_revision,output,adopted_at,adopted_draft_revision FROM ai_generations
+	err = tx.QueryRow(ctx, `SELECT target_revision,source_text,output,adopted_at,adopted_draft_revision FROM ai_generations
 WHERE id=$1 AND user_id=$2 AND operation_type='goal_refine' AND source_goal_draft_id=$3 AND status='succeeded' FOR UPDATE`,
-		mustUUID(generationID), mustUUID(userID), mustUUID(draftID)).Scan(&targetRevision, &output, &adoptedAt, &adoptedDraftRevision)
+		mustUUID(generationID), mustUUID(userID), mustUUID(draftID)).Scan(&targetRevision, &sourceText, &output, &adoptedAt, &adoptedDraftRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspace.DraftView{}, workspace.ErrAISuggestionNotFound
 	}
@@ -578,7 +579,7 @@ WHERE id=$1 AND user_id=$2 AND operation_type='goal_refine' AND source_goal_draf
 		}
 		return workspace.DraftView{}, workspace.ErrAIResultAlreadyAdopted
 	}
-	if draft.Revision != expectedDraftRevision || targetRevision != expectedDraftRevision {
+	if draft.Revision != expectedDraftRevision || targetRevision > draft.Revision || draft.Body != sourceText {
 		return workspace.DraftView{}, workspace.ErrAIContextStale
 	}
 	draft.Body = output
