@@ -1,6 +1,8 @@
 import { Container, getContainer } from "@cloudflare/containers";
 import { env } from "cloudflare:workers";
 
+import { handleBetaAdmission } from "./beta-admission/beta-admission";
+
 const backendInstanceID = "staging-singleton";
 
 function required(name: string, value: string | undefined): string {
@@ -174,6 +176,9 @@ export default {
     if (!isBackendRequest(new URL(request.url))) {
       return bindings.ASSETS.fetch(request);
     }
+
+    const admissionResponse = await handleBetaAdmission(request, bindings);
+    if (admissionResponse !== null) return admissionResponse;
 
     const headers = new Headers(request.headers);
     const connectingIP = request.headers.get("CF-Connecting-IP");

@@ -3,6 +3,7 @@ import type { PropsWithChildren } from "react";
 
 import { APIError, requestJSON } from "../../shared/api/client";
 import { sessionSchema, type Session } from "../../shared/api/schemas";
+import { BetaAdmissionGate } from "../beta-admission/BetaAdmissionGate";
 import {
   clearBootstrapID,
   getOrCreateBootstrapID,
@@ -41,13 +42,17 @@ export function SessionProvider({ children }: PropsWithChildren) {
     queryKey: ["session"],
     queryFn: loadSession,
     staleTime: Number.POSITIVE_INFINITY,
-    retry: 2,
+    retry: (failureCount, error) =>
+      !isBetaAdmissionRequired(error) && failureCount < 2,
   });
 
   if (query.isPending) {
     return <div className="app-message">セッションを準備しています…</div>;
   }
   if (query.isError) {
+    if (isBetaAdmissionRequired(query.error)) {
+      return <BetaAdmissionGate onAdmitted={() => query.refetch()} />;
+    }
     return (
       <div className="app-message app-message--error" role="alert">
         <p>PDCAIを開始できませんでした。</p>
@@ -66,4 +71,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
       </SessionContext.Provider>
     </ReplaceSessionContext.Provider>
   );
+}
+
+function isBetaAdmissionRequired(error: unknown): boolean {
+  return error instanceof APIError && error.code === "BETA_ADMISSION_REQUIRED";
 }

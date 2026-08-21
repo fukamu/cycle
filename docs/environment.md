@@ -14,6 +14,17 @@ Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging L
 - R2 backend credential、Terraform/Turnstile token、Cloudflare deploy tokenは用途別に分離します。
 - Session/CSRF/bootstrap pepper、rate-limit HMAC、cursor署名secretは環境ごと・用途ごとに異なる24文字以上の高entropy値にします。
 
+## Temporary Closed Beta ingress
+
+Closed Beta AdmissionはCloudflare Workerだけが使用する一時的な公開ingress制御です。ApplicationのBackend runtimeやFrontend bundleへ値を渡しません。発行、失効、一般公開時の撤去は [`closed-beta-admission.md`](closed-beta-admission.md) を参照してください。
+
+| Variable | Purpose | Requirement / exposure |
+|---|---|---|
+| `BETA_ADMISSION_MODE` | `closed`で新規Anonymous bootstrap前にAdmissionを強制、`off`で無効化 | Worker-only non-secret。Staging workflowは未設定時`off`、初期Productionは`closed` |
+| `BETA_ADMISSION_COOKIE_TTL_DAYS` | Admission Cookie期限 | `closed`時のみ1〜730のinteger、Worker-only non-secret |
+| `BETA_INVITES` | 非個人Invite IDとSHA-256 Token digestのJSON array | `closed`時のみnon-empty、Worker-only non-secret。Raw Token禁止 |
+| `BETA_ADMISSION_COOKIE_KEY` | Admission Cookie HMAC-SHA-256署名 | `closed`時のみ32 random bytesのbase64url、**secret** |
+
 ## Backend runtime
 
 Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](deployment.md) のinput sheetに従い全項目をGitHub Environmentへ明示します。
@@ -159,10 +170,13 @@ CURSOR_SIGNING_SECRET
 TURNSTILE_SECRET_KEY
 ```
 
+Closed BetaをStagingで検証する場合だけ、secretへ`BETA_ADMISSION_COOKIE_KEY`を追加します。`BETA_ADMISSION_MODE=off`では不要です。
+
 Variables:
 
 ```text
 PUBLIC_ORIGIN
+BETA_ADMISSION_MODE
 GOOGLE_WEB_CLIENT_ID
 TURNSTILE_SITE_KEY
 DB_MAX_OPEN_CONNS
@@ -199,4 +213,6 @@ RATE_AI_PER_SESSION_MINUTE
 RATE_AI_PER_IP_MINUTE
 ```
 
-Production Environmentは未構築です。正式domain決定後に別値・別resourceとして追加します。
+`BETA_ADMISSION_MODE`は未設定時`off`です。`closed`へ変更する場合だけ`BETA_ADMISSION_COOKIE_TTL_DAYS`と`BETA_INVITES`も追加し、上記のCookie key secretと同じdeployで反映します。
+
+Production Environmentは未構築です。公開domainは`app.pdcai.io`とし、Production専用resourceと値を追加するときは初期値`BETA_ADMISSION_MODE=closed`を必須にします。Stagingのsecret、DB、provider値を転用しません。
