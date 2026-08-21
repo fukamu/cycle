@@ -68,8 +68,7 @@ go run ./cmd/server
 別terminalでFrontendを起動します。
 
 ```powershell
-Push-Location frontend
-npm run dev
+pnpm --filter pdcai-frontend run dev
 ```
 
 `http://localhost:5173` を開きます。同名のPostgreSQL containerを以前作成済みなら、`docker run` の代わりに `docker start pdcai-postgres` を使います。既存 `.env` / `.env.local` はsetup scriptで上書きされません。

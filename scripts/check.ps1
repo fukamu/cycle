@@ -36,17 +36,17 @@ function Invoke-Checked {
 }
 
 if ($runFrontend) {
-    Assert-Command "npm"
-    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "frontend/node_modules"))) {
+    Assert-Command "pnpm"
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "node_modules"))) {
         throw "frontend/node_modules is missing. Run pwsh ./scripts/setup.ps1 first."
     }
-    Push-Location (Join-Path $repoRoot "frontend")
+    Push-Location $repoRoot
     try {
-        Invoke-Checked npm run format:check
-        Invoke-Checked npm run lint
-        Invoke-Checked npm run typecheck
-        Invoke-Checked npm test
-        Invoke-Checked npm run build
+        Invoke-Checked pnpm --filter pdcai-frontend run format:check
+        Invoke-Checked pnpm --filter pdcai-frontend run lint
+        Invoke-Checked pnpm --filter pdcai-frontend run typecheck
+        Invoke-Checked pnpm --filter pdcai-frontend test
+        Invoke-Checked pnpm --filter pdcai-frontend run build
     }
     finally {
         Pop-Location
@@ -85,7 +85,7 @@ if ($runBackend) {
 
 if ($runInfrastructure) {
     Assert-Command "terraform"
-    Assert-Command "npm"
+    Assert-Command "pnpm"
     Assert-Command "docker"
     Invoke-Checked docker compose --file (Join-Path $repoRoot "compose.local.yaml") config --quiet
     $terraformDataDirWasSet = Test-Path Env:TF_DATA_DIR
@@ -107,27 +107,24 @@ if ($runInfrastructure) {
         }
     }
 
-    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "frontend/node_modules"))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "node_modules"))) {
         throw "frontend/node_modules is missing. Run pwsh ./scripts/setup.ps1 first."
     }
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "frontend/dist"))) {
-        Push-Location (Join-Path $repoRoot "frontend")
+        Push-Location $repoRoot
         try {
-            Invoke-Checked npm run build
+            Invoke-Checked pnpm --filter pdcai-frontend run build
         }
         finally {
             Pop-Location
         }
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "cloudflare/node_modules"))) {
-        throw "cloudflare/node_modules is missing. Run pwsh ./scripts/setup.ps1 first."
-    }
-    Push-Location (Join-Path $repoRoot "cloudflare")
+    Push-Location $repoRoot
     try {
         $previousXdgConfigHome = $env:XDG_CONFIG_HOME
         $env:XDG_CONFIG_HOME = Join-Path $repoRoot "cloudflare/.wrangler/config"
-        Invoke-Checked npm run check
-        Invoke-Checked npm run deploy:dry-run
+        Invoke-Checked pnpm --filter pdcai-cloudflare run check
+        Invoke-Checked pnpm --filter pdcai-cloudflare run deploy:dry-run
     }
     finally {
         $env:XDG_CONFIG_HOME = $previousXdgConfigHome
@@ -162,9 +159,9 @@ if ($E2E) {
         }
 
         $env:PDCAI_SERVER_BINARY = $e2eServerBinary
-        Push-Location (Join-Path $repoRoot "frontend")
+        Push-Location $repoRoot
         try {
-            Invoke-Checked npm run test:e2e
+            Invoke-Checked pnpm --filter pdcai-frontend run test:e2e
         }
         finally {
             Pop-Location

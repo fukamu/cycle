@@ -12,7 +12,6 @@ export default tseslint.config(
       "playwright-report",
       "test-results",
       ".tools",
-      ".npm-cache",
     ],
   },
   js.configs.recommended,

@@ -8,7 +8,7 @@
 | ------------------------------------- | ------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `Required command 'go' was not found` | HostにGoがない、PATH未反映            | `Get-Command go`; `go env GOVERSION`          | Go 1.26.6をinstallしterminalを開き直す。標準のsetup/check/E2Eはhost Goを前提とする |
 | `setup.ps1` がGo versionで停止        | CI/imageと異なるGo                    | `go env GOVERSION`                            | 1.26.6へ合わせる。実行前に停止するので既存env fileは上書きされない                 |
-| `npm ci`失敗                          | Node不一致、lock不整合、network/cache | `node --version`; `npm --version`; npm error  | Node 24以上へ合わせる。lockを手編集せず、必要なら`clean.ps1 -All`後に再実行        |
+| `pnpm install`失敗                    | Node/pnpm不一致、lock不整合、network/cache | `node --version`; `pnpm --version`; pnpm error | Node 24以上・pnpm 11.22.0へ合わせる。lockを手編集せず、必要なら`clean.ps1 -All`後に再実行 |
 | 同名Docker container error            | `pdcai-postgres`が既に存在            | `docker ps -a --filter name=pdcai-postgres`   | 停止中なら`docker start pdcai-postgres`。保持dataを確認せずremoveしない            |
 | PowerShell scriptを実行できない       | PowerShell 7未導入、execution policy  | `pwsh --version`; `Get-ExecutionPolicy -List` | PowerShell 7を導入し、組織policyに従う。policyを無断で緩和しない                   |
 | Docker実機環境がremote contextを拒否 | 現在のDocker contextがremote host     | `docker context inspect`                      | Docker Desktopのlocal contextへ明示的に戻す。安全guardを削除しない                 |
@@ -20,9 +20,9 @@
 | Backendが`invalid configuration`で終了 | `.env`未読込、必須secretが短い/空、値format不正 | error messageの変数名; `Get-ChildItem Env:APP_ENV`                 | Backend terminalで`. ./scripts/import-env.ps1`。`.env.example`を基に値を修正 |
 | Port 8080/5173が使用中                 | 以前のserverが残っている                        | `Get-NetTCPConnection -LocalPort 8080,5173`                        | 所有processを確認して停止。無関係なprocessをkillしない                       |
 | FrontendからAPI 404/connection refused | Backend未起動、Vite以外のorigin、proxy不一致    | Browser Network; `Invoke-RestMethod http://localhost:8080/healthz` | Backendを起動し、開発時は`http://localhost:5173`を使う                       |
-| Production相当buildで画面404           | `STATIC_DIR`不正、`dist`未build                 | `Test-Path frontend/dist/index.html`; Backend startup env          | `npm run build`後にabsolute `STATIC_DIR`を設定                               |
+| Production相当buildで画面404           | `STATIC_DIR`不正、`dist`未build                 | `Test-Path frontend/dist/index.html`; Backend startup env          | `pnpm --filter pdcai-frontend run build`後にabsolute `STATIC_DIR`を設定       |
 | Frontend build/typecheck失敗           | TypeScript error、stale dependency              | `pwsh ./scripts/check.ps1 -Scope frontend`                         | 最初のerrorを修正。必要なら`clean.ps1 -All`→`setup.ps1`                      |
-| format/lintだけ失敗                    | Prettier/ESLint規則違反                         | `npm run format:check`; `npm run lint`                             | `npm run format`後に差分をreviewし、lint errorを修正                         |
+| format/lintだけ失敗                    | Prettier/ESLint規則違反                         | `pnpm --filter pdcai-frontend run format:check`; `pnpm --filter pdcai-frontend run lint` | `pnpm --filter pdcai-frontend run format`後に差分をreviewし、lint errorを修正 |
 | Docker実機環境がreadyにならない        | Port競合、image build、Migration、DB起動の失敗  | `docker compose -f compose.local.yaml logs`                        | 最初のerrorを修正し、`pwsh ./scripts/local-app.ps1 -Down`後に再実行           |
 
 ## Database / Migration
@@ -45,7 +45,7 @@
 | E2EがDBへ接続できない                      | Playwright defaultは55432、Docker例は5432 | `docker port`; Playwright error             | `TEST_DATABASE_URL`を明示する                                                       |
 | E2EがGo executableを起動できない           | Host Goなし、`PDCAI_GO_BINARY`不正        | `Get-Command go`; env var                   | Go 1.26.6をinstall。binary指定時は実在pathを使う                                    |
 | `PDCAI_SERVER_BINARY`指定時にreadiness失敗 | Playwrightがmigration commandを省略する   | `frontend/playwright.config.ts`; DB version | Test DBへmigrationを事前適用してから再実行                                          |
-| Chromiumがない                             | Playwright browser未install               | Errorのbrowser executable path              | `Push-Location frontend; npx playwright install chromium; Pop-Location`             |
+| Chromiumがない                             | Playwright browser未install               | Errorのbrowser executable path              | `pnpm --filter pdcai-frontend exec playwright install chromium`                     |
 | CIだけflaky                                | timing、CI resource、shared state         | Playwright trace/screenshot、job log        | Testを並列化せず現状workers=1を維持し、traceから根因を修正。retry増加だけで隠さない |
 
 ## Authentication / Turnstile / AI

@@ -29,12 +29,17 @@ function Copy-ExampleIfMissing {
 }
 
 Assert-Command "node"
-Assert-Command "npm"
+Assert-Command "pnpm"
 Assert-Command "go"
 
 $nodeVersion = (& node --version).TrimStart('v')
 if ([version]$nodeVersion -lt [version]"24.0.0") {
     throw "Node.js 24 or newer is required; found $nodeVersion."
+}
+
+$pnpmVersion = (& pnpm --version).Trim()
+if ($pnpmVersion -ne "11.22.0") {
+    throw "pnpm 11.22.0 is required for reproducible local/CI builds; found $pnpmVersion."
 }
 
 $goVersion = (& go env GOVERSION).TrimStart("go")
@@ -50,32 +55,18 @@ Copy-ExampleIfMissing `
     -Destination (Join-Path $repoRoot "frontend/.env.local")
 
 if (-not $SkipInstall) {
-    Push-Location (Join-Path $repoRoot "frontend")
+    Push-Location $repoRoot
     try {
-        & npm ci
+        & pnpm install --frozen-lockfile
         if ($LASTEXITCODE -ne 0) {
-            throw "npm ci failed with exit code $LASTEXITCODE."
+            throw "pnpm install failed with exit code $LASTEXITCODE."
         }
-    }
-    finally {
-        Pop-Location
-    }
-
-    Push-Location (Join-Path $repoRoot "cloudflare")
-    try {
-        $previousXdgConfigHome = $env:XDG_CONFIG_HOME
-        $env:XDG_CONFIG_HOME = Join-Path $repoRoot "cloudflare/.wrangler/config"
-        & npm ci
-        if ($LASTEXITCODE -ne 0) {
-            throw "Cloudflare npm ci failed with exit code $LASTEXITCODE."
-        }
-        & npm run types
+        & pnpm --filter pdcai-cloudflare run types
         if ($LASTEXITCODE -ne 0) {
             throw "Cloudflare type generation failed with exit code $LASTEXITCODE."
         }
     }
     finally {
-        $env:XDG_CONFIG_HOME = $previousXdgConfigHome
         Pop-Location
     }
 

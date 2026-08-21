@@ -5,7 +5,7 @@
 ## 前提環境
 
 - PowerShell 7（このリポジトリの補助スクリプトを使う場合）
-- Node.js 24以上、npm（lock fileは `frontend/package-lock.json` と `cloudflare/package-lock.json`）
+- Node.js 24以上、pnpm 11.22.0（lock fileはrootの `pnpm-lock.yaml`）
 - Go 1.26.6
 - PostgreSQL 17
 - sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.26.6によるfallbackも利用可能）
@@ -13,7 +13,7 @@
 - Chromium（E2Eを実行する場合）
 - Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
 
-CIとContainer imageはNode.js 24、Go 1.26.6、PostgreSQL 17を前提にし、Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
+CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.26.6、PostgreSQL 17を前提にし、Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
 
 sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1.31.1がHostにあればそれを使い、なければ`sqlc/sqlc:1.31.1`を`docker run --rm`で起動します。Docker serverも利用できない場合は、Goでpin済みの一時toolを`.tmp/tools`へbuildしてfallbackします。これによりsqlcをHostへ常設する必要はありません。Docker/Goはいずれも初回だけimageまたはmoduleのdownloadが必要で、一時toolは通常のsafe clean対象です。
 
@@ -56,7 +56,7 @@ pwsh ./scripts/local-app.ps1 -Down
 pwsh ./scripts/setup.ps1
 ```
 
-このスクリプトはNode/Goのバージョンを確認し、未作成の場合だけ `.env.example` から `.env`、`frontend/.env.example` から `frontend/.env.local` を作り、Frontend/Cloudflareの`npm ci`とBackendの`go mod download`を実行します。既存の環境ファイルを上書きしません。依存関係を入れず環境ファイルだけ準備する場合は `-SkipInstall` を指定できます。
+このスクリプトはNode/pnpm/Goのバージョンを確認し、未作成の場合だけ `.env.example` から `.env`、`frontend/.env.example` から `frontend/.env.local` を作り、rootで`pnpm install --frozen-lockfile`とBackendの`go mod download`を実行します。既存の環境ファイルを上書きしません。依存関係を入れず環境ファイルだけ準備する場合は `-SkipInstall` を指定できます。
 
 `.env` のSession/CSRF/bootstrap pepper、rate-limit HMAC、cursor署名secretは、ローカルでも24文字以上が必要です。example値をproductionで使ってはいけません。Frontendの `VITE_` 変数はブラウザへ公開されるため、秘密値を入れてはいけません。
 
@@ -100,8 +100,7 @@ go run ./cmd/server
 Terminal 2でFrontendを起動します。
 
 ```powershell
-Push-Location frontend
-npm run dev
+pnpm --filter pdcai-frontend run dev
 ```
 
 `http://localhost:5173` を開きます。Viteは `/api` を `http://localhost:8080` へproxyします。Frontend環境変数を変えたときはViteを再起動してください。
@@ -109,9 +108,7 @@ npm run dev
 Go Backend単体の同一origin配信fallbackをローカルで確認する場合は、FrontendをbuildしてBackendへ静的assetsを渡します。Cloudflare StagingではWorkerがstatic assetsを配信します。
 
 ```powershell
-Push-Location frontend
-npm run build
-Pop-Location
+pnpm --filter pdcai-frontend run build
 . ./scripts/import-env.ps1
 $env:PUBLIC_ORIGIN = 'http://localhost:8080'
 $env:STATIC_DIR = (Resolve-Path ./frontend/dist)
@@ -148,7 +145,7 @@ E2Eも同じ専用DBを使います。初回のみChromiumを導入し、`-E2E` 
 
 ```powershell
 Push-Location frontend
-npx playwright install chromium
+pnpm --filter pdcai-frontend exec playwright install chromium
 Pop-Location
 $env:TEST_DATABASE_URL = 'postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmode=disable'
 pwsh ./scripts/check.ps1 -E2E
@@ -162,7 +159,7 @@ CIと同じ個別コマンドが必要な場合は [`.github/workflows/ci.yml`](
 
 DB-backed collection endpointは、page内のitem数に比例してSQL round tripが増えないよう、JOINまたはbatch queryで必要なsummaryを取得します。Home、Goal一覧、Cycle一覧を変更するときは、itemごとのdetail query（N+1 query）を追加してはいけません。
 
-Frontendのroute別code splittingとasset sizeは`npm run build`のchunk一覧で確認します。Mutation responseが遷移先と同じDTOを含む場合は、TanStack Query cacheへ反映してから遷移し、直後に同じresourceを再取得するnetwork round tripを避けます。Mutationの影響を受けるcollection/detail cacheは、引き続き明示的に更新またはinvalidateします。Auto SaveやAI提案Adoptも同じserver mutationとして扱い、成功responseをeditor local stateだけに反映しません。未保存入力はeditor/Browser Draft Cache、保存済みstateはTanStack Queryへ同期し、route往復の回帰testで古いfresh cacheが復元されないことを確認します。
+Frontendのroute別code splittingとasset sizeは`pnpm --filter pdcai-frontend run build`のchunk一覧で確認します。Mutation responseが遷移先と同じDTOを含む場合は、TanStack Query cacheへ反映してから遷移し、直後に同じresourceを再取得するnetwork round tripを避けます。Mutationの影響を受けるcollection/detail cacheは、引き続き明示的に更新またはinvalidateします。Auto SaveやAI提案Adoptも同じserver mutationとして扱い、成功responseをeditor local stateだけに反映しません。未保存入力はeditor/Browser Draft Cache、保存済みstateはTanStack Queryへ同期し、route往復の回帰testで古いfresh cacheが復元されないことを確認します。
 
 ### GitHub Actionsの更新
 
@@ -181,7 +178,7 @@ pwsh ./scripts/clean.ps1 -WhatIf
 pwsh ./scripts/clean.ps1
 ```
 
-依存関係も消すfull cleanです。次回は `scripts/setup.ps1` または `npm ci` が必要です。
+依存関係も消すfull cleanです。次回は `scripts/setup.ps1` または `pnpm install --frozen-lockfile` が必要です。
 
 ```powershell
 pwsh ./scripts/clean.ps1 -All

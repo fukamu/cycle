@@ -34,7 +34,6 @@ $safeTargets = @(
     "frontend/coverage",
     "frontend/playwright-report",
     "frontend/test-results",
-    "frontend/.npm-cache",
     "frontend/.eslintcache",
     "frontend/tsconfig.tsbuildinfo",
     "frontend/tsconfig.app.tsbuildinfo",
@@ -47,6 +46,8 @@ foreach ($target in $safeTargets) {
 }
 
 if ($All) {
+    Remove-GeneratedPath ".pnpm-store"
+    Remove-GeneratedPath "node_modules"
     Remove-GeneratedPath "frontend/node_modules"
     Remove-GeneratedPath "cloudflare/node_modules"
 }

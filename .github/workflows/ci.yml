@@ -64,22 +64,19 @@ jobs:
     needs: reuse_pr_ci
     if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npm run format:check
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
+          runtime: node@24
+          cache: true
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter pdcai-frontend run format:check
+      - run: pnpm --filter pdcai-frontend run lint
+      - run: pnpm --filter pdcai-frontend run typecheck
+      - run: pnpm --filter pdcai-frontend test
+      - run: pnpm --filter pdcai-frontend run build
 
   backend:
     needs: reuse_pr_ci
@@ -126,14 +123,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: docker compose --file compose.local.yaml config --quiet
-      - uses: actions/setup-node@v7
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            frontend/package-lock.json
-            cloudflare/package-lock.json
+          runtime: node@24
+          cache: true
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - run: docker compose --file compose.local.yaml config --quiet
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.15.8
@@ -143,16 +139,9 @@ jobs:
         working-directory: infra/terraform/staging
       - run: terraform validate
         working-directory: infra/terraform/staging
-      - run: npm ci
-        working-directory: frontend
-      - run: npm run build
-        working-directory: frontend
-      - run: npm ci
-        working-directory: cloudflare
-      - run: npm run check
-        working-directory: cloudflare
-      - run: npm run deploy:dry-run
-        working-directory: cloudflare
+      - run: pnpm --filter pdcai-frontend run build
+      - run: pnpm --filter pdcai-cloudflare run check
+      - run: pnpm --filter pdcai-cloudflare run deploy:dry-run
 
   e2e:
     needs: [reuse_pr_ci, workflow, frontend, backend, infrastructure]
@@ -180,23 +169,19 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          runtime: node@24
+          cache: true
+          install: false
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26.6'
           cache-dependency-path: backend/go.sum
-      - run: npm ci
-        working-directory: frontend
-      - run: npx playwright install --with-deps chromium
-        working-directory: frontend
-      - run: npm run build
-        working-directory: frontend
-      - run: npm run test:e2e
-        working-directory: frontend
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter pdcai-frontend exec playwright install --with-deps chromium
+      - run: pnpm --filter pdcai-frontend run build
+      - run: pnpm --filter pdcai-frontend run test:e2e
         env:
           TEST_DATABASE_URL: postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmode=disable
 

@@ -71,7 +71,7 @@ Worker/ContainerをTerraformとWranglerの両方で管理しません。Applicat
 - Cloudflareで`matoruru.com` zoneがActiveであること。
 - Cloudflare Workers Paid planを有効にすること。ContainersはPaid planが必要です。
 - GitHub repositoryのdefault branchが`main`で、CIがgreenであること。
-- Local bootstrapにはTerraform 1.15.8、Node.js 24、npm、Gitを使うこと。
+- Local bootstrapにはTerraform 1.15.8、Node.js 24、pnpm 11.22.0、Gitを使うこと。
 - Cloudflare、Neon、Google、OpenAI、GitHubへ必要最小権限でaccessできること。
 
 Repository全体の事前検査:

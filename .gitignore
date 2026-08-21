@@ -4,16 +4,17 @@
 !.env.example
 
 # Frontend
+node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
 frontend/playwright-report/
 frontend/test-results/
-frontend/.npm-cache/
 cloudflare/node_modules/
 cloudflare/.wrangler/
 cloudflare/.dev.vars*
 cloudflare/worker-configuration.d.ts
+.pnpm-store/
 
 # Backend
 backend/bin/
