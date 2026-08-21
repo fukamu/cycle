@@ -286,7 +286,7 @@ if [[ "${1:-}" == "context" && "${2:-}" == "inspect" ]]; then
 elif [[ "${1:-}" == "inspect" ]]; then
   case "${3:-}" in
     '{{.State.Status}}') printf '%s\n' 'running' ;;
-    '{{.Config.Image}}') printf '%s\n' "${FAKE_POSTGRES_IMAGE:-postgres:17-alpine}" ;;
+    '{{.Config.Image}}') printf '%s\n' "${FAKE_POSTGRES_IMAGE:-postgres:18.6-alpine3.24}" ;;
     '{{range .Config.Env}}{{println .}}{{end}}')
       printf '%s\n' 'POSTGRES_USER=dev user' 'POSTGRES_PASSWORD=p@ss:word'
       ;;
@@ -341,7 +341,7 @@ EOF
     bash "${fixture}/scripts/reset-local-db.sh" \
     --database-name pdcai_test --confirm-database-name pdcai_test --yes
   assert_failure "wrong PostgreSQL image" \
-    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" FAKE_POSTGRES_IMAGE=postgres:16-alpine \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" FAKE_POSTGRES_IMAGE=postgres:18.6-alpine \
     bash "${fixture}/scripts/reset-local-db.sh" \
     --database-name pdcai_test --confirm-database-name pdcai_test --yes
   pass "reset requires exact confirmation and rejects production, remote Docker, and wrong images"

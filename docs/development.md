@@ -7,14 +7,14 @@
 - Bash 5.0以上とGNU userland（Ubuntu 20.04/24.04、WSL2）
 - Node.js 24以上、pnpm 11.22.0（lock fileはrootの `pnpm-lock.yaml`）
 - Go 1.26.6
-- PostgreSQL 17
+- PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24`）
 - sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.26.6によるfallbackも利用可能）
 - Docker（PostgreSQLの簡易起動とCloudflare Container imageのbuildに使う場合）
 - Chromium（E2Eを実行する場合）
 - Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
 - `curl`、`openssl`、`realpath`、`sha256sum`、`base64`、`sed`、`awk`、`find`、`sort`、`mktemp`
 
-CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.26.6、PostgreSQL 17を前提にし、Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
+CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.26.6、PostgreSQL 18.6を前提にし、Docker PostgreSQLは`postgres:18.6-alpine3.24`へ固定しています。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
 
 sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1.31.1がHostにあればそれを使い、なければ`sqlc/sqlc:1.31.1`を`docker run --rm`で起動します。Docker serverも利用できない場合は、Goでpin済みの一時toolを`.tmp/tools`へbuildしてfallbackします。これによりsqlcをHostへ常設する必要はありません。Docker/Goはいずれも初回だけimageまたはmoduleのdownloadが必要で、一時toolは通常のsafe clean対象です。
 
@@ -69,13 +69,15 @@ source ./scripts/import-env.sh
 
 ## PostgreSQLの準備
 
-ローカルにPostgreSQL 17がなければ、Dockerで開発DBを起動できます。
+ローカルにPostgreSQL 18.6がなければ、Dockerで開発DBを起動できます。
 
 ```bash
-docker run --name pdcai-postgres -e POSTGRES_USER=pdcai -e POSTGRES_PASSWORD=pdcai -e POSTGRES_DB=pdcai -p 5432:5432 -d postgres:17-alpine
+docker run --name pdcai-postgres -e POSTGRES_USER=pdcai -e POSTGRES_PASSWORD=pdcai -e POSTGRES_DB=pdcai -p 5432:5432 -d postgres:18.6-alpine3.24
 ```
 
-同名containerを以前作成して停止している場合は、再作成せず `docker start pdcai-postgres` を使います。`docker rm` やvolume削除は通常の開発手順には含めません。
+同名containerを以前作成して停止している場合は、`docker inspect --format '{{.Config.Image}}' pdcai-postgres`でimageが正確に`postgres:18.6-alpine3.24`であることを確認してから`docker start pdcai-postgres`を使います。異なるimageのcontainerは再利用せず、保持dataの要否を確認してから別途処分してください。`docker rm`やvolume削除は通常の開発手順には含めません。
+
+PostgreSQL 18以降の公式Docker imageは`PGDATA=/var/lib/postgresql/18/docker`を使い、volume mount先が`/var/lib/postgresql`へ変わりました。`compose.local.yaml`の破棄可能DBも親directoryへtmpfsをmountします。17以前の`/var/lib/postgresql/data`を新規設定へ流用しません。
 
 Migrationを適用します。
 

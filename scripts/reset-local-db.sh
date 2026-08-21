@@ -21,7 +21,7 @@ Usage: ./scripts/reset-local-db.sh \
   [--container-name NAME] [--dry-run | --yes]
 
 Permanently drop, recreate, and migrate one allowlisted database in a running
-local PostgreSQL 17 Docker container. Real deletion requires both an exact
+local PostgreSQL 18.6 Docker container. Real deletion requires both an exact
 database-name confirmation and --yes.
 EOF
 }
@@ -93,8 +93,8 @@ container_environment="$(docker inspect --format '{{range .Config.Env}}{{println
 
 [[ "${container_state}" == "running" ]] \
   || die "Container '${container_name}' is not running. No database was changed."
-[[ "${container_image}" =~ ^postgres:17(-|$) ]] \
-  || die "Container '${container_name}' does not use the expected PostgreSQL 17 image. No database was changed."
+[[ "${container_image}" == "postgres:18.6-alpine3.24" ]] \
+  || die "Container '${container_name}' does not use the expected postgres:18.6-alpine3.24 image. No database was changed."
 
 postgres_user=""
 postgres_password=""

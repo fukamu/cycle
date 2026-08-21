@@ -4,7 +4,7 @@
 
 ## 構成
 
-- Database: PostgreSQL 17
+- Database: PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24`）
 - Migration runner: `backend/cmd/migrate`（`golang-migrate`）
 - `000002_tighten_content_limits` はGoalを80 code points、各PDCA Frameを200 code pointsへ制限する。既存行が新上限を超える場合は自動切り捨てせずMigration全体を失敗させるため、対象データを確認し、明示的な運用判断を得てから修正して再実行する。
 - `000003_enforce_uuid_v7` はPrimary/standalone UUID列とUUID配列へUUID v7のversion/variant制約を追加する。FK列は制約済みの参照先を通じてUUID v7へ限定される。
@@ -75,8 +75,8 @@ seed scriptと固定seedデータはありません。Migration後、匿名sessi
 
 - `clean.sh` とは別commandで、明示的な実行以外から呼ばれない。
 - `pdcai`、`pdcai_dev`、`pdcai_test` 以外のDB名を拒否する。
-- DB名を `ConfirmDatabaseName` へ大文字小文字も含めて再入力させる。
-- remote Docker context、停止container、PostgreSQL 17以外のimage、host portなしを拒否する。
+- DB名を`--confirm-database-name`へ大文字小文字も含めて再入力させる。
+- remote Docker context、停止container、`postgres:18.6-alpine3.24`以外のimage、host portなしを拒否する。
 - URLを引数に取らず、local Docker containerからだけ接続情報を構築する。
 - `APP_ENV=production` を拒否する。
 - Docker/Go/migration実行条件を削除前に検査し、実削除には`--yes`を要求する。

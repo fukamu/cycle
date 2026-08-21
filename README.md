@@ -36,7 +36,7 @@ PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal 
 - Bash 5.0以上とGNU userland（Ubuntu 20.04/24.04、WSL2対応）
 - Node.js 24以上とpnpm 11.22.0
 - Go 1.26.6
-- PostgreSQL 17
+- PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24`）
 - sqlc 1.31.1またはDocker（Backend check/SQL生成。Go fallbackあり）
 - Docker（local PostgreSQL/Container image buildに使う場合）
 - Chromium（E2Eに必要）
@@ -58,7 +58,7 @@ Docker Desktop、Bash 5、curlだけで、Frontend、Backend、Migration、Postg
 
 ```bash
 ./scripts/setup.sh
-docker run --name pdcai-postgres -e POSTGRES_USER=pdcai -e POSTGRES_PASSWORD=pdcai -e POSTGRES_DB=pdcai -p 5432:5432 -d postgres:17-alpine
+docker run --name pdcai-postgres -e POSTGRES_USER=pdcai -e POSTGRES_PASSWORD=pdcai -e POSTGRES_DB=pdcai -p 5432:5432 -d postgres:18.6-alpine3.24
 source ./scripts/import-env.sh
 cd backend
 go run ./cmd/migrate
@@ -71,7 +71,7 @@ go run ./cmd/server
 pnpm --filter pdcai-frontend run dev
 ```
 
-`http://localhost:5173` を開きます。同名のPostgreSQL containerを以前作成済みなら、`docker run` の代わりに `docker start pdcai-postgres` を使います。既存 `.env` / `.env.local` はsetup scriptで上書きされません。
+`http://localhost:5173` を開きます。同名のPostgreSQL containerを以前作成済みなら、imageが正確に`postgres:18.6-alpine3.24`であることを確認した場合だけ、`docker run`の代わりに`docker start pdcai-postgres`を使います。異なるimageは再利用しません。既存 `.env` / `.env.local` はsetup scriptで上書きされません。
 
 ## Main commands
 
