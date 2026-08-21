@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 test_dir="$(mktemp -d)"
@@ -11,9 +11,9 @@ tested_tree="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 head_sha="cccccccccccccccccccccccccccccccccccccccc"
 artifact_name="pr-ci-18-${head_sha}-${tested_tree}"
 
-cat > "${test_dir}/gh" <<EOF
+cat >"${test_dir}/gh" <<EOF
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 endpoint=""
 for argument in "\$@"; do
   if [[ "\${argument}" == /repos/* ]]; then
@@ -53,9 +53,9 @@ run_resolver() {
     FAKE_MATCHING_ARTIFACT="${matching_artifact}" \
     PATH="${test_dir}:${PATH}" \
     bash "${script_dir}/resolve-ci-reuse.sh" \
-      "${main_sha}" \
-      "owner/repository" \
-      "${output_file}"
+    "${main_sha}" \
+    "owner/repository" \
+    "${output_file}"
 }
 
 matching_output="${test_dir}/matching-output"

@@ -14,9 +14,9 @@ Dashboard、alert policy、notification channel、uptime monitorはまだIaC化�
 
 ## Health check
 
-```powershell
-Invoke-RestMethod 'https://pdcai.matoruru.com/healthz'
-Invoke-RestMethod 'https://pdcai.matoruru.com/readyz'
+```bash
+curl --fail --silent --show-error 'https://pdcai.matoruru.com/healthz'
+curl --fail --silent --show-error 'https://pdcai.matoruru.com/readyz'
 ```
 
 - `/healthz`: WorkerからContainer processへ到達できる。DBや外部APIは呼ばない。

@@ -76,8 +76,8 @@ Worker/ContainerをTerraformとWranglerの両方で管理しません。Applicat
 
 Repository全体の事前検査:
 
-```powershell
-pwsh ./scripts/check.ps1
+```bash
+./scripts/check.sh
 ```
 
 ## 2. R2 Terraform backend bootstrap
@@ -87,12 +87,14 @@ R2 bucketとS3 credentialはTerraform自身より先に必要なためmanual boo
 1. Cloudflare Dashboardでprivate R2 bucket（例: `pdcai-terraform-state`）を作る。他用途と共有しない。
 2. 対象bucketだけにObject Read/WriteできるR2 API tokenを作る。Plan時のstate read/lockとApply時のstate更新に使い、account全体の管理tokenやdeploy tokenと共有しない。
 3. [`backend.hcl.example`](../infra/terraform/staging/backend.hcl.example) をuntrackedの `backend.hcl` へcopyし、bucketとaccount IDを設定する。
-4. Access Key ID / Secret Access Keyを現在のPowerShell processだけへ設定する。値をcommand historyへ直接貼らないため、password managerから安全に取得する。
+4. Access Key ID / Secret Access Keyを現在のBash processだけへ設定する。値をcommand historyへ直接貼らないため、password managerから安全に取得する。
 
-```powershell
-Copy-Item ./infra/terraform/staging/backend.hcl.example ./infra/terraform/staging/backend.hcl
-$env:AWS_ACCESS_KEY_ID = '<R2 access key ID>'
-$env:AWS_SECRET_ACCESS_KEY = '<R2 secret access key>'
+```bash
+cp -- ./infra/terraform/staging/backend.hcl.example ./infra/terraform/staging/backend.hcl
+read -r -p 'R2 access key ID: ' AWS_ACCESS_KEY_ID
+read -r -s -p 'R2 secret access key: ' AWS_SECRET_ACCESS_KEY
+printf '\n'
+export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 ```
 
 Backendは`use_lockfile = true`を使います。R2はstrong consistencyとconditional writesを提供しますが、S3 Object Versioningに相当するstate履歴復旧はありません。State bucketへBucket Lockを設定するとTerraformの上書きを妨げるため設定しません。State/backend credential/plan fileはsecretとして扱い、Terraform workflowのconcurrency group以外から同時applyしません。
@@ -144,8 +146,8 @@ Saved planはstateとresource値を含み得るsecret相当です。Artifactをd
 
 Localではcredential不要のfmt/validateを通常検査に使います。CI/CD障害調査でremote planが必要な場合だけ、[`backend.hcl.example`](../infra/terraform/staging/backend.hcl.example) と [`terraform.tfvars.example`](../infra/terraform/staging/terraform.tfvars.example) からGit管理外ファイルを作り、同じscopeのcredentialを現在processへ設定します。通常releaseをlocal `terraform apply`で迂回しません。
 
-```powershell
-pwsh ./scripts/check.ps1 -Scope infrastructure
+```bash
+./scripts/check.sh --scope infrastructure
 ```
 
 

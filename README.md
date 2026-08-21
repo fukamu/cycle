@@ -21,7 +21,7 @@ PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal 
 
 - `frontend/`: React 19、TypeScript、Vite、Vitest、Playwright
 - `backend/`: Go API、PostgreSQL adapter、migration
-- `scripts/`: PowerShellのlocal setup/check/clean/reset補助
+- `scripts/`: Bashのlocal setup/check/clean/reset補助
 - `cloudflare/`: Worker routing、Container、static assets、Wrangler config
 - `infra/terraform/staging/`: Staging LightのTurnstile widget（R2 backend、secret payload/deployは対象外）
 - `.github/workflows/ci.yml`: Frontend、Backend、Infrastructure、E2EのCI
@@ -33,8 +33,8 @@ PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal 
 
 ## Prerequisites
 
-- PowerShell 7（補助scriptを使う場合）
-- Node.js 24以上とnpm
+- Bash 5.0以上とGNU userland（Ubuntu 20.04/24.04、WSL2対応）
+- Node.js 24以上とpnpm 11.22.0
 - Go 1.26.6
 - PostgreSQL 17
 - sqlc 1.31.1またはDocker（Backend check/SQL生成。Go fallbackあり）
@@ -46,28 +46,28 @@ PDCAIは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal 
 
 ## Docker local preview
 
-Docker DesktopとPowerShell 7だけで、Frontend、Backend、Migration、PostgreSQLを起動して実際の画面を確認できます。Repositoryへ依存関係やbuild出力を作らず、既存の`.env`とローカルDBも使用しません。
+Docker Desktop、Bash 5、curlだけで、Frontend、Backend、Migration、PostgreSQLを起動して実際の画面を確認できます。Repositoryへ依存関係やbuild出力を作らず、既存の`.env`とローカルDBも使用しません。
 
-```powershell
-pwsh ./scripts/local-app.ps1
+```bash
+./scripts/local-app.sh
 ```
 
 準備完了後に`http://localhost:8080`を開きます。AIは外部通信しないFake Adapter、Turnstileは無効、Google連携は未設定です。Enterで終了するとcontainer、network、破棄可能DBを削除します。詳細、別port、detached起動は[`docs/development.md`](docs/development.md)を参照してください。
 
 ## Quick start
 
-```powershell
-pwsh ./scripts/setup.ps1
+```bash
+./scripts/setup.sh
 docker run --name pdcai-postgres -e POSTGRES_USER=pdcai -e POSTGRES_PASSWORD=pdcai -e POSTGRES_DB=pdcai -p 5432:5432 -d postgres:17-alpine
-. ./scripts/import-env.ps1
-Push-Location backend
+source ./scripts/import-env.sh
+cd backend
 go run ./cmd/migrate
 go run ./cmd/server
 ```
 
 別terminalでFrontendを起動します。
 
-```powershell
+```bash
 pnpm --filter pdcai-frontend run dev
 ```
 
@@ -77,20 +77,20 @@ pnpm --filter pdcai-frontend run dev
 
 | 用途                                  | Command                                                                            |
 | ------------------------------------- | ---------------------------------------------------------------------------------- |
-| 初回setup                             | `pwsh ./scripts/setup.ps1`                                                         |
-| Dockerローカル実機確認                | `pwsh ./scripts/local-app.ps1`                                                     |
-| Backend環境変数を現在のterminalへ読込 | `. ./scripts/import-env.ps1`                                                       |
-| 全品質check                           | `pwsh ./scripts/check.ps1`                                                         |
-| Frontend / Backend / Infrastructureだけcheck | `pwsh ./scripts/check.ps1 -Scope frontend` / `-Scope backend` / `-Scope infrastructure` |
-| E2Eを含むcheck                        | `pwsh ./scripts/check.ps1 -E2E`                                                    |
+| 初回setup                             | `./scripts/setup.sh`                                                               |
+| Dockerローカル実機確認                | `./scripts/local-app.sh`                                                           |
+| Backend環境変数を現在のterminalへ読込 | `source ./scripts/import-env.sh`                                                   |
+| 全品質check                           | `./scripts/check.sh`                                                               |
+| Frontend / Backend / Infrastructureだけcheck | `./scripts/check.sh --scope frontend` / `--scope backend` / `--scope infrastructure` |
+| E2Eを含むcheck                        | `./scripts/check.sh --e2e`                                                        |
 | AI quality evaluation手順             | [`docs/ai-evaluation.md`](docs/ai-evaluation.md)                                   |
-| Safe clean                            | `pwsh ./scripts/clean.ps1`                                                         |
-| 依存関係を含むfull clean              | `pwsh ./scripts/clean.ps1 -All`                                                    |
-| Local Docker DB reset                 | `pwsh ./scripts/reset-local-db.ps1 -DatabaseName pdcai -ConfirmDatabaseName pdcai` |
+| Safe clean                            | `./scripts/clean.sh`                                                               |
+| 依存関係を含むfull clean              | `./scripts/clean.sh --all`                                                         |
+| Local Docker DB reset                 | `./scripts/reset-local-db.sh --database-name pdcai --confirm-database-name pdcai --yes` |
 
 `TEST_DATABASE_URL`を使うBackend integration testとE2Eはtableを初期化します。消去してよい専用test DBだけを指定してください。
 
-Safe/full cleanは環境file、DB、Docker resource、browser dataを削除しません。DB resetは全データを削除する別のHigh impact commandです。実行前に [`docs/database.md`](docs/database.md) の警告と `-WhatIf` を使用してください。Production DBをresetするcommandはありません。
+Safe/full cleanは環境file、DB、Docker resource、browser dataを削除しません。DB resetは全データを削除する別のHigh impact commandです。実行前に [`docs/database.md`](docs/database.md) の警告と `--dry-run` を使用してください。Production DBをresetするcommandはありません。
 
 ## Environment
 

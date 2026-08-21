@@ -6,8 +6,8 @@ AI qualityの基準、5つのcase group、rubric、release gateは [`design.md`]
 
 次のBackend checkは、version指定が中央Prompt Registryで解決できること、Promptのoperation boundary、5つのfixture groupが存在し有効なJSONLであることを検証します。
 
-```powershell
-pwsh ./scripts/check.ps1 -Scope backend
+```bash
+./scripts/check.sh --scope backend
 ```
 
 Fixture corpusは`backend/testdata/ai_eval`にあり、`internal/ai/prompts`のtest runnerが全case groupを明示的に列挙して発見します。物理Pathやfile名を変更する場合は、同じ変更でrunnerを更新してください。

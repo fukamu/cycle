@@ -40,24 +40,24 @@
 
 - 作業開始時に`git status`と関連code/config/test/docsを確認し、userの未commit変更を削除・上書き・混入しない。
 - Secret、credential、private key、production dataをcommit・log・文書・test fixtureへ入れない。Clientへ出せるのは明示された`VITE_`公開値だけ。
-- `.env`をBackendが暗黙loadする前提にしない。Local PowerShellでは `. ./scripts/import-env.ps1` を使う。
-- 通常cleanとdata削除を分離する。`scripts/clean.ps1`へDB、Docker volume、environment file、browser dataの削除を追加しない。
+- `.env`をBackendが暗黙loadする前提にしない。Local Bashでは `source ./scripts/import-env.sh` を使う。
+- 通常cleanとdata削除を分離する。`scripts/clean.sh`へDB、Docker volume、environment file、browser dataの削除を追加しない。
 - Production DB reset/down/drop、production deploy、secret変更、data correctionを検証目的で実行しない。
 - Schema変更は既存migrationを編集せず、新しいup/down pairを追加する。保存dataや挙動に影響する場合は先に仕様整合性を確認する。
 - Production deployはmigration-firstを維持し、migration成功前にapplication trafficを新versionへ移さない。
 - main CIの重いjobを省略できるのは、成功したPR CIの検証tree artifactとmain treeが完全一致する場合だけとする。直接push、artifact/API問題、tree不一致では全CIへfallbackし、main SHAの成功CI、Terraform Plan、承認付きApply、Deployの連鎖を維持する。
 - 未決のproduction capacity、backup、provider、budget/rate/security/alert値をexample/defaultから推測しない。
 - 実装・command・environment variable・workflowを変更したら、対応する専門文書とREADMEの導線が正しいか確認する。
-- `backend/internal/infrastructure/postgres/generated/`は手編集しない。Query/schema変更後に`pwsh ./scripts/invoke-sqlc.ps1 compile generate`で検証・更新し、生成元と同じcommitへ含める。実行方法の詳細は[`docs/development.md`](docs/development.md)を参照する。
+- `backend/internal/infrastructure/postgres/generated/`は手編集しない。Query/schema変更後に`./scripts/invoke-sqlc.sh compile generate`で検証・更新し、生成元と同じcommitへ含める。実行方法の詳細は[`docs/development.md`](docs/development.md)を参照する。
 
 ## Verification
 
-- Frontendだけ: `pwsh ./scripts/check.ps1 -Scope frontend`
-- Backendだけ: `pwsh ./scripts/check.ps1 -Scope backend`
-- 全体: `pwsh ./scripts/check.ps1`
-- E2E込み: 消去可能な`TEST_DATABASE_URL`を設定して `pwsh ./scripts/check.ps1 -E2E`
-- Safe cleanの対象確認: `pwsh ./scripts/clean.ps1 -WhatIf`
-- DB reset guardのdry-run: `pwsh ./scripts/reset-local-db.ps1 -DatabaseName pdcai -ConfirmDatabaseName pdcai -WhatIf`
+- Frontendだけ: `./scripts/check.sh --scope frontend`
+- Backendだけ: `./scripts/check.sh --scope backend`
+- 全体: `./scripts/check.sh`
+- E2E込み: 消去可能な`TEST_DATABASE_URL`を設定して `./scripts/check.sh --e2e`
+- Safe cleanの対象確認: `./scripts/clean.sh --dry-run`
+- DB reset guardのdry-run: `./scripts/reset-local-db.sh --database-name pdcai --confirm-database-name pdcai --dry-run`
 
 Host tool不足で一部checkを実行できない場合は、実行できたcheck、未実行のcheck、理由を明記してください。Data消失やproduction変更を伴う操作をvalidationのために実行してはいけません。
 

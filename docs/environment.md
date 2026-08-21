@@ -6,7 +6,7 @@
 
 Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging Lightは `APP_ENV=production` を使いますが、ProductionとDB、secret、provider credential、GitHub Environment、Terraform stateを共有しません。
 
-- Local backendはuntracked `.env`、Viteはuntracked `frontend/.env.local`を使います。Backendが`.env`を暗黙loadする前提にせず、PowerShellでは `. ./scripts/import-env.ps1` を使います。
+- Local backendはuntracked `.env`、Viteはuntracked `frontend/.env.local`を使います。Backendが`.env`を暗黙loadする前提にせず、Bashで `source ./scripts/import-env.sh` を使います。
 - `VITE_`値はbundleへ埋め込まれ、全利用者から見えます。Secretを設定しません。
 - Stagingのnon-secret configurationはGitHub `staging` Environment variablesからWrangler `--var`で登録します。
 - Staging runtime secretsはGitHub `staging` Environmentからdeploy時の一時`--secrets-file`経由でCloudflare Worker Secretsへ登録します。一時fileはworkflowの`always()` stepで削除します。
@@ -110,7 +110,7 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 | `TEST_DATABASE_URL` | disposable integration/E2E DB | runtime/Production DBを指定禁止 |
 | `PDCAI_GO_BINARY` | Playwright用Go executable | optional |
 | `PDCAI_SERVER_BINARY` | prebuilt E2E server | optional、指定時は事前migration必要 |
-| `PDCAI_LOCAL_PORT` | Dockerローカル実機確認のHost port | optional、`scripts/local-app.ps1`が`-Port`から一時設定、既定`8080` |
+| `PDCAI_LOCAL_PORT` | Dockerローカル実機確認のHost port | optional、`scripts/local-app.sh`が`--port`から一時設定、既定`8080` |
 | `CI` | Playwright behavior | CIが自動設定 |
 | `CLOUDFLARE_ACCOUNT_ID` | Wrangler account | GitHub secret（値自体はcredentialではない） |
 | `CLOUDFLARE_API_TOKEN` | Wrangler deploy auth | **GitHub secret**、deploy最小権限 |

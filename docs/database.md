@@ -22,7 +22,7 @@ Migration runnerは、正常に適用した各fileについて`migration_version
 2. 次の未使用番号で `.up.sql` と `.down.sql` を同時に作る。例: `000002_add_example.up.sql` / `000002_add_example.down.sql`。
 3. 1 migrationをtransactionで安全に適用できる場合は、既存fileと同様に `BEGIN;` / `COMMIT;` で囲む。PostgreSQLでtransaction非対応の操作が必要なら、影響と復旧手順をmigrationのcommentとPRへ明記する。
 4. Query変更があれば `backend/internal/infrastructure/postgres/queries` を更新する。
-5. Repository rootで`pwsh ./scripts/invoke-sqlc.ps1 compile generate`を実行し、生成差分をcommitする。実行環境の選択は[`development.md`](development.md)を参照する。
+5. Repository rootで`./scripts/invoke-sqlc.sh compile generate`を実行し、生成差分をcommitする。実行環境の選択は[`development.md`](development.md)を参照する。
 6. 空のtest DBと、可能ならproduction相当データ量のcopyではない匿名化fixtureでupを検証する。downはローカルの破棄可能DBでのみ検証する。
 7. backward incompatibleな変更は一度に行わず、expand → application切替 → contractを複数releaseに分ける。
 
@@ -30,11 +30,12 @@ Migration番号の変更、適用済みfileの書き換え、別branchで同じ�
 
 ## ローカル適用
 
-```powershell
-. ./scripts/import-env.ps1
-Push-Location backend
-go run ./cmd/migrate
-Pop-Location
+```bash
+source ./scripts/import-env.sh
+(
+  cd backend
+  go run ./cmd/migrate
+)
 ```
 
 再実行しても未適用分だけが処理されます。接続先を表示・共有するとpasswordが漏れるため、`DATABASE_URL` をterminal logやissueへ貼らないでください。
@@ -43,15 +44,15 @@ Pop-Location
 
 Go integration testとE2Eは `TEST_DATABASE_URL` だけを使います。専用の `pdcai_test` databaseを用意してください。
 
-```powershell
+```bash
 docker exec pdcai-postgres createdb --username pdcai --owner pdcai pdcai_test
-$env:TEST_DATABASE_URL = 'postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmode=disable'
-pwsh ./scripts/check.ps1 -Scope backend
+export TEST_DATABASE_URL='postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmode=disable'
+./scripts/check.sh --scope backend
 ```
 
 `createdb` は初回だけです。integration testはapplication tableにdown/up SQLを適用して初期化するため、保持したいデータがあるDBを絶対に指定しないでください。CIはjobごとのPostgreSQL service `pdcai_test` を使い、productionへ接続しません。
 
-`pwsh ./scripts/local-app.ps1`で起動する`pdcai_local`は、`pdcai-local` Compose project内のtmpfsだけを使う手動実機確認用DBです。Host port、既存の`pdcai-postgres`、`.env`の`DATABASE_URL`を使用せず、終了時に破棄されます。保持したいデータを保存しないでください。
+`./scripts/local-app.sh`で起動する`pdcai_local`は、`pdcai-local` Compose project内のtmpfsだけを使う手動実機確認用DBです。Host port、既存の`pdcai-postgres`、`.env`の`DATABASE_URL`を使用せず、終了時に破棄されます。保持したいデータを保存しないでください。
 
 ## Seedと開発データ
 
@@ -65,20 +66,20 @@ seed scriptと固定seedデータはありません。Migration後、匿名sessi
 
 次は指定DB内の**全データを復元不能な形で削除**し、DBを再作成してup migrationを適用します。自動backupは作りません。必要な開発データは実行前に `pg_dump` 等で退避してください。
 
-```powershell
-pwsh ./scripts/reset-local-db.ps1 -DatabaseName pdcai -ConfirmDatabaseName pdcai -WhatIf
-pwsh ./scripts/reset-local-db.ps1 -DatabaseName pdcai -ConfirmDatabaseName pdcai
+```bash
+./scripts/reset-local-db.sh --database-name pdcai --confirm-database-name pdcai --dry-run
+./scripts/reset-local-db.sh --database-name pdcai --confirm-database-name pdcai --yes
 ```
 
 安全策は次のとおりです。
 
-- `clean.ps1` とは別commandで、明示的な実行以外から呼ばれない。
+- `clean.sh` とは別commandで、明示的な実行以外から呼ばれない。
 - `pdcai`、`pdcai_dev`、`pdcai_test` 以外のDB名を拒否する。
 - DB名を `ConfirmDatabaseName` へ大文字小文字も含めて再入力させる。
 - remote Docker context、停止container、PostgreSQL 17以外のimage、host portなしを拒否する。
 - URLを引数に取らず、local Docker containerからだけ接続情報を構築する。
 - `APP_ENV=production` を拒否する。
-- Docker/Go/migration実行条件を削除前に検査し、PowerShellのHigh impact確認も行う。
+- Docker/Go/migration実行条件を削除前に検査し、実削除には`--yes`を要求する。
 
 保持されるものは `.env`、Frontend環境・依存関係、Docker container自体、他のDB、browser dataです。Migrationに失敗した場合は空または途中状態のローカルDBが残る可能性があるため、errorを解消して `go run ./cmd/migrate` を再実行します。
 

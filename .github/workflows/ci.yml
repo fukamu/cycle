@@ -59,6 +59,8 @@ jobs:
         uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -color
+      - name: Validate Bash scripts
+        run: bash ./scripts/check-shell.sh
 
   frontend:
     needs: reuse_pr_ci

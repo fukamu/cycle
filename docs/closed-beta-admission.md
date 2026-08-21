@@ -30,8 +30,8 @@ BETA_ADMISSION_COOKIE_KEY=<32 random bytesのbase64url secret>
 
 共有・記録されるterminalでは実行しません。
 
-```powershell
-pwsh ./scripts/new-beta-admission-key.ps1
+```bash
+./scripts/new-beta-admission-key.sh
 ```
 
 表示された値をGitHub `production` Environment secret `BETA_ADMISSION_COOKIE_KEY`へ直接保存します。Repository、`.env`、issue、PR、runbook、release記録へ値を残しません。
@@ -41,8 +41,8 @@ pwsh ./scripts/new-beta-admission-key.ps1
 1. 個人情報を含まないInvite IDを割り当てます。
 2. 共有・記録されるterminalではないことを確認して生成します。
 
-```powershell
-pwsh ./scripts/new-beta-invite.ps1 -InviteId beta-001
+```bash
+./scripts/new-beta-invite.sh --invite-id beta-001
 ```
 
 3. 表示された生Tokenだけを招待対象者へ安全な経路で一度共有します。生Tokenを保存・commit・log出力しません。
@@ -98,7 +98,7 @@ Deploy後:
 - `cloudflare/src/index.ts`のAdmission hook
 - `frontend/src/features/beta-admission/`
 - `SessionProvider.tsx`の`BETA_ADMISSION_REQUIRED`分岐
-- `scripts/new-beta-invite.ps1`と`scripts/new-beta-admission-key.ps1`
+- `scripts/new-beta-invite.sh`と`scripts/new-beta-admission-key.sh`
 - `BETA_*` deployment inputs、tests、このrunbookと他文書からの導線
 - Cloudflare Worker/GitHub Environmentの`BETA_*` values
 
