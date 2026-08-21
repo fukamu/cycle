@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 import {
   parseDeploymentEnvironment,
   searchIndexingPlugin,
-} from "./vite/searchIndexing";
+} from "./vite/searchIndexing.ts";
 
 export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, process.cwd(), "VITE_");
