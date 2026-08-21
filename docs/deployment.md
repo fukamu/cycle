@@ -1,6 +1,6 @@
 # Deployment
 
-この文書はPDCAIのdeployment手順のSource of Truthです。Architecture上の境界は [`design.md`](design.md) §44、環境変数の正確な一覧は [`environment.md`](environment.md)、migration規則は [`database.md`](database.md)、運用確認は [`operations.md`](operations.md) を参照してください。
+この文書はFUKAMU Cycleのdeployment手順のSource of Truthです。Architecture上の境界は [`design.md`](design.md) §44、環境変数の正確な一覧は [`environment.md`](environment.md)、migration規則は [`database.md`](database.md)、運用確認は [`operations.md`](operations.md) を参照してください。
 
 ## Environment model
 
@@ -8,8 +8,8 @@
 |---|---|---|---|
 | Development | local開発 | 手動起動 | local PostgreSQL、Fake AI/Turnstile可 |
 | Test | CI / E2E | GitHub Actions内 | job専用PostgreSQL、external providerはtest double |
-| Staging Light | external integration検証 | main SHAの成功CI（検証済みPR tree再利用または全check）→ Terraform Plan → owner承認Apply → migration-first Cloudflare deploy | `pdcai.matoruru.com`、専用Cloudflare/Neon/provider設定 |
-| Production | 正式公開 | 未構築 | `pdcai.io`確定後にStagingと別resource/stateで設計 |
+| Staging Light | external integration検証 | main SHAの成功CI（検証済みPR tree再利用または全check）→ Terraform Plan → owner承認Apply → migration-first Cloudflare deploy | `cycle.staging.fukamu.matoruru.com`、専用Cloudflare/Neon/provider設定 |
+| Production | 正式公開 | 未構築 | `cycle.fukamu.com`。Stagingと別resource/stateで設計 |
 
 Staging Lightは `APP_ENV=production` でproduction security validationを通しますが、Production相当のSLA、backup、data retentionは保証しません。破棄可能な検証dataだけを使い、StagingのDB、session、IndexedDB、credentialをProductionへ移しません。
 
@@ -55,7 +55,7 @@ Worker/ContainerをTerraformとWranglerの両方で管理しません。Applicat
 | Area | Required decision / identifier |
 |---|---|
 | Cloudflare | account ID、zone ID、`matoruru.com`がActive、Workers Paid plan、operator |
-| Domain | `https://pdcai.matoruru.com`、同名recordの有無、domain owner |
+| Domain | `https://cycle.staging.fukamu.matoruru.com`、同名recordの有無、domain owner |
 | Container | `lite`、max instances `1`、APAC、idle sleep `10m`をStaging初期値として承認 |
 | R2 state | private bucket名、bucket-scoped credential owner、GitHub secret owner、復旧方針 |
 | Neon | Staging専用project/branch、region、compute/scale-to-zero、restore window、connection limit |
@@ -84,7 +84,7 @@ Repository全体の事前検査:
 
 R2 bucketとS3 credentialはTerraform自身より先に必要なためmanual bootstrapです。
 
-1. Cloudflare Dashboardでprivate R2 bucket（例: `pdcai-terraform-state`）を作る。他用途と共有しない。
+1. Cloudflare Dashboardでprivate R2 bucket（例: `fukamu-cycle-terraform-state`）を作る。他用途と共有しない。
 2. 対象bucketだけにObject Read/WriteできるR2 API tokenを作る。Plan時のstate read/lockとApply時のstate更新に使い、account全体の管理tokenやdeploy tokenと共有しない。
 3. [`backend.hcl.example`](../infra/terraform/staging/backend.hcl.example) をuntrackedの `backend.hcl` へcopyし、bucketとaccount IDを設定する。
 4. Access Key ID / Secret Access Keyを現在のBash processだけへ設定する。値をcommand historyへ直接貼らないため、password managerから安全に取得する。
@@ -140,7 +140,7 @@ CI (main HEAD。完全一致するPR検証treeを再利用、証明不能なら�
 -> Deploy Staging
 ```
 
-`Terraform Plan Staging`のlogでhostnameが`pdcai.matoruru.com`、modeがinvisible、destroy/replaceがないことを確認してから、そのPlan run IDで`Terraform Apply Staging`を実行します。Environment Required reviewerも設定した場合は、続けて`Review deployments`から承認します。Review中にmainが進んだ場合はstale planとして停止し、新しいCI/Planを待ちます。Plan artifactはApply成功後に削除を試み、削除できなくても7日でexpireします。
+`Terraform Plan Staging`のlogでhostnameが`cycle.staging.fukamu.matoruru.com`、modeがinvisible、destroy/replaceがないことを確認してから、そのPlan run IDで`Terraform Apply Staging`を実行します。Environment Required reviewerも設定した場合は、続けて`Review deployments`から承認します。Review中にmainが進んだ場合はstale planとして停止し、新しいCI/Planを待ちます。Plan artifactはApply成功後に削除を試み、削除できなくても7日でexpireします。
 
 Saved planはstateとresource値を含み得るsecret相当です。Artifactをdownload、転記、長期保存しません。Turnstile resourceが返すsecretもR2 stateへ含まれ得るため、R2 credentialとGitHub Actions accessを最小化します。Site keyはGitHub variableへ、secret keyはCloudflare DashboardからGitHub secretへ登録し、terminal/logへ出しません。
 
@@ -168,14 +168,14 @@ Localではcredential不要のfmt/validateを通常検査に使います。CI/CD
 Google Identity:
 
 1. Staging専用Web application clientを作る。
-2. Authorized JavaScript originsへ正確に `https://pdcai.matoruru.com` を登録する。
+2. Authorized JavaScript originsへ正確に `https://cycle.staging.fukamu.matoruru.com` を登録する。
 3. Web Client IDはGitHub variable `GOOGLE_WEB_CLIENT_ID`へ登録する。Client secretはこのGIS ID-token flowでは使用しない。
 
 Turnstile:
 
 - Terraform outputのsite keyをGitHub variable `TURNSTILE_SITE_KEY`へ登録する。
 - Secret keyをGitHub secret `TURNSTILE_SECRET_KEY`へ登録する。
-- 許可hostnameは`pdcai.matoruru.com`、expected actionは`anonymous_bootstrap`で固定する。
+- 許可hostnameは`cycle.staging.fukamu.matoruru.com`、expected actionは`anonymous_bootstrap`で固定する。
 
 OpenAI:
 
@@ -208,7 +208,7 @@ Pepper/HMAC/cursor署名secretはそれぞれ別の暗号学的random値を生�
 GitHub Environment `staging`を作り、deployment branchを`main`だけに制限します。Application deployにも別の承認を要求したい場合だけreviewerを設定します。Terraform Applyの必須owner承認はmanual `Terraform Apply Staging`が所有し、対応planでは別Environment `staging-terraform-apply`のreviewerも追加できます。次のvariablesを [`environment.md`](environment.md) とinput sheetに基づいて明示します。
 
 ```text
-PUBLIC_ORIGIN=https://pdcai.matoruru.com
+PUBLIC_ORIGIN=https://cycle.staging.fukamu.matoruru.com
 BETA_ADMISSION_MODE=off
 GOOGLE_WEB_CLIENT_ID
 TURNSTILE_SITE_KEY
@@ -248,7 +248,7 @@ RATE_AI_PER_IP_MINUTE
 
 Workflowは空値と誤った`PUBLIC_ORIGIN`をdeploy前に拒否します。Example/defaultは運用承認値ではありません。Stagingで一時Admissionを検証するときだけ [`closed-beta-admission.md`](closed-beta-admission.md) に従い、`BETA_ADMISSION_MODE=closed`、TTL、Allowlist、Cookie keyを同じdeployへ設定します。
 
-Application紹介導線は任意です。Stagingで意図して公開する場合だけ`APP_REFERRAL_URL=https://pdcai.matoruru.com/`を追加します。未設定ならFrontend Componentは表示されません。Workflowは別domain、path、query、fragmentを持つ紹介URLを拒否し、共有payloadにはUser Dataを含めません。
+Application紹介導線は任意です。Stagingで意図して公開する場合だけ`APP_REFERRAL_URL=https://cycle.fukamu.com/`を追加します。未設定ならFrontend Componentは表示されません。Workflowは空値またはこの固定Production root URLだけを許可し、共有payloadにはUser Dataを含めません。
 
 ## 8. First CI/CD deployment
 
@@ -277,15 +277,15 @@ Custom domainは [`cloudflare/wrangler.jsonc`](../cloudflare/wrangler.jsonc) の
 
 ## 9. Post-deploy verification
 
-- `https://pdcai.matoruru.com/healthz` が200。
-- `https://pdcai.matoruru.com/readyz` が200。
+- `https://cycle.staging.fukamu.matoruru.com/healthz` が200。
+- `https://cycle.staging.fukamu.matoruru.com/readyz` が200。
 - 配信されたHTMLに`<meta name="robots" content="noindex, nofollow">`があり、Stagingが検索engineへindex/follow拒否を指示している。
 - Browserでcertificate/mixed-content/CSP errorがない。
 - Anonymous bootstrapがTurnstile hostname/action検証を通る。
 - Google login/upgrade、save、AI generate/refine、account deletionを検証dataで最小回数確認する。
 - Workers Logs/Tracesにsecret、PDCA本文、email、raw user ID/IP、raw Turnstile tokenがない。
 - Neon connections/latency、Container cold start、5xx、AI usage/costが承認済みlimit内。
-- `pdcai.matoruru.com`以外のhostnameと`workers.dev`から利用できない。
+- `cycle.staging.fukamu.matoruru.com`以外のhostnameと`workers.dev`から利用できない。
 
 Stagingはpublic internetから到達可能です。URLの秘匿はaccess controlではありません。機密情報、Production data、失えないdataを入力しません。限定公開が必要ならCloudflare Accessを別途設計し、Google GIS/Turnstile/APIへの影響を検証してから導入します。
 
@@ -316,4 +316,4 @@ Staging停止は通常deployとは分離します。次の順でdata/secret所�
 
 ## Production
 
-Production infrastructureと自動deployはまだありません。公開domainは`app.pdcai.io`とし、Production専用のCloudflare Worker/Container config、Neon project、Turnstile widget、Google client、R2 state、GitHub Environment、capacity/backup/alert値を設計します。初回公開時は [`closed-beta-admission.md`](closed-beta-admission.md) のAdmission inputsを`closed`で設定し、未招待Anonymous bootstrapをfail-closedにします。Stagingのhostname、secret、DB、state、provider limitをcopyしてProduction扱いにしません。
+Production infrastructureと自動deployはまだありません。公開domainは`cycle.fukamu.com`とし、Production専用のCloudflare Worker/Container config、Neon project、Turnstile widget、Google client、R2 state、GitHub Environment、capacity/backup/alert値を設計します。初回公開時は [`closed-beta-admission.md`](closed-beta-admission.md) のAdmission inputsを`closed`で設定し、未招待Anonymous bootstrapをfail-closedにします。Stagingのhostname、secret、DB、state、provider limitをcopyしてProduction扱いにしません。

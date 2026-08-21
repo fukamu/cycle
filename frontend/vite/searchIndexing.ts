@@ -37,7 +37,7 @@ export function searchIndexingPlugin(
   environment: DeploymentEnvironment,
 ): Plugin {
   return {
-    name: "pdcai-search-indexing",
+    name: "fukamu-cycle-search-indexing",
     transformIndexHtml: () => searchIndexingTags(environment),
   };
 }

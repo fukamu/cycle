@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 )
 
 func TestAnonymousRateLimiterPersistsBlockedAttemptAcrossInstances(t *testing.T) {

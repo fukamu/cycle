@@ -10,10 +10,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
-	"github.com/matoruru/PDCAI/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 func (store *WorkspaceStore) StartGoal(ctx context.Context, input workspace.StartGoalInput, maxProgressing int) (result workspace.StartGoalResult, err error) {

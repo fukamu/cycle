@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 )
 
 var now = time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC)

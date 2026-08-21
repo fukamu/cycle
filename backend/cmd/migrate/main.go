@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/infrastructure/postgres"
+	"github.com/fukamu/cycle/backend/internal/infrastructure/postgres"
 )
 
 func main() {

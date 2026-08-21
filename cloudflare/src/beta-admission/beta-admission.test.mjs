@@ -3,8 +3,8 @@ import test from "node:test";
 
 import { handleBetaAdmission } from "./beta-admission.ts";
 
-const origin = "https://app.pdcai.io";
-const token = `pdcai_beta_${"a".repeat(43)}`;
+const origin = "https://cycle.fukamu.com";
+const token = `fukamu_cycle_beta_${"a".repeat(43)}`;
 const now = Date.UTC(2026, 7, 20, 12, 0, 0);
 const key = base64url(new Uint8Array(32).fill(7));
 const digest = await sha256Hex(token);
@@ -46,7 +46,7 @@ test("closed mode blocks anonymous creation and early session bootstrap", async 
 test("existing sessions bypass the early admission prompt", async () => {
   const response = await handleBetaAdmission(
     new Request(`${origin}/api/v1/session`, {
-      headers: { Cookie: "__Host-pdcai_session=existing" },
+      headers: { Cookie: "__Host-fukamu_cycle_session=existing" },
     }),
     closed,
     now,
@@ -72,7 +72,7 @@ test("redeem rejects cross-origin and unknown tokens", async () => {
   assert.equal(crossOrigin.status, 403);
   assert.equal((await crossOrigin.json()).error.code, "CSRF_INVALID");
 
-  const invalid = await redeem(`pdcai_beta_${"b".repeat(43)}`);
+  const invalid = await redeem(`fukamu_cycle_beta_${"b".repeat(43)}`);
   assert.equal(invalid.status, 403);
   assert.equal((await invalid.json()).error.code, "BETA_INVITE_INVALID");
 });
@@ -81,7 +81,7 @@ test("valid redeem issues an HttpOnly cookie that admits anonymous creation", as
   const response = await redeem(token);
   assert.equal(response.status, 204);
   const setCookie = response.headers.get("Set-Cookie");
-  assert.match(setCookie, /^__Host-pdcai_beta_admission=/);
+  assert.match(setCookie, /^__Host-fukamu_cycle_beta_admission=/);
   assert.match(setCookie, /; Secure; HttpOnly; SameSite=Lax;/);
   assert.match(setCookie, /Max-Age=/);
   assert.equal(response.headers.get("Cache-Control"), "no-store");

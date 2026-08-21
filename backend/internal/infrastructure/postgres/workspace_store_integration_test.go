@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 func TestWorkspaceStoreEnforcesConfigurableProgressingGoalBoundary(t *testing.T) {

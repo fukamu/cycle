@@ -85,7 +85,7 @@ EOF
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
     bash "${fixture}/scripts/setup.sh" >/dev/null
   assert_file_contains "${log}" "pnpm install --frozen-lockfile"
-  assert_file_contains "${log}" "pnpm --filter pdcai-cloudflare run types"
+  assert_file_contains "${log}" "pnpm --filter fukamu-cycle-cloudflare run types"
   assert_file_contains "${log}" "go mod download"
 
   assert_failure "setup with wrong pnpm version" \
@@ -152,11 +152,11 @@ EOF
 
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
     bash "${fixture}/scripts/check.sh" --scope frontend >/dev/null
-  assert_file_contains "${log}" "--filter pdcai-frontend run format:check"
-  assert_file_contains "${log}" "--filter pdcai-frontend run lint"
-  assert_file_contains "${log}" "--filter pdcai-frontend run typecheck"
-  assert_file_contains "${log}" "--filter pdcai-frontend test"
-  assert_file_contains "${log}" "--filter pdcai-frontend run build"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend run format:check"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend run lint"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend run typecheck"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend test"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend run build"
   assert_failure "E2E with a partial scope" \
     bash "${fixture}/scripts/check.sh" --scope frontend --e2e
   assert_failure "unknown check scope" \
@@ -305,7 +305,7 @@ set -euo pipefail
 if [[ "${1:-}" == "env" && "${2:-}" == "GOVERSION" ]]; then
   printf '%s\n' 'go1.26.6'
 elif [[ "${1:-}" == "run" ]]; then
-  expected='postgres://dev%20user:p%40ss%3Aword@127.0.0.1:55432/pdcai_test?sslmode=disable'
+  expected='postgres://dev%20user:p%40ss%3Aword@127.0.0.1:55432/fukamu_cycle_test?sslmode=disable'
   [[ "${DATABASE_URL:-}" == "${expected}" && "${MIGRATIONS_DIR:-}" == "migrations" ]]
   printf 'go %s\n' "$*" >>"${TEST_COMMAND_LOG}"
 else
@@ -315,35 +315,35 @@ EOF
   chmod +x "${bin}/docker" "${bin}/go"
 
   bash "${fixture}/scripts/reset-local-db.sh" \
-    --database-name pdcai_test --confirm-database-name pdcai_test --dry-run >/dev/null
+    --database-name fukamu_cycle_test --confirm-database-name fukamu_cycle_test --dry-run >/dev/null
   assert_failure "database confirmation mismatch" \
     bash "${fixture}/scripts/reset-local-db.sh" \
-    --database-name pdcai_test --confirm-database-name pdcai --dry-run
+    --database-name fukamu_cycle_test --confirm-database-name fukamu_cycle --dry-run
   assert_failure "production database reset" \
     env APP_ENV=production bash "${fixture}/scripts/reset-local-db.sh" \
-    --database-name pdcai_test --confirm-database-name pdcai_test --dry-run
+    --database-name fukamu_cycle_test --confirm-database-name fukamu_cycle_test --dry-run
   assert_failure "invalid reset container name" \
     bash "${fixture}/scripts/reset-local-db.sh" \
     --container-name --privileged \
-    --database-name pdcai_test --confirm-database-name pdcai_test --dry-run
+    --database-name fukamu_cycle_test --confirm-database-name fukamu_cycle_test --dry-run
 
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
     bash "${fixture}/scripts/reset-local-db.sh" \
-    --database-name pdcai_test --confirm-database-name pdcai_test --yes >/dev/null
-  grep -Fq -- 'dropdb --username dev user --if-exists --force pdcai_test' "${log}" \
+    --database-name fukamu_cycle_test --confirm-database-name fukamu_cycle_test --yes >/dev/null
+  grep -Fq -- 'dropdb --username dev user --if-exists --force fukamu_cycle_test' "${log}" \
     || fail "reset did not invoke dropdb with the confirmed database"
-  grep -Fq -- 'createdb --username dev user --owner dev user pdcai_test' "${log}" \
+  grep -Fq -- 'createdb --username dev user --owner dev user fukamu_cycle_test' "${log}" \
     || fail "reset did not recreate the confirmed database"
   assert_file_contains "${log}" "go run ./cmd/migrate"
 
   assert_failure "remote reset context" \
     env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" FAKE_DOCKER_ENDPOINT=tcp://remote:2376 \
     bash "${fixture}/scripts/reset-local-db.sh" \
-    --database-name pdcai_test --confirm-database-name pdcai_test --yes
+    --database-name fukamu_cycle_test --confirm-database-name fukamu_cycle_test --yes
   assert_failure "wrong PostgreSQL image" \
     env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" FAKE_POSTGRES_IMAGE=postgres:18.6-alpine \
     bash "${fixture}/scripts/reset-local-db.sh" \
-    --database-name pdcai_test --confirm-database-name pdcai_test --yes
+    --database-name fukamu_cycle_test --confirm-database-name fukamu_cycle_test --yes
   pass "reset requires exact confirmation and rejects production, remote Docker, and wrong images"
 }
 
@@ -359,7 +359,7 @@ test_admission_helpers() {
   output="$("${repo_root}/scripts/new-beta-invite.sh" --invite-id tester-1 2>"${test_root}/invite-warning")"
   token="$(sed -n 's/^Token: //p' <<<"${output}")"
   digest="$(sed -n 's/^Allowlist entry: .*"digest":"\([0-9a-f]*\)".*/\1/p' <<<"${output}")"
-  [[ "${token}" =~ ^pdcai_beta_[A-Za-z0-9_-]{43}$ ]] \
+  [[ "${token}" =~ ^fukamu_cycle_beta_[A-Za-z0-9_-]{43}$ ]] \
     || fail "Admission invite token has an unexpected format"
   expected_digest="$(printf '%s' "${token}" | sha256sum | awk '{print $1}')"
   [[ "${digest}" == "${expected_digest}" ]] || fail "Admission invite digest does not match the token"

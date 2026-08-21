@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
 )
 
 func TestFakeProviderIsDeterministicAndPreservesEditableSource(t *testing.T) {

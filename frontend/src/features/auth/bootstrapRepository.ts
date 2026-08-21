@@ -1,6 +1,6 @@
 import { isUUIDv7, newUUIDv7 } from "../../shared/id/uuid";
 
-const databaseName = "pdcai-bootstrap";
+const databaseName = "fukamu-cycle-bootstrap";
 const storeName = "bootstrap";
 const key = "pending";
 

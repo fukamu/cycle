@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 )
 
 func TestRenderGeneratedActions(t *testing.T) {

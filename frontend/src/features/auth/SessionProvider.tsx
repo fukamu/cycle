@@ -55,7 +55,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
     return (
       <div className="app-message app-message--error" role="alert">
-        <p>PDCAIを開始できませんでした。</p>
+        <p>FUKAMU Cycleを開始できませんでした。</p>
         <button type="button" onClick={() => void query.refetch()}>
           再試行
         </button>

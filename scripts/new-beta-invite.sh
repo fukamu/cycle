@@ -42,7 +42,7 @@ require_command awk
 encoded="$(openssl rand -base64 32 | tr -d '\n=' | tr '+/' '-_')"
 [[ "${encoded}" =~ ^[A-Za-z0-9_-]{43}$ ]] \
   || die "Secure token generation returned an unexpected result."
-token="pdcai_beta_${encoded}"
+token="fukamu_cycle_beta_${encoded}"
 digest="$(printf '%s' "${token}" | sha256sum | awk '{print $1}')"
 [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] \
   || die "Invite digest generation returned an unexpected result."

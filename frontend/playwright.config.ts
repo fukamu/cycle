@@ -2,13 +2,13 @@ import { defineConfig, devices } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const go = process.env.PDCAI_GO_BINARY ?? "go";
-const serverCommand = process.env.PDCAI_SERVER_BINARY
-  ? `"${process.env.PDCAI_SERVER_BINARY}"`
+const go = process.env.FUKAMU_CYCLE_GO_BINARY ?? "go";
+const serverCommand = process.env.FUKAMU_CYCLE_SERVER_BINARY
+  ? `"${process.env.FUKAMU_CYCLE_SERVER_BINARY}"`
   : `"${go}" run ./cmd/migrate && "${go}" run ./cmd/server`;
 const databaseURL =
   process.env.TEST_DATABASE_URL ??
-  "postgres://pdcai:pdcai@127.0.0.1:55432/pdcai_test?sslmode=disable";
+  "postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:55432/fukamu_cycle_test?sslmode=disable";
 
 export default defineConfig({
   testDir: "./e2e",

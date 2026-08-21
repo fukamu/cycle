@@ -27,8 +27,8 @@ export function AppReferralPromotion() {
 
   return (
     <aside className="app-referral" aria-labelledby="app-referral-heading">
-      <p className="eyebrow">SHARE PDCAI</p>
-      <h2 id="app-referral-heading">PDCAIを友人・同僚に紹介</h2>
+      <p className="eyebrow">SHARE FUKAMU Cycle</p>
+      <h2 id="app-referral-heading">FUKAMU Cycleを友人・同僚に紹介</h2>
       <p className="app-referral__description">
         共有されるのはアプリの紹介リンクだけです。あなたの目標やPDCAの内容は含まれません。
       </p>
@@ -38,7 +38,9 @@ export function AppReferralPromotion() {
         disabled={state === "sharing"}
         onClick={() => void share()}
       >
-        {state === "sharing" ? "共有を準備中…" : "PDCAIの紹介リンクを共有"}
+        {state === "sharing"
+          ? "共有を準備中…"
+          : "FUKAMU Cycleの紹介リンクを共有"}
       </button>
       {state === "shared" && (
         <p className="app-referral__status" role="status">

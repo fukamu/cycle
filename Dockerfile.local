@@ -8,9 +8,9 @@ COPY --from=pnpm-runtime /opt/pnpm/dist /opt/pnpm/dist
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY frontend/package.json frontend/package.json
 COPY cloudflare/package.json cloudflare/package.json
-RUN node /opt/pnpm/dist/pnpm.mjs install --frozen-lockfile --filter pdcai-frontend
+RUN node /opt/pnpm/dist/pnpm.mjs install --frozen-lockfile --filter fukamu-cycle-frontend
 COPY frontend/ frontend/
-RUN node /opt/pnpm/dist/pnpm.mjs --filter pdcai-frontend run build
+RUN node /opt/pnpm/dist/pnpm.mjs --filter fukamu-cycle-frontend run build
 
 FROM golang:1.26.6-alpine AS backend-build
 WORKDIR /src/backend

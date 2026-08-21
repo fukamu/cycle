@@ -59,11 +59,11 @@ if [[ "${run_frontend}" == "true" ]]; then
     || die "node_modules is missing. Run ./scripts/setup.sh first."
   (
     cd -- "${repo_root}"
-    pnpm --filter pdcai-frontend run format:check
-    pnpm --filter pdcai-frontend run lint
-    pnpm --filter pdcai-frontend run typecheck
-    pnpm --filter pdcai-frontend test
-    pnpm --filter pdcai-frontend run build
+    pnpm --filter fukamu-cycle-frontend run format:check
+    pnpm --filter fukamu-cycle-frontend run lint
+    pnpm --filter fukamu-cycle-frontend run typecheck
+    pnpm --filter fukamu-cycle-frontend test
+    pnpm --filter fukamu-cycle-frontend run build
   )
 fi
 
@@ -116,14 +116,14 @@ if [[ "${run_infrastructure}" == "true" ]]; then
   if [[ ! -f "${repo_root}/frontend/dist/index.html" ]]; then
     (
       cd -- "${repo_root}"
-      pnpm --filter pdcai-frontend run build
+      pnpm --filter fukamu-cycle-frontend run build
     )
   fi
   (
     cd -- "${repo_root}"
     export XDG_CONFIG_HOME="${repo_root}/cloudflare/.wrangler/config"
-    pnpm --filter pdcai-cloudflare run check
-    pnpm --filter pdcai-cloudflare run deploy:dry-run
+    pnpm --filter fukamu-cycle-cloudflare run check
+    pnpm --filter fukamu-cycle-cloudflare run deploy:dry-run
   )
 fi
 
@@ -141,8 +141,8 @@ if [[ "${run_e2e}" == "true" ]]; then
   )
   (
     cd -- "${repo_root}"
-    PDCAI_SERVER_BINARY="${e2e_server}" \
-      pnpm --filter pdcai-frontend run test:e2e
+    FUKAMU_CYCLE_SERVER_BINARY="${e2e_server}" \
+      pnpm --filter fukamu-cycle-frontend run test:e2e
   )
 fi
 

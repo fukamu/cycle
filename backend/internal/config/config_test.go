@@ -67,7 +67,7 @@ func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
 
 	environment := validEnvironment()
 	environment["APP_ENV"] = "production"
-	environment["PUBLIC_ORIGIN"] = "https://pdcai.matoruru.com"
+	environment["PUBLIC_ORIGIN"] = "https://cycle.staging.fukamu.matoruru.com"
 	environment["OPENAI_API_KEY"] = "test-openai-key"
 	environment["GOOGLE_WEB_CLIENT_ID"] = "test.apps.googleusercontent.com"
 	environment["TURNSTILE_ENABLED"] = "true"
@@ -83,7 +83,7 @@ func validEnvironment() map[string]string {
 	return map[string]string{
 		"APP_ENV":                "development",
 		"PUBLIC_ORIGIN":          "http://localhost:5173",
-		"DATABASE_URL":           "postgres://pdcai:pdcai@localhost:5432/pdcai?sslmode=disable",
+		"DATABASE_URL":           "postgres://fukamu_cycle:fukamu_cycle@localhost:5432/fukamu_cycle?sslmode=disable",
 		"SESSION_TOKEN_PEPPER":   "123456789012345678901234",
 		"CSRF_TOKEN_PEPPER":      "123456789012345678901234",
 		"BOOTSTRAP_ID_PEPPER":    "123456789012345678901234",

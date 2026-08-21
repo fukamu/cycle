@@ -58,7 +58,7 @@ require_command docker
 require_local_docker_context >/dev/null
 compose_args=(
   compose
-  --project-name pdcai-local
+  --project-name fukamu-cycle-local
   --file "${compose_file}"
 )
 
@@ -68,7 +68,7 @@ stop_local_app() {
 
 if [[ "${down}" == "true" ]]; then
   stop_local_app
-  printf '%s\n' "PDCAI local environment was removed."
+  printf '%s\n' "FUKAMU Cycle local environment was removed."
   exit 0
 fi
 
@@ -86,7 +86,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 require_command curl
-export PDCAI_LOCAL_PORT="${port}"
+export FUKAMU_CYCLE_LOCAL_PORT="${port}"
 docker "${compose_args[@]}" up --build --detach --remove-orphans app
 started=true
 
@@ -101,10 +101,10 @@ for ((attempt = 0; attempt < 60; attempt++)); do
 done
 if [[ "${ready}" != "true" ]]; then
   docker "${compose_args[@]}" logs --no-color || true
-  die "PDCAI did not become ready at ${ready_url}."
+  die "FUKAMU Cycle did not become ready at ${ready_url}."
 fi
 
-printf 'PDCAI is ready: http://localhost:%s\n' "${port}"
+printf 'FUKAMU Cycle is ready: http://localhost:%s\n' "${port}"
 printf '%s\n' "The database is disposable and external AI/authentication services are disabled."
 if [[ "${detached}" == "true" ]]; then
   keep_running=true

@@ -7,9 +7,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 type createDraftRequest struct {

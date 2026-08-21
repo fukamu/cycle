@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 var (

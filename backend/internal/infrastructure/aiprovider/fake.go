@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
 )
 
 // Fake is deterministic and must never be enabled in production.

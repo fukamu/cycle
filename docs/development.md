@@ -26,13 +26,13 @@ sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1
 
 ## Dockerによるローカル実機確認
 
-Docker Desktop、Bash 5、curlだけで、Frontend、Backend、Migration、PostgreSQLを隔離環境へbuildし、ブラウザから操作できます。Repositoryの`.env`、`frontend/.env.local`、`node_modules`、`frontend/dist`、`.tmp`、既存の`pdcai-postgres`は使用・変更しません。
+Docker Desktop、Bash 5、curlだけで、Frontend、Backend、Migration、PostgreSQLを隔離環境へbuildし、ブラウザから操作できます。Repositoryの`.env`、`frontend/.env.local`、`node_modules`、`frontend/dist`、`.tmp`、既存の`fukamu-cycle-postgres`は使用・変更しません。
 
 ```bash
 ./scripts/local-app.sh
 ```
 
-ready確認後に`http://localhost:8080`を開きます。Enterで終了すると、`pdcai-local` Compose projectのcontainer、network、破棄可能DBだけを削除します。DBはtmpfsで永続化されず、Hostへport公開されません。Applicationは`127.0.0.1:8080`だけへ公開されます。Docker imageとBuildKit cacheは次回の高速化のため保持し、他projectを含むglobal pruneは実行しません。
+ready確認後に`http://localhost:8080`を開きます。Enterで終了すると、`fukamu-cycle-local` Compose projectのcontainer、network、破棄可能DBだけを削除します。DBはtmpfsで永続化されず、Hostへport公開されません。Applicationは`127.0.0.1:8080`だけへ公開されます。Docker imageとBuildKit cacheは次回の高速化のため保持し、他projectを含むglobal pruneは実行しません。
 
 別portを使う場合は`--port`を指定します。
 
@@ -72,10 +72,10 @@ source ./scripts/import-env.sh
 ローカルにPostgreSQL 18.6がなければ、Dockerで開発DBを起動できます。
 
 ```bash
-docker run --name pdcai-postgres -e POSTGRES_USER=pdcai -e POSTGRES_PASSWORD=pdcai -e POSTGRES_DB=pdcai -p 5432:5432 -d postgres:18.6-alpine3.24
+docker run --name fukamu-cycle-postgres -e POSTGRES_USER=fukamu_cycle -e POSTGRES_PASSWORD=fukamu_cycle -e POSTGRES_DB=fukamu_cycle -p 5432:5432 -d postgres:18.6-alpine3.24
 ```
 
-同名containerを以前作成して停止している場合は、`docker inspect --format '{{.Config.Image}}' pdcai-postgres`でimageが正確に`postgres:18.6-alpine3.24`であることを確認してから`docker start pdcai-postgres`を使います。異なるimageのcontainerは再利用せず、保持dataの要否を確認してから別途処分してください。`docker rm`やvolume削除は通常の開発手順には含めません。
+同名containerを以前作成して停止している場合は、`docker inspect --format '{{.Config.Image}}' fukamu-cycle-postgres`でimageが正確に`postgres:18.6-alpine3.24`であることを確認してから`docker start fukamu-cycle-postgres`を使います。異なるimageのcontainerは再利用せず、保持dataの要否を確認してから別途処分してください。`docker rm`やvolume削除は通常の開発手順には含めません。
 
 PostgreSQL 18以降の公式Docker imageは`PGDATA=/var/lib/postgresql/18/docker`を使い、volume mount先が`/var/lib/postgresql`へ変わりました。`compose.local.yaml`の破棄可能DBも親directoryへtmpfsをmountします。17以前の`/var/lib/postgresql/data`を新規設定へ流用しません。
 
@@ -102,7 +102,7 @@ go run ./cmd/server
 Terminal 2でFrontendを起動します。
 
 ```bash
-pnpm --filter pdcai-frontend run dev
+pnpm --filter fukamu-cycle-frontend run dev
 ```
 
 `http://localhost:5173` を開きます。Viteは `/api` を `http://localhost:8080` へproxyします。Frontend環境変数を変えたときはViteを再起動してください。
@@ -110,7 +110,7 @@ pnpm --filter pdcai-frontend run dev
 Go Backend単体の同一origin配信fallbackをローカルで確認する場合は、FrontendをbuildしてBackendへ静的assetsを渡します。Cloudflare StagingではWorkerがstatic assetsを配信します。
 
 ```bash
-pnpm --filter pdcai-frontend run build
+pnpm --filter fukamu-cycle-frontend run build
 source ./scripts/import-env.sh
 export PUBLIC_ORIGIN='http://localhost:8080'
 export STATIC_DIR="$(realpath ./frontend/dist)"
@@ -139,15 +139,15 @@ Frontend、Backend、Infrastructureだけを確認できます。
 Backend integration testには、消去してよい専用DBだけを指定してください。テストはschema内のapplication tableをdown/up migrationで作り直します。開発DBやproduction DBを指定してはいけません。
 
 ```bash
-export TEST_DATABASE_URL='postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmode=disable'
+export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable'
 ./scripts/check.sh --scope backend
 ```
 
 E2Eも同じ専用DBを使います。初回のみChromiumを導入し、`--e2e` を付けます。Check scriptはbuild済みのmigration/server binaryを使って事前migrationとPlaywright server起動を行い、終了時に子processを確実に停止します。
 
 ```bash
-pnpm --filter pdcai-frontend exec playwright install chromium
-export TEST_DATABASE_URL='postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmode=disable'
+pnpm --filter fukamu-cycle-frontend exec playwright install chromium
+export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable'
 ./scripts/check.sh --e2e
 ```
 
@@ -159,7 +159,7 @@ CIと同じ個別コマンドが必要な場合は [`.github/workflows/ci.yml`](
 
 DB-backed collection endpointは、page内のitem数に比例してSQL round tripが増えないよう、JOINまたはbatch queryで必要なsummaryを取得します。Home、Goal一覧、Cycle一覧を変更するときは、itemごとのdetail query（N+1 query）を追加してはいけません。
 
-Frontendのroute別code splittingとasset sizeは`pnpm --filter pdcai-frontend run build`のchunk一覧で確認します。Mutation responseが遷移先と同じDTOを含む場合は、TanStack Query cacheへ反映してから遷移し、直後に同じresourceを再取得するnetwork round tripを避けます。Mutationの影響を受けるcollection/detail cacheは、引き続き明示的に更新またはinvalidateします。Auto SaveやAI提案Adoptも同じserver mutationとして扱い、成功responseをeditor local stateだけに反映しません。未保存入力はeditor/Browser Draft Cache、保存済みstateはTanStack Queryへ同期し、route往復の回帰testで古いfresh cacheが復元されないことを確認します。
+Frontendのroute別code splittingとasset sizeは`pnpm --filter fukamu-cycle-frontend run build`のchunk一覧で確認します。Mutation responseが遷移先と同じDTOを含む場合は、TanStack Query cacheへ反映してから遷移し、直後に同じresourceを再取得するnetwork round tripを避けます。Mutationの影響を受けるcollection/detail cacheは、引き続き明示的に更新またはinvalidateします。Auto SaveやAI提案Adoptも同じserver mutationとして扱い、成功responseをeditor local stateだけに反映しません。未保存入力はeditor/Browser Draft Cache、保存済みstateはTanStack Queryへ同期し、route往復の回帰testで古いfresh cacheが復元されないことを確認します。
 
 ### GitHub Actionsの更新
 
@@ -189,12 +189,12 @@ Pull request CIはGitHubのmerge refをcheckoutして全checkを実行し、成�
 ローカルDocker DBの全データを捨てる場合だけ、[`database.md`](database.md) の警告を確認して専用reset scriptを使ってください。このscriptはproduction URLを受け付けず、remote Docker contextも拒否します。
 
 ```bash
-./scripts/reset-local-db.sh --database-name pdcai --confirm-database-name pdcai --dry-run
-./scripts/reset-local-db.sh --database-name pdcai --confirm-database-name pdcai --yes
+./scripts/reset-local-db.sh --database-name fukamu_cycle --confirm-database-name fukamu_cycle --dry-run
+./scripts/reset-local-db.sh --database-name fukamu_cycle --confirm-database-name fukamu_cycle --yes
 ```
 
 ## 開発終了時
 
-各serverを `Ctrl+C` で停止します。Docker DBも止める場合は `docker stop pdcai-postgres` を実行します。containerをstopしてもDBデータは保持されます。
+各serverを `Ctrl+C` で停止します。Docker DBも止める場合は `docker stop fukamu-cycle-postgres` を実行します。containerをstopしてもDBデータは保持されます。
 
 問題が解決しない場合は [`troubleshooting.md`](troubleshooting.md) を参照してください。

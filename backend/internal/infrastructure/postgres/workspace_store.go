@@ -16,9 +16,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
-	"github.com/matoruru/PDCAI/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 type WorkspaceStoreSettings struct {

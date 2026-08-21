@@ -27,26 +27,26 @@ describe("AppReferralPromotion", () => {
     vi.stubEnv("VITE_APP_REFERRAL_URL", "");
     render(<AppReferralPromotion />);
     expect(
-      screen.queryByRole("heading", { name: "PDCAIを友人・同僚に紹介" }),
+      screen.queryByRole("heading", { name: "FUKAMU Cycleを友人・同僚に紹介" }),
     ).not.toBeInTheDocument();
   });
 
   it("shares only the configured app introduction", async () => {
-    vi.stubEnv("VITE_APP_REFERRAL_URL", "https://pdcai.example/");
+    vi.stubEnv("VITE_APP_REFERRAL_URL", "https://cycle.example/");
     const share = vi.fn().mockResolvedValue(undefined);
     setNavigatorProperty("share", share);
     const user = userEvent.setup();
     render(<AppReferralPromotion />);
 
     await user.click(
-      screen.getByRole("button", { name: "PDCAIの紹介リンクを共有" }),
+      screen.getByRole("button", { name: "FUKAMU Cycleの紹介リンクを共有" }),
     );
 
     await screen.findByRole("status");
     expect(share).toHaveBeenCalledWith({
-      title: "PDCAI",
-      text: "目標ごとに小さなPDCAサイクルを回し、学びながら前へ進めるアプリ「PDCAI」を紹介します。",
-      url: "https://pdcai.example/",
+      title: "FUKAMU Cycle",
+      text: "目標ごとに小さなPDCAサイクルを回し、学びながら前へ進めるアプリ「FUKAMU Cycle」を紹介します。",
+      url: "https://cycle.example/",
     });
     expect(screen.getByRole("status")).toHaveTextContent(
       "紹介ありがとうございます。",
@@ -54,7 +54,7 @@ describe("AppReferralPromotion", () => {
   });
 
   it("copies the introduction when native sharing is unavailable", async () => {
-    vi.stubEnv("VITE_APP_REFERRAL_URL", "https://pdcai.example/");
+    vi.stubEnv("VITE_APP_REFERRAL_URL", "https://cycle.example/");
     const user = userEvent.setup();
     setNavigatorProperty("share", undefined);
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -62,12 +62,12 @@ describe("AppReferralPromotion", () => {
     render(<AppReferralPromotion />);
 
     await user.click(
-      screen.getByRole("button", { name: "PDCAIの紹介リンクを共有" }),
+      screen.getByRole("button", { name: "FUKAMU Cycleの紹介リンクを共有" }),
     );
 
     await screen.findByRole("status");
     expect(writeText).toHaveBeenCalledWith(
-      "目標ごとに小さなPDCAサイクルを回し、学びながら前へ進めるアプリ「PDCAI」を紹介します。\nhttps://pdcai.example/",
+      "目標ごとに小さなPDCAサイクルを回し、学びながら前へ進めるアプリ「FUKAMU Cycle」を紹介します。\nhttps://cycle.example/",
     );
     expect(screen.getByRole("status")).toHaveTextContent(
       "紹介文とリンクをコピーしました。",

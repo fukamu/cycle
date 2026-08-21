@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/account"
+	"github.com/fukamu/cycle/backend/internal/application/account"
 )
 
 // FakeVerifier is restricted to APP_ENV=test wiring. The token format is

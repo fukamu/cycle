@@ -23,7 +23,7 @@ it("replaces a stored bootstrap ID from an older UUID version", async () => {
 
 function openBootstrapDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("pdcai-bootstrap", 1);
+    const request = indexedDB.open("fukamu-cycle-bootstrap", 1);
     request.onupgradeneeded = () => {
       request.result.createObjectStore("bootstrap");
     };

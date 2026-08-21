@@ -7,12 +7,12 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/account"
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
-	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/application/account"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
+	appsession "github.com/fukamu/cycle/backend/internal/application/session"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 type errorEnvelope struct {

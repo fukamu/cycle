@@ -1,6 +1,6 @@
 # Staging Light Terraform
 
-This root module manages the Cloudflare Turnstile widget for `pdcai.matoruru.com`. The Worker, Container image, static assets, custom domain, runtime secrets, and database migrations are application deployment concerns owned by Wrangler/GitHub Actions.
+This root module manages the Cloudflare Turnstile widget for `cycle.staging.fukamu.matoruru.com`. The Worker, Container image, static assets, custom domain, runtime secrets, and database migrations are application deployment concerns owned by Wrangler/GitHub Actions.
 
 Terraform state uses the S3 backend against a manually bootstrapped, private R2 bucket. Credentials are supplied only through `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`; never add them to `backend.hcl`, `terraform.tfvars`, shell history, or the repository.
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 var accountTestTime = time.Date(2026, time.August, 16, 1, 2, 3, 0, time.UTC)

@@ -16,9 +16,8 @@ describe("App", () => {
   it("renders the G-PDCA home route", () => {
     render(<App />);
     expect(screen.getByRole("heading", { name: "ホーム" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "PDCAI ホーム" })).toHaveAttribute(
-      "href",
-      "/",
-    );
+    expect(
+      screen.getByRole("link", { name: "FUKAMU Cycle ホーム" }),
+    ).toHaveAttribute("href", "/");
   });
 });

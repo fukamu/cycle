@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/matoruru/PDCAI/backend/internal/config"
+	"github.com/fukamu/cycle/backend/internal/config"
 )
 
 func Open(ctx context.Context, settings config.DatabaseConfig) (*pgxpool.Pool, error) {

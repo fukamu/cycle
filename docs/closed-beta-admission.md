@@ -1,17 +1,17 @@
 # Closed Beta Admission（一時運用）
 
-この文書は`app.pdcai.io`の初期Closed Betaだけで使用する一時runbookです。Application要件のSource of Truthである [`design.md`](design.md) へ取り込む恒久仕様ではありません。AdmissionはCloudflare Workerの公開ingressだけでAnonymous bootstrap前に強制し、User/Auth domain、Go Backend、Database schemaへ状態を持ちません。
+この文書は`cycle.fukamu.com`の初期Closed Betaだけで使用する一時runbookです。Application要件のSource of Truthである [`design.md`](design.md) へ取り込む恒久仕様ではありません。AdmissionはCloudflare Workerの公開ingressだけでAnonymous bootstrap前に強制し、User/Auth domain、Go Backend、Database schemaへ状態を持ちません。
 
 ## 境界と挙動
 
 - `BETA_ADMISSION_MODE=closed`では、有効なAdmission Cookieを持たない`POST /api/v1/session/anonymous`をWorkerで拒否し、Containerへ転送しません。
 - Session CookieもAdmission Cookieもない`GET /api/v1/session`は`BETA_ADMISSION_REQUIRED`を返し、FrontendはTurnstileより前に招待画面を表示します。
-- 有効なPDCAI Sessionを持つ利用者にはAdmissionを再要求しません。
-- Invite Tokenのredeem成功時は、署名付き・期限付きの`__Host-pdcai_beta_admission` Secure HttpOnly Cookieを発行します。
+- 有効なFUKAMU Cycle Sessionを持つ利用者にはAdmissionを再要求しません。
+- Invite Tokenのredeem成功時は、署名付き・期限付きの`__Host-fukamu_cycle_beta_admission` Secure HttpOnly Cookieを発行します。
 - `BETA_ADMISSION_MODE=off`ではAdmission処理を論理的に無効化し、既存のAnonymous bootstrapを変更せず利用します。
 - `closed`の設定が欠落・不正なら新規利用開始だけをfail-closedにし、既存SessionのAPI利用は継続させます。
 
-Invite TokenはstatelessなBearer Tokenです。Allowlistから削除すると新しいredeemは拒否されますが、発行済みAdmission CookieやPDCAI Sessionは個別失効しません。
+Invite TokenはstatelessなBearer Tokenです。Allowlistから削除すると新しいredeemは拒否されますが、発行済みAdmission CookieやFUKAMU Cycle Sessionは個別失効しません。
 
 ## Configuration
 
@@ -59,7 +59,7 @@ BETA_ADMISSION_COOKIE_KEY=<32 random bytesのbase64url secret>
 6. 招待linkにする場合はqueryではなくfragmentを使います。Frontendは値を読んだ直後にaddress barから削除します。
 
 ```text
-https://app.pdcai.io/#beta-invite=<URL-encoded raw token>
+https://cycle.fukamu.com/#beta-invite=<URL-encoded raw token>
 ```
 
 ## Invite TokenをAllowlistから外す
@@ -68,7 +68,7 @@ https://app.pdcai.io/#beta-invite=<URL-encoded raw token>
 2. Review済みのProduction deployで設定を反映します。
 3. Admission Cookieを持たないfresh browserから削除済みTokenをredeemし、`403 BETA_INVITE_INVALID`になることを確認します。Token自体を検証logへ残しません。
 
-この操作は今後のredeemだけを止めます。全発行済みAdmission Cookieを失効する必要があるincidentでは`BETA_ADMISSION_COOKIE_KEY`を新しい32-byte keyへrotateしてdeployします。既存の有効なPDCAI Sessionは、繰り返しAdmissionを要求しない要件により継続します。特定参加者の即時個別失効が必要になった場合は、このstateless Admissionの範囲を超えるため、実装を推測で拡張せず判断を停止します。
+この操作は今後のredeemだけを止めます。全発行済みAdmission Cookieを失効する必要があるincidentでは`BETA_ADMISSION_COOKIE_KEY`を新しい32-byte keyへrotateしてdeployします。既存の有効なFUKAMU Cycle Sessionは、繰り返しAdmissionを要求しない要件により継続します。特定参加者の即時個別失効が必要になった場合は、このstateless Admissionの範囲を超えるため、実装を推測で拡張せず判断を停止します。
 
 ## Deploy前後の確認
 
@@ -76,7 +76,7 @@ Deploy前:
 
 - `BETA_ADMISSION_MODE=closed`、TTL、Allowlist、Cookie keyがProduction Environmentに存在する。
 - Raw Invite TokenやCookie keyが差分、workflow log、shell historyへ入っていない。
-- `PUBLIC_ORIGIN=https://app.pdcai.io`で、Worker/Containerへの公開入口がcustom domainだけである。
+- `PUBLIC_ORIGIN=https://cycle.fukamu.com`で、Worker/Containerへの公開入口がcustom domainだけである。
 
 Deploy後:
 

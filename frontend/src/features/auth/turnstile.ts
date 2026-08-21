@@ -68,7 +68,7 @@ export async function getAnonymousBootstrapToken(): Promise<string> {
 function loadScript(): Promise<void> {
   scriptPromise ??= new Promise<void>((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>(
-      'script[data-pdcai-turnstile="true"]',
+      'script[data-fukamu-cycle-turnstile="true"]',
     );
     if (existing !== null) {
       if (window.turnstile !== undefined) resolve();
@@ -85,7 +85,7 @@ function loadScript(): Promise<void> {
       "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
     script.async = true;
     script.defer = true;
-    script.dataset.pdcaiTurnstile = "true";
+    script.dataset.fukamuCycleTurnstile = "true";
     script.addEventListener("load", () => resolve(), { once: true });
     script.addEventListener(
       "error",

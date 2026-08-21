@@ -1,11 +1,11 @@
-name: pdcai-local
+name: fukamu-cycle-local
 
 x-runtime-environment: &runtime-environment
   APP_ENV: development
-  PUBLIC_ORIGIN: http://localhost:${PDCAI_LOCAL_PORT:-8080}
+  PUBLIC_ORIGIN: http://localhost:${FUKAMU_CYCLE_LOCAL_PORT:-8080}
   HTTP_ADDRESS: :8080
   STATIC_DIR: /app/static
-  DATABASE_URL: postgres://pdcai:pdcai@postgres:5432/pdcai_local?sslmode=disable
+  DATABASE_URL: postgres://fukamu_cycle:fukamu_cycle@postgres:5432/fukamu_cycle_local?sslmode=disable
   SESSION_TOKEN_PEPPER: local-only-session-token-pepper
   CSRF_TOKEN_PEPPER: local-only-csrf-token-pepper
   BOOTSTRAP_ID_PEPPER: local-only-bootstrap-id-pepper
@@ -19,11 +19,11 @@ services:
   postgres:
     image: postgres:18.6-alpine3.24
     environment:
-      POSTGRES_USER: pdcai
-      POSTGRES_PASSWORD: pdcai
-      POSTGRES_DB: pdcai_local
+      POSTGRES_USER: fukamu_cycle
+      POSTGRES_PASSWORD: fukamu_cycle
+      POSTGRES_DB: fukamu_cycle_local
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready --username pdcai --dbname pdcai_local"]
+      test: ["CMD-SHELL", "pg_isready --username fukamu_cycle --dbname fukamu_cycle_local"]
       interval: 2s
       timeout: 5s
       retries: 15
@@ -33,7 +33,7 @@ services:
       - local
 
   migrate:
-    image: pdcai-local-app:dev
+    image: fukamu-cycle-local-app:dev
     build:
       context: .
       dockerfile: Dockerfile.local
@@ -54,7 +54,7 @@ services:
       - local
 
   app:
-    image: pdcai-local-app:dev
+    image: fukamu-cycle-local-app:dev
     build:
       context: .
       dockerfile: Dockerfile.local
@@ -63,7 +63,7 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - 127.0.0.1:${PDCAI_LOCAL_PORT:-8080}:8080
+      - 127.0.0.1:${FUKAMU_CYCLE_LOCAL_PORT:-8080}:8080
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
       interval: 2s

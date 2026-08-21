@@ -1,4 +1,4 @@
-const databaseName = "pdcai-browser-drafts-v2";
+const databaseName = "fukamu-cycle-browser-drafts-v2";
 const storeName = "drafts";
 const ttl = 24 * 60 * 60 * 1000;
 

@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 )
 
 func TestVerifierAcceptsMatchingResponseAndHashesNormalizedIP(t *testing.T) {
 	t.Parallel()
 	limiter := &fakeLimiter{}
-	client := &fakeHTTPClient{response: response(http.StatusOK, `{"success":true,"hostname":"pdcai.example","action":"anonymous_bootstrap"}`)}
+	client := &fakeHTTPClient{response: response(http.StatusOK, `{"success":true,"hostname":"cycle.example","action":"anonymous_bootstrap"}`)}
 	verifier := testVerifier(client, limiter)
 	err := verifier.VerifyAnonymousCreation(context.Background(), ports.AnonymousAbuseInput{
 		TurnstileToken: "opaque-token", RemoteAddress: "203.0.113.10:54321", BootstrapID: "00000000-0000-7000-8000-000000000001",
@@ -41,7 +41,7 @@ func TestVerifierFailsClosedForInvalidSignals(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{
 		"unsuccessful":     `{"success":false,"error-codes":["invalid-input-response"]}`,
-		"wrong action":     `{"success":true,"hostname":"pdcai.example","action":"other"}`,
+		"wrong action":     `{"success":true,"hostname":"cycle.example","action":"other"}`,
 		"wrong hostname":   `{"success":true,"hostname":"evil.example","action":"anonymous_bootstrap"}`,
 		"missing hostname": `{"success":true,"action":"anonymous_bootstrap"}`,
 	}
@@ -82,7 +82,7 @@ func TestVerifierTreatsSiteverifyFailureAsUnavailable(t *testing.T) {
 
 func testVerifier(client HTTPClient, limiter RateLimiter) *Verifier {
 	return NewVerifier(client, limiter, turnstileFakeClock{}, Settings{
-		SecretKey: "secret", ExpectedAction: "anonymous_bootstrap", ExpectedHost: "pdcai.example",
+		SecretKey: "secret", ExpectedAction: "anonymous_bootstrap", ExpectedHost: "cycle.example",
 		RateHashKey: []byte("rate-key"), SiteverifyURL: "https://verify.example/siteverify",
 	})
 }

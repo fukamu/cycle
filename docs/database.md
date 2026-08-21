@@ -40,17 +40,17 @@ source ./scripts/import-env.sh
 
 ## Test DB
 
-Go integration testとE2Eは `TEST_DATABASE_URL` だけを使います。専用の `pdcai_test` databaseを用意してください。
+Go integration testとE2Eは `TEST_DATABASE_URL` だけを使います。専用の `fukamu_cycle_test` databaseを用意してください。
 
 ```bash
-docker exec pdcai-postgres createdb --username pdcai --owner pdcai pdcai_test
-export TEST_DATABASE_URL='postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmode=disable'
+docker exec fukamu-cycle-postgres createdb --username fukamu_cycle --owner fukamu_cycle fukamu_cycle_test
+export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable'
 ./scripts/check.sh --scope backend
 ```
 
-`createdb` は初回だけです。integration testはapplication tableにdown/up SQLを適用して初期化するため、保持したいデータがあるDBを絶対に指定しないでください。CIはjobごとのPostgreSQL service `pdcai_test` を使い、productionへ接続しません。
+`createdb` は初回だけです。integration testはapplication tableにdown/up SQLを適用して初期化するため、保持したいデータがあるDBを絶対に指定しないでください。CIはjobごとのPostgreSQL service `fukamu_cycle_test` を使い、productionへ接続しません。
 
-`./scripts/local-app.sh`で起動する`pdcai_local`は、`pdcai-local` Compose project内のtmpfsだけを使う手動実機確認用DBです。Host port、既存の`pdcai-postgres`、`.env`の`DATABASE_URL`を使用せず、終了時に破棄されます。保持したいデータを保存しないでください。
+`./scripts/local-app.sh`で起動する`fukamu_cycle_local`は、`fukamu-cycle-local` Compose project内のtmpfsだけを使う手動実機確認用DBです。Host port、既存の`fukamu-cycle-postgres`、`.env`の`DATABASE_URL`を使用せず、終了時に破棄されます。保持したいデータを保存しないでください。
 
 ## Seedと開発データ
 
@@ -65,14 +65,14 @@ seed scriptと固定seedデータはありません。Migration後、匿名sessi
 次は指定DB内の**全データを復元不能な形で削除**し、DBを再作成してup migrationを適用します。自動backupは作りません。必要な開発データは実行前に `pg_dump` 等で退避してください。
 
 ```bash
-./scripts/reset-local-db.sh --database-name pdcai --confirm-database-name pdcai --dry-run
-./scripts/reset-local-db.sh --database-name pdcai --confirm-database-name pdcai --yes
+./scripts/reset-local-db.sh --database-name fukamu_cycle --confirm-database-name fukamu_cycle --dry-run
+./scripts/reset-local-db.sh --database-name fukamu_cycle --confirm-database-name fukamu_cycle --yes
 ```
 
 安全策は次のとおりです。
 
 - `clean.sh` とは別commandで、明示的な実行以外から呼ばれない。
-- `pdcai`、`pdcai_dev`、`pdcai_test` 以外のDB名を拒否する。
+- `fukamu_cycle`、`fukamu_cycle_dev`、`fukamu_cycle_test` 以外のDB名を拒否する。
 - DB名を`--confirm-database-name`へ大文字小文字も含めて再入力させる。
 - remote Docker context、停止container、`postgres:18.6-alpine3.24`以外のimage、host portなしを拒否する。
 - URLを引数に取らず、local Docker containerからだけ接続情報を構築する。
@@ -92,7 +92,7 @@ seed scriptと固定seedデータはありません。Migration後、匿名sessi
 
 Application runtimeはNeon pooled URL、migrationはdirect URLを使います。Migration URLはCloudflare Worker/Containerへ渡さず、runtime URLはmigrationへ流用しません。双方をGitHub `staging` Environment secretに置き、workflowは値を出力しません。
 
-手動再実行が必要なincidentでは通常deployを止め、対象Neon project/branch、head SHA、現在のschema version、失敗原因を確認した個別runbookを作ります。URLをlocalへ取り出したり、確認なしにworkflowを繰り返したりしません。Production pipelineは正式domain/resource決定後に別Environmentとして設計します。
+手動再実行が必要なincidentでは通常deployを止め、対象Neon project/branch、head SHA、現在のschema version、失敗原因を確認した個別runbookを作ります。URLをlocalへ取り出したり、確認なしにworkflowを繰り返したりしません。Production pipelineは確定済みの`cycle.fukamu.com`向けに、Production専用resourceと運用値が確定した後で別Environmentとして設計します。
 
 ## Destructive migration・rollback・backup
 

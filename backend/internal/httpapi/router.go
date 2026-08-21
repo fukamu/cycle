@@ -11,12 +11,12 @@ import (
 	"github.com/go-playground/validator/v10"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
-	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
+	appsession "github.com/fukamu/cycle/backend/internal/application/session"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
 )
 
-const sessionCookieName = "__Host-pdcai_session"
+const sessionCookieName = "__Host-fukamu_cycle_session"
 
 type SessionService interface {
 	Authenticate(context.Context, string) (appsession.AuthenticatedSession, error)

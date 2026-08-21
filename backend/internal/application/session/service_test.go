@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
-	"github.com/matoruru/PDCAI/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 func TestCreateAnonymousHashesCredentialsAndReturnsPlainTokens(t *testing.T) {

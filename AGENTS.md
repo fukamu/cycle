@@ -1,4 +1,4 @@
-# PDCAI repository instructions
+# FUKAMU Cycle repository instructions
 
 このfileはrepository全体に適用します。
 
@@ -58,7 +58,7 @@
 - 全体: `./scripts/check.sh`
 - E2E込み: 消去可能な`TEST_DATABASE_URL`を設定して `./scripts/check.sh --e2e`
 - Safe cleanの対象確認: `./scripts/clean.sh --dry-run`
-- DB reset guardのdry-run: `./scripts/reset-local-db.sh --database-name pdcai --confirm-database-name pdcai --dry-run`
+- DB reset guardのdry-run: `./scripts/reset-local-db.sh --database-name fukamu_cycle --confirm-database-name fukamu_cycle --dry-run`
 
 Host tool不足で一部checkを実行できない場合は、実行できたcheck、未実行のcheck、理由を明記してください。Data消失やproduction変更を伴う操作をvalidationのために実行してはいけません。
 

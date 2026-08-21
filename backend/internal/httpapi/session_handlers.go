@@ -3,7 +3,7 @@ package httpapi
 import (
 	"net/http"
 
-	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
+	appsession "github.com/fukamu/cycle/backend/internal/application/session"
 )
 
 type sessionResponse struct {

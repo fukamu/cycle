@@ -53,7 +53,7 @@ describe("SessionProvider Closed Beta admission", () => {
     const user = userEvent.setup();
     await user.type(
       screen.getByLabelText("招待Token"),
-      `pdcai_beta_${"a".repeat(43)}`,
+      `fukamu_cycle_beta_${"a".repeat(43)}`,
     );
     await user.click(screen.getByRole("button", { name: "利用を開始する" }));
 

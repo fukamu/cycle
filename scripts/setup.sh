@@ -71,7 +71,7 @@ if [[ "${skip_install}" == "false" ]]; then
     cd -- "${repo_root}"
     pnpm install --frozen-lockfile
     XDG_CONFIG_HOME="${repo_root}/cloudflare/.wrangler/config" \
-      pnpm --filter pdcai-cloudflare run types
+      pnpm --filter fukamu-cycle-cloudflare run types
   )
   (
     cd -- "${repo_root}/backend"

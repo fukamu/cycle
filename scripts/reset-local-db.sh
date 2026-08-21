@@ -7,8 +7,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=scripts/lib/common.sh
 source "${script_dir}/lib/common.sh"
 repo_root="$(resolve_repo_root "${BASH_SOURCE[0]}")"
-container_name="pdcai-postgres"
-database_name="pdcai"
+container_name="fukamu-cycle-postgres"
+database_name="fukamu_cycle"
 confirm_database_name=""
 dry_run=false
 confirmed=false
@@ -59,8 +59,8 @@ while (($# > 0)); do
   esac
 done
 
-[[ "${database_name}" =~ ^pdcai(_dev|_test)?$ ]] \
-  || die "--database-name must be pdcai, pdcai_dev, or pdcai_test. No database was changed."
+[[ "${database_name}" =~ ^fukamu_cycle(_dev|_test)?$ ]] \
+  || die "--database-name must be fukamu_cycle, fukamu_cycle_dev, or fukamu_cycle_test. No database was changed."
 [[ "${container_name}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] \
   || die "--container-name must be a valid local Docker container name. No database was changed."
 [[ -n "${confirm_database_name}" ]] \

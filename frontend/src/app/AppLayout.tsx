@@ -15,8 +15,8 @@ export function AppLayout() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <Link className="wordmark" to="/" aria-label="PDCAI ホーム">
-          PDCAI
+        <Link className="wordmark" to="/" aria-label="FUKAMU Cycle ホーム">
+          FUKAMU Cycle
         </Link>
         <button
           className="icon-button"

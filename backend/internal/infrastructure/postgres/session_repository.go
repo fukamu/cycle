@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
-	"github.com/matoruru/PDCAI/backend/internal/domain/user"
-	db "github.com/matoruru/PDCAI/backend/internal/infrastructure/postgres/generated"
+	appsession "github.com/fukamu/cycle/backend/internal/application/session"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
+	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
 
 type SessionRepository struct {

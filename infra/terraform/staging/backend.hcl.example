@@ -1,5 +1,5 @@
 bucket = "<R2_STATE_BUCKET_NAME>"
-key    = "pdcai/staging/terraform.tfstate"
+key    = "fukamu-cycle/staging/terraform.tfstate"
 region = "auto"
 
 use_lockfile                 = true

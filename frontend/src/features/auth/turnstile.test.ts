@@ -5,7 +5,7 @@ afterEach(() => {
   vi.resetModules();
   delete window.turnstile;
   document
-    .querySelectorAll('script[data-pdcai-turnstile="true"]')
+    .querySelectorAll('script[data-fukamu-cycle-turnstile="true"]')
     .forEach((script) => script.remove());
 });
 
@@ -41,7 +41,7 @@ describe("getAnonymousBootstrapToken", () => {
 
     const token = getAnonymousBootstrapToken();
     const script = document.querySelector<HTMLScriptElement>(
-      'script[data-pdcai-turnstile="true"]',
+      'script[data-fukamu-cycle-turnstile="true"]',
     );
     expect(script?.src).toBe(
       "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
