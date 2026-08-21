@@ -43,7 +43,8 @@
 - `.env`をBackendが暗黙loadする前提にしない。Local Bashでは `source ./scripts/import-env.sh` を使う。
 - 通常cleanとdata削除を分離する。`scripts/clean.sh`へDB、Docker volume、environment file、browser dataの削除を追加しない。
 - Production DB reset/down/drop、production deploy、secret変更、data correctionを検証目的で実行しない。
-- Schema変更は既存migrationを編集せず、新しいup/down pairを追加する。保存dataや挙動に影響する場合は先に仕様整合性を確認する。
+- 未リリース・空DB・既存環境互換不要というuserの明示承認に基づく`000001_fukamu_cycle_baseline`へのrebaselineは完了済みの一回限りの例外である。この例外を根拠にbaselineを再編集しない。
+- 今後のSchema変更は既存migrationを編集せず、新しいup/down pairを追加する。保存dataや挙動に影響する場合は先に仕様整合性を確認する。
 - Production deployはmigration-firstを維持し、migration成功前にapplication trafficを新versionへ移さない。
 - main CIの重いjobを省略できるのは、成功したPR CIの検証tree artifactとmain treeが完全一致する場合だけとする。直接push、artifact/API問題、tree不一致では全CIへfallbackし、main SHAの成功CI、Terraform Plan、承認付きApply、Deployの連鎖を維持する。
 - 未決のproduction capacity、backup、provider、budget/rate/security/alert値をexample/defaultから推測しない。

@@ -6,11 +6,9 @@
 
 - Database: PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24`）
 - Migration runner: `backend/cmd/migrate`（`golang-migrate`）
-- `000002_tighten_content_limits` はGoalを80 code points、各PDCA Frameを200 code pointsへ制限する。既存行が新上限を超える場合は自動切り捨てせずMigration全体を失敗させるため、対象データを確認し、明示的な運用判断を得てから修正して再実行する。
-- `000003_enforce_uuid_v7` はPrimary/standalone UUID列とUUID配列へUUID v7のversion/variant制約を追加する。FK列は制約済みの参照先を通じてUUID v7へ限定される。
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
-- 現在のbaseline schema: `000001_pdcai_baseline.up.sql`
+- 現在のbaseline schema: `000001_fukamu_cycle_baseline.up.sql`。未リリース・空DB・既存環境互換不要という明示承認に基づき、初期Schemaの80/200文字制約とUUID v7制約を直接含む1 migrationへrebaseline済みです。
 
 Migration runnerは `DATABASE_URL` と、任意の `MIGRATIONS_DIR`（default `migrations`）だけを読み、未適用のup migrationを順番に適用します。適用履歴はDBの `schema_migrations` で管理されます。
 
@@ -26,7 +24,7 @@ Migration runnerは、正常に適用した各fileについて`migration_version
 6. 空のtest DBと、可能ならproduction相当データ量のcopyではない匿名化fixtureでupを検証する。downはローカルの破棄可能DBでのみ検証する。
 7. backward incompatibleな変更は一度に行わず、expand → application切替 → contractを複数releaseに分ける。
 
-Migration番号の変更、適用済みfileの書き換え、別branchで同じ番号を使うことは禁止です。適用済みmigrationの訂正は新しいmigrationで行います。
+この完了済みrebaselineを再実行・再編集してはいけません。今後はMigration番号の変更、適用済みfileの書き換え、別branchで同じ番号を使うことを禁止し、適用済みmigrationの訂正は新しいmigrationで行います。
 
 ## ローカル適用
 

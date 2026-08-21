@@ -6367,7 +6367,7 @@ Repositoryは最低限次の論理領域を持つ。各領域の物理Directory�
 
 **[設計上の仮定]** 初回Application deploymentは空Databaseを対象とする。
 
-1. 最初のMigrationを`000001_pdcai_baseline`相当として作成し、§16.2の全Table、Constraint、Index、Foreign Keyを作成する。
+1. 最初のMigrationを`000001_fukamu_cycle_baseline`相当として作成し、§16.2の全Table、Constraint、Index、Foreign Keyを作成する。
 2. Baselineは空Databaseへ単独で適用できなければならない。
 3. CIで、空DatabaseへのMigration適用、Application起動、Repository Integration Testを実行する。
 4. Local / Test環境ではUser Dataが存在しない場合に限りDatabase resetを許可する。

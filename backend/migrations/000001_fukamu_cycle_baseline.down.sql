@@ -13,5 +13,7 @@ DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS auth_identities;
 DROP TABLE IF EXISTS anonymous_bootstraps;
 DROP TABLE IF EXISTS users;
+DROP FUNCTION IF EXISTS fukamu_cycle_uuid_array_is_v7(UUID[]);
+DROP FUNCTION IF EXISTS fukamu_cycle_uuid_is_v7(UUID);
 
 COMMIT;

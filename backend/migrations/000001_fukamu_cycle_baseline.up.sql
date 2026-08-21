@@ -1,10 +1,33 @@
 BEGIN;
 
+CREATE FUNCTION fukamu_cycle_uuid_is_v7(value UUID)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT (get_byte(uuid_send(value), 6) >> 4) = 7
+       AND (get_byte(uuid_send(value), 8) >> 6) = 2
+$$;
+
+CREATE FUNCTION fukamu_cycle_uuid_array_is_v7(items UUID[])
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT COALESCE(bool_and(value IS NOT NULL AND fukamu_cycle_uuid_is_v7(value)), TRUE)
+    FROM unnest(items) AS value
+$$;
+
 CREATE TABLE users (
     id UUID PRIMARY KEY,
     last_active_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
+    updated_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT users_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(id))
 );
 
 CREATE TABLE anonymous_bootstraps (
@@ -23,6 +46,7 @@ CREATE TABLE auth_identities (
     email_at_link TEXT NULL,
     email_verified_at_link BOOLEAN NULL,
     created_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT auth_identities_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(id)),
     UNIQUE(provider, provider_subject),
     UNIQUE(user_id, provider)
 );
@@ -36,7 +60,8 @@ CREATE TABLE sessions (
     last_seen_at TIMESTAMPTZ NOT NULL,
     idle_expires_at TIMESTAMPTZ NOT NULL,
     absolute_expires_at TIMESTAMPTZ NOT NULL,
-    revoked_at TIMESTAMPTZ NULL
+    revoked_at TIMESTAMPTZ NULL,
+    CONSTRAINT sessions_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(id))
 );
 CREATE INDEX idx_sessions_user ON sessions(user_id);
 CREATE INDEX idx_sessions_expiry ON sessions(idle_expires_at) WHERE revoked_at IS NULL;
@@ -53,6 +78,8 @@ CREATE TABLE goals (
     terminal_request_hash TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT goals_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(id)),
+    CONSTRAINT goals_terminal_operation_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(terminal_operation_id)),
     UNIQUE(user_id, id),
     UNIQUE(user_id, terminal_operation_id),
     CHECK (
@@ -79,9 +106,12 @@ CREATE TABLE goal_versions (
     user_id UUID NOT NULL,
     goal_id UUID NOT NULL,
     version_number INTEGER NOT NULL CHECK (version_number >= 1),
-    body TEXT NOT NULL CHECK (char_length(body) BETWEEN 1 AND 500),
+    body TEXT NOT NULL,
     created_by_operation_id UUID NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT goal_versions_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(id)),
+    CONSTRAINT goal_versions_created_by_operation_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(created_by_operation_id)),
+    CONSTRAINT goal_versions_body_max_80 CHECK (char_length(body) BETWEEN 1 AND 80),
     UNIQUE(goal_id, version_number),
     UNIQUE(goal_id, id),
     UNIQUE(goal_id, created_by_operation_id),
@@ -126,10 +156,13 @@ CREATE TABLE pdca_cycles (
     FOREIGN KEY(user_id, goal_id) REFERENCES goals(user_id, id) ON DELETE CASCADE,
     FOREIGN KEY(goal_id, goal_version_id)
       REFERENCES goal_versions(goal_id, id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
-    CHECK (char_length(plan) <= 2000),
-    CHECK (char_length(do_text) <= 2000),
-    CHECK (char_length(check_text) <= 2000),
-    CHECK (char_length(action) <= 2000),
+    CONSTRAINT pdca_cycles_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(id)),
+    CONSTRAINT pdca_cycles_start_operation_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(start_operation_id)),
+    CONSTRAINT pdca_cycles_completion_operation_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(completion_operation_id)),
+    CONSTRAINT pdca_cycles_plan_max_200 CHECK (char_length(plan) <= 200),
+    CONSTRAINT pdca_cycles_do_max_200 CHECK (char_length(do_text) <= 200),
+    CONSTRAINT pdca_cycles_check_max_200 CHECK (char_length(check_text) <= 200),
+    CONSTRAINT pdca_cycles_action_max_200 CHECK (char_length(action) <= 200),
     CHECK (
       action_last_ai_applied_content_revision IS NULL
       OR (action_last_ai_applied_content_revision >= 1
@@ -171,10 +204,12 @@ CREATE TABLE goal_drafts (
     goal_id UUID NULL,
     base_goal_version_id UUID NULL,
     review_cycle_id UUID NULL,
-    body TEXT NOT NULL DEFAULT '' CHECK (char_length(body) <= 500),
+    body TEXT NOT NULL DEFAULT '',
     revision BIGINT NOT NULL DEFAULT 0 CHECK (revision >= 0),
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT goal_drafts_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(id)),
+    CONSTRAINT goal_drafts_body_max_80 CHECK (char_length(body) <= 80),
     UNIQUE(user_id, id),
     FOREIGN KEY(user_id, goal_id) REFERENCES goals(user_id, id) ON DELETE CASCADE,
     FOREIGN KEY(goal_id, base_goal_version_id)
@@ -240,6 +275,9 @@ CREATE TABLE ai_generations (
     FOREIGN KEY(goal_id, goal_version_id) REFERENCES goal_versions(goal_id, id) ON DELETE CASCADE,
     FOREIGN KEY(goal_id, cycle_id)
       REFERENCES pdca_cycles(goal_id, id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT ai_generations_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(id)),
+    CONSTRAINT ai_generations_idempotency_key_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(idempotency_key)),
+    CONSTRAINT ai_generations_context_cycle_ids_uuid_v7 CHECK (fukamu_cycle_uuid_array_is_v7(context_cycle_ids)),
     CHECK (cardinality(context_cycle_ids) <= 10),
     CHECK (
       (status = 'running' AND finished_at IS NULL AND lease_expires_at IS NOT NULL)
@@ -283,15 +321,15 @@ CREATE TABLE ai_generations (
         OR (source_goal_draft_id IS NULL AND goal_id IS NOT NULL AND goal_version_id IS NOT NULL)
       ))
     ),
-    CHECK (
+    CONSTRAINT ai_generations_source_text_tight_limit CHECK (
       (operation_type = 'action_generate' AND source_text IS NULL)
-      OR (operation_type = 'goal_refine' AND source_text IS NOT NULL AND char_length(source_text) <= 500)
-      OR (operation_type = 'action_refine' AND source_text IS NOT NULL AND char_length(source_text) <= 2000)
+      OR (operation_type = 'goal_refine' AND source_text IS NOT NULL AND char_length(source_text) <= 80)
+      OR (operation_type = 'action_refine' AND source_text IS NOT NULL AND char_length(source_text) <= 200)
     ),
-    CHECK (
+    CONSTRAINT ai_generations_output_tight_limit CHECK (
       output IS NULL
-      OR (operation_type = 'goal_refine' AND char_length(output) <= 500)
-      OR (operation_type IN ('action_generate','action_refine') AND char_length(output) <= 2000)
+      OR (operation_type = 'goal_refine' AND char_length(output) <= 80)
+      OR (operation_type IN ('action_generate','action_refine') AND char_length(output) <= 200)
     ),
     CHECK (input_tokens IS NULL OR input_tokens >= 0),
     CHECK (output_tokens IS NULL OR output_tokens >= 0),
@@ -325,6 +363,7 @@ CREATE TABLE ai_usage_events (
     provider_usage_finalized_at TIMESTAMPTZ NULL,
     quota_retain_until TIMESTAMPTZ NOT NULL,
     content_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    CONSTRAINT ai_usage_events_operation_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(operation_id)),
     CHECK (input_tokens IS NULL OR input_tokens >= 0),
     CHECK (output_tokens IS NULL OR output_tokens >= 0),
     CHECK (estimated_cost_usd IS NULL OR estimated_cost_usd >= 0),
@@ -351,6 +390,8 @@ CREATE TABLE goal_delete_receipts (
     request_hash TEXT NOT NULL,
     deleted_at TIMESTAMPTZ NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT goal_delete_receipts_idempotency_key_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(idempotency_key)),
+    CONSTRAINT goal_delete_receipts_deleted_goal_id_uuid_v7 CHECK (fukamu_cycle_uuid_is_v7(deleted_goal_id)),
     PRIMARY KEY(user_id, idempotency_key)
 );
 CREATE INDEX idx_goal_delete_receipts_expiry ON goal_delete_receipts(expires_at);
