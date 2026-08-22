@@ -90,6 +90,7 @@ export function GoalTimelinePage() {
         {groups.map((group, index) => {
           const boundaryCycle = groups[index + 1]?.cycles[0];
           const isRevision = group.kind === "revision";
+          const isCurrent = group.version.id === current.currentVersion.id;
           return (
             <Fragment key={group.version.id}>
               <li
@@ -97,6 +98,7 @@ export function GoalTimelinePage() {
                 data-timeline-entry="period"
                 data-version-kind={group.kind}
                 data-version-number={group.version.versionNumber}
+                data-version-state={isCurrent ? "current" : "past"}
               >
                 {group.cycles.length > 0 && (
                   <span className="timeline-period__rail" aria-hidden="true" />
@@ -137,6 +139,7 @@ export function GoalTimelinePage() {
                 data-event-version={group.version.versionNumber}
                 data-timeline-entry="event"
                 data-timeline-event={isRevision ? "change" : "created"}
+                data-version-state={isCurrent ? "current" : "past"}
               >
                 <span className="timeline-event__marker" aria-hidden="true" />
                 <div>

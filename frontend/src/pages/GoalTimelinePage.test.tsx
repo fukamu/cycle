@@ -90,16 +90,45 @@ describe("GoalTimelinePage", () => {
     const version = getVersion(container, 2);
     const event = getEvent(container, 2);
     expect(version).toHaveAttribute("data-version-kind", "revision");
+    expect(version).toHaveAttribute("data-version-state", "current");
     expect(
       within(version).queryByText("目標を変更しました"),
     ).not.toBeInTheDocument();
     expect(within(event).getByText("目標を変更しました")).toBeVisible();
     expect(event).toHaveAttribute("data-timeline-event", "change");
+    expect(event).toHaveAttribute("data-version-state", "current");
     expect(version.nextElementSibling).toBe(event);
     expect(event.querySelector(".timeline-event__marker")).toBeInTheDocument();
     expect(version.querySelector(".timeline-period__rail")).toBeInTheDocument();
     expect(screen.queryByText("GOAL V1")).not.toBeInTheDocument();
     expect(listCycles).toHaveBeenCalledWith(goalId, undefined);
+  });
+
+  it("marks the V1 period and creation event as current before any revision", async () => {
+    vi.mocked(getGoal).mockResolvedValue({ goal: makeGoal(1) });
+    vi.mocked(listCycles).mockResolvedValue({
+      items: [makeCycle(1, 1)],
+      nextCursor: null,
+    });
+
+    const { container } = renderTimeline();
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Version 1の目標",
+    });
+    expect(getVersion(container, 1)).toHaveAttribute(
+      "data-version-state",
+      "current",
+    );
+    expect(getEvent(container, 1)).toHaveAttribute(
+      "data-version-state",
+      "current",
+    );
+    expect(getEvent(container, 1)).toHaveAttribute(
+      "data-timeline-event",
+      "created",
+    );
   });
 
   it("keeps V3 marked and merges version groups across older pages", async () => {
@@ -183,6 +212,24 @@ describe("GoalTimelinePage", () => {
     expect(
       within(getEvent(container, 1)).getByText("目標を設定しました"),
     ).toBeVisible();
+    expect(getVersion(container, 3)).toHaveAttribute(
+      "data-version-state",
+      "current",
+    );
+    expect(getEvent(container, 3)).toHaveAttribute(
+      "data-version-state",
+      "current",
+    );
+    for (const versionNumber of [1, 2]) {
+      expect(getVersion(container, versionNumber)).toHaveAttribute(
+        "data-version-state",
+        "past",
+      );
+      expect(getEvent(container, versionNumber)).toHaveAttribute(
+        "data-version-state",
+        "past",
+      );
+    }
     for (const version of versions)
       expect(
         within(version).queryByText("目標を変更しました"),

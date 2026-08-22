@@ -215,26 +215,32 @@ test("timeline distinguishes V1, V2, and V3 goal segments", async ({
   await expect(v1).toHaveAttribute("data-version-kind", "baseline");
   await expect(v2).toHaveAttribute("data-version-kind", "revision");
   await expect(v3).toHaveAttribute("data-version-kind", "revision");
-  await expect(v1.locator(".timeline-period__rail")).toHaveCSS(
+  for (const past of [v1, v2]) {
+    await expect(past).toHaveAttribute("data-version-state", "past");
+    await expect(past.locator(".timeline-period__rail")).toHaveCSS(
+      "background-color",
+      "rgb(204, 218, 236)",
+    );
+  }
+  await expect(v3).toHaveAttribute("data-version-state", "current");
+  await expect(v3.locator(".timeline-period__rail")).toHaveCSS(
     "background-color",
-    "rgb(214, 233, 255)",
+    "rgb(74, 144, 226)",
   );
-  for (const revision of [v2, v3]) {
-    await expect(revision.locator(".timeline-period__rail")).toHaveCSS(
+  for (const versionNumber of [1, 2]) {
+    const pastEvent = page.locator(`[data-event-version="${versionNumber}"]`);
+    await expect(pastEvent).toHaveAttribute("data-version-state", "past");
+    await expect(pastEvent.locator(".timeline-event__marker")).toHaveCSS(
       "background-color",
-      "rgb(74, 144, 226)",
+      "rgb(255, 255, 255)",
     );
   }
-  for (const versionNumber of [2, 3]) {
-    const event = page.locator(`[data-event-version="${versionNumber}"]`);
-    await expect(event.locator(".timeline-event__marker")).toHaveCSS(
-      "background-color",
-      "rgb(74, 144, 226)",
-    );
-  }
-  await expect(
-    page.locator('[data-event-version="1"]').locator(".timeline-event__marker"),
-  ).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  const currentEvent = page.locator('[data-event-version="3"]');
+  await expect(currentEvent).toHaveAttribute("data-version-state", "current");
+  await expect(currentEvent.locator(".timeline-event__marker")).toHaveCSS(
+    "background-color",
+    "rgb(74, 144, 226)",
+  );
   await expect(page.locator('[data-event-version="3"]')).toContainText(
     "Cycle 2の終了後",
   );

@@ -633,7 +633,7 @@ Required behavior:
 - Cycle rowにはGoal単位のCycle番号、期間、`completed` / `canceled`、P previewを表示する。
 - Cycle Detailには、そのCycleが参照したGoal Version本文とP/D/C/AをRead-onlyで表示する。
 - Version区間とVersion開始eventを別itemとして表示する。変更文言をVersion見出しやCycle群へ内包せず、最新順では新VersionのCycle群と旧Version区間の間に独立した変更eventを置く。
-- V1区間はLight Blueのrail、V2以降の区間はBlueのrailで示す。V1開始eventは白抜きmarker、V2以降の変更eventはBlueの塗りmarkerとし、Version固有色は増やさない。
+- `goal.currentVersion`に一致する現在VersionだけをBlueの太いrailとBlueの塗りmarkerで強調する。過去VersionはVersion番号にかかわらず中立色のrailと白抜きmarkerへ戻し、Version固有色は増やさない。V1しかない場合はV1を現在Versionとして強調する。
 - Version変更eventは色だけでなく、`Goal Vn → Vn+1`、`目標を変更しました`、確定日時を表示する。直前Versionの最新Cycleを取得済みなら`Cycle Nの終了後`も表示し、変更を範囲ではなく時点として識別可能にする。
 - Timelineは最新Versionを先頭にし、各Version内のCycleも新しい順に表示する。Infinite Scrollで取得した古いpageは既存表示を移動させず末尾へ追加する。
 - Review Draftを変更後に`achieved` / `ended`へ遷移した場合、そのDraftはVersion化されないためTimelineにもmarkerを作らない。
