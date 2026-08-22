@@ -1005,6 +1005,7 @@ textarea[readonly] {
   width: min(400px, 100%);
   min-height: 44px;
   overflow: hidden;
+  contain: layout paint;
 }
 
 .google-identity[data-disabled="true"] {
@@ -1022,9 +1023,25 @@ textarea[readonly] {
   display: none;
 }
 
-.google-identity__button iframe {
+.google-identity__button > * {
   max-width: 100% !important;
   max-height: 44px !important;
+  overflow: hidden !important;
+}
+
+.google-identity__button iframe {
+  display: block;
+  width: 100% !important;
+  height: 44px !important;
+  max-width: 100% !important;
+  max-height: 44px !important;
+}
+
+.google-identity__button img,
+.google-identity__button svg {
+  width: 18px !important;
+  height: 18px !important;
+  object-fit: contain;
 }
 
 .danger-zone {
