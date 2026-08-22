@@ -66,7 +66,7 @@ export function SettingsPage() {
     setError(undefined);
     try {
       await deleteAccount(session.csrfToken);
-      await clearUserDrafts(session.user.id);
+      await clearUserDrafts(session.user.id).catch(() => undefined);
       window.location.assign("/");
     } catch (cause) {
       setError(errorMessage(cause, "アカウントを削除できませんでした。"));
