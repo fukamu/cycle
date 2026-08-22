@@ -153,6 +153,73 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   await expect(editor).toHaveValue("失敗しても保持する目標");
 });
 
+test("timeline distinguishes V1, V2, and V3 goal segments", async ({
+  page,
+}) => {
+  const goalVersions = [
+    "最初の目標",
+    "二回目に見直した目標",
+    "三回目に見直した目標",
+  ];
+  await createProgressingGoal(page, goalVersions[0]);
+  await completeCurrentCycle(page, "V1");
+
+  const review = page.getByRole("textbox", {
+    name: "次のサイクルで目指す目標",
+  });
+  await saveText(page, review, goalVersions[1], "/review");
+  await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
+  await expect(page.getByText("Goal v2 · Cycle 2")).toBeVisible();
+  await completeCurrentCycle(page, "V2");
+
+  await saveText(page, review, goalVersions[2], "/review");
+  await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
+  await expect(page.getByText("Goal v3 · Cycle 3")).toBeVisible();
+
+  const route = new URL(page.url()).pathname.match(
+    /^\/goals\/([^/]+)\/cycles\//,
+  );
+  expect(route).not.toBeNull();
+  await page.goto(`/history/goals/${route![1]}`);
+
+  const segments = page.locator("[data-version-number]");
+  await expect(segments).toHaveCount(3);
+  expect(
+    await segments.evaluateAll((values) =>
+      values.map((value) => value.getAttribute("data-version-number")),
+    ),
+  ).toEqual(["1", "2", "3"]);
+  await expect(page.getByText("目標を変更しました")).toHaveCount(2);
+
+  const v1 = page.locator('[data-version-number="1"]');
+  const v2 = page.locator('[data-version-number="2"]');
+  const v3 = page.locator('[data-version-number="3"]');
+  await expect(v1).toHaveAttribute("data-version-kind", "baseline");
+  await expect(v2).toHaveAttribute("data-version-kind", "revision");
+  await expect(v3).toHaveAttribute("data-version-kind", "revision");
+  await expect(v1.locator(".timeline-segment__marker")).toHaveCSS(
+    "background-color",
+    "rgb(255, 255, 255)",
+  );
+  await expect(v1.locator(".timeline-segment__rail")).toHaveCSS(
+    "background-color",
+    "rgb(214, 233, 255)",
+  );
+  for (const revision of [v2, v3]) {
+    await expect(revision.locator(".timeline-segment__marker")).toHaveCSS(
+      "background-color",
+      "rgb(74, 144, 226)",
+    );
+    await expect(revision.locator(".timeline-segment__rail")).toHaveCSS(
+      "background-color",
+      "rgb(74, 144, 226)",
+    );
+  }
+  await expect(v1.getByRole("link", { name: /Cycle 1/ })).toBeVisible();
+  await expect(v2.getByRole("link", { name: /Cycle 2/ })).toBeVisible();
+  await expect(v3.getByRole("link", { name: /Cycle 3/ })).toBeVisible();
+});
+
 test("free users can progress two goals while a third start is rejected without losing its draft", async ({
   page,
 }) => {
@@ -411,10 +478,14 @@ async function createAndCompleteGoal(page: Page) {
     "/api/v1/goal-drafts/",
   );
   await page.getByRole("button", { name: "この目標で始める" }).click();
-  await saveFrame(page, "P — Plan", "計画", "D");
-  await saveFrame(page, "D — Do", "実行", "C");
-  await saveFrame(page, "C — Check", "確認", "A");
-  await saveFrame(page, "A — Action", "改善", "A");
+  await completeCurrentCycle(page, "確認");
+}
+
+async function completeCurrentCycle(page: Page, suffix: string) {
+  await saveFrame(page, "P — Plan", `計画 ${suffix}`, "D");
+  await saveFrame(page, "D — Do", `実行 ${suffix}`, "C");
+  await saveFrame(page, "C — Check", `確認 ${suffix}`, "A");
+  await saveFrame(page, "A — Action", `改善 ${suffix}`, "A");
   await page.getByRole("button", { name: "サイクルを完了" }).click();
   await page
     .getByRole("dialog")

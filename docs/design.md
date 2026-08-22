@@ -628,6 +628,7 @@ Required behavior:
 - Cycle rowにはGoal単位のCycle番号、期間、`completed` / `canceled`、P previewを表示する。
 - Cycle Detailには、そのCycleが参照したGoal Version本文とP/D/C/AをRead-onlyで表示する。
 - Version変更地点は色だけでなく、marker icon、文言、Version番号でも識別可能にする。
+- V1は白抜きmarkerとLight Blueの独立segment、V2以降は各VersionをBlueの塗りmarkerとBlueの独立segmentで示す。Version固有色は増やさず、任意のVersionは番号と変更文言で識別する。
 - Review Draftを変更後に`achieved` / `ended`へ遷移した場合、そのDraftはVersion化されないためTimelineにもmarkerを作らない。
 - Infinite Scrollのpage境界をまたいでも、各Cycle itemが持つ`goalVersion`を使って正しいVersion groupを維持する。
 - Goal Aggregate Delete後は当該GoalをHistoryに残さない。Goal終了とは区別する。

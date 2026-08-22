@@ -798,23 +798,53 @@ textarea[readonly] {
   list-style: none;
 }
 
-.timeline-version {
+.timeline-segment {
+  --timeline-marker-fill: var(--paper);
+  --timeline-marker-border: var(--line-strong);
+  --timeline-rail-color: var(--brand-light);
+
   position: relative;
-  margin-bottom: 38px;
+  min-width: 0;
+  margin-bottom: 30px;
+  padding-left: 34px;
 }
 
-.version-marker {
-  display: grid;
-  grid-template-columns: 24px 1fr;
-  gap: 12px;
+.timeline-segment[data-version-kind="revision"] {
+  --timeline-marker-fill: var(--brand);
+  --timeline-marker-border: var(--brand);
+  --timeline-rail-color: var(--brand);
 }
 
-.version-marker > span {
-  color: var(--brand-dark);
-  font-size: 1.2rem;
+.timeline-segment:last-child {
+  margin-bottom: 0;
 }
 
-.version-marker h2 {
+.timeline-segment__marker {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  background: var(--timeline-marker-fill);
+  border: 3px solid var(--timeline-marker-border);
+  border-radius: 50%;
+}
+
+.timeline-segment__rail {
+  position: absolute;
+  top: 22px;
+  bottom: 0;
+  left: 8px;
+  width: 2px;
+  background: var(--timeline-rail-color);
+}
+
+.timeline-segment__content {
+  min-width: 0;
+}
+
+.timeline-version h2 {
   margin: 0 0 6px;
   color: var(--brand-deep);
   font-size: 1.08rem;
@@ -822,7 +852,7 @@ textarea[readonly] {
   overflow-wrap: anywhere;
 }
 
-.version-marker time {
+.timeline-version time {
   color: var(--muted);
   font-size: var(--font-size-small);
 }
@@ -834,9 +864,7 @@ textarea[readonly] {
 }
 
 .timeline-cycles {
-  margin: 16px 0 0 11px;
-  padding-left: 25px;
-  border-left: 2px solid var(--brand-light);
+  margin: 16px 0 0;
 }
 
 .timeline-cycles li {
