@@ -90,16 +90,47 @@ Deploy後:
 
 ## 一般公開と物理撤去
 
-最初に`BETA_ADMISSION_MODE=off`へ変更してdeployし、fresh browserが招待なしで既存Anonymous bootstrapを完了できることを確認します。この論理無効化にDatabase変更はありません。
+一般公開と物理撤去の最終判定者はProject Ownerです。論理無効化のdeployと物理撤去は別の変更として個別に明示承認し、同時に行いません。
 
-安定確認後、別のreview済み変更で次をまとめて削除します。
+### 1. 論理無効化
 
-- `cloudflare/src/beta-admission/`
-- `cloudflare/src/index.ts`のAdmission hook
-- `frontend/src/features/beta-admission/`
-- `SessionProvider.tsx`の`BETA_ADMISSION_REQUIRED`分岐
-- `scripts/new-beta-invite.sh`と`scripts/new-beta-admission-key.sh`
-- `BETA_*` deployment inputs、tests、このrunbookと他文書からの導線
-- Cloudflare Worker/GitHub Environmentの`BETA_*` values
+1. Review済みの変更で`BETA_ADMISSION_MODE=off`だけをdeployします。観測期間中はrollbackに備えてclosed用のGitHub Environment値とWorker secretを保持し、値自体をlogや記録へ出しません。
+2. 次を確認し、deploy対象revision、確認開始日時、結果をSecretを含まない運用記録へ残します。
+   - fresh browserがInvite Tokenなしで既存のTurnstile付きAnonymous bootstrapを完了し、UserとSessionを1組だけ作成できる。
+   - 既存SessionがAdmission画面を再表示せず、同じApplication UserとDataを継続する。
+   - Google連携、Goal作成、P/D/C/A、Cycle完了の主要flowがAdmissionとは独立して動く。
+   - `/healthz`、`/readyz`、error rate、Worker/Container logに一般公開切替を原因とする未解決の異常がない。
+3. この切替にDatabase migration、User/Auth migration、既存Data correctionを追加しません。
 
-Database migration、User/Auth migration、既存User data correctionは不要です。
+### 2. 7日間の安定確認
+
+- 論理無効化後、Project Ownerが連続7日間（168時間）の安定確認を行います。
+- 毎日、fresh anonymous bootstrap、既存Session継続、主要flow、health/ready、認証・bootstrap error、利用者報告を確認します。未決の数値thresholdは推測で追加せず、承認済みの通常運用基準と切替前baselineを使います。
+- `closed`へのrollback、Admission起因か判断できない認証・bootstrap障害、主要flowの未解決regressionがあれば期間をresetし、修正後の`off` deployから7日間を数え直します。
+- 7日間の完了だけでは撤去を開始しません。確認結果をProject Ownerが承認し、物理撤去を別途明示承認した場合だけ次へ進みます。
+
+### 3. 単一変更での物理撤去
+
+物理撤去は互換layerやdead codeを残さず、次を1つのreview可能な変更でまとめて行います。
+
+| Area | 同じ変更で削除・更新する対象 |
+|---|---|
+| Worker ingress | `cloudflare/src/beta-admission/`、`cloudflare/src/index.ts`のimportとAdmission hook、`cloudflare/wrangler.jsonc`の`BETA_*` vars |
+| Generated Cloudflare types | `cloudflare/worker-configuration.d.ts`を`pnpm --filter fukamu-cycle-cloudflare run types`で再生成し、`BETA_*` bindingを除去。手編集しない |
+| Frontend | `frontend/src/features/beta-admission/`、`SessionProvider.tsx`のimport・`BETA_ADMISSION_REQUIRED`分岐・専用retry判定、対応するFrontend test |
+| Bash helpers | `scripts/new-beta-invite.sh`、`scripts/new-beta-admission-key.sh`、`scripts/tests/run.sh`のAdmission helper test |
+| Deploy workflow | `.github/workflows/deploy.yml`の`BETA_*` Environment/secret入力、validation、ephemeral secrets file追加、Wrangler `--var`組立 |
+| Documents | `docs/environment.md`、`docs/deployment.md`、`docs/operations.md`のAdmission記述と導線、および役目を終えたこのrunbook |
+| External settings | 新codeのdeployとrollback可否確認後、別途承認された外部操作としてGitHub EnvironmentとCloudflare Workerから`BETA_*` variable/secretを削除 |
+
+現在のAdmission固有依存は上表のWorker ingress、Frontend feature、helper、workflow、generated type、文書に限定されます。Go Backend、Domain、Database schema/migration、`infra/terraform/`にはAdmission固有状態も依存もないため、物理撤去でschema/data migrationを作成しません。
+
+撤去変更では次のzero-match監査と通常の全検証を行います。
+
+```bash
+rg --hidden -n 'BETA_|beta-admission|BetaAdmission|fukamu_cycle_beta|Closed Beta Admission' \
+  --glob '!node_modules/**' --glob '!frontend/dist/**' --glob '!.git/**' .
+./scripts/check.sh
+```
+
+最初のcommandはexit code 1（matchなし）を成功条件とします。加えてCloudflare test/dry-run、Frontend test/build、Bash test、消去可能なDBだけを使うE2Eで、InviteなしAnonymous bootstrapと既存Sessionを再確認します。外部値を削除した後に旧Admission codeへrollbackする場合は必要なsecretを安全に復元する別承認が必要になるため、rollback期間の終了をProject Ownerが確認するまでは外部値を削除しません。

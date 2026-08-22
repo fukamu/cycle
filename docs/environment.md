@@ -213,6 +213,6 @@ RATE_AI_PER_SESSION_MINUTE
 RATE_AI_PER_IP_MINUTE
 ```
 
-`BETA_ADMISSION_MODE`は未設定時`off`です。`closed`へ変更する場合だけ`BETA_ADMISSION_COOKIE_TTL_DAYS`と`BETA_INVITES`も追加し、上記のCookie key secretと同じdeployで反映します。
+Staging deploy workflowはGitHub Environmentで`BETA_ADMISSION_MODE`が未設定の場合に明示的な`off`をWorkerへ渡します。Worker binding自体の欠落や未知のmodeは設定不備として新規利用開始をfail-closedにします。`closed`へ変更する場合だけ`BETA_ADMISSION_COOKIE_TTL_DAYS`と`BETA_INVITES`も追加し、上記のCookie key secretと同じdeployで反映します。
 
 Production Environmentは未構築です。公開domainは`cycle.fukamu.com`とし、Production専用resourceと値を追加するときは初期値`BETA_ADMISSION_MODE=closed`を必須にします。Stagingのsecret、DB、provider値を転用しません。

@@ -16,13 +16,24 @@ const closed = {
   BETA_ADMISSION_COOKIE_KEY: key,
 };
 
-test("off mode leaves anonymous bootstrap unchanged", async () => {
-  const response = await handleBetaAdmission(
-    new Request(`${origin}/api/v1/session/anonymous`, { method: "POST" }),
-    { BETA_ADMISSION_MODE: "off" },
-    now,
-  );
-  assert.equal(response, null);
+test("off mode bypasses every admission endpoint without closed-only settings", async () => {
+  for (const [path, method] of [
+    ["/api/v1/session", "GET"],
+    ["/api/v1/session/anonymous", "POST"],
+    ["/api/__beta/admission/redeem", "POST"],
+  ]) {
+    const response = await handleBetaAdmission(
+      new Request(`${origin}${path}`, { method }),
+      {
+        BETA_ADMISSION_MODE: "off",
+        BETA_ADMISSION_COOKIE_TTL_DAYS: "invalid",
+        BETA_INVITES: "invalid",
+        BETA_ADMISSION_COOKIE_KEY: "invalid",
+      },
+      now,
+    );
+    assert.equal(response, null);
+  }
 });
 
 test("closed mode blocks anonymous creation and early session bootstrap", async () => {
@@ -49,6 +60,17 @@ test("existing sessions bypass the early admission prompt", async () => {
       headers: { Cookie: "__Host-fukamu_cycle_session=existing" },
     }),
     closed,
+    now,
+  );
+  assert.equal(response, null);
+});
+
+test("existing sessions survive invalid closed-mode configuration", async () => {
+  const response = await handleBetaAdmission(
+    new Request(`${origin}/api/v1/session`, {
+      headers: { Cookie: "__Host-fukamu_cycle_session=existing" },
+    }),
+    { BETA_ADMISSION_MODE: "closed" },
     now,
   );
   assert.equal(response, null);

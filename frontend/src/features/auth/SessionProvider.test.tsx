@@ -14,7 +14,7 @@ const session = {
   csrfToken: "csrf-token",
 };
 
-describe("SessionProvider Closed Beta admission", () => {
+describe("SessionProvider admission boundary", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -88,6 +88,38 @@ describe("SessionProvider Closed Beta admission", () => {
       }),
     ).toHaveTextContent("招待Tokenを確認できませんでした");
     expect(screen.queryByText("application ready")).not.toBeInTheDocument();
+  });
+
+  it("keeps the normal anonymous bootstrap flow independent of admission", async () => {
+    const requests: { method: string; path: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = typeof input === "string" ? input : input.toString();
+        const method = init?.method ?? "GET";
+        requests.push({ method, path });
+        if (path === "/api/v1/session") {
+          return errorResponse(401, "SESSION_MISSING");
+        }
+        if (path === "/api/v1/session/anonymous" && method === "POST") {
+          return Response.json(session);
+        }
+        throw new Error(`unexpected request: ${method} ${path}`);
+      }),
+    );
+
+    renderProvider();
+
+    expect(await screen.findByText("application ready")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", {
+        name: "招待された方のみご利用いただけます",
+      }),
+    ).not.toBeInTheDocument();
+    expect(requests).toEqual([
+      { method: "GET", path: "/api/v1/session" },
+      { method: "POST", path: "/api/v1/session/anonymous" },
+    ]);
   });
 });
 
