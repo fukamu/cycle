@@ -9,7 +9,7 @@ type Turnstile = {
       readonly execution: "execute";
       readonly size: "invisible";
       readonly callback: (token: string) => void;
-      readonly "error-callback": () => void;
+      readonly "error-callback": (errorCode: string) => boolean;
       readonly "expired-callback": () => void;
       readonly "timeout-callback": () => void;
     },
@@ -47,6 +47,7 @@ export async function getAnonymousBootstrapToken(): Promise<string> {
     const fail = (message: string) => {
       cleanup();
       reject(new Error(message));
+      return true;
     };
     widget.id = turnstile.render(container, {
       sitekey: siteKey,
@@ -57,7 +58,8 @@ export async function getAnonymousBootstrapToken(): Promise<string> {
         cleanup();
         resolve(token);
       },
-      "error-callback": () => fail("Turnstile verification failed"),
+      "error-callback": (errorCode) =>
+        fail(`Turnstile verification failed (${errorCode})`),
       "expired-callback": () => fail("Turnstile token expired"),
       "timeout-callback": () => fail("Turnstile verification timed out"),
     });
