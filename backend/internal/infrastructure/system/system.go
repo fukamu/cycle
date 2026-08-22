@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 )
 
 type Clock struct{}

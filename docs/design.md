@@ -1,7 +1,7 @@
-# PDCAI G-PDCA 実装仕様書
+# FUKAMU Cycle G-PDCA 実装仕様書
 
 > **文書種別:** 統合実装仕様書（Product Specification + Software Design + Implementation Contract） / 実装上の唯一のSource of Truth  
-> **対象:** Webアプリ「PDCAI」MVP  
+> **対象:** Webアプリ「FUKAMU Cycle」MVP\
 > **主要読者:** AIコーディングエージェント / 実装者 / レビュアー  
 > **本文言語:** 日本語
 
@@ -11,7 +11,7 @@
 
 ## 0.1 文書の権威
 
-Repositoryの`docs/design.md`へ配置される本書は、PDCAIのProduct Rule、UX、Domain、Database、API、Frontend、Backend、AI、Security、Operations、Testingに関する**唯一の規範文書**である。
+Repositoryの`docs/design.md`へ配置される本書は、FUKAMU CycleのProduct Rule、UX、Domain、Database、API、Frontend、Backend、AI、Security、Operations、Testingに関する**唯一の規範文書**である。
 
 実装者は本書だけを読んで、主要なProduct Ruleを追加推測せずにMVPを実装できなければならない。
 
@@ -102,7 +102,7 @@ Repositoryの`docs/design.md`へ配置される本書は、PDCAIのProduct Rule�
 
 # 1. Executive Summary
 
-**[確定仕様]** PDCAIは、ユーザーが自分にとって適切なGoalを設定し、そのGoalを達成するためにP（Plan）/ D（Do）/ C（Check）/ A（Action）のCycleを複数回実行し、各Cycleから得た学びによってGoal自体も必要に応じて改善できる日本語向けWebアプリである。
+**[確定仕様]** FUKAMU Cycleは、ユーザーが自分にとって適切なGoalを設定し、そのGoalを達成するためにP（Plan）/ D（Do）/ C（Check）/ A（Action）のCycleを複数回実行し、各Cycleから得た学びによってGoal自体も必要に応じて改善できる日本語向けWebアプリである。
 
 GoalはP/D/C/Aと並ぶ5つ目のFrameではない。関係は次である。
 
@@ -146,7 +146,7 @@ Goal Review Draft
 - Database: PostgreSQL / Neon
 - DB Access: `pgx/v5` + `sqlc`
 - Migration: `golang-migrate/migrate`
-- Authentication: PDCAI Opaque Session Cookie + Google Identity Services
+- Authentication: FUKAMU Cycle Opaque Session Cookie + Google Identity Services
 - AI: OpenAI Responses API + Structured Outputs、公式Go SDK v3
 - AI初期Model候補: `gpt-5.6-luna`。日本語品質評価で不足する場合は`gpt-5.6-terra`へConfiguration変更
 - Hosting: Cloudflare Workers Static Assets + Cloudflare Container上のGo Backend
@@ -266,9 +266,9 @@ ArchitectureはMicroservicesではなく、Domain / Application / Infrastructure
 
 | 用語 | 定義 |
 |---|---|
-| User | PDCAI内部のApplication User。匿名/Google連携状態とは独立したIDを持つ。 |
+| User | FUKAMU Cycle内部のApplication User。匿名/Google連携状態とは独立したIDを持つ。 |
 | AuthIdentity | 外部認証主体。MVP providerは`google`のみ。 |
-| Session | PDCAIが発行するOpaque session。Google ID tokenそのものをSessionとして使わない。 |
+| Session | FUKAMU Cycleが発行するOpaque session。Google ID tokenそのものをSessionとして使わない。 |
 | Goal | 複数のPDCA Cycleを束ねる改善対象。P/D/C/AのFrameではない。 |
 | Goal Creation Draft | Goal確定前の編集可能なDraft。Goal Entityではない。 |
 | Goal Review Draft | Completed Cycle後、現在Goal Versionを元に作る編集可能なDraft。 |
@@ -606,28 +606,36 @@ Goal HistoryはGoalを最上位の閲覧単位とし、Cycleを単純に全User�
 表示例:
 
 ```text
-Goal v1
-仕事に余裕を持てるようになりたい
-│
-├─ Cycle 1  Completed  2026/08/01 〜 2026/08/05
-└─ Cycle 2  Completed  2026/08/06 〜 2026/08/10
-
-● 目標を変更しました
 Goal v2
 平日は18時までに主要業務を終えたい
 │
-├─ Cycle 3  Completed  2026/08/11 〜 2026/08/17
-└─ Cycle 4  Canceled   2026/08/18
+├─ Cycle 4  Canceled   2026/08/18
+└─ Cycle 3  Completed  2026/08/11 〜 2026/08/17
+
+● Goal v1 → v2
+   Cycle 2の終了後に目標を変更しました  2026/08/11
+
+Goal v1
+仕事に余裕を持てるようになりたい
+│
+├─ Cycle 2  Completed  2026/08/06 〜 2026/08/10
+└─ Cycle 1  Completed  2026/08/01 〜 2026/08/05
+
+○ Goal v1
+   目標を設定しました  2026/08/01
 
 Goal status: ended
 ```
 
 Required behavior:
 
-- Version markerには`versionNumber`、Goal本文、確定日時を表示する。
+- Version区間には`versionNumber`とGoal本文を表示し、対応するVersion開始eventには確定日時を表示する。
 - Cycle rowにはGoal単位のCycle番号、期間、`completed` / `canceled`、P previewを表示する。
 - Cycle Detailには、そのCycleが参照したGoal Version本文とP/D/C/AをRead-onlyで表示する。
-- Version変更地点は色だけでなく、marker icon、文言、Version番号でも識別可能にする。
+- Version区間とVersion開始eventを別itemとして表示する。変更文言をVersion見出しやCycle群へ内包せず、最新順では新VersionのCycle群と旧Version区間の間に独立した変更eventを置く。
+- `goal.currentVersion`に一致する現在VersionだけをBlueの太いrailとBlueの塗りmarkerで強調する。過去VersionはVersion番号にかかわらず中立色のrailと白抜きmarkerへ戻し、Version固有色は増やさない。V1しかない場合はV1を現在Versionとして強調する。
+- Version変更eventは色だけでなく、`Goal Vn → Vn+1`、`目標を変更しました`、確定日時を表示する。直前Versionの最新Cycleを取得済みなら`Cycle Nの終了後`も表示し、変更を範囲ではなく時点として識別可能にする。
+- Timelineは最新Versionを先頭にし、各Version内のCycleも新しい順に表示する。Infinite Scrollで取得した古いpageは既存表示を移動させず末尾へ追加する。
 - Review Draftを変更後に`achieved` / `ended`へ遷移した場合、そのDraftはVersion化されないためTimelineにもmarkerを作らない。
 - Infinite Scrollのpage境界をまたいでも、各Cycle itemが持つ`goalVersion`を使って正しいVersion groupを維持する。
 - Goal Aggregate Delete後は当該GoalをHistoryに残さない。Goal終了とは区別する。
@@ -2167,7 +2175,7 @@ Concurrent operation:
 Base path: `/api/v1`
 
 - `Content-Type: application/json; charset=utf-8`
-- Authentication: `__Host-pdcai_session` Secure HttpOnly Cookie
+- Authentication: `__Host-fukamu_cycle_session` Secure HttpOnly Cookie
 - Unsafe method (`POST/PATCH/PUT/DELETE`)は`X-CSRF-Token`必須。ただしanonymous bootstrapはSession前のためOrigin検証 + Turnstile + rate limitで保護する。
 - 全Responseに`X-Request-ID`を付与する。
 - FrontendはResponseを`unknown`としてZodでparseする。
@@ -3684,12 +3692,12 @@ Frontendは`message`文字列ではなく`code`で分岐する。`AI_CONTEXT_ISO
 
 ## 27.1 Opaque Session
 
-**[設計判断]** Google ID tokenやJWTをPDCAI Sessionとして使わず、256-bit cryptographically random Opaque tokenをCookieへ格納する。DBには`SHA-256(token)`だけを保存する。
+**[設計判断]** Google ID tokenやJWTをFUKAMU Cycle Sessionとして使わず、256-bit cryptographically random Opaque tokenをCookieへ格納する。DBには`SHA-256(token)`だけを保存する。
 
 Cookie:
 
 ```text
-Name: __Host-pdcai_session
+Name: __Host-fukamu_cycle_session
 Secure: true
 HttpOnly: true
 SameSite: Lax
@@ -3703,7 +3711,7 @@ Default expiration（Configuration）:
 - absolute: 180 days
 - activity touch coalescing: 15 minutes
 
-Google Identityのsign-in stateとPDCAI Sessionは別概念として管理する。
+Google Identityのsign-in stateとFUKAMU Cycle Sessionは別概念として管理する。
 
 ## 27.2 CSRF
 
@@ -5459,7 +5467,7 @@ System-firstを採用する理由:
 5. 長文Textareaと小さいUI labelの両方で、各OSの標準日本語表示に近い。
 6. Font配信・subset・cache・license noticeの運用をMVPへ増やさない。
 
-Trade-offは、OS間で字形・文字幅・weightが異なり、Brand上の完全な統一感を得られないことである。PDCAIでは文章入力と可読性をBrand統一より優先する。
+Trade-offは、OS間で字形・文字幅・weightが異なり、Brand上の完全な統一感を得られないことである。FUKAMU Cycleでは文章入力と可読性をBrand統一より優先する。
 
 ## 43.3 Type scale / metrics
 
@@ -5549,6 +5557,25 @@ MVP UIは日本語のみだが、将来次のように差し替え可能にす�
 - Web FontなしでCLSがTypography起因に増えないことをPerformance testで確認。
 - 擬似翻訳でlabelを1.5〜2倍にし、Home card、Tab、Dialog、Historyが破綻しない。
 - Lint / review ruleでComponent CSSのliteral `font-family`を禁止し、token fileだけを許可する。
+
+## 43.8 Visual identity
+
+**[確定仕様]** FUKAMU Cycleの画面は、白を基調に次の青系3色をBrand paletteとして使用する。
+
+| Token | Value | Main use |
+|---|---|---|
+| Light Blue | `#D6E9FF` | 面、区切り、選択前の穏やかな状態 |
+| Blue | `#4A90E2` | Accent、Focus、進行や変化の手掛かり |
+| Deep Blue | `#0D3B8E` | Primary Action、文字Wordmark、重要見出し |
+
+- 印象は静か、明快、幾何学的、信頼できるものとし、思考・行動・学びが深く積み重なる感覚を、余白、階層、直線的な色面、控えめな奥行きで表現する。
+- Primary ActionはDeep Blueを使い、通常本文をBlueだけで表示しない。文字、Focus、状態、境界はWCAG 2.2 AA相当のcontrastを満たす。
+- HeaderはSystem Fontによる`FUKAMU Cycle`の文字Wordmarkを使う。Componentへ専用Web Fontを追加しない。
+- Application canvasは単色とし、通常のContent Surfaceは白背景、1pxの境界、共通radiusを基本とする。背景模様、装飾gradient、Cardの装飾線、通常Surfaceのshadowやhover浮上を使わない。
+- ShadowはDrawer、Dialog等の重なりを伝えるOverlayへ限定する。Warning、Error、選択状態等の意味を持つ単色面と、操作Focusを示すringは装飾ではなく状態表現として維持する。
+- Logo conceptの環状Symbolを装飾として再描画せず、3層の視覚表現をP/D/C/Aや特定Domain概念へ対応付けない。
+- AuthoritativeなLogo/Favicon/Icon assetが存在しない間は、Raster Logo、SVG Logo、Favicon、App Icon、PWA Icon、OG ImageをRepositoryへ生成・設定しない。
+- Motionは操作理解に必要な短いtransitionだけとし、`prefers-reduced-motion`で実質無効化する。
 
 ---
 
@@ -5679,7 +5706,7 @@ Migration失敗時はApplication deployを行わない。Backward-incompatible�
 ```yaml
 app:
   environment: production
-  public_origin: https://pdcai.example
+  public_origin: https://cycle.example
   trusted_proxy: cloudflare
 
 session:
@@ -6312,7 +6339,7 @@ AIによる自動graderだけを唯一の合否判定にしない。
 
 | Path | Classification | Reason |
 |---|---|---|
-| `docs/design.md` | **[固定Path]** | PDCAIの唯一のProduct Specification / Software Design / Implementation Contract |
+| `docs/design.md` | **[固定Path]** | FUKAMU Cycleの唯一のProduct Specification / Software Design / Implementation Contract |
 | `.github/workflows/` | **[固定Path]** | §44で採用するGitHub Actionsがworkflowを発見するPlatform-defined root。個別workflow file名は固定しない |
 
 上表以外のFrontend source root、Backend source root、Migration、Prompt、Evaluation fixture、Infrastructure、Generated Code等の正確なPathは、本書では固定しない。物理Pathの発見には既存Repositoryのmanifest、build script、code generation設定、deployment設定を使用する。ただし、それらの挙動または責務が本書と矛盾する場合は本書を優先して修正する。
@@ -6367,7 +6394,7 @@ Repositoryは最低限次の論理領域を持つ。各領域の物理Directory�
 
 **[設計上の仮定]** 初回Application deploymentは空Databaseを対象とする。
 
-1. 最初のMigrationを`000001_pdcai_baseline`相当として作成し、§16.2の全Table、Constraint、Index、Foreign Keyを作成する。
+1. 最初のMigrationを`000001_fukamu_cycle_baseline`相当として作成し、§16.2の全Table、Constraint、Index、Foreign Keyを作成する。
 2. Baselineは空Databaseへ単独で適用できなければならない。
 3. CIで、空DatabaseへのMigration適用、Application起動、Repository Integration Testを実行する。
 4. Local / Test環境ではUser Dataが存在しない場合に限りDatabase resetを許可する。
@@ -6466,19 +6493,18 @@ Repositoryは最低限次の論理領域を持つ。各領域の物理Directory�
 
 ## 52.2 Non-blocking operational values
 
-次の値はProduction release前に確定する。これらはConfigurationまたは運用Runbookへ実値を記録できるが、本書の制約を変更してはならない。
+Production public domainは`cycle.fukamu.com`（root domainは`fukamu.com`）に確定している。次の値はProduction release前に確定する。これらはConfigurationまたは運用Runbookへ実値を記録できるが、本書の制約を変更してはならない。
 
-1. Production public domain。
-2. Cloudflare account / plan、Container capacity、region、maximum instances。
-3. Neon project / region / compute、connection上限、restore window。
-4. Google Web Client ID、Turnstile widget / action / hostname。
-5. OpenAI既定ModelのProduction accountでの利用可否、日本語Quality Evaluation結果、適用時点の価格。
-6. 既定ModelがQuality Gateを満たさない場合に使用する代替Model。
-7. OpenAI provider-side spend limit / rate limitの具体値。
-8. Application monthly AI budget、User quota、Rate Limit初期値の最終承認。
-9. Log / Trace retention、Alert通知先、On-call手順。
-10. Backup / Disaster Recovery retentionと、削除済みDataを復元しない運用手順。
-11. 日本語System Font Stackの実機検証結果。Web Font導入はMVPのBlocking条件ではない。
+1. Cloudflare account / plan、Container capacity、region、maximum instances。
+2. Neon project / region / compute、connection上限、restore window。
+3. Google Web Client ID、Turnstile widget / action / hostname。
+4. OpenAI既定ModelのProduction accountでの利用可否、日本語Quality Evaluation結果、適用時点の価格。
+5. 既定ModelがQuality Gateを満たさない場合に使用する代替Model。
+6. OpenAI provider-side spend limit / rate limitの具体値。
+7. Application monthly AI budget、User quota、Rate Limit初期値の最終承認。
+8. Log / Trace retention、Alert通知先、On-call手順。
+9. Backup / Disaster Recovery retentionと、削除済みDataを復元しない運用手順。
+10. 日本語System Font Stackの実機検証結果。Web Font導入はMVPのBlocking条件ではない。
 
 ## 52.3 Changes that require updating this document
 

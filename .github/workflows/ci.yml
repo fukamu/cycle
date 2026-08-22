@@ -59,27 +59,26 @@ jobs:
         uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -color
+      - name: Validate Bash scripts
+        run: bash ./scripts/check-shell.sh
 
   frontend:
     needs: reuse_pr_ci
     if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npm run format:check
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
+          runtime: node@24
+          cache: true
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter fukamu-cycle-frontend run format:check
+      - run: pnpm --filter fukamu-cycle-frontend run lint
+      - run: pnpm --filter fukamu-cycle-frontend run typecheck
+      - run: pnpm --filter fukamu-cycle-frontend test
+      - run: pnpm --filter fukamu-cycle-frontend run build
 
   backend:
     needs: reuse_pr_ci
@@ -87,20 +86,20 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18.6-alpine3.24
         env:
-          POSTGRES_USER: pdcai
-          POSTGRES_PASSWORD: pdcai
-          POSTGRES_DB: pdcai_test
+          POSTGRES_USER: fukamu_cycle
+          POSTGRES_PASSWORD: fukamu_cycle
+          POSTGRES_DB: fukamu_cycle_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U pdcai -d pdcai_test"
+          --health-cmd "pg_isready -U fukamu_cycle -d fukamu_cycle_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      TEST_DATABASE_URL: postgres://pdcai:pdcai@localhost:5432/pdcai_test?sslmode=disable
+      TEST_DATABASE_URL: postgres://fukamu_cycle:fukamu_cycle@localhost:5432/fukamu_cycle_test?sslmode=disable
     defaults:
       run:
         working-directory: backend
@@ -126,14 +125,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: docker compose --file compose.local.yaml config --quiet
-      - uses: actions/setup-node@v7
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            frontend/package-lock.json
-            cloudflare/package-lock.json
+          runtime: node@24
+          cache: true
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - run: docker compose --file compose.local.yaml config --quiet
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.15.8
@@ -143,16 +141,9 @@ jobs:
         working-directory: infra/terraform/staging
       - run: terraform validate
         working-directory: infra/terraform/staging
-      - run: npm ci
-        working-directory: frontend
-      - run: npm run build
-        working-directory: frontend
-      - run: npm ci
-        working-directory: cloudflare
-      - run: npm run check
-        working-directory: cloudflare
-      - run: npm run deploy:dry-run
-        working-directory: cloudflare
+      - run: pnpm --filter fukamu-cycle-frontend run build
+      - run: pnpm --filter fukamu-cycle-cloudflare run check
+      - run: pnpm --filter fukamu-cycle-cloudflare run deploy:dry-run
 
   e2e:
     needs: [reuse_pr_ci, workflow, frontend, backend, infrastructure]
@@ -166,39 +157,35 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18.6-alpine3.24
         env:
-          POSTGRES_USER: pdcai
-          POSTGRES_PASSWORD: pdcai
-          POSTGRES_DB: pdcai_test
+          POSTGRES_USER: fukamu_cycle
+          POSTGRES_PASSWORD: fukamu_cycle
+          POSTGRES_DB: fukamu_cycle_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U pdcai -d pdcai_test"
+          --health-cmd "pg_isready -U fukamu_cycle -d fukamu_cycle_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          runtime: node@24
+          cache: true
+          install: false
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26.6'
           cache-dependency-path: backend/go.sum
-      - run: npm ci
-        working-directory: frontend
-      - run: npx playwright install --with-deps chromium
-        working-directory: frontend
-      - run: npm run build
-        working-directory: frontend
-      - run: npm run test:e2e
-        working-directory: frontend
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter fukamu-cycle-frontend exec playwright install --with-deps chromium
+      - run: pnpm --filter fukamu-cycle-frontend run build
+      - run: pnpm --filter fukamu-cycle-frontend run test:e2e
         env:
-          TEST_DATABASE_URL: postgres://pdcai:pdcai@127.0.0.1:5432/pdcai_test?sslmode=disable
+          TEST_DATABASE_URL: postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable
 
   attest_pr_ci:
     name: Attest tested PR tree
@@ -227,19 +214,19 @@ jobs:
           set -euo pipefail
           tested_tree="$(git rev-parse 'HEAD^{tree}')"
           artifact_name="pr-ci-${PR_NUMBER}-${HEAD_SHA}-${tested_tree}"
-          mkdir -p "${RUNNER_TEMP}/pdcai-pr-ci-attestation"
+          mkdir -p "${RUNNER_TEMP}/fukamu-cycle-pr-ci-attestation"
           {
             echo "pull_request=${PR_NUMBER}"
             echo "head_sha=${HEAD_SHA}"
             echo "tested_commit=${GITHUB_SHA}"
             echo "tested_tree=${tested_tree}"
             echo "workflow_run=${GITHUB_RUN_ID}"
-          } > "${RUNNER_TEMP}/pdcai-pr-ci-attestation/attestation.txt"
+          } > "${RUNNER_TEMP}/fukamu-cycle-pr-ci-attestation/attestation.txt"
           echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
       - name: Upload tested tree attestation
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.metadata.outputs.artifact_name }}
-          path: ${{ runner.temp }}/pdcai-pr-ci-attestation/attestation.txt
+          path: ${{ runner.temp }}/fukamu-cycle-pr-ci-attestation/attestation.txt
           if-no-files-found: error
           retention-days: 30

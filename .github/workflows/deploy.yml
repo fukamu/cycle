@@ -84,7 +84,7 @@ jobs:
     timeout-minutes: 30
     environment:
       name: staging
-      url: https://pdcai.matoruru.com
+      url: https://cycle.staging.fukamu.matoruru.com
     env:
       COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
       PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
@@ -190,12 +190,12 @@ jobs:
               missing=1
             fi
           done
-          if [[ "${PUBLIC_ORIGIN}" != "https://pdcai.matoruru.com" ]]; then
-            echo "::error::PUBLIC_ORIGIN must be exactly https://pdcai.matoruru.com"
+          if [[ "${PUBLIC_ORIGIN}" != "https://cycle.staging.fukamu.matoruru.com" ]]; then
+            echo "::error::PUBLIC_ORIGIN must be exactly https://cycle.staging.fukamu.matoruru.com"
             missing=1
           fi
-          if [[ -n "${APP_REFERRAL_URL}" && "${APP_REFERRAL_URL}" != "${PUBLIC_ORIGIN}/" ]]; then
-            echo "::error::APP_REFERRAL_URL must be empty or exactly ${PUBLIC_ORIGIN}/"
+          if [[ -n "${APP_REFERRAL_URL}" && "${APP_REFERRAL_URL}" != "https://cycle.fukamu.com/" ]]; then
+            echo "::error::APP_REFERRAL_URL must be empty or exactly https://cycle.fukamu.com/"
             missing=1
           fi
           if [[ "${BETA_ADMISSION_MODE}" != 'off' && "${BETA_ADMISSION_MODE}" != 'closed' ]]; then
@@ -225,35 +225,27 @@ jobs:
           fi
           exit "${missing}"
 
-      - uses: actions/setup-node@v7
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            frontend/package-lock.json
-            cloudflare/package-lock.json
+          runtime: node@24
+          cache: true
+          install: false
 
       - uses: actions/setup-go@v7
         with:
           go-version: 1.26.6
           cache-dependency-path: backend/go.sum
 
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Build static frontend
-        working-directory: frontend
         env:
           VITE_DEPLOYMENT_ENV: staging
           VITE_APP_REFERRAL_URL: ${{ env.APP_REFERRAL_URL }}
           VITE_GOOGLE_WEB_CLIENT_ID: ${{ env.GOOGLE_WEB_CLIENT_ID }}
           VITE_TURNSTILE_SITE_KEY: ${{ env.TURNSTILE_SITE_KEY }}
-        run: npm run build
-
-      - name: Install Cloudflare deployment dependencies
-        working-directory: cloudflare
-        run: npm ci
+        run: pnpm --filter fukamu-cycle-frontend run build
 
       - name: Apply database migrations
         working-directory: backend
@@ -265,7 +257,7 @@ jobs:
       - name: Create ephemeral Worker secrets file
         shell: bash
         env:
-          SECRETS_FILE: ${{ runner.temp }}/pdcai-worker-secrets.json
+          SECRETS_FILE: ${{ runner.temp }}/fukamu-cycle-worker-secrets.json
         run: |
           node - <<'NODE'
           const fs = require("node:fs");
@@ -279,7 +271,6 @@ jobs:
           NODE
 
       - name: Deploy Worker, static assets, and Container
-        working-directory: cloudflare
         shell: bash
         run: |
           set -euo pipefail
@@ -307,15 +298,15 @@ jobs:
             )
           fi
           variable_args+=(--var "AI_PRICING_MODEL:${AI_MODEL}")
-          npx wrangler deploy \
+          pnpm --filter fukamu-cycle-cloudflare exec wrangler deploy \
             "${variable_args[@]}" \
-            --secrets-file "${RUNNER_TEMP}/pdcai-worker-secrets.json" \
+            --secrets-file "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json" \
             --containers-rollout=immediate
 
       - name: Remove ephemeral Worker secrets file
         if: always()
         shell: bash
-        run: rm -f -- "${RUNNER_TEMP}/pdcai-worker-secrets.json"
+        run: rm -f -- "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"
 
       - name: Smoke test
         shell: bash

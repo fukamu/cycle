@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 )
 
 type AnonymousRateLimiter struct {

@@ -7,8 +7,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
-	"github.com/matoruru/PDCAI/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 const tokenBytes = 32

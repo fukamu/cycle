@@ -7,9 +7,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 type createDraftRequest struct {
@@ -140,12 +140,7 @@ func (server *api) refineGoalDraft(writer http.ResponseWriter, request *http.Req
 
 func (server *api) refineGoalReview(writer http.ResponseWriter, request *http.Request) {
 	goalID := chi.URLParam(request, "goalId")
-	review, err := server.dependencies.Workspace.GetReview(request.Context(), currentUserID(request), goalID)
-	if err != nil {
-		server.writeError(writer, request, err, nil)
-		return
-	}
-	server.refineGoal(writer, request, review.ReviewDraft.ID, goalID)
+	server.refineGoal(writer, request, "", goalID)
 }
 
 func (server *api) refineGoal(writer http.ResponseWriter, request *http.Request, draftID, goalID string) {
@@ -176,19 +171,14 @@ func (server *api) refineGoal(writer http.ResponseWriter, request *http.Request,
 }
 
 func (server *api) adoptGoalDraftSuggestion(writer http.ResponseWriter, request *http.Request) {
-	server.adoptSuggestion(writer, request, chi.URLParam(request, "draftId"), false)
+	server.adoptSuggestion(writer, request, chi.URLParam(request, "draftId"), "", false)
 }
 
 func (server *api) adoptGoalReviewSuggestion(writer http.ResponseWriter, request *http.Request) {
-	review, err := server.dependencies.Workspace.GetReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"))
-	if err != nil {
-		server.writeError(writer, request, err, nil)
-		return
-	}
-	server.adoptSuggestion(writer, request, review.ReviewDraft.ID, true)
+	server.adoptSuggestion(writer, request, "", chi.URLParam(request, "goalId"), true)
 }
 
-func (server *api) adoptSuggestion(writer http.ResponseWriter, request *http.Request, draftID string, review bool) {
+func (server *api) adoptSuggestion(writer http.ResponseWriter, request *http.Request, draftID, goalID string, review bool) {
 	var input adoptSuggestionRequest
 	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
 		server.writeError(writer, request, err, nil)
@@ -198,7 +188,7 @@ func (server *api) adoptSuggestion(writer http.ResponseWriter, request *http.Req
 		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
-	view, err := server.dependencies.Workspace.AdoptGoalSuggestion(request.Context(), currentUserID(request), draftID,
+	view, err := server.dependencies.Workspace.AdoptGoalSuggestion(request.Context(), currentUserID(request), draftID, goalID,
 		chi.URLParam(request, "generationId"), input.ExpectedDraftRevision, input.ExpectedGoalRevision)
 	if err != nil {
 		server.writeError(writer, request, err, nil)

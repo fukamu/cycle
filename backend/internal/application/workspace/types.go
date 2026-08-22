@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 var (
@@ -420,7 +420,7 @@ type Store interface {
 	CompleteCycle(context.Context, CompleteCycleInput) (CompleteCycleResult, error)
 	BeginGoalRefine(context.Context, GoalRefineInput, AIContextSelector) (AISnapshot, error)
 	FinishGoalRefine(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
-	AdoptGoalSuggestion(context.Context, string, string, string, int64, *int64, time.Time) (DraftView, error)
+	AdoptGoalSuggestion(context.Context, string, string, string, string, int64, *int64, time.Time) (DraftView, error)
 	BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error)
 	FinishActionAI(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
 }

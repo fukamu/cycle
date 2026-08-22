@@ -53,7 +53,7 @@ export function BetaAdmissionGate({ onAdmitted }: BetaAdmissionGateProps) {
   return (
     <main className="beta-admission">
       <section className="beta-admission__card" aria-labelledby="beta-heading">
-        <p className="beta-admission__eyebrow">PDCAI Closed Beta</p>
+        <p className="beta-admission__eyebrow">FUKAMU Cycle Closed Beta</p>
         <h1 id="beta-heading">招待された方のみご利用いただけます</h1>
         <p className="beta-admission__description">
           招待時にお送りしたTokenを入力してください。このブラウザでの確認は初回だけです。

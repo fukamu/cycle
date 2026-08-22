@@ -18,7 +18,7 @@ func (queryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.Tr
 	if fields := strings.Fields(data.SQL); len(fields) > 0 {
 		operation = strings.ToLower(fields[0])
 	}
-	ctx, _ = otel.Tracer("pdcai/postgres").Start(ctx, "postgres."+operation, trace.WithAttributes(
+	ctx, _ = otel.Tracer("fukamu-cycle/postgres").Start(ctx, "postgres."+operation, trace.WithAttributes(
 		attribute.String("db.system.name", "postgresql"),
 		attribute.String("db.operation.name", operation),
 	))

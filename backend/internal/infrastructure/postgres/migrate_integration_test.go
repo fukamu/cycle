@@ -13,75 +13,24 @@ import (
 func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
-	_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS schema_migrations`)
 	directory := filepath.Join("..", "..", "..", "migrations")
-	uuidV7Down, err := os.ReadFile(filepath.Join(directory, "000003_enforce_uuid_v7.down.sql"))
+	down, err := os.ReadFile(filepath.Join(directory, "000001_fukamu_cycle_baseline.down.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	executeMigrationScript(t, pool, uuidV7Down)
-	down := filepath.Join(directory, "000001_pdcai_baseline.down.sql")
-	script, err := os.ReadFile(down)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executeMigrationScript(t, pool, script)
-
-	baselineDirectory := t.TempDir()
-	for _, name := range []string{"000001_pdcai_baseline.up.sql", "000001_pdcai_baseline.down.sql"} {
-		contents, readErr := os.ReadFile(filepath.Join(directory, name))
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		if writeErr := os.WriteFile(filepath.Join(baselineDirectory, name), contents, 0o600); writeErr != nil {
-			t.Fatal(writeErr)
-		}
-	}
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if _, err := Migrate(databaseURL, baselineDirectory); err != nil {
-		t.Fatal(err)
-	}
-	legacyBody := strings.Repeat("界", 81)
-	_, err = pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at)
-VALUES('10000000-0000-7000-8000-000000000001',now(),now(),now())`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = pool.Exec(context.Background(), `INSERT INTO goal_drafts(id,user_id,draft_type,body,created_at,updated_at)
-VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000001','creation',$1,now(),now())`, legacyBody)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Migrate(databaseURL, directory); err == nil || !strings.Contains(err.Error(), "content exceeds the new goal") {
-		t.Fatalf("oversize legacy migration error = %v", err)
-	}
-	var preserved string
-	if err := pool.QueryRow(context.Background(), `SELECT body FROM goal_drafts WHERE id='20000000-0000-7000-8000-000000000001'`).Scan(&preserved); err != nil {
-		t.Fatal(err)
-	}
-	if preserved != legacyBody {
-		t.Fatalf("legacy content was changed: length = %d", len([]rune(preserved)))
-	}
-
-	executeMigrationScript(t, pool, script)
+	executeMigrationScript(t, pool, down)
 	_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS schema_migrations`)
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	result, err := Migrate(databaseURL, directory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 3 {
-		t.Fatalf("applied migrations = %v, want 3", result.Applied)
+	if len(result.Applied) != 1 {
+		t.Fatalf("applied migrations = %v, want 1", result.Applied)
 	}
-	wantFiles := []string{
-		"000001_pdcai_baseline.up.sql",
-		"000002_tighten_content_limits.up.sql",
-		"000003_enforce_uuid_v7.up.sql",
-	}
-	for index, migration := range result.Applied {
-		wantVersion := uint(index + 1)
-		if migration.Version != wantVersion || migration.Direction != "up" || migration.File != wantFiles[index] {
-			t.Fatalf("applied migration %d = %+v", index, migration)
-		}
+	migration := result.Applied[0]
+	if migration.Version != 1 || migration.Direction != "up" || migration.File != "000001_fukamu_cycle_baseline.up.sql" {
+		t.Fatalf("applied migration = %+v", migration)
 	}
 	result, err = Migrate(databaseURL, directory)
 	if err != nil {
@@ -93,11 +42,22 @@ VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 3 || users != 0 {
+	if version != 1 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
 	assertUUIDv7Constraints(t, pool)
+
+	_, err = pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at)
+VALUES('10000000-0000-7000-8000-000000000001',now(),now(),now())`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Exec(context.Background(), `INSERT INTO goal_drafts(id,user_id,draft_type,body,created_at,updated_at)
+VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000001','creation',$1,now(),now())`, strings.Repeat("界", 81))
+	if err == nil {
+		t.Fatal("oversize goal draft unexpectedly succeeded")
+	}
 }
 
 func assertUUIDv7Constraints(t *testing.T, pool *pgxpool.Pool) {
@@ -111,9 +71,9 @@ func assertUUIDv7Constraints(t *testing.T, pool *pgxpool.Pool) {
 	}
 	var validArray, rejectsV4Array, rejectsNullElement bool
 	if err := pool.QueryRow(context.Background(), `SELECT
-    pdcai_uuid_array_is_v7(ARRAY['0198c20b-7b95-7000-8000-000000000001']::uuid[]),
-    NOT pdcai_uuid_array_is_v7(ARRAY['123e4567-e89b-42d3-a456-426614174000']::uuid[]),
-    NOT pdcai_uuid_array_is_v7(ARRAY[NULL]::uuid[])`).Scan(&validArray, &rejectsV4Array, &rejectsNullElement); err != nil {
+    fukamu_cycle_uuid_array_is_v7(ARRAY['0198c20b-7b95-7000-8000-000000000001']::uuid[]),
+    NOT fukamu_cycle_uuid_array_is_v7(ARRAY['123e4567-e89b-42d3-a456-426614174000']::uuid[]),
+    NOT fukamu_cycle_uuid_array_is_v7(ARRAY[NULL]::uuid[])`).Scan(&validArray, &rejectsV4Array, &rejectsNullElement); err != nil {
 		t.Fatal(err)
 	}
 	if !validArray || !rejectsV4Array || !rejectsNullElement {

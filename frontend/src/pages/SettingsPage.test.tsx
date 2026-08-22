@@ -104,6 +104,26 @@ describe("SettingsPage", () => {
       expect(clearUserDrafts).toHaveBeenCalledWith(session.user.id),
     );
   });
+
+  it("does not report server deletion as failed when local cleanup fails", async () => {
+    vi.mocked(deleteAccount).mockResolvedValue(undefined);
+    vi.mocked(clearUserDrafts).mockRejectedValue(new Error("indexeddb"));
+    renderPage();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "アカウントを削除" }),
+    );
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "アカウントを削除",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(clearUserDrafts).toHaveBeenCalledWith(session.user.id),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });
 
 function renderPage(value = session) {

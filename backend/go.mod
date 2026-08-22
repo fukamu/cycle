@@ -1,4 +1,4 @@
-module github.com/matoruru/PDCAI/backend
+module github.com/fukamu/cycle/backend
 
 go 1.26.0
 

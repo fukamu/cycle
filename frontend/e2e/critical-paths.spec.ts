@@ -88,7 +88,9 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
   await page.goto("/history");
   await page.getByRole("link", { name: new RegExp(goalText) }).click();
-  await expect(page.getByText("GOAL V1")).toBeVisible();
+  await expect(
+    page.locator('[data-version-number="1"]').getByText("GOAL V1"),
+  ).toBeVisible();
   await expect(page.getByRole("link", { name: /Cycle 1/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /Cycle 2/ })).toBeVisible();
 
@@ -110,7 +112,6 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   let fail = true;
   await page.route("**/api/v1/goal-drafts/*", async (route) => {
     if (route.request().method() === "PATCH" && fail) {
-      fail = false;
       await route.abort("connectionfailed");
       return;
     }
@@ -118,11 +119,139 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   });
   const editor = page.getByRole("textbox", { name: "あなたの目標" });
   await editor.fill("失敗しても保持する目標");
-  await expect(page.getByRole("alert")).toContainText("保存失敗");
+  await expect(page.getByRole("alert")).toContainText("保存失敗", {
+    timeout: 45_000,
+  });
+  const browserDraftBodies = await page.evaluate(
+    () =>
+      new Promise<string[]>((resolve, reject) => {
+        const open = indexedDB.open("fukamu-cycle-browser-drafts-v2", 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const database = open.result;
+          const read = database
+            .transaction("drafts")
+            .objectStore("drafts")
+            .getAll();
+          read.onerror = () => {
+            database.close();
+            reject(read.error);
+          };
+          read.onsuccess = () => {
+            const bodies = (read.result as { body: string }[]).map(
+              (draft) => draft.body,
+            );
+            database.close();
+            resolve(bodies);
+          };
+        };
+      }),
+  );
+  expect(browserDraftBodies).toContain("失敗しても保持する目標");
+  fail = false;
   await page.getByRole("button", { name: "再試行" }).click();
   await expect(page.getByText("保存済み")).toBeVisible();
   await page.reload();
   await expect(editor).toHaveValue("失敗しても保持する目標");
+});
+
+test("timeline distinguishes V1, V2, and V3 goal segments", async ({
+  page,
+}) => {
+  const goalVersions = [
+    "最初の目標",
+    "二回目に見直した目標",
+    "三回目に見直した目標",
+  ];
+  await createProgressingGoal(page, goalVersions[0]);
+  await completeCurrentCycle(page, "V1");
+
+  const review = page.getByRole("textbox", {
+    name: "次のサイクルで目指す目標",
+  });
+  await saveText(page, review, goalVersions[1], "/review");
+  await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
+  await expect(page.getByText("Goal v2 · Cycle 2")).toBeVisible();
+  await completeCurrentCycle(page, "V2");
+
+  await saveText(page, review, goalVersions[2], "/review");
+  await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
+  await expect(page.getByText("Goal v3 · Cycle 3")).toBeVisible();
+
+  const route = new URL(page.url()).pathname.match(
+    /^\/goals\/([^/]+)\/cycles\//,
+  );
+  expect(route).not.toBeNull();
+  await page.goto(`/history/goals/${route![1]}`);
+
+  const segments = page.locator("[data-version-number]");
+  await expect(segments).toHaveCount(3);
+  expect(
+    await segments.evaluateAll((values) =>
+      values.map((value) => value.getAttribute("data-version-number")),
+    ),
+  ).toEqual(["3", "2", "1"]);
+  await expect(page.getByText("目標を変更しました")).toHaveCount(2);
+  expect(
+    await page
+      .locator(".timeline > li")
+      .evaluateAll((entries) =>
+        entries.map((entry) =>
+          entry.getAttribute("data-timeline-entry") === "period"
+            ? `period-${entry.getAttribute("data-version-number")}`
+            : `${entry.getAttribute("data-timeline-event")}-${entry.getAttribute("data-event-version")}`,
+        ),
+      ),
+  ).toEqual([
+    "period-3",
+    "change-3",
+    "period-2",
+    "change-2",
+    "period-1",
+    "created-1",
+  ]);
+
+  const v1 = page.locator('[data-version-number="1"]');
+  const v2 = page.locator('[data-version-number="2"]');
+  const v3 = page.locator('[data-version-number="3"]');
+  await expect(v1).toHaveAttribute("data-version-kind", "baseline");
+  await expect(v2).toHaveAttribute("data-version-kind", "revision");
+  await expect(v3).toHaveAttribute("data-version-kind", "revision");
+  for (const past of [v1, v2]) {
+    await expect(past).toHaveAttribute("data-version-state", "past");
+    await expect(past.locator(".timeline-period__rail")).toHaveCSS(
+      "background-color",
+      "rgb(204, 218, 236)",
+    );
+  }
+  await expect(v3).toHaveAttribute("data-version-state", "current");
+  await expect(v3.locator(".timeline-period__rail")).toHaveCSS(
+    "background-color",
+    "rgb(74, 144, 226)",
+  );
+  for (const versionNumber of [1, 2]) {
+    const pastEvent = page.locator(`[data-event-version="${versionNumber}"]`);
+    await expect(pastEvent).toHaveAttribute("data-version-state", "past");
+    await expect(pastEvent.locator(".timeline-event__marker")).toHaveCSS(
+      "background-color",
+      "rgb(255, 255, 255)",
+    );
+  }
+  const currentEvent = page.locator('[data-event-version="3"]');
+  await expect(currentEvent).toHaveAttribute("data-version-state", "current");
+  await expect(currentEvent.locator(".timeline-event__marker")).toHaveCSS(
+    "background-color",
+    "rgb(74, 144, 226)",
+  );
+  await expect(page.locator('[data-event-version="3"]')).toContainText(
+    "Cycle 2の終了後",
+  );
+  await expect(page.locator('[data-event-version="2"]')).toContainText(
+    "Cycle 1の終了後",
+  );
+  await expect(v1.getByRole("link", { name: /Cycle 1/ })).toBeVisible();
+  await expect(v2.getByRole("link", { name: /Cycle 2/ })).toBeVisible();
+  await expect(v3.getByRole("link", { name: /Cycle 3/ })).toBeVisible();
 });
 
 test("free users can progress two goals while a third start is rejected without losing its draft", async ({
@@ -232,6 +361,38 @@ test("cycle autosave serializes an edit made during a slow save", async ({
   await expect(page.getByText("保存済み")).toBeVisible();
   await page.reload();
   await expect(plan).toHaveValue("保存中に更新した最終内容");
+});
+
+test("mobile long content stays in bounds and frame tabs support keyboard navigation", async ({
+  page,
+}) => {
+  const goalText = "長い目標".repeat(20);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "新しい目標を設定" }).click();
+  await saveText(
+    page,
+    page.getByRole("textbox", { name: "あなたの目標" }),
+    goalText,
+    "/api/v1/goal-drafts/",
+  );
+  await page.getByRole("button", { name: "この目標で始める" }).click();
+
+  await expect(page.getByRole("heading", { name: goalText })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+
+  const planTab = page.getByRole("tab", { name: /^P/ });
+  const doTab = page.getByRole("tab", { name: /^D/ });
+  await planTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(doTab).toBeFocused();
+  await expect(doTab).toHaveAttribute("aria-selected", "true");
 });
 
 test("goal review termination discards an unversioned change explicitly", async ({
@@ -351,10 +512,14 @@ async function createAndCompleteGoal(page: Page) {
     "/api/v1/goal-drafts/",
   );
   await page.getByRole("button", { name: "この目標で始める" }).click();
-  await saveFrame(page, "P — Plan", "計画", "D");
-  await saveFrame(page, "D — Do", "実行", "C");
-  await saveFrame(page, "C — Check", "確認", "A");
-  await saveFrame(page, "A — Action", "改善", "A");
+  await completeCurrentCycle(page, "確認");
+}
+
+async function completeCurrentCycle(page: Page, suffix: string) {
+  await saveFrame(page, "P — Plan", `計画 ${suffix}`, "D");
+  await saveFrame(page, "D — Do", `実行 ${suffix}`, "C");
+  await saveFrame(page, "C — Check", `確認 ${suffix}`, "A");
+  await saveFrame(page, "A — Action", `改善 ${suffix}`, "A");
   await page.getByRole("button", { name: "サイクルを完了" }).click();
   await page
     .getByRole("dialog")

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 type Settings struct {
@@ -219,9 +219,13 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	return response, specificAIInputError("goal_refine", resourceNotFound(finishErr, missing))
 }
 
-func (service *Service) AdoptGoalSuggestion(ctx context.Context, userID, draftID, generationID string, expectedDraftRevision int64, expectedGoalRevision *int64) (DraftView, error) {
-	view, err := service.store.AdoptGoalSuggestion(ctx, userID, draftID, generationID, expectedDraftRevision, expectedGoalRevision, service.clock.Now().UTC())
-	return view, resourceNotFound(err, ErrGoalDraftNotFound)
+func (service *Service) AdoptGoalSuggestion(ctx context.Context, userID, draftID, goalID, generationID string, expectedDraftRevision int64, expectedGoalRevision *int64) (DraftView, error) {
+	view, err := service.store.AdoptGoalSuggestion(ctx, userID, draftID, goalID, generationID, expectedDraftRevision, expectedGoalRevision, service.clock.Now().UTC())
+	missing := ErrGoalDraftNotFound
+	if goalID != "" {
+		missing = ErrGoalNotFound
+	}
+	return view, resourceNotFound(err, missing)
 }
 
 func (service *Service) RunActionAI(ctx context.Context, input ActionAIInput) (AIResponse, error) {

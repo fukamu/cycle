@@ -1,4 +1,4 @@
-# PDCAI repository instructions
+# FUKAMU Cycle repository instructions
 
 このfileはrepository全体に適用します。
 
@@ -40,25 +40,27 @@
 
 - 作業開始時に`git status`と関連code/config/test/docsを確認し、userの未commit変更を削除・上書き・混入しない。
 - Secret、credential、private key、production dataをcommit・log・文書・test fixtureへ入れない。Clientへ出せるのは明示された`VITE_`公開値だけ。
-- `.env`をBackendが暗黙loadする前提にしない。Local PowerShellでは `. ./scripts/import-env.ps1` を使う。
-- 通常cleanとdata削除を分離する。`scripts/clean.ps1`へDB、Docker volume、environment file、browser dataの削除を追加しない。
+- `.env`をBackendが暗黙loadする前提にしない。Local Bashでは `source ./scripts/import-env.sh` を使う。
+- 通常cleanとdata削除を分離する。`scripts/clean.sh`へDB、Docker volume、environment file、browser dataの削除を追加しない。
 - Production DB reset/down/drop、production deploy、secret変更、data correctionを検証目的で実行しない。
-- Schema変更は既存migrationを編集せず、新しいup/down pairを追加する。保存dataや挙動に影響する場合は先に仕様整合性を確認する。
+- 未リリース・空DB・既存環境互換不要というuserの明示承認に基づく`000001_fukamu_cycle_baseline`へのrebaselineは完了済みの一回限りの例外である。この例外を根拠にbaselineを再編集しない。
+- 今後のSchema変更は既存migrationを編集せず、新しいup/down pairを追加する。保存dataや挙動に影響する場合は先に仕様整合性を確認する。
 - Production deployはmigration-firstを維持し、migration成功前にapplication trafficを新versionへ移さない。
 - main CIの重いjobを省略できるのは、成功したPR CIの検証tree artifactとmain treeが完全一致する場合だけとする。直接push、artifact/API問題、tree不一致では全CIへfallbackし、main SHAの成功CI、Terraform Plan、承認付きApply、Deployの連鎖を維持する。
 - 未決のproduction capacity、backup、provider、budget/rate/security/alert値をexample/defaultから推測しない。
 - 実装・command・environment variable・workflowを変更したら、対応する専門文書とREADMEの導線が正しいか確認する。
-- `backend/internal/infrastructure/postgres/generated/`は手編集しない。Query/schema変更後に`pwsh ./scripts/invoke-sqlc.ps1 compile generate`で検証・更新し、生成元と同じcommitへ含める。実行方法の詳細は[`docs/development.md`](docs/development.md)を参照する。
+- `backend/internal/infrastructure/postgres/generated/`は手編集しない。Query/schema変更後に`./scripts/invoke-sqlc.sh compile generate`で検証・更新し、生成元と同じcommitへ含める。実行方法の詳細は[`docs/development.md`](docs/development.md)を参照する。
 
 ## Verification
 
-- Frontendだけ: `pwsh ./scripts/check.ps1 -Scope frontend`
-- Backendだけ: `pwsh ./scripts/check.ps1 -Scope backend`
-- 全体: `pwsh ./scripts/check.ps1`
-- E2E込み: 消去可能な`TEST_DATABASE_URL`を設定して `pwsh ./scripts/check.ps1 -E2E`
-- Safe cleanの対象確認: `pwsh ./scripts/clean.ps1 -WhatIf`
-- DB reset guardのdry-run: `pwsh ./scripts/reset-local-db.ps1 -DatabaseName pdcai -ConfirmDatabaseName pdcai -WhatIf`
+- Frontendだけ: `./scripts/check.sh --scope frontend`
+- Backendだけ: `./scripts/check.sh --scope backend`
+- 全体: `./scripts/check.sh`
+- E2E込み: 消去可能な`TEST_DATABASE_URL`を設定して `./scripts/check.sh --e2e`
+- Commit前の必須gate: 全変更をstageし、消去可能なlocal `*_test` DBを`TEST_DATABASE_URL`へ設定して `./scripts/check-before-commit.sh`
+- Safe cleanの対象確認: `./scripts/clean.sh --dry-run`
+- DB reset guardのdry-run: `./scripts/reset-local-db.sh --database-name fukamu_cycle --confirm-database-name fukamu_cycle --dry-run`
 
-Host tool不足で一部checkを実行できない場合は、実行できたcheck、未実行のcheck、理由を明記してください。Data消失やproduction変更を伴う操作をvalidationのために実行してはいけません。
+Host tool不足で一部checkを実行できない場合は、実行できたcheck、未実行のcheck、理由を明記してください。ただし、Commit前の必須gateを完走できない場合はcommitしてはいけません。Data消失やproduction変更を伴う操作をvalidationのために実行してはいけません。
 
-Commit前に`git diff --check`、対象scopeのcheck、generated code差分、Secret/旧仕様の混入を確認します。意味のある単位でcommitし、force pushや既存履歴の書き換えを行いません。
+Commit前に`./scripts/check-before-commit.sh`を完走し、成功後はindexとworking treeを変えずにcommitします。変更した場合は全gateを再実行します。加えてSecret/旧仕様の混入を確認し、意味のある単位でcommitします。Force pushや既存履歴の書き換えを行いません。詳細は[`docs/development.md`](docs/development.md)を参照します。

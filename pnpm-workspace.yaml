@@ -1,0 +1,7 @@
+packages:
+  - frontend
+  - cloudflare
+
+allowBuilds:
+  esbuild: true
+  workerd: true

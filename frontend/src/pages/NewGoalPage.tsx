@@ -20,6 +20,8 @@ import {
   startGoal,
 } from "../shared/api/workspace";
 import {
+  DraftCacheWarning,
+  DraftRecoveryNotice,
   PageError,
   PageLoading,
   SaveBadge,
@@ -52,8 +54,13 @@ export function NewGoalPage() {
             disabled={create.isPending}
             onClick={() => create.mutate()}
           >
-            下書きを作成
+            {create.isError ? "もう一度作成" : "下書きを作成"}
           </button>
+          {create.isError && (
+            <p className="inline-error" role="alert">
+              下書きを作成できませんでした。時間をおいて再試行してください。
+            </p>
+          )}
         </div>
       </main>
     );
@@ -86,6 +93,7 @@ function GoalDraftEditor({
   );
   const editor = useDraftAutoSave({
     userId: session.user.id,
+    goalId: null,
     subjectKey: `goal-draft:${draft.id}`,
     initialBody: draft.body,
     initialRevision: draft.revision,
@@ -170,19 +178,32 @@ function GoalDraftEditor({
       <header className="page-heading">
         <p className="eyebrow">NEW GOAL</p>
         <h1>新しい目標</h1>
-        <p>{goalCopy.guide}</p>
+        <p id="goal-editor-guide">{goalCopy.guide}</p>
       </header>
       <section className="editor-card">
+        {editor.recoveryConflict && (
+          <DraftRecoveryNotice
+            onRestore={editor.restoreRecovery}
+            onDiscard={editor.discardRecovery}
+          />
+        )}
+        {editor.browserCacheFailed && <DraftCacheWarning />}
         <label htmlFor="goal-body">あなたの目標</label>
         <textarea
           id="goal-body"
+          aria-describedby="goal-editor-guide"
           value={editor.body}
           maxLength={80}
           placeholder={goalCopy.placeholder}
+          readOnly={Boolean(editor.recoveryConflict)}
           onChange={(event) => editor.setBody(event.target.value)}
+          onBlur={editor.flush}
         />
         <div className="editor-meta">
-          <SaveBadge state={editor.state} retry={editor.retry} />
+          <SaveBadge
+            state={editor.state}
+            retry={editor.recoveryConflict ? undefined : editor.retry}
+          />
           <span className={count > 80 ? "counter counter--error" : "counter"}>
             {count} / 80
           </span>

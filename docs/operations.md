@@ -14,9 +14,9 @@ Dashboard、alert policy、notification channel、uptime monitorはまだIaC化�
 
 ## Health check
 
-```powershell
-Invoke-RestMethod 'https://pdcai.matoruru.com/healthz'
-Invoke-RestMethod 'https://pdcai.matoruru.com/readyz'
+```bash
+curl --fail --silent --show-error 'https://cycle.staging.fukamu.matoruru.com/healthz'
+curl --fail --silent --show-error 'https://cycle.staging.fukamu.matoruru.com/readyz'
 ```
 
 - `/healthz`: WorkerからContainer processへ到達できる。DBや外部APIは呼ばない。
@@ -38,7 +38,7 @@ Production userの本文、email、token、raw user ID/IPを確認用logへ追�
 
 ## Logs / error investigation
 
-Cloudflare DashboardでWorker `pdcai-staging`、deploy時刻/version、Containerを絞り、`severity`、`error_class`、`error_code`、request/trace IDを確認します。PDCA本文、prompt/output、session/CSRF token、Google credential、email、raw user ID/IP、raw Turnstile tokenを検索・記録・転記しません。
+Cloudflare DashboardでWorker `fukamu-cycle-staging`、deploy時刻/version、Containerを絞り、`severity`、`error_class`、`error_code`、request/trace IDを確認します。PDCA本文、prompt/output、session/CSRF token、Google credential、email、raw user ID/IP、raw Turnstile tokenを検索・記録・転記しません。
 
 必要な調査結果は時刻、version、route template、status、error class/code、集約eventで残します。Neon/OpenAI/Google/Turnstileのdashboardを確認するときもcredential値を表示しません。
 
@@ -70,7 +70,7 @@ Cloudflare DashboardでWorker `pdcai-staging`、deploy時刻/version、Container
 ### Turnstile
 
 1. Anonymous bootstrap errorとSiteverify response classを確認する。Raw token/secretをlogに追加しない。
-2. Frontend site key、Backend secret、hostname `pdcai.matoruru.com`、action `anonymous_bootstrap`を確認。
+2. Frontend site key、Backend secret、hostname `cycle.staging.fukamu.matoruru.com`、action `anonymous_bootstrap`を確認。
 3. Production profileで`TURNSTILE_ENABLED=false`にしない。Fail-closedを維持し、rate limitとprovider statusを切り分ける。
 
 ### Cloudflare Worker / Container

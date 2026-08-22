@@ -53,7 +53,7 @@ export function SettingsPage() {
     try {
       const loggedIn = await loginGoogle(credential, session.csrfToken);
       replaceSession(loggedIn);
-      setMessage("既存のPDCAIアカウントへ切り替えました。");
+      setMessage("既存のFUKAMU Cycleアカウントへ切り替えました。");
     } catch (cause) {
       setError(errorMessage(cause, "Googleログインに失敗しました。"));
     } finally {
@@ -66,7 +66,7 @@ export function SettingsPage() {
     setError(undefined);
     try {
       await deleteAccount(session.csrfToken);
-      await clearUserDrafts(session.user.id);
+      await clearUserDrafts(session.user.id).catch(() => undefined);
       window.location.assign("/");
     } catch (cause) {
       setError(errorMessage(cause, "アカウントを削除できませんでした。"));
@@ -134,8 +134,8 @@ export function SettingsPage() {
           }}
         >
           <p>
-            このGoogle
-            Accountは既存のPDCAIアカウントに連携されています。現在の匿名データは統合されません。
+            このGoogle Accountは既存のFUKAMU
+            Cycleアカウントに連携されています。現在の匿名データは統合されません。
           </p>
         </ConfirmationDialog>
       )}

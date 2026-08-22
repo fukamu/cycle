@@ -15,8 +15,8 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/matoruru/PDCAI/backend/internal/ai/prompts"
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/ai/prompts"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
 )
 
 type OpenAI struct {
@@ -77,11 +77,11 @@ type outputDecoder func(string) (string, error)
 func operationContract(operation string, promptSet prompts.Set) (string, string, map[string]any, outputDecoder) {
 	switch operation {
 	case "goal_refine":
-		return promptSet.GoalRefine, "pdcai_goal_suggestion", textSchema("suggestion"), decodeField("suggestion")
+		return promptSet.GoalRefine, "fukamu_cycle_goal_suggestion", textSchema("suggestion"), decodeField("suggestion")
 	case "action_refine":
-		return promptSet.ActionRefine, "pdcai_refined_action", textSchema("refinedAction"), decodeField("refinedAction")
+		return promptSet.ActionRefine, "fukamu_cycle_refined_action", textSchema("refinedAction"), decodeField("refinedAction")
 	case "action_generate":
-		return promptSet.ActionGenerate, "pdcai_generated_actions", map[string]any{
+		return promptSet.ActionGenerate, "fukamu_cycle_generated_actions", map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{"actions": map[string]any{
 				"type": "array", "minItems": 1, "maxItems": 3,

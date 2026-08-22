@@ -20,11 +20,17 @@ export function ConfirmationDialog({
   onCancel,
 }: ConfirmationDialogProps) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const trigger = useRef<HTMLElement | null>(
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
+  );
   const titleId = useId();
   const descriptionId = useId();
 
   useEffect(() => {
     const element = dialog.current;
+    const triggerElement = trigger.current;
     if (!element) return;
     try {
       element.showModal();
@@ -33,9 +39,11 @@ export function ConfirmationDialog({
       element.setAttribute("open", "");
     }
     return () => {
-      if (!element.open) return;
-      if (typeof element.close === "function") element.close();
-      else element.removeAttribute("open");
+      if (element.open) {
+        if (typeof element.close === "function") element.close();
+        else element.removeAttribute("open");
+      }
+      if (triggerElement?.isConnected) triggerElement.focus();
     };
   }, []);
 

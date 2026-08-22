@@ -88,7 +88,7 @@ jobs:
       - name: Prepare ephemeral R2 backend configuration
         shell: bash
         env:
-          BACKEND_CONFIG: ${{ runner.temp }}/pdcai-staging-backend.hcl
+          BACKEND_CONFIG: ${{ runner.temp }}/fukamu-cycle-staging-backend.hcl
         run: |
           set -euo pipefail
           cp infra/terraform/staging/backend.hcl.example "${BACKEND_CONFIG}"
@@ -101,7 +101,7 @@ jobs:
         working-directory: infra/terraform/staging
         run: |
           terraform fmt -check
-          terraform init -input=false -backend-config="${RUNNER_TEMP}/pdcai-staging-backend.hcl"
+          terraform init -input=false -backend-config="${RUNNER_TEMP}/fukamu-cycle-staging-backend.hcl"
           terraform validate
 
       - name: Create saved Terraform plan

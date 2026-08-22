@@ -3,23 +3,20 @@
   min-height: 100vh;
   place-items: center;
   padding: 32px 16px;
-  background:
-    radial-gradient(circle at top, rgb(220 236 229 / 78%), transparent 48%),
-    var(--paper);
+  background: var(--canvas);
 }
 
 .beta-admission__card {
   width: min(520px, 100%);
   padding: clamp(28px, 6vw, 48px);
-  background: rgb(255 254 249 / 96%);
+  background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: 22px;
-  box-shadow: var(--shadow);
+  border-radius: 12px;
 }
 
 .beta-admission__eyebrow {
   margin: 0 0 10px;
-  color: var(--brand);
+  color: var(--brand-dark);
   font-size: var(--font-size-small);
   font-weight: var(--font-weight-bold);
   letter-spacing: 0.08em;
@@ -51,12 +48,12 @@
   padding: 10px 12px;
   color: var(--ink);
   background: white;
-  border: 1px solid #9db9af;
+  border: 1px solid var(--line-strong);
   border-radius: 10px;
 }
 
 .beta-admission input:focus-visible {
-  outline: 3px solid #79aa99;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -67,4 +64,7 @@
 .beta-admission__error {
   margin: 0;
   color: var(--danger);
+  background: var(--danger-soft);
+  border-radius: 8px;
+  padding: 10px 12px;
 }

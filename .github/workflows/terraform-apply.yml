@@ -116,7 +116,7 @@ jobs:
     timeout-minutes: 15
     environment:
       name: staging-terraform-apply
-      url: https://pdcai.matoruru.com
+      url: https://cycle.staging.fukamu.matoruru.com
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}
@@ -202,7 +202,7 @@ jobs:
       - name: Prepare ephemeral R2 backend configuration
         shell: bash
         env:
-          BACKEND_CONFIG: ${{ runner.temp }}/pdcai-staging-backend.hcl
+          BACKEND_CONFIG: ${{ runner.temp }}/fukamu-cycle-staging-backend.hcl
         run: |
           set -euo pipefail
           cp infra/terraform/staging/backend.hcl.example "${BACKEND_CONFIG}"
@@ -213,7 +213,7 @@ jobs:
 
       - name: Initialize Terraform
         working-directory: infra/terraform/staging
-        run: terraform init -input=false -backend-config="${RUNNER_TEMP}/pdcai-staging-backend.hcl"
+        run: terraform init -input=false -backend-config="${RUNNER_TEMP}/fukamu-cycle-staging-backend.hcl"
 
       - name: Apply approved saved plan
         working-directory: infra/terraform/staging
@@ -236,14 +236,14 @@ jobs:
       - name: Write deployment metadata
         shell: bash
         run: |
-          mkdir -p "${RUNNER_TEMP}/pdcai-terraform-apply"
-          printf '%s\n' "${COMMIT_SHA}" > "${RUNNER_TEMP}/pdcai-terraform-apply/commit-sha"
+          mkdir -p "${RUNNER_TEMP}/fukamu-cycle-terraform-apply"
+          printf '%s\n' "${COMMIT_SHA}" > "${RUNNER_TEMP}/fukamu-cycle-terraform-apply/commit-sha"
 
       - name: Upload deployment metadata
         uses: actions/upload-artifact@v7
         with:
           name: terraform-apply-staging-${{ env.COMMIT_SHA }}
-          path: ${{ runner.temp }}/pdcai-terraform-apply/commit-sha
+          path: ${{ runner.temp }}/fukamu-cycle-terraform-apply/commit-sha
           if-no-files-found: error
           overwrite: true
           retention-days: 30

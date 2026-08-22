@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matoruru/PDCAI/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 type scriptedProvider struct {

@@ -1,7 +1,7 @@
 export type AppReferralShareResult = "shared" | "copied" | "canceled";
 
 const referralMessage =
-  "目標ごとに小さなPDCAサイクルを回し、学びながら前へ進めるアプリ「PDCAI」を紹介します。";
+  "目標ごとに小さなPDCAサイクルを回し、学びながら前へ進めるアプリ「FUKAMU Cycle」を紹介します。";
 
 function canceled(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
@@ -12,7 +12,11 @@ export async function shareAppReferral(
 ): Promise<AppReferralShareResult> {
   if (navigator.share) {
     try {
-      await navigator.share({ title: "PDCAI", text: referralMessage, url });
+      await navigator.share({
+        title: "FUKAMU Cycle",
+        text: referralMessage,
+        url,
+      });
       return "shared";
     } catch (error) {
       if (canceled(error)) return "canceled";

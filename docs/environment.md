@@ -6,7 +6,7 @@
 
 Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging Lightは `APP_ENV=production` を使いますが、ProductionとDB、secret、provider credential、GitHub Environment、Terraform stateを共有しません。
 
-- Local backendはuntracked `.env`、Viteはuntracked `frontend/.env.local`を使います。Backendが`.env`を暗黙loadする前提にせず、PowerShellでは `. ./scripts/import-env.ps1` を使います。
+- Local backendはuntracked `.env`、Viteはuntracked `frontend/.env.local`を使います。Backendが`.env`を暗黙loadする前提にせず、Bashで `source ./scripts/import-env.sh` を使います。
 - `VITE_`値はbundleへ埋め込まれ、全利用者から見えます。Secretを設定しません。
 - Stagingのnon-secret configurationはGitHub `staging` Environment variablesからWrangler `--var`で登録します。
 - Staging runtime secretsはGitHub `staging` Environmentからdeploy時の一時`--secrets-file`経由でCloudflare Worker Secretsへ登録します。一時fileはworkflowの`always()` stepで削除します。
@@ -99,7 +99,7 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 
 `VITE_DEPLOYMENT_ENV`はBackendのsecurity profileを表す`APP_ENV`とは別です。Staging Lightは`APP_ENV=production`を維持しつつ、Frontend buildだけ`VITE_DEPLOYMENT_ENV=staging`として検索engineへ`noindex, nofollow`を指示します。未知の値はbuild errorにします。Production buildでは`production`を明示し、検索除外meta tagを生成しません。
 
-`VITE_APP_REFERRAL_URL`は任意です。Stagingで紹介導線を表示する場合だけGitHub `staging` Environment variable `APP_REFERRAL_URL`へ`https://pdcai.matoruru.com/`を明示します。未設定時は紹介Componentが画面へ表示されません。検証環境を意図せず紹介しないため、deploy workflowは空値または`PUBLIC_ORIGIN`のroot URLだけを許可します。紹介payloadへ現在routeやUser Dataを追加しません。
+`VITE_APP_REFERRAL_URL`は任意です。Stagingで紹介導線を表示する場合だけGitHub `staging` Environment variable `APP_REFERRAL_URL`へ`https://cycle.fukamu.com/`を明示します。未設定時は紹介Componentが画面へ表示されません。deploy workflowは空値またはこの固定Production root URLだけを許可します。紹介payloadへ現在routeやUser Dataを追加しません。
 
 ## Migration / test / tooling
 
@@ -108,9 +108,9 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 | `MIGRATIONS_DIR` | migration directory、`migrations` | GitHub Actionsで明示 |
 | `NEON_MIGRATION_DATABASE_URL` | Staging direct URL | **GitHub secret**、workflowが`DATABASE_URL`へ一時mapping |
 | `TEST_DATABASE_URL` | disposable integration/E2E DB | runtime/Production DBを指定禁止 |
-| `PDCAI_GO_BINARY` | Playwright用Go executable | optional |
-| `PDCAI_SERVER_BINARY` | prebuilt E2E server | optional、指定時は事前migration必要 |
-| `PDCAI_LOCAL_PORT` | Dockerローカル実機確認のHost port | optional、`scripts/local-app.ps1`が`-Port`から一時設定、既定`8080` |
+| `FUKAMU_CYCLE_GO_BINARY` | Playwright用Go executable | optional |
+| `FUKAMU_CYCLE_SERVER_BINARY` | prebuilt E2E server | optional、指定時は事前migration必要 |
+| `FUKAMU_CYCLE_LOCAL_PORT` | Dockerローカル実機確認のHost port | optional、`scripts/local-app.sh`が`--port`から一時設定、既定`8080` |
 | `CI` | Playwright behavior | CIが自動設定 |
 | `CLOUDFLARE_ACCOUNT_ID` | Wrangler account | GitHub secret（値自体はcredentialではない） |
 | `CLOUDFLARE_API_TOKEN` | Wrangler deploy auth | **GitHub secret**、deploy最小権限 |
@@ -213,6 +213,6 @@ RATE_AI_PER_SESSION_MINUTE
 RATE_AI_PER_IP_MINUTE
 ```
 
-`BETA_ADMISSION_MODE`は未設定時`off`です。`closed`へ変更する場合だけ`BETA_ADMISSION_COOKIE_TTL_DAYS`と`BETA_INVITES`も追加し、上記のCookie key secretと同じdeployで反映します。
+Staging deploy workflowはGitHub Environmentで`BETA_ADMISSION_MODE`が未設定の場合に明示的な`off`をWorkerへ渡します。Worker binding自体の欠落や未知のmodeは設定不備として新規利用開始をfail-closedにします。`closed`へ変更する場合だけ`BETA_ADMISSION_COOKIE_TTL_DAYS`と`BETA_INVITES`も追加し、上記のCookie key secretと同じdeployで反映します。
 
-Production Environmentは未構築です。公開domainは`app.pdcai.io`とし、Production専用resourceと値を追加するときは初期値`BETA_ADMISSION_MODE=closed`を必須にします。Stagingのsecret、DB、provider値を転用しません。
+Production Environmentは未構築です。公開domainは`cycle.fukamu.com`とし、Production専用resourceと値を追加するときは初期値`BETA_ADMISSION_MODE=closed`を必須にします。Stagingのsecret、DB、provider値を転用しません。

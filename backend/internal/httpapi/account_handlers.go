@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/account"
-	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
-	"github.com/matoruru/PDCAI/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/application/account"
+	appsession "github.com/fukamu/cycle/backend/internal/application/session"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 const googleTokenBodyLimit = 16 << 10

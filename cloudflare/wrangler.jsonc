@@ -1,13 +1,13 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "pdcai-staging",
+  "name": "fukamu-cycle-staging",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-17",
   "workers_dev": false,
   "preview_urls": false,
   "routes": [
     {
-      "pattern": "pdcai.matoruru.com",
+      "pattern": "cycle.staging.fukamu.matoruru.com",
       "custom_domain": true,
     },
   ],

@@ -10,7 +10,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"google.golang.org/api/idtoken"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/account"
+	"github.com/fukamu/cycle/backend/internal/application/account"
 )
 
 type Verifier struct {
@@ -23,7 +23,7 @@ func NewVerifier(audience string) *Verifier {
 }
 
 func (verifier *Verifier) Verify(ctx context.Context, rawToken string) (account.GoogleIdentity, error) {
-	ctx, span := otel.Tracer("pdcai/google-identity").Start(ctx, "google.identity.verify")
+	ctx, span := otel.Tracer("fukamu-cycle/google-identity").Start(ctx, "google.identity.verify")
 	defer span.End()
 	if strings.TrimSpace(rawToken) == "" || verifier.audience == "" {
 		return account.GoogleIdentity{}, account.ErrGoogleTokenInvalid

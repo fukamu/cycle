@@ -11,10 +11,10 @@ variable "cloudflare_account_id" {
 variable "public_hostname" {
   description = "Fixed Staging Light hostname. Production must use a separate root module and state."
   type        = string
-  default     = "pdcai.matoruru.com"
+  default     = "cycle.staging.fukamu.matoruru.com"
 
   validation {
-    condition     = var.public_hostname == "pdcai.matoruru.com"
-    error_message = "This root module may only manage pdcai.matoruru.com."
+    condition     = var.public_hostname == "cycle.staging.fukamu.matoruru.com"
+    error_message = "This root module may only manage cycle.staging.fukamu.matoruru.com."
   }
 }

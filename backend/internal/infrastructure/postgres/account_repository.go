@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/account"
-	"github.com/matoruru/PDCAI/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/application/account"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 type AccountRepository struct {

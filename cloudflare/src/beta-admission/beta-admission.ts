@@ -1,14 +1,14 @@
 // TEMPORARY CLOSED BETA: this module is an ingress-only admission layer.
 // Remove this directory and the small hook in src/index.ts for general release.
 
-const admissionCookieName = "__Host-pdcai_beta_admission";
-const sessionCookieName = "__Host-pdcai_session";
+const admissionCookieName = "__Host-fukamu_cycle_beta_admission";
+const sessionCookieName = "__Host-fukamu_cycle_session";
 const redeemPath = "/api/__beta/admission/redeem";
 const anonymousSessionPath = "/api/v1/session/anonymous";
 const sessionPath = "/api/v1/session";
 const maximumBodyBytes = 2_048;
 const secondsPerDay = 86_400;
-const tokenPattern = /^pdcai_beta_[A-Za-z0-9_-]{43}$/;
+const tokenPattern = /^fukamu_cycle_beta_[A-Za-z0-9_-]{43}$/;
 const digestPattern = /^[0-9a-f]{64}$/;
 const inviteIDPattern = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const uuidV7Pattern =
@@ -91,7 +91,7 @@ export async function handleBetaAdmission(
     request,
     403,
     "BETA_ADMISSION_REQUIRED",
-    "PDCAI Closed Betaの招待Tokenが必要です。",
+    "FUKAMU Cycle Closed Betaの招待Tokenが必要です。",
   );
 }
 

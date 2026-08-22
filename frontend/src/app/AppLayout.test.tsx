@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -16,7 +16,12 @@ describe("AppLayout", () => {
         </Routes>
       </MemoryRouter>,
     );
-    await user.click(screen.getByRole("button", { name: "メニューを開く" }));
+    expect(screen.queryByText("MENU")).not.toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "メニューを開く" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(trigger);
+    expect(trigger).toHaveAccessibleName("メニューを閉じる");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(
       screen.getByRole("navigation", { name: "メインメニュー" }),
     ).toBeInTheDocument();
@@ -27,6 +32,16 @@ describe("AppLayout", () => {
     expect(screen.getByRole("link", { name: "設定" })).toHaveAttribute(
       "href",
       "/settings",
+    );
+
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("navigation", { name: "メインメニュー" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "メニューを開く" }),
+      ).toHaveFocus(),
     );
   });
 });

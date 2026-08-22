@@ -20,6 +20,8 @@ import {
   terminateGoal,
 } from "../shared/api/workspace";
 import {
+  DraftCacheWarning,
+  DraftRecoveryNotice,
   PageError,
   PageLoading,
   SaveBadge,
@@ -64,6 +66,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   );
   const editor = useDraftAutoSave({
     userId: session.user.id,
+    goalId: goal.id,
     subjectKey: `goal-review:${goal.id}`,
     initialBody: reviewDraft.body,
     initialRevision: reviewDraft.revision,
@@ -185,15 +188,27 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         ))}
       </details>
       <section className="editor-card">
+        {editor.recoveryConflict && (
+          <DraftRecoveryNotice
+            onRestore={editor.restoreRecovery}
+            onDiscard={editor.discardRecovery}
+          />
+        )}
+        {editor.browserCacheFailed && <DraftCacheWarning />}
         <label htmlFor="review-goal">次のサイクルで目指す目標</label>
         <textarea
           id="review-goal"
           value={editor.body}
           maxLength={80}
+          readOnly={Boolean(editor.recoveryConflict)}
           onChange={(event) => editor.setBody(event.target.value)}
+          onBlur={editor.flush}
         />
         <div className="editor-meta">
-          <SaveBadge state={editor.state} retry={editor.retry} />
+          <SaveBadge
+            state={editor.state}
+            retry={editor.recoveryConflict ? undefined : editor.retry}
+          />
           <span>{count} / 80</span>
         </div>
         <div className="button-row">

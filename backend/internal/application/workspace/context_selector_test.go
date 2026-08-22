@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/matoruru/PDCAI/backend/internal/domain/cycle"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 )
 
 type runeTokenCounter struct{}

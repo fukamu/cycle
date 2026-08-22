@@ -14,7 +14,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
 )
 
 type AIUsage struct {
@@ -70,7 +70,7 @@ type Metrics struct {
 }
 
 func NewMetrics(logger *slog.Logger, warningThresholds []float64) (*Metrics, error) {
-	meter := otel.Meter("pdcai")
+	meter := otel.Meter("fukamu-cycle")
 	result := Metrics{logger: logger, warningThresholds: append([]float64(nil), warningThresholds...)}
 	var err error
 	if result.httpRequests, err = meter.Int64Counter("http_requests_total"); err != nil {

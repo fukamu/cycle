@@ -47,7 +47,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
   });
 
   if (query.isPending) {
-    return <div className="app-message">セッションを準備しています…</div>;
+    return (
+      <div className="app-message" role="status" aria-live="polite">
+        セッションを準備しています…
+      </div>
+    );
   }
   if (query.isError) {
     if (isBetaAdmissionRequired(query.error)) {
@@ -55,7 +59,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
     return (
       <div className="app-message app-message--error" role="alert">
-        <p>PDCAIを開始できませんでした。</p>
+        <p>FUKAMU Cycleを開始できませんでした。</p>
         <button type="button" onClick={() => void query.refetch()}>
           再試行
         </button>

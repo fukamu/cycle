@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 
-set -uo pipefail
+set -Eeuo pipefail
 
 main_sha="${1:?main commit SHA is required}"
 repository="${2:?repository is required}"
 output_file="${3:?GitHub output file is required}"
 
 write_output() {
-  printf '%s=%s\n' "$1" "$2" >> "${output_file}"
+  printf '%s=%s\n' "$1" "$2" >>"${output_file}"
 }
 
 fallback() {
@@ -31,7 +31,7 @@ if ! main_commit_json="$(
   fallback "Could not read the main commit."
 fi
 
-if ! main_tree="$(jq -er '.tree.sha' <<< "${main_commit_json}" | tr -d '\r')"; then
+if ! main_tree="$(jq -er '.tree.sha' <<<"${main_commit_json}" | tr -d '\r')"; then
   fallback "Could not resolve the main commit tree."
 fi
 
@@ -58,18 +58,23 @@ if ! matching_prs="$(
           head_sha: .head.sha,
           head_branch: .head.ref
         }
-    ]' <<< "${pulls_json}"
+    ]' <<<"${pulls_json}"
 )"; then
   fallback "Could not validate the pull request associated with the main commit."
 fi
 
-if [[ "$(jq 'length' <<< "${matching_prs}")" -ne 1 ]]; then
+if ! matching_pr_count="$(jq -er 'length' <<<"${matching_prs}")"; then
+  fallback "Could not count pull requests associated with the main commit."
+fi
+if [[ ! "${matching_pr_count}" =~ ^[0-9]+$ ]] || ((matching_pr_count != 1)); then
   fallback "The main commit is not associated with exactly one merged pull request."
 fi
 
-pr_number="$(jq -r '.[0].number' <<< "${matching_prs}" | tr -d '\r')"
-head_sha="$(jq -r '.[0].head_sha' <<< "${matching_prs}" | tr -d '\r')"
-head_branch="$(jq -r '.[0].head_branch' <<< "${matching_prs}" | tr -d '\r')"
+if ! pr_number="$(jq -er '.[0].number' <<<"${matching_prs}" | tr -d '\r')" \
+  || ! head_sha="$(jq -er '.[0].head_sha' <<<"${matching_prs}" | tr -d '\r')" \
+  || ! head_branch="$(jq -er '.[0].head_branch' <<<"${matching_prs}" | tr -d '\r')"; then
+  fallback "Could not resolve the merged pull request metadata."
+fi
 artifact_name="pr-ci-${pr_number}-${head_sha}-${main_tree}"
 
 if ! runs_json="$(
@@ -97,7 +102,7 @@ mapfile -t run_ids < <(
           .head_branch == $head_branch and
           (.path | startswith(".github/workflows/ci.yml"))
         )
-      | .id' <<< "${runs_json}" \
+      | .id' <<<"${runs_json}" \
     | tr -d '\r'
 )
 
@@ -113,7 +118,7 @@ for run_id in "${run_ids[@]}"; do
   if jq -e \
     --arg artifact_name "${artifact_name}" \
     '.artifacts[] | select(.name == $artifact_name and .expired == false)' \
-    <<< "${artifacts_json}" > /dev/null; then
+    <<<"${artifacts_json}" >/dev/null; then
     write_output reuse_pr_ci true
     write_output source_pr_number "${pr_number}"
     write_output source_run_id "${run_id}"

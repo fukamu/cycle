@@ -4,48 +4,48 @@
 
 ## Setup / dependency install
 
-| 症状                                  | 原因候補                              | 確認方法                                      | 解決方法                                                                           |
-| ------------------------------------- | ------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `Required command 'go' was not found` | HostにGoがない、PATH未反映            | `Get-Command go`; `go env GOVERSION`          | Go 1.26.6をinstallしterminalを開き直す。標準のsetup/check/E2Eはhost Goを前提とする |
-| `setup.ps1` がGo versionで停止        | CI/imageと異なるGo                    | `go env GOVERSION`                            | 1.26.6へ合わせる。実行前に停止するので既存env fileは上書きされない                 |
-| `npm ci`失敗                          | Node不一致、lock不整合、network/cache | `node --version`; `npm --version`; npm error  | Node 24以上へ合わせる。lockを手編集せず、必要なら`clean.ps1 -All`後に再実行        |
-| 同名Docker container error            | `pdcai-postgres`が既に存在            | `docker ps -a --filter name=pdcai-postgres`   | 停止中なら`docker start pdcai-postgres`。保持dataを確認せずremoveしない            |
-| PowerShell scriptを実行できない       | PowerShell 7未導入、execution policy  | `pwsh --version`; `Get-ExecutionPolicy -List` | PowerShell 7を導入し、組織policyに従う。policyを無断で緩和しない                   |
-| Docker実機環境がremote contextを拒否 | 現在のDocker contextがremote host     | `docker context inspect`                      | Docker Desktopのlocal contextへ明示的に戻す。安全guardを削除しない                 |
+| 症状                                  | 原因候補                                  | 確認方法                                        | 解決方法                                                                             |
+| ------------------------------------- | ----------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `Required command 'go' was not found` | HostにGoがない、PATH未反映                | `command -v go`; `go env GOVERSION`             | Go 1.26.6をinstallしterminalを開き直す。標準のsetup/check/E2Eはhost Goを前提とする   |
+| `setup.sh` がGo versionで停止         | CI/imageと異なるGo                        | `go env GOVERSION`                              | 1.26.6へ合わせる。実行前に停止するので既存env fileは上書きされない                  |
+| `pnpm install`失敗                    | Node/pnpm不一致、lock不整合、network/cache | `node --version`; `pnpm --version`; pnpm error | Node 24以上・pnpm 11.22.0へ合わせる。lockを手編集せず、必要なら`clean.sh --all`後に再実行 |
+| 同名Docker container error            | `fukamu-cycle-postgres`が既に存在                | `docker ps -a --filter name=fukamu-cycle-postgres`     | 停止中なら`docker start fukamu-cycle-postgres`。保持dataを確認せずremoveしない              |
+| Bash scriptがversion不足で停止        | Bash 5.0未満またはBash以外で実行          | `bash --version`; `command -v bash`             | Bash 5.0以上で実行する。Ubuntu 20.04/24.04またはWSL2を標準環境とする                 |
+| Docker実機環境がremote contextを拒否  | 現在のDocker contextがremote host         | `docker context inspect`                        | Docker Desktopのlocal contextへ明示的に戻す。安全guardを削除しない                  |
 
 ## Development server / build
 
 | 症状                                   | 原因候補                                        | 確認方法                                                           | 解決方法                                                                     |
 | -------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| Backendが`invalid configuration`で終了 | `.env`未読込、必須secretが短い/空、値format不正 | error messageの変数名; `Get-ChildItem Env:APP_ENV`                 | Backend terminalで`. ./scripts/import-env.ps1`。`.env.example`を基に値を修正 |
-| Port 8080/5173が使用中                 | 以前のserverが残っている                        | `Get-NetTCPConnection -LocalPort 8080,5173`                        | 所有processを確認して停止。無関係なprocessをkillしない                       |
-| FrontendからAPI 404/connection refused | Backend未起動、Vite以外のorigin、proxy不一致    | Browser Network; `Invoke-RestMethod http://localhost:8080/healthz` | Backendを起動し、開発時は`http://localhost:5173`を使う                       |
-| Production相当buildで画面404           | `STATIC_DIR`不正、`dist`未build                 | `Test-Path frontend/dist/index.html`; Backend startup env          | `npm run build`後にabsolute `STATIC_DIR`を設定                               |
-| Frontend build/typecheck失敗           | TypeScript error、stale dependency              | `pwsh ./scripts/check.ps1 -Scope frontend`                         | 最初のerrorを修正。必要なら`clean.ps1 -All`→`setup.ps1`                      |
-| format/lintだけ失敗                    | Prettier/ESLint規則違反                         | `npm run format:check`; `npm run lint`                             | `npm run format`後に差分をreviewし、lint errorを修正                         |
-| Docker実機環境がreadyにならない        | Port競合、image build、Migration、DB起動の失敗  | `docker compose -f compose.local.yaml logs`                        | 最初のerrorを修正し、`pwsh ./scripts/local-app.ps1 -Down`後に再実行           |
+| Backendが`invalid configuration`で終了 | `.env`未読込、必須secretが短い/空、値format不正 | error messageの変数名; `[[ -n ${APP_ENV:-} ]]`                     | Backend terminalで`source ./scripts/import-env.sh`。`.env.example`を基に値を修正 |
+| Port 8080/5173が使用中                 | 以前のserverが残っている                        | `ss --tcp --listening --numeric --process`                          | 所有processを確認して停止。無関係なprocessをkillしない                       |
+| FrontendからAPI 404/connection refused | Backend未起動、Vite以外のorigin、proxy不一致    | Browser Network; `curl --fail http://localhost:8080/healthz`        | Backendを起動し、開発時は`http://localhost:5173`を使う                       |
+| Production相当buildで画面404           | `STATIC_DIR`不正、`dist`未build                 | `test -f frontend/dist/index.html`; Backend startup env             | `pnpm --filter fukamu-cycle-frontend run build`後にabsolute `STATIC_DIR`を設定       |
+| Frontend build/typecheck失敗           | TypeScript error、stale dependency              | `./scripts/check.sh --scope frontend`                               | 最初のerrorを修正。必要なら`clean.sh --all`→`setup.sh`                       |
+| format/lintだけ失敗                    | Prettier/ESLint規則違反                         | `pnpm --filter fukamu-cycle-frontend run format:check`; `pnpm --filter fukamu-cycle-frontend run lint` | `pnpm --filter fukamu-cycle-frontend run format`後に差分をreviewし、lint errorを修正 |
+| Docker実機環境がreadyにならない        | Port競合、image build、Migration、DB起動の失敗  | `docker compose --file compose.local.yaml logs`                    | 最初のerrorを修正し、`./scripts/local-app.sh --down`後に再実行               |
 
 ## Database / Migration
 
 | 症状                               | 原因候補                                           | 確認方法                                                  | 解決方法                                                                                     |
 | ---------------------------------- | -------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| DB connection refused              | PostgreSQL停止、port/URL不一致                     | `docker ps`; `docker port pdcai-postgres 5432`; `/readyz` | containerをstartし、`.env`のhost/port/dbを合わせる                                           |
+| DB connection refused              | PostgreSQL停止、port/URL不一致                     | `docker ps`; `docker port fukamu-cycle-postgres 5432`; `/readyz` | containerをstartし、`.env`のhost/port/dbを合わせる                                           |
 | password authentication failed     | user/password不一致                                | Container作成時envと`.env`のuser名を値を露出せず比較      | Local DBなら正しいcredentialへ修正。production secretをlocalへcopyしない                     |
-| database does not exist            | `pdcai`/`pdcai_test`未作成                         | `docker exec pdcai-postgres psql -U pdcai -l`             | local専用DBを`createdb`。testには`pdcai_test`のみ指定                                        |
-| Migration fileが見つからない       | Working directoryまたは`MIGRATIONS_DIR`不正        | `Get-Location`; `Get-ChildItem backend/migrations`        | `backend`で実行するか正しいdirectoryを設定                                                   |
+| database does not exist            | `fukamu_cycle`/`fukamu_cycle_test`未作成                         | `docker exec fukamu-cycle-postgres psql -U fukamu_cycle -l`             | local専用DBを`createdb`。testには`fukamu_cycle_test`のみ指定                                        |
+| Migration fileが見つからない       | Working directoryまたは`MIGRATIONS_DIR`不正        | `pwd`; `find backend/migrations -maxdepth 1 -type f`       | `backend`で実行するか正しいdirectoryを設定                                                   |
 | Migrationがdirty/error             | SQL途中失敗、既存schema不整合                      | Migration job/log、`schema_migrations`をread-only確認     | productionでforce/down/resetしない。原因とbackupを確認し、新migrationまたは個別runbookで復旧 |
 | Integration testで開発dataが消えた | `TEST_DATABASE_URL`に開発DBを指定                  | shell historyのhost/db名だけを確認                        | Test専用DBを作る。credentialをhistory/issueへ貼らない。失われたdataはbackupから復元          |
-| DB reset scriptが拒否              | remote context、名前不一致、image/version/Go不一致 | 表示されたguard error; `-WhatIf`                          | 安全条件を満たすlocal Dockerだけで実行。guardを削除しない                                    |
+| DB reset scriptが拒否              | remote context、名前不一致、image/version/Go不一致 | 表示されたguard error; `--dry-run`                        | 安全条件を満たすlocal Dockerだけで実行。guardを削除しない                                    |
 
 ## Test / E2E
 
 | 症状                                       | 原因候補                                  | 確認方法                                    | 解決方法                                                                            |
 | ------------------------------------------ | ----------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Go integration testがskip                  | `TEST_DATABASE_URL`未設定                 | Test output; `$env:TEST_DATABASE_URL`       | 消去可能な`pdcai_test`を設定。開発/production DBは禁止                              |
+| Go integration testがskip                  | `TEST_DATABASE_URL`未設定                 | Test output; `[[ -n ${TEST_DATABASE_URL:-} ]]` | 消去可能な`fukamu_cycle_test`を設定。開発/production DBは禁止                            |
 | E2EがDBへ接続できない                      | Playwright defaultは55432、Docker例は5432 | `docker port`; Playwright error             | `TEST_DATABASE_URL`を明示する                                                       |
-| E2EがGo executableを起動できない           | Host Goなし、`PDCAI_GO_BINARY`不正        | `Get-Command go`; env var                   | Go 1.26.6をinstall。binary指定時は実在pathを使う                                    |
-| `PDCAI_SERVER_BINARY`指定時にreadiness失敗 | Playwrightがmigration commandを省略する   | `frontend/playwright.config.ts`; DB version | Test DBへmigrationを事前適用してから再実行                                          |
-| Chromiumがない                             | Playwright browser未install               | Errorのbrowser executable path              | `Push-Location frontend; npx playwright install chromium; Pop-Location`             |
+| E2EがGo executableを起動できない           | Host Goなし、`FUKAMU_CYCLE_GO_BINARY`不正        | `command -v go`; env var                    | Go 1.26.6をinstall。binary指定時は実在pathを使う                                    |
+| `FUKAMU_CYCLE_SERVER_BINARY`指定時にreadiness失敗 | Playwrightがmigration commandを省略する   | `frontend/playwright.config.ts`; DB version | Test DBへmigrationを事前適用してから再実行                                          |
+| Chromiumがない                             | Playwright browser未install               | Errorのbrowser executable path              | `pnpm --filter fukamu-cycle-frontend exec playwright install chromium`                     |
 | CIだけflaky                                | timing、CI resource、shared state         | Playwright trace/screenshot、job log        | Testを並列化せず現状workers=1を維持し、traceから根因を修正。retry増加だけで隠さない |
 
 ## Authentication / Turnstile / AI

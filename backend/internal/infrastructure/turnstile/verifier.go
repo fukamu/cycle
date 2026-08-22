@@ -16,7 +16,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 )
 
 const (
@@ -76,7 +76,7 @@ func NewVerifier(client HTTPClient, limiter RateLimiter, clock Clock, settings S
 }
 
 func (verifier *Verifier) VerifyAnonymousCreation(ctx context.Context, input ports.AnonymousAbuseInput) error {
-	ctx, span := otel.Tracer("pdcai/turnstile").Start(ctx, "turnstile.siteverify")
+	ctx, span := otel.Tracer("fukamu-cycle/turnstile").Start(ctx, "turnstile.siteverify")
 	defer span.End()
 	if strings.TrimSpace(input.TurnstileToken) == "" {
 		return ports.ErrAnonymousCreationBlocked

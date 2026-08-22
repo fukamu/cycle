@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/api/idtoken"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/account"
+	"github.com/fukamu/cycle/backend/internal/application/account"
 )
 
 func TestVerifierUsesSubjectAsIdentityAndTreatsEmailAsMetadata(t *testing.T) {

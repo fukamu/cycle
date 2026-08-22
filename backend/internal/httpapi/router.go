@@ -11,12 +11,12 @@ import (
 	"github.com/go-playground/validator/v10"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-	"github.com/matoruru/PDCAI/backend/internal/application/ports"
-	appsession "github.com/matoruru/PDCAI/backend/internal/application/session"
-	"github.com/matoruru/PDCAI/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/application/ports"
+	appsession "github.com/fukamu/cycle/backend/internal/application/session"
+	"github.com/fukamu/cycle/backend/internal/application/workspace"
 )
 
-const sessionCookieName = "__Host-pdcai_session"
+const sessionCookieName = "__Host-fukamu_cycle_session"
 
 type SessionService interface {
 	Authenticate(context.Context, string) (appsession.AuthenticatedSession, error)
@@ -44,7 +44,7 @@ type WorkspaceService interface {
 	SaveFrame(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
 	CompleteCycle(context.Context, workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error)
 	RefineGoal(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
-	AdoptGoalSuggestion(context.Context, string, string, string, int64, *int64) (workspace.DraftView, error)
+	AdoptGoalSuggestion(context.Context, string, string, string, string, int64, *int64) (workspace.DraftView, error)
 	RunActionAI(context.Context, workspace.ActionAIInput) (workspace.AIResponse, error)
 }
 

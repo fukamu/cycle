@@ -8,13 +8,15 @@ describe("Closed Beta invite fragment", () => {
     window.history.replaceState(
       null,
       "",
-      `/?source=invite#beta-invite=${encodeURIComponent("pdcai_beta_token")}&campaign=closed`,
+      `/?source=invite#beta-invite=${encodeURIComponent("fukamu_cycle_beta_token")}&campaign=closed`,
     );
     vi.resetModules();
 
     const fragment = await import("./inviteFragment");
 
-    expect(fragment.getInitialBetaInviteToken()).toBe("pdcai_beta_token");
+    expect(fragment.getInitialBetaInviteToken()).toBe(
+      "fukamu_cycle_beta_token",
+    );
     expect(
       window.location.pathname + window.location.search + window.location.hash,
     ).toBe("/?source=invite#campaign=closed");
