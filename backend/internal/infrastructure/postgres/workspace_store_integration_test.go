@@ -536,6 +536,74 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,$5,'元の目標','改善した�
 	}
 }
 
+func TestReviewGoalAIResolvesDraftByGoalInsideTransaction(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const (
+		userID            = "10000000-0000-7000-8000-000000000001"
+		reviewDraftID     = "61000000-0000-7000-8000-000000000001"
+		completeOperation = "62000000-0000-7000-8000-000000000001"
+		generationID      = "63000000-0000-7000-8000-000000000001"
+		refineIdempotency = "64000000-0000-7000-8000-000000000001"
+	)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{
+		CursorSigningKey:  []byte("test-cursor-key"),
+		Provider:          "fake",
+		Model:             "test",
+		GoalPromptVersion: "goal-refine-v1",
+		RollingLimit:      10,
+		MonthlyBudgetUSD:  100,
+		ReservationUSD:    0.01,
+		LeaseDuration:     time.Minute,
+		RateHashKey:       []byte("test-rate-key"),
+	})
+	fixture := progressingGoalFixtures()[0]
+	started := startProgressingGoal(t, store, userID, fixture, 2, now)
+	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',action='A',
+content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revision=1 WHERE id=$1`, fixture.cycleID); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: reviewDraftID,
+		OperationID: completeOperation, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
+		RequestHash: "complete-review-ai", Now: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedGoalRevision := completed.Goal.Revision
+	snapshot, err := store.BeginGoalRefine(context.Background(), workspace.GoalRefineInput{
+		UserID: userID, GoalID: fixture.goalID, ExpectedDraftRevision: completed.ReviewDraft.Revision,
+		ExpectedGoalRevision: &expectedGoalRevision, IdempotencyKey: refineIdempotency,
+		GenerationID: generationID, Now: now.Add(2 * time.Minute),
+	}, func(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
+		return snapshot, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.GoalID != fixture.goalID || snapshot.SourceText != completed.ReviewDraft.Body {
+		t.Fatalf("review snapshot = %#v", snapshot)
+	}
+	if _, err = store.FinishGoalRefine(context.Background(), snapshot, workspace.AIProviderResult{
+		Output: "改善した目標", InputTokens: 10, OutputTokens: 4, CostUSD: 0.01, Attempts: 1,
+	}, nil, now.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, "", fixture.goalID, generationID,
+		completed.ReviewDraft.Revision, &expectedGoalRevision, now.Add(4*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted.ID != reviewDraftID || adopted.Body != "改善した目標" || adopted.Revision != completed.ReviewDraft.Revision+1 {
+		t.Fatalf("adopted review draft = %#v", adopted)
+	}
+}
+
 func TestAdoptGoalSuggestionReplayIsIdempotentUntilDraftChanges(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
@@ -561,18 +629,18 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改�
 		t.Fatal(err)
 	}
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, generationID, 0, nil, now.Add(time.Minute))
+	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(time.Minute))
 	if err != nil || adopted.Revision != 1 || adopted.Replayed {
 		t.Fatalf("adopted = %#v, error = %v", adopted, err)
 	}
-	replayed, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, generationID, 0, nil, now.Add(2*time.Minute))
+	replayed, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(2*time.Minute))
 	if err != nil || !replayed.Replayed || replayed.Body != "改善した目標" {
 		t.Fatalf("adopt replay = %#v, error = %v", replayed, err)
 	}
 	if _, err = store.SaveDraft(context.Background(), userID, draftID, "利用者が編集", 1, now.Add(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AdoptGoalSuggestion(context.Background(), userID, draftID, generationID, 0, nil, now.Add(4*time.Minute))
+	_, err = store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(4*time.Minute))
 	if !errors.Is(err, workspace.ErrAIResultAlreadyAdopted) {
 		t.Fatalf("adopt after edit error = %v", err)
 	}
@@ -610,7 +678,7 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改�
 		t.Fatal(err)
 	}
 
-	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, generationID, 2, nil, now.Add(3*time.Minute))
+	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 2, nil, now.Add(3*time.Minute))
 	if err != nil || adopted.Body != "改善した目標" || adopted.Revision != 3 {
 		t.Fatalf("adopted = %#v, error = %v", adopted, err)
 	}

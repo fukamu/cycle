@@ -44,7 +44,7 @@ type WorkspaceService interface {
 	SaveFrame(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
 	CompleteCycle(context.Context, workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error)
 	RefineGoal(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
-	AdoptGoalSuggestion(context.Context, string, string, string, int64, *int64) (workspace.DraftView, error)
+	AdoptGoalSuggestion(context.Context, string, string, string, string, int64, *int64) (workspace.DraftView, error)
 	RunActionAI(context.Context, workspace.ActionAIInput) (workspace.AIResponse, error)
 }
 

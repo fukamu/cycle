@@ -27,14 +27,17 @@ func (store *WorkspaceStore) BeginGoalRefine(ctx context.Context, input workspac
 	if err = lockUser(ctx, tx, user.ID(input.UserID)); err != nil {
 		return snapshot, workspace.ErrNotFound
 	}
-	draft, err := scanDraft(tx.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
-FROM goal_drafts WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(input.DraftID), mustUUID(input.UserID)))
+	draft, err := lockGoalDraftForAI(ctx, tx, input.UserID, input.DraftID, input.GoalID)
 	if err != nil {
 		return snapshot, err
 	}
 	if input.GoalID == "" && draft.DraftType != string(goal.DraftCreation) {
 		return snapshot, workspace.ErrDraftTypeMismatch
 	}
+	if input.GoalID != "" && (draft.DraftType != string(goal.DraftReview) || draft.GoalID == nil || *draft.GoalID != input.GoalID) {
+		return snapshot, workspace.ErrDraftTypeMismatch
+	}
+	input.DraftID = draft.ID
 	inputHash := hashGoalRefineRequest(input)
 	replayed, replayErr := existingGeneration(ctx, tx, input.UserID, "goal_refine", input.IdempotencyKey, inputHash)
 	if replayErr != nil {
@@ -534,17 +537,23 @@ provider_usage_finalized_at=$6 WHERE operation_id=$1 AND provider_usage_finalize
 	return err
 }
 
-func (store *WorkspaceStore) AdoptGoalSuggestion(ctx context.Context, userID, draftID, generationID string, expectedDraftRevision int64, expectedGoalRevision *int64, now time.Time) (workspace.DraftView, error) {
+func (store *WorkspaceStore) AdoptGoalSuggestion(ctx context.Context, userID, draftID, goalID, generationID string, expectedDraftRevision int64, expectedGoalRevision *int64, now time.Time) (workspace.DraftView, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return workspace.DraftView{}, err
 	}
 	defer rollback(ctx, tx)
-	draft, err := scanDraft(tx.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
-FROM goal_drafts WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(draftID), mustUUID(userID)))
+	draft, err := lockGoalDraftForAI(ctx, tx, userID, draftID, goalID)
 	if err != nil {
 		return workspace.DraftView{}, err
 	}
+	if goalID == "" && draft.DraftType != string(goal.DraftCreation) {
+		return workspace.DraftView{}, workspace.ErrDraftTypeMismatch
+	}
+	if goalID != "" && (draft.DraftType != string(goal.DraftReview) || draft.GoalID == nil || *draft.GoalID != goalID) {
+		return workspace.DraftView{}, workspace.ErrDraftTypeMismatch
+	}
+	draftID = draft.ID
 	if draft.GoalID != nil {
 		if expectedGoalRevision == nil {
 			return workspace.DraftView{}, workspace.ErrGoalRevisionConflict
@@ -595,6 +604,19 @@ WHERE id=$1 AND user_id=$2 AND operation_type='goal_refine' AND source_goal_draf
 		return workspace.DraftView{}, err
 	}
 	return draft, nil
+}
+
+func lockGoalDraftForAI(ctx context.Context, tx pgx.Tx, userID, draftID, goalID string) (workspace.DraftView, error) {
+	const columns = `id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at`
+	if draftID != "" {
+		return scanDraft(tx.QueryRow(ctx, `SELECT `+columns+`
+FROM goal_drafts WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(draftID), mustUUID(userID)))
+	}
+	if goalID != "" {
+		return scanDraft(tx.QueryRow(ctx, `SELECT `+columns+`
+FROM goal_drafts WHERE goal_id=$1 AND user_id=$2 AND draft_type='review' FOR UPDATE`, mustUUID(goalID), mustUUID(userID)))
+	}
+	return workspace.DraftView{}, workspace.ErrNotFound
 }
 
 func loadAIContextCycles(ctx context.Context, tx pgx.Tx, userID, goalID, excludeCycleID string, limit int) ([]workspace.AIContextCycle, error) {
