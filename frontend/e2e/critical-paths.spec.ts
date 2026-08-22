@@ -110,7 +110,6 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   let fail = true;
   await page.route("**/api/v1/goal-drafts/*", async (route) => {
     if (route.request().method() === "PATCH" && fail) {
-      fail = false;
       await route.abort("connectionfailed");
       return;
     }
@@ -118,7 +117,36 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   });
   const editor = page.getByRole("textbox", { name: "あなたの目標" });
   await editor.fill("失敗しても保持する目標");
-  await expect(page.getByRole("alert")).toContainText("保存失敗");
+  await expect(page.getByRole("alert")).toContainText("保存失敗", {
+    timeout: 45_000,
+  });
+  const browserDraftBodies = await page.evaluate(
+    () =>
+      new Promise<string[]>((resolve, reject) => {
+        const open = indexedDB.open("fukamu-cycle-browser-drafts-v2", 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const database = open.result;
+          const read = database
+            .transaction("drafts")
+            .objectStore("drafts")
+            .getAll();
+          read.onerror = () => {
+            database.close();
+            reject(read.error);
+          };
+          read.onsuccess = () => {
+            const bodies = (read.result as { body: string }[]).map(
+              (draft) => draft.body,
+            );
+            database.close();
+            resolve(bodies);
+          };
+        };
+      }),
+  );
+  expect(browserDraftBodies).toContain("失敗しても保持する目標");
+  fail = false;
   await page.getByRole("button", { name: "再試行" }).click();
   await expect(page.getByText("保存済み")).toBeVisible();
   await page.reload();
@@ -232,6 +260,38 @@ test("cycle autosave serializes an edit made during a slow save", async ({
   await expect(page.getByText("保存済み")).toBeVisible();
   await page.reload();
   await expect(plan).toHaveValue("保存中に更新した最終内容");
+});
+
+test("mobile long content stays in bounds and frame tabs support keyboard navigation", async ({
+  page,
+}) => {
+  const goalText = "長い目標".repeat(20);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "新しい目標を設定" }).click();
+  await saveText(
+    page,
+    page.getByRole("textbox", { name: "あなたの目標" }),
+    goalText,
+    "/api/v1/goal-drafts/",
+  );
+  await page.getByRole("button", { name: "この目標で始める" }).click();
+
+  await expect(page.getByRole("heading", { name: goalText })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+
+  const planTab = page.getByRole("tab", { name: /^P/ });
+  const doTab = page.getByRole("tab", { name: /^D/ });
+  await planTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(doTab).toBeFocused();
+  await expect(doTab).toHaveAttribute("aria-selected", "true");
 });
 
 test("goal review termination discards an unversioned change explicitly", async ({

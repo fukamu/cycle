@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -27,6 +27,16 @@ describe("AppLayout", () => {
     expect(screen.getByRole("link", { name: "設定" })).toHaveAttribute(
       "href",
       "/settings",
+    );
+
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("navigation", { name: "メインメニュー" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "メニューを開く" }),
+      ).toHaveFocus(),
     );
   });
 });

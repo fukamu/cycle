@@ -211,6 +211,22 @@ describe("GoalWorkspacePage", () => {
       ),
     );
   });
+
+  it("moves between frame tabs with the WAI-ARIA keyboard controls", async () => {
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+    const planTab = await screen.findByRole("tab", { name: /P\s*Plan/ });
+    planTab.focus();
+
+    fireEvent.keyDown(planTab, { key: "ArrowRight" });
+
+    const doTab = screen.getByRole("tab", { name: /D\s*Do/ });
+    expect(doTab).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(doTab).toHaveFocus());
+    expect(screen.getByRole("textbox", { name: "D — Do" })).toBeInTheDocument();
+  });
 });
 
 function renderPage(cache: QueryClient) {

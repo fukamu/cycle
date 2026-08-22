@@ -4,7 +4,11 @@ import { Link } from "react-router-dom";
 
 import { cacheGoals } from "../features/goal-collection/goalCache";
 import { listGoals } from "../shared/api/workspace";
-import { PageError, PageLoading } from "../shared/components/AsyncState";
+import {
+  LoadMoreError,
+  PageError,
+  PageLoading,
+} from "../shared/components/AsyncState";
 import { statusLabel } from "../shared/copy/ja";
 import {
   formatActivePeriod,
@@ -20,7 +24,12 @@ export function GoalHistoryPage() {
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
   const sentinel = useRef<HTMLDivElement>(null);
-  const { fetchNextPage, hasNextPage, isFetchingNextPage } = query;
+  const {
+    fetchNextPage,
+    hasNextPage,
+    isFetchNextPageError,
+    isFetchingNextPage,
+  } = query;
   useEffect(() => {
     if (query.data) {
       cacheGoals(
@@ -35,16 +44,22 @@ export function GoalHistoryPage() {
     if (!element) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry?.isIntersecting && hasNextPage && !isFetchingNextPage)
+        if (
+          entry?.isIntersecting &&
+          hasNextPage &&
+          !isFetchingNextPage &&
+          !isFetchNextPageError
+        )
           void fetchNextPage();
       },
       { rootMargin: "240px" },
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
+  }, [fetchNextPage, hasNextPage, isFetchNextPageError, isFetchingNextPage]);
   if (query.isPending) return <PageLoading />;
-  if (query.isError) return <PageError retry={() => void query.refetch()} />;
+  if (query.isLoadingError)
+    return <PageError retry={() => void query.refetch()} />;
   const goals = query.data.pages.flatMap((page) => page.items);
   return (
     <main className="page history-page">
@@ -82,7 +97,12 @@ export function GoalHistoryPage() {
       </section>
       <div ref={sentinel} className="load-sentinel" aria-hidden="true" />
       {query.isFetchingNextPage && (
-        <p className="app-message">続きを読み込んでいます…</p>
+        <p className="pagination-status" role="status" aria-live="polite">
+          続きを読み込んでいます…
+        </p>
+      )}
+      {query.isFetchNextPageError && (
+        <LoadMoreError retry={() => void query.fetchNextPage()} />
       )}
     </main>
   );

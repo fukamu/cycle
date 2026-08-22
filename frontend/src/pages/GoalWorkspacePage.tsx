@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -569,6 +575,29 @@ function CycleWorkspace({
     void pumpRef.current();
   }
 
+  function selectFrame(frame: Frame) {
+    if (frame === selected) return;
+    flush(selected);
+    setSelected(frame);
+  }
+
+  function handleTabKeyDown(
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    frame: Frame,
+  ) {
+    const index = frames.indexOf(frame);
+    let next: Frame | undefined;
+    if (event.key === "ArrowRight") next = frames[(index + 1) % frames.length];
+    else if (event.key === "ArrowLeft")
+      next = frames[(index - 1 + frames.length) % frames.length];
+    else if (event.key === "Home") next = frames[0];
+    else if (event.key === "End") next = frames.at(-1);
+    if (!next) return;
+    event.preventDefault();
+    selectFrame(next);
+    window.setTimeout(() => document.getElementById(`tab-${next}`)?.focus(), 0);
+  }
+
   function retrySave() {
     if (conflictsRef.current.size || savesPausedRef.current) return;
     retryCountRef.current = 0;
@@ -831,11 +860,10 @@ function CycleWorkspace({
             id={`tab-${frame}`}
             role="tab"
             aria-selected={selected === frame}
+            aria-controls="frame-panel"
             tabIndex={selected === frame ? 0 : -1}
-            onClick={() => {
-              flush(selected);
-              setSelected(frame);
-            }}
+            onClick={() => selectFrame(frame)}
+            onKeyDown={(event) => handleTabKeyDown(event, frame)}
           >
             <span>{frameCopy[frame].label}</span>
             <small>
@@ -846,6 +874,7 @@ function CycleWorkspace({
         ))}
       </div>
       <section
+        id="frame-panel"
         className="editor-card"
         role="tabpanel"
         aria-labelledby={`tab-${selected}`}
@@ -858,12 +887,23 @@ function CycleWorkspace({
         )}
         {browserCacheFailed && <DraftCacheWarning />}
         <div className="frame-title">
-          <span>{copy.label}</span>
-          <h2>{copy.name}</h2>
+          <span aria-hidden="true">{copy.label}</span>
+          <h2>
+            <label htmlFor="cycle-frame-editor">{copy.name}</label>
+          </h2>
         </div>
-        <p className="frame-guide">{copy.guide}</p>
+        <p className="frame-guide" id="cycle-frame-guide">
+          {copy.guide}
+        </p>
         <textarea
+          id="cycle-frame-editor"
           aria-label={`${copy.label} — ${copy.name}`}
+          aria-describedby="cycle-frame-guide"
+          aria-readonly={
+            !editable ||
+            Boolean(selectedConflict) ||
+            (selected === "action" && aiState !== "idle")
+          }
           value={values[selected]}
           maxLength={200}
           placeholder={copy.placeholder}

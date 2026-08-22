@@ -5,7 +5,11 @@ import { Link, useParams } from "react-router-dom";
 import { goalQueryKey } from "../features/goal-collection/goalCache";
 import type { CycleSummary, GoalVersion } from "../shared/api/schemas";
 import { getGoal, listCycles } from "../shared/api/workspace";
-import { PageError, PageLoading } from "../shared/components/AsyncState";
+import {
+  LoadMoreError,
+  PageError,
+  PageLoading,
+} from "../shared/components/AsyncState";
 import { statusLabel } from "../shared/copy/ja";
 import {
   formatActivePeriod,
@@ -25,20 +29,30 @@ export function GoalTimelinePage() {
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
   const sentinel = useRef<HTMLDivElement>(null);
-  const { fetchNextPage, hasNextPage, isFetchingNextPage } = cycles;
+  const {
+    fetchNextPage,
+    hasNextPage,
+    isFetchNextPageError,
+    isFetchingNextPage,
+  } = cycles;
   useEffect(() => {
     const node = sentinel.current;
     if (!node) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry?.isIntersecting && hasNextPage && !isFetchingNextPage)
+        if (
+          entry?.isIntersecting &&
+          hasNextPage &&
+          !isFetchingNextPage &&
+          !isFetchNextPageError
+        )
           void fetchNextPage();
       },
       { rootMargin: "240px" },
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
+  }, [fetchNextPage, hasNextPage, isFetchNextPageError, isFetchingNextPage]);
   const groups = useMemo(() => {
     const values = cycles.data?.pages.flatMap((page) => page.items) ?? [];
     const map = new Map<
@@ -63,7 +77,7 @@ export function GoalTimelinePage() {
       }));
   }, [cycles.data]);
   if (goal.isPending || cycles.isPending) return <PageLoading />;
-  if (goal.isError || cycles.isError)
+  if (goal.isError || cycles.isLoadingError)
     return (
       <PageError
         retry={() => {
@@ -132,9 +146,14 @@ export function GoalTimelinePage() {
           </li>
         ))}
       </ol>
-      <div ref={sentinel} className="load-sentinel" />
+      <div ref={sentinel} className="load-sentinel" aria-hidden="true" />
       {cycles.isFetchingNextPage && (
-        <p className="app-message">続きを読み込んでいます…</p>
+        <p className="pagination-status" role="status" aria-live="polite">
+          続きを読み込んでいます…
+        </p>
+      )}
+      {cycles.isFetchNextPageError && (
+        <LoadMoreError retry={() => void cycles.fetchNextPage()} />
       )}
     </main>
   );

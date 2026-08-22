@@ -178,7 +178,7 @@ function GoalDraftEditor({
       <header className="page-heading">
         <p className="eyebrow">NEW GOAL</p>
         <h1>新しい目標</h1>
-        <p>{goalCopy.guide}</p>
+        <p id="goal-editor-guide">{goalCopy.guide}</p>
       </header>
       <section className="editor-card">
         {editor.recoveryConflict && (
@@ -191,6 +191,7 @@ function GoalDraftEditor({
         <label htmlFor="goal-body">あなたの目標</label>
         <textarea
           id="goal-body"
+          aria-describedby="goal-editor-guide"
           value={editor.body}
           maxLength={80}
           placeholder={goalCopy.placeholder}

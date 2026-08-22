@@ -47,7 +47,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
   });
 
   if (query.isPending) {
-    return <div className="app-message">セッションを準備しています…</div>;
+    return (
+      <div className="app-message" role="status" aria-live="polite">
+        セッションを準備しています…
+      </div>
+    );
   }
   if (query.isError) {
     if (isBetaAdmissionRequired(query.error)) {

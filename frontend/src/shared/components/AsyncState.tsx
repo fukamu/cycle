@@ -62,6 +62,22 @@ export function PageError({ retry }: { readonly retry: () => void }) {
     </main>
   );
 }
+
+export function LoadMoreError({ retry }: { readonly retry: () => void }) {
+  return (
+    <div className="pagination-status pagination-status--error" role="alert">
+      <p>続きを読み込めませんでした。</p>
+      <button
+        className="button button--secondary"
+        type="button"
+        onClick={retry}
+      >
+        もう一度読み込む
+      </button>
+    </div>
+  );
+}
+
 export function SaveBadge({
   state,
   retry,
@@ -82,6 +98,8 @@ export function SaveBadge({
     );
   return (
     <p
+      role="status"
+      aria-live="polite"
       className={
         state === "saved" ? "save-status save-status--saved" : "save-status"
       }

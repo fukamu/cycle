@@ -5550,6 +5550,23 @@ MVP UIは日本語のみだが、将来次のように差し替え可能にす�
 - 擬似翻訳でlabelを1.5〜2倍にし、Home card、Tab、Dialog、Historyが破綻しない。
 - Lint / review ruleでComponent CSSのliteral `font-family`を禁止し、token fileだけを許可する。
 
+## 43.8 Visual identity
+
+**[確定仕様]** FUKAMU Cycleの画面は、白を基調に次の青系3色をBrand paletteとして使用する。
+
+| Token | Value | Main use |
+|---|---|---|
+| Light Blue | `#D6E9FF` | 面、区切り、選択前の穏やかな状態 |
+| Blue | `#4A90E2` | Accent、Focus、進行や変化の手掛かり |
+| Deep Blue | `#0D3B8E` | Primary Action、文字Wordmark、重要見出し |
+
+- 印象は静か、明快、幾何学的、信頼できるものとし、思考・行動・学びが深く積み重なる感覚を、余白、階層、直線的な色面、控えめな奥行きで表現する。
+- Primary ActionはDeep Blueを使い、通常本文をBlueだけで表示しない。文字、Focus、状態、境界はWCAG 2.2 AA相当のcontrastを満たす。
+- HeaderはSystem Fontによる`FUKAMU Cycle`の文字Wordmarkを使う。Componentへ専用Web Fontを追加しない。
+- Logo conceptの環状Symbolを装飾として再描画せず、3層の視覚表現をP/D/C/Aや特定Domain概念へ対応付けない。
+- AuthoritativeなLogo/Favicon/Icon assetが存在しない間は、Raster Logo、SVG Logo、Favicon、App Icon、PWA Icon、OG ImageをRepositoryへ生成・設定しない。
+- Motionは操作理解に必要な短いtransitionだけとし、`prefers-reduced-motion`で実質無効化する。
+
 ---
 
 # 44. Hosting / Infrastructure / CI-CD
