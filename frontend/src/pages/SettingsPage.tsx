@@ -91,11 +91,11 @@ export function SettingsPage() {
         </p>
       )}
       <section className="settings-card">
-        <div>
+        <div className="settings-field">
           <span>User ID</span>
           <code>{session.user.id}</code>
         </div>
-        <div>
+        <div className="settings-field">
           <span>Google Account</span>
           <strong>
             {session.user.googleConnected ? "連携済み" : "未連携"}

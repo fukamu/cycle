@@ -12,11 +12,11 @@ describe("GoogleIdentityButton", () => {
   it("renders Google Identity inside a size-constrained host", async () => {
     vi.stubEnv("VITE_GOOGLE_WEB_CLIENT_ID", "client-id");
     const renderButton = vi.fn((parent: HTMLElement) => {
-      const wrapper = document.createElement("div");
-      const logo = document.createElement("img");
-      logo.alt = "Google";
-      wrapper.append(logo, document.createElement("iframe"));
-      parent.append(wrapper);
+      const iframe = document.createElement("iframe");
+      iframe.title = "Google Identity";
+      iframe.style.width = "320px";
+      iframe.style.height = "44px";
+      parent.append(iframe);
     });
     window.google = {
       accounts: {
@@ -35,11 +35,13 @@ describe("GoogleIdentityButton", () => {
     await waitFor(() => expect(renderButton).toHaveBeenCalledOnce());
     expect(renderButton).toHaveBeenCalledWith(
       host,
-      expect.objectContaining({ size: "large", width: 320 }),
+      expect.objectContaining({ size: "large", width: "320" }),
     );
-    expect(getComputedStyle(screen.getByAltText("Google"))).toMatchObject({
-      width: "18px",
-      height: "18px",
+    expect(
+      getComputedStyle(screen.getByTitle("Google Identity")),
+    ).toMatchObject({
+      width: "320px",
+      height: "44px",
     });
     expect(
       screen.queryByText("Google認証を読み込み中…"),

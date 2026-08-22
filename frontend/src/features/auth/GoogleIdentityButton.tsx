@@ -9,7 +9,7 @@ type GoogleAccounts = {
     }) => void;
     readonly renderButton: (
       parent: HTMLElement,
-      options: Readonly<Record<string, string | number>>,
+      options: Readonly<Record<string, string>>,
     ) => void;
   };
 };
@@ -60,7 +60,7 @@ export function GoogleIdentityButton({
           text: "continue_with",
           shape: "pill",
           locale: "ja",
-          width: Math.min(parent.current.clientWidth || 320, 400),
+          width: String(Math.min(parent.current.clientWidth || 320, 400)),
         });
         setLoadState("ready");
       })
