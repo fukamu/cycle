@@ -270,10 +270,6 @@ summary:focus-visible {
 
 .home-page > .page-heading {
   margin-bottom: 42px;
-  padding: clamp(28px, 6vw, 52px);
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 12px;
 }
 
 .home-page > .page-heading h1 {
@@ -1083,10 +1079,6 @@ textarea[readonly] {
 
   .page {
     padding-top: 30px;
-  }
-
-  .home-page > .page-heading {
-    border-radius: 12px;
   }
 
   .history-row {
