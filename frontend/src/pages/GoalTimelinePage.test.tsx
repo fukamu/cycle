@@ -47,7 +47,7 @@ describe("GoalTimelinePage", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("groups newest-first cycles into ascending V1, V2, and V3 segments", () => {
+  it("keeps newest cycles first while grouping V3, V2, and V1 segments", () => {
     const pages: CyclePage[] = [
       {
         items: [
@@ -71,9 +71,9 @@ describe("GoalTimelinePage", () => {
         cycles: group.cycles.map((cycle) => cycle.sequenceNumber),
       })),
     ).toEqual([
-      { version: 1, kind: "baseline", cycles: [1, 2] },
-      { version: 2, kind: "revision", cycles: [3, 4] },
-      { version: 3, kind: "revision", cycles: [5, 6] },
+      { version: 3, kind: "revision", cycles: [6, 5] },
+      { version: 2, kind: "revision", cycles: [4, 3] },
+      { version: 1, kind: "baseline", cycles: [2, 1] },
     ]);
   });
 
@@ -147,14 +147,14 @@ describe("GoalTimelinePage", () => {
       ...container.querySelectorAll<HTMLElement>("[data-version-number]"),
     ];
     expect(versions.map((version) => version.dataset.versionNumber)).toEqual([
-      "1",
-      "2",
       "3",
+      "2",
+      "1",
     ]);
     expect(versions.map((version) => version.dataset.versionKind)).toEqual([
+      "revision",
+      "revision",
       "baseline",
-      "revision",
-      "revision",
     ]);
     expect(screen.getAllByText("目標を変更しました")).toHaveLength(2);
     expect(

@@ -188,7 +188,7 @@ test("timeline distinguishes V1, V2, and V3 goal segments", async ({
     await segments.evaluateAll((values) =>
       values.map((value) => value.getAttribute("data-version-number")),
     ),
-  ).toEqual(["1", "2", "3"]);
+  ).toEqual(["3", "2", "1"]);
   await expect(page.getByText("目標を変更しました")).toHaveCount(2);
 
   const v1 = page.locator('[data-version-number="1"]');

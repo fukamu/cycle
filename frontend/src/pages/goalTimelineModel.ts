@@ -47,12 +47,12 @@ export function buildTimelineGroups(
   }
 
   return [...byVersion.values()]
-    .sort((a, b) => a.version.versionNumber - b.version.versionNumber)
+    .sort((a, b) => b.version.versionNumber - a.version.versionNumber)
     .map((group) => ({
       version: group.version,
       kind: versionKind(group.version),
       cycles: [...group.cycles.values()].sort(
-        (a, b) => a.sequenceNumber - b.sequenceNumber,
+        (a, b) => b.sequenceNumber - a.sequenceNumber,
       ),
     }));
 }

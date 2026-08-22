@@ -606,18 +606,18 @@ Goal HistoryはGoalを最上位の閲覧単位とし、Cycleを単純に全User�
 表示例:
 
 ```text
-Goal v1
-仕事に余裕を持てるようになりたい
-│
-├─ Cycle 1  Completed  2026/08/01 〜 2026/08/05
-└─ Cycle 2  Completed  2026/08/06 〜 2026/08/10
-
 ● 目標を変更しました
 Goal v2
 平日は18時までに主要業務を終えたい
 │
-├─ Cycle 3  Completed  2026/08/11 〜 2026/08/17
-└─ Cycle 4  Canceled   2026/08/18
+├─ Cycle 4  Canceled   2026/08/18
+└─ Cycle 3  Completed  2026/08/11 〜 2026/08/17
+
+Goal v1
+仕事に余裕を持てるようになりたい
+│
+├─ Cycle 2  Completed  2026/08/06 〜 2026/08/10
+└─ Cycle 1  Completed  2026/08/01 〜 2026/08/05
 
 Goal status: ended
 ```
@@ -629,6 +629,7 @@ Required behavior:
 - Cycle Detailには、そのCycleが参照したGoal Version本文とP/D/C/AをRead-onlyで表示する。
 - Version変更地点は色だけでなく、marker icon、文言、Version番号でも識別可能にする。
 - V1は白抜きmarkerとLight Blueの独立segment、V2以降は各VersionをBlueの塗りmarkerとBlueの独立segmentで示す。Version固有色は増やさず、任意のVersionは番号と変更文言で識別する。
+- Timelineは最新Versionを先頭にし、各Version内のCycleも新しい順に表示する。Infinite Scrollで取得した古いpageは既存表示を移動させず末尾へ追加する。
 - Review Draftを変更後に`achieved` / `ended`へ遷移した場合、そのDraftはVersion化されないためTimelineにもmarkerを作らない。
 - Infinite Scrollのpage境界をまたいでも、各Cycle itemが持つ`goalVersion`を使って正しいVersion groupを維持する。
 - Goal Aggregate Delete後は当該GoalをHistoryに残さない。Goal終了とは区別する。
