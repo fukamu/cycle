@@ -88,7 +88,9 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
   await page.goto("/history");
   await page.getByRole("link", { name: new RegExp(goalText) }).click();
-  await expect(page.getByText("GOAL V1")).toBeVisible();
+  await expect(
+    page.locator('[data-version-number="1"]').getByText("GOAL V1"),
+  ).toBeVisible();
   await expect(page.getByRole("link", { name: /Cycle 1/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /Cycle 2/ })).toBeVisible();
 
