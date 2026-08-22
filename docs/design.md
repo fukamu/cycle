@@ -25,11 +25,11 @@ Repositoryの`docs/design.md`へ配置される本書は、FUKAMU CycleのProduc
 
 本書は次の三つを一体として管理する。別文書へ分離した独立したSource of Truthは作らない。
 
-| 役割                    | 定義                                   | 主な内容                                                                               |
-| ----------------------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
-| Product Specification   | 何を実現し、ユーザーにどう振る舞うか   | Product Goals、MVP境界、UX、Domain Rule、状態遷移、受入条件                            |
-| Software Design         | 仕様をどのような構造と技術で実現するか | Architecture、Domain Model、Database Design、Frontend / Backend / AI / Security設計    |
-| Implementation Contract | 実装者が検証可能な形で必ず守る契約     | API、DTO、DDL、Constraint、Transaction、Concurrency、Error Code、Test、Deployment Gate |
+| 役割 | 定義 | 主な内容 |
+|---|---|---|
+| Product Specification | 何を実現し、ユーザーにどう振る舞うか | Product Goals、MVP境界、UX、Domain Rule、状態遷移、受入条件 |
+| Software Design | 仕様をどのような構造と技術で実現するか | Architecture、Domain Model、Database Design、Frontend / Backend / AI / Security設計 |
+| Implementation Contract | 実装者が検証可能な形で必ず守る契約 | API、DTO、DDL、Constraint、Transaction、Concurrency、Error Code、Test、Deployment Gate |
 
 三者は上下関係のある別仕様ではない。Product SpecificationをSoftware Designが構造化し、Implementation Contractが実装・検証可能な形で保証する。
 
@@ -39,25 +39,25 @@ Repositoryの`docs/design.md`へ配置される本書は、FUKAMU CycleのProduc
 
 章の主な役割は次のとおりである。複数の役割を持つ章があることは意図的である。
 
-| 役割                    | 主な章                 |
-| ----------------------- | ---------------------- |
-| Product Specification   | §§1–14、§43、§53       |
-| Software Design         | §§5、15–19、27–47、§50 |
+| 役割 | 主な章 |
+|---|---|
+| Product Specification | §§1–14、§43、§53 |
+| Software Design | §§5、15–19、27–47、§50 |
 | Implementation Contract | §§16、18、20–42、48–54 |
 
 ## 0.3 規範性と表記
 
-| ラベル             | 意味                                                                                |
-| ------------------ | ----------------------------------------------------------------------------------- |
-| **[確定仕様]**     | Product Rule。実装都合で変更してはならない。                                        |
-| **[設計判断]**     | 確定仕様を満たすために採用した技術・構造。本書を更新した場合に限り変更可能。        |
-| **[設計上の仮定]** | Product Ruleではないが、実装を成立させるために置いた明示的な前提。                  |
-| **[実装契約]**     | API、DDL、Transaction、Concurrency、Security、Test等、実装と検証が必ず満たす契約。  |
-| **[固定Path]**     | 物理Path自体がSource of TruthまたはTooling Contractであり、変更時に本書更新が必要。 |
-| **[参考]**         | 理解を助ける非規範的な例。識別子名・分割単位・物理配置の一致を要求しない。          |
-| **[未決事項]**     | Product Ownerまたは運営判断が必要な事項。MVP実装を止めるかを明記する。              |
-| **[MVP]**          | MVPで実装する。                                                                     |
-| **[non-MVP]**      | MVPでは実装しない。                                                                 |
+| ラベル | 意味 |
+|---|---|
+| **[確定仕様]** | Product Rule。実装都合で変更してはならない。 |
+| **[設計判断]** | 確定仕様を満たすために採用した技術・構造。本書を更新した場合に限り変更可能。 |
+| **[設計上の仮定]** | Product Ruleではないが、実装を成立させるために置いた明示的な前提。 |
+| **[実装契約]** | API、DDL、Transaction、Concurrency、Security、Test等、実装と検証が必ず満たす契約。 |
+| **[固定Path]** | 物理Path自体がSource of TruthまたはTooling Contractであり、変更時に本書更新が必要。 |
+| **[参考]** | 理解を助ける非規範的な例。識別子名・分割単位・物理配置の一致を要求しない。 |
+| **[未決事項]** | Product Ownerまたは運営判断が必要な事項。MVP実装を止めるかを明記する。 |
+| **[MVP]** | MVPで実装する。 |
+| **[non-MVP]** | MVPでは実装しない。 |
 
 ラベルは記述の変更区分を示す。次の規則で解釈する。
 
@@ -221,27 +221,27 @@ ArchitectureはMicroservicesではなく、Domain / Application / Infrastructure
 
 ## 3.1 MVP機能
 
-| Area                | MVP                                                                        |
-| ------------------- | -------------------------------------------------------------------------- |
-| Anonymous bootstrap | Anonymous User + Sessionのみ作成。Cycleは作らない                          |
-| Goal Draft          | Creation Draft作成、80文字、Auto Save、復旧、破棄                          |
-| Goal Start          | Goal + Goal Version 1 + Cycle 1を1 Transactionで作成                       |
-| Goal                | User : N Goals、FreeのProgressing Goal最大2、terminal Goal保持             |
-| Goal Version        | 本文変更時のみ追加、過去Version Immutable                                  |
-| Goal Review         | Cycle完了後必須。維持 / 修正 / achieved / ended                            |
-| Cycle               | Goal単位連番、active / completed / canceled                                |
-| Frame               | P/D/C/A各1Textarea、各最大200文字                                          |
-| Action AI           | Generate / Refine、Current Goalを重要Contextに含める                       |
-| Goal AI             | Refineのみ。User案とAI案を比較し、明示採用のみ反映                         |
-| AI Context          | 同一GoalのCycleだけを使用。最大10件候補 + Token Budget                     |
-| AI Usage            | Goal Refine / Action Generate / Action RefineをUser単位で合算              |
-| History             | Goal中心。Goal Version変化点とCycle群を表示                                |
-| Delete              | Goal Aggregate Delete、Account Delete                                      |
-| Auth                | Anonymous Account Upgrade / existing Google login                          |
-| Cost / Abuse        | rolling quota、rate limit、monthly budget、Turnstile                       |
-| Typography          | 日本語向け明示Font Stack、token化、fallback test                           |
-| Language            | UI、Guide、Error、Confirmation、AI出力は日本語。将来locale追加を阻害しない |
-| Observability       | logs / metrics / traces相当。管理画面なし                                  |
+| Area | MVP |
+|---|---|
+| Anonymous bootstrap | Anonymous User + Sessionのみ作成。Cycleは作らない |
+| Goal Draft | Creation Draft作成、80文字、Auto Save、復旧、破棄 |
+| Goal Start | Goal + Goal Version 1 + Cycle 1を1 Transactionで作成 |
+| Goal | User : N Goals、FreeのProgressing Goal最大2、terminal Goal保持 |
+| Goal Version | 本文変更時のみ追加、過去Version Immutable |
+| Goal Review | Cycle完了後必須。維持 / 修正 / achieved / ended |
+| Cycle | Goal単位連番、active / completed / canceled |
+| Frame | P/D/C/A各1Textarea、各最大200文字 |
+| Action AI | Generate / Refine、Current Goalを重要Contextに含める |
+| Goal AI | Refineのみ。User案とAI案を比較し、明示採用のみ反映 |
+| AI Context | 同一GoalのCycleだけを使用。最大10件候補 + Token Budget |
+| AI Usage | Goal Refine / Action Generate / Action RefineをUser単位で合算 |
+| History | Goal中心。Goal Version変化点とCycle群を表示 |
+| Delete | Goal Aggregate Delete、Account Delete |
+| Auth | Anonymous Account Upgrade / existing Google login |
+| Cost / Abuse | rolling quota、rate limit、monthly budget、Turnstile |
+| Typography | 日本語向け明示Font Stack、token化、fallback test |
+| Language | UI、Guide、Error、Confirmation、AI出力は日本語。将来locale追加を阻害しない |
+| Observability | logs / metrics / traces相当。管理画面なし |
 
 ## 3.2 MVPへ入れてはいけない実装
 
@@ -264,33 +264,33 @@ ArchitectureはMicroservicesではなく、Domain / Application / Infrastructure
 
 # 4. Glossary
 
-| 用語                      | 定義                                                                                   |
-| ------------------------- | -------------------------------------------------------------------------------------- |
-| User                      | FUKAMU Cycle内部のApplication User。匿名/Google連携状態とは独立したIDを持つ。          |
-| AuthIdentity              | 外部認証主体。MVP providerは`google`のみ。                                             |
-| Session                   | FUKAMU Cycleが発行するOpaque session。Google ID tokenそのものをSessionとして使わない。 |
-| Goal                      | 複数のPDCA Cycleを束ねる改善対象。P/D/C/AのFrameではない。                             |
-| Goal Creation Draft       | Goal確定前の編集可能なDraft。Goal Entityではない。                                     |
-| Goal Review Draft         | Completed Cycle後、現在Goal Versionを元に作る編集可能なDraft。                         |
-| Goal Version              | Cycle開始時点のGoal本文を固定したImmutable record。                                    |
-| Progressing Goal          | Goal statusが`active_cycle`または`goal_review`のGoal。MVP上限対象。                    |
-| Terminal Goal             | statusが`achieved`または`ended`のGoal。再Open不可。                                    |
-| Goal Review               | Cycle完了後、次Cycle開始前にGoalを維持・修正・達成・終了する状態とUse Case。           |
-| Frame                     | P / D / C / A の各入力領域。                                                           |
-| Cycle                     | 特定のGoal Versionを前提に行うP→D→C→Aの一連の記録。                                    |
-| Active Cycle              | 編集可能なCycle。Goalごと最大1。                                                       |
-| Completed Cycle           | P/D/C/Aを入力して通常完了したImmutable Cycle。                                         |
-| Canceled Cycle            | Goal途中終了によりPDCAを完遂せず終了したImmutable Cycle。                              |
-| Goal Refine               | Goal Draftの意図を維持し、明確さ・実行可能性・判断可能性を改善するAI処理。             |
-| Action Generate           | AIがCurrent Goal / P/D/C等からAをゼロベース生成する処理。                              |
-| Action Refine             | AIがCurrent Aの意図を維持し、具体性等を改善する処理。                                  |
-| Content Revision          | Cycle全体の変更順序を表す単調増加revision。AI snapshot / complete整合に使う。          |
-| Frame Revision            | P/D/C/A各Frameの単調増加revision。Auto Saveのstale write防止に使う。                   |
-| Draft Revision            | Goal Draft本文の単調増加revision。Auto SaveとAI提案採用の競合防止に使う。              |
-| AI Snapshot               | AI処理開始時点でDBから読み取ったGoal / Draft / Cycle Context。                         |
-| Draft Cache               | 未保存入力のみをBrowser IndexedDBへ一時保持する回復用データ。                          |
-| Goal Aggregate Delete     | Goal、Versions、Draft、Cycles、AI contentを一括削除する破壊的Use Case。                |
-| Anonymous Account Upgrade | User IDを変えずGoogle AuthIdentityを追加する処理。                                     |
+| 用語 | 定義 |
+|---|---|
+| User | FUKAMU Cycle内部のApplication User。匿名/Google連携状態とは独立したIDを持つ。 |
+| AuthIdentity | 外部認証主体。MVP providerは`google`のみ。 |
+| Session | FUKAMU Cycleが発行するOpaque session。Google ID tokenそのものをSessionとして使わない。 |
+| Goal | 複数のPDCA Cycleを束ねる改善対象。P/D/C/AのFrameではない。 |
+| Goal Creation Draft | Goal確定前の編集可能なDraft。Goal Entityではない。 |
+| Goal Review Draft | Completed Cycle後、現在Goal Versionを元に作る編集可能なDraft。 |
+| Goal Version | Cycle開始時点のGoal本文を固定したImmutable record。 |
+| Progressing Goal | Goal statusが`active_cycle`または`goal_review`のGoal。MVP上限対象。 |
+| Terminal Goal | statusが`achieved`または`ended`のGoal。再Open不可。 |
+| Goal Review | Cycle完了後、次Cycle開始前にGoalを維持・修正・達成・終了する状態とUse Case。 |
+| Frame | P / D / C / A の各入力領域。 |
+| Cycle | 特定のGoal Versionを前提に行うP→D→C→Aの一連の記録。 |
+| Active Cycle | 編集可能なCycle。Goalごと最大1。 |
+| Completed Cycle | P/D/C/Aを入力して通常完了したImmutable Cycle。 |
+| Canceled Cycle | Goal途中終了によりPDCAを完遂せず終了したImmutable Cycle。 |
+| Goal Refine | Goal Draftの意図を維持し、明確さ・実行可能性・判断可能性を改善するAI処理。 |
+| Action Generate | AIがCurrent Goal / P/D/C等からAをゼロベース生成する処理。 |
+| Action Refine | AIがCurrent Aの意図を維持し、具体性等を改善する処理。 |
+| Content Revision | Cycle全体の変更順序を表す単調増加revision。AI snapshot / complete整合に使う。 |
+| Frame Revision | P/D/C/A各Frameの単調増加revision。Auto Saveのstale write防止に使う。 |
+| Draft Revision | Goal Draft本文の単調増加revision。Auto SaveとAI提案採用の競合防止に使う。 |
+| AI Snapshot | AI処理開始時点でDBから読み取ったGoal / Draft / Cycle Context。 |
+| Draft Cache | 未保存入力のみをBrowser IndexedDBへ一時保持する回復用データ。 |
+| Goal Aggregate Delete | Goal、Versions、Draft、Cycles、AI contentを一括削除する破壊的Use Case。 |
+| Anonymous Account Upgrade | User IDを変えずGoogle AuthIdentityを追加する処理。 |
 
 ---
 
@@ -471,17 +471,17 @@ flowchart TD
 
 すべての細則をID化して文書を複雑化しない。複数Layerへまたがり、デグレ時の影響が大きいInvariantだけに安定したIDを付ける。実装、Test名またはTest description、Pull Request reviewでは、関係するIDを必要に応じて参照する。
 
-| ID                          | Critical Rule                                                                         | 主な保証領域                              | 主な検証領域            |
-| --------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------- |
-| `INV-CYCLE-GOAL-001`        | GoalなしCycleを作らず、全CycleがGoalとGoal Versionを参照する                          | Domain、DDL、Goal Start Transaction       | §§16、18、48            |
-| `INV-GOAL-VERSION-001`      | Cycle作成後に参照Goal Versionを変更せず、過去Versionを更新しない                      | Domain、FK / Repository、API              | §§14–18、23–24、48      |
-| `INV-REVIEW-GATE-001`       | Cycle完了時に次Cycleを作らず、Goal Review Continueだけが次Cycleを作る                 | State Machine、Transaction、API           | §§12–13、18、23–24、48  |
-| `INV-GOAL-LIMIT-001`        | Progressing Goal上限をEntitlement + Transactionで保証し、User : 1 Goal Schemaにしない | Domain Policy、User lock、API             | §§14、16、18、38、48    |
-| `INV-TERMINAL-001`          | achieved / ended Goalは再Openせず、Active CycleとOpen Review Draftを残さない          | Goal State、Transaction、DDL              | §§12、14、18、23、48    |
-| `INV-HISTORY-IMMUTABLE-001` | Completed / Canceled Cycleと過去Goal Versionを編集・単体削除しない                    | Domain、Repository、API                   | §§14–16、23–24、48      |
-| `INV-AI-CONTEXT-001`        | AI Contextへ他Goalの本文・Cycleを混入させない                                         | Context Builder、Repository scope、Prompt | §§32–37、41、48–49      |
-| `INV-AI-QUOTA-001`          | 三つのAI operationをUser単位で合算し、Goal DeleteでQuotaを復活させない                | Usage Event、Delete Transaction、Quota    | §§18、38、41、48        |
-| `INV-DRAFT-RECOVERY-001`    | Recoverable ErrorでGoal / Review / Frameの未保存入力を失わせない                      | Auto Save、Browser cache、Error UX        | §§11、22–24、28、40、48 |
+| ID | Critical Rule | 主な保証領域 | 主な検証領域 |
+|---|---|---|---|
+| `INV-CYCLE-GOAL-001` | GoalなしCycleを作らず、全CycleがGoalとGoal Versionを参照する | Domain、DDL、Goal Start Transaction | §§16、18、48 |
+| `INV-GOAL-VERSION-001` | Cycle作成後に参照Goal Versionを変更せず、過去Versionを更新しない | Domain、FK / Repository、API | §§14–18、23–24、48 |
+| `INV-REVIEW-GATE-001` | Cycle完了時に次Cycleを作らず、Goal Review Continueだけが次Cycleを作る | State Machine、Transaction、API | §§12–13、18、23–24、48 |
+| `INV-GOAL-LIMIT-001` | Progressing Goal上限をEntitlement + Transactionで保証し、User : 1 Goal Schemaにしない | Domain Policy、User lock、API | §§14、16、18、38、48 |
+| `INV-TERMINAL-001` | achieved / ended Goalは再Openせず、Active CycleとOpen Review Draftを残さない | Goal State、Transaction、DDL | §§12、14、18、23、48 |
+| `INV-HISTORY-IMMUTABLE-001` | Completed / Canceled Cycleと過去Goal Versionを編集・単体削除しない | Domain、Repository、API | §§14–16、23–24、48 |
+| `INV-AI-CONTEXT-001` | AI Contextへ他Goalの本文・Cycleを混入させない | Context Builder、Repository scope、Prompt | §§32–37、41、48–49 |
+| `INV-AI-QUOTA-001` | 三つのAI operationをUser単位で合算し、Goal DeleteでQuotaを復活させない | Usage Event、Delete Transaction、Quota | §§18、38、41、48 |
+| `INV-DRAFT-RECOVERY-001` | Recoverable ErrorでGoal / Review / Frameの未保存入力を失わせない | Auto Save、Browser cache、Error UX | §§11、22–24、28、40、48 |
 
 ---
 
@@ -489,65 +489,65 @@ flowchart TD
 
 ## 8.1 Goal Use Cases
 
-| ID   | Use Case                | Preconditions                     | Result                                   |
-| ---- | ----------------------- | --------------------------------- | ---------------------------------------- |
-| G-01 | CreateGoalCreationDraft | Session有効、作成可能             | 空または指定本文のDraft                  |
-| G-02 | SaveGoalDraft           | owner、open draft、revision一致   | 本文保存、revision+1                     |
-| G-03 | RefineGoalDraft         | 非空、save済み、AI idle           | AI suggestionを保存・返却。Draftは未変更 |
-| G-04 | AdoptGoalSuggestion     | generation success、context fresh | suggestionをDraftへ反映、revision+1      |
-| G-05 | StartGoal               | Draft非空、Progressing Goal上限内 | Goal + Version1 + Cycle1                 |
-| G-06 | ListGoals               | Session有効                       | Goal collection / cursor page            |
-| G-07 | GetGoal                 | owner                             | Goal detail                              |
-| G-08 | TerminateGoal           | active_cycleまたはgoal_review     | achieved / ended。必要ならCycle canceled |
-| G-09 | DeleteGoalAggregate     | owner、明示確認                   | Goal関連content削除、Quotaは復活しない   |
+| ID | Use Case | Preconditions | Result |
+|---|---|---|---|
+| G-01 | CreateGoalCreationDraft | Session有効、作成可能 | 空または指定本文のDraft |
+| G-02 | SaveGoalDraft | owner、open draft、revision一致 | 本文保存、revision+1 |
+| G-03 | RefineGoalDraft | 非空、save済み、AI idle | AI suggestionを保存・返却。Draftは未変更 |
+| G-04 | AdoptGoalSuggestion | generation success、context fresh | suggestionをDraftへ反映、revision+1 |
+| G-05 | StartGoal | Draft非空、Progressing Goal上限内 | Goal + Version1 + Cycle1 |
+| G-06 | ListGoals | Session有効 | Goal collection / cursor page |
+| G-07 | GetGoal | owner | Goal detail |
+| G-08 | TerminateGoal | active_cycleまたはgoal_review | achieved / ended。必要ならCycle canceled |
+| G-09 | DeleteGoalAggregate | owner、明示確認 | Goal関連content削除、Quotaは復活しない |
 
 ## 8.2 Cycle Use Cases
 
-| ID   | Use Case       | Preconditions                       | Result                                    |
-| ---- | -------------- | ----------------------------------- | ----------------------------------------- |
-| C-01 | GetActiveCycle | owner、Goal active_cycle            | Active Cycle                              |
-| C-02 | SaveFrame      | owner、Active、frame revision一致   | 1 Frame保存                               |
-| C-03 | GenerateAction | Goal/P/D/Cあり、save済み、AI idle   | AI結果をAへAtomic反映                     |
-| C-04 | RefineAction   | Goal/P/D/C/Aあり、save済み、AI idle | AI結果をAへAtomic反映                     |
-| C-05 | CompleteCycle  | P/D/C/Aあり、save済み、AI idle      | Cycle completed + Goal review + Draft作成 |
-| C-06 | ListGoalCycles | owner                               | Goal配下Cycle cursor page                 |
-| C-07 | GetCycle       | owner                               | Activeまたはread-only detail              |
+| ID | Use Case | Preconditions | Result |
+|---|---|---|---|
+| C-01 | GetActiveCycle | owner、Goal active_cycle | Active Cycle |
+| C-02 | SaveFrame | owner、Active、frame revision一致 | 1 Frame保存 |
+| C-03 | GenerateAction | Goal/P/D/Cあり、save済み、AI idle | AI結果をAへAtomic反映 |
+| C-04 | RefineAction | Goal/P/D/C/Aあり、save済み、AI idle | AI結果をAへAtomic反映 |
+| C-05 | CompleteCycle | P/D/C/Aあり、save済み、AI idle | Cycle completed + Goal review + Draft作成 |
+| C-06 | ListGoalCycles | owner | Goal配下Cycle cursor page |
+| C-07 | GetCycle | owner | Activeまたはread-only detail |
 
 ## 8.3 Goal Review Use Cases
 
-| ID   | Use Case              | Preconditions                   | Result                             |
-| ---- | --------------------- | ------------------------------- | ---------------------------------- |
-| R-01 | GetGoalReview         | Goal goal_review                | Review Draft + trigger Cycle       |
-| R-02 | SaveGoalReviewDraft   | owner、revision一致             | Draft保存                          |
-| R-03 | RefineGoalReviewDraft | Draft非空、save済み             | AI suggestion。Draftは未変更       |
-| R-04 | AdoptReviewSuggestion | context fresh                   | suggestionをDraftへ反映            |
-| R-05 | ContinueGoal          | Review open、Draft非空、AI idle | 必要ならVersion追加 + 次Cycle      |
-| R-06 | AchieveGoalFromReview | Review open                     | Draft破棄、現Versionのままachieved |
-| R-07 | EndGoalFromReview     | Review open                     | Draft破棄、現Versionのままended    |
+| ID | Use Case | Preconditions | Result |
+|---|---|---|---|
+| R-01 | GetGoalReview | Goal goal_review | Review Draft + trigger Cycle |
+| R-02 | SaveGoalReviewDraft | owner、revision一致 | Draft保存 |
+| R-03 | RefineGoalReviewDraft | Draft非空、save済み | AI suggestion。Draftは未変更 |
+| R-04 | AdoptReviewSuggestion | context fresh | suggestionをDraftへ反映 |
+| R-05 | ContinueGoal | Review open、Draft非空、AI idle | 必要ならVersion追加 + 次Cycle |
+| R-06 | AchieveGoalFromReview | Review open | Draft破棄、現Versionのままachieved |
+| R-07 | EndGoalFromReview | Review open | Draft破棄、現Versionのままended |
 
 ## 8.4 Account / Auth Use Cases
 
-| ID   | Use Case                   | Result                                |
-| ---- | -------------------------- | ------------------------------------- |
-| A-01 | CreateAnonymousSession     | User + Session。Goal / Cycleなし      |
-| A-02 | UpgradeAnonymousWithGoogle | 同一User IDへGoogle Identity追加      |
-| A-03 | LoginExistingGoogleUser    | Sessionを既存Userへ切替。mergeなし    |
-| A-04 | DeleteAccount              | User関連Application Dataをhard delete |
+| ID | Use Case | Result |
+|---|---|---|
+| A-01 | CreateAnonymousSession | User + Session。Goal / Cycleなし |
+| A-02 | UpgradeAnonymousWithGoogle | 同一User IDへGoogle Identity追加 |
+| A-03 | LoginExistingGoogleUser | Sessionを既存Userへ切替。mergeなし |
+| A-04 | DeleteAccount | User関連Application Dataをhard delete |
 
 ---
 
 # 9. Screen List / Routes
 
-| Route                            | Screen                      | 主な責務                                                                   |
-| -------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
-| `/`                              | Home                        | Progressing Goal collection、Creation Draft導線、任意のApplication紹介導線 |
-| `/goals/new`                     | New Goal                    | Goal Creation Draft、Goal Refine、Goal開始                                 |
-| `/goals/:goalId`                 | Goal Overview               | Goal状態に応じactive cycle / reviewへ案内                                  |
-| `/goals/:goalId/cycles/:cycleId` | Cycle Editor / Cycle Detail | Active編集またはCompleted/Canceled read-only                               |
-| `/goals/:goalId/review`          | Goal Review                 | Draft編集、Refine、次Cycle、achieved / ended                               |
-| `/history`                       | Goal History List           | Goal中心の履歴一覧、infinite scroll                                        |
-| `/history/goals/:goalId`         | Goal Timeline               | Goal Version変化点 + Cycle群                                               |
-| `/settings`                      | Settings                    | User ID、Google連携、Account Delete                                        |
+| Route | Screen | 主な責務 |
+|---|---|---|
+| `/` | Home | Progressing Goal collection、Creation Draft導線、任意のApplication紹介導線 |
+| `/goals/new` | New Goal | Goal Creation Draft、Goal Refine、Goal開始 |
+| `/goals/:goalId` | Goal Overview | Goal状態に応じactive cycle / reviewへ案内 |
+| `/goals/:goalId/cycles/:cycleId` | Cycle Editor / Cycle Detail | Active編集またはCompleted/Canceled read-only |
+| `/goals/:goalId/review` | Goal Review | Draft編集、Refine、次Cycle、achieved / ended |
+| `/history` | Goal History List | Goal中心の履歴一覧、infinite scroll |
+| `/history/goals/:goalId` | Goal Timeline | Goal Version変化点 + Cycle群 |
+| `/settings` | Settings | User ID、Google連携、Account Delete |
 
 Hamburger Menu:
 
@@ -796,17 +796,17 @@ stateDiagram-v2
 type ProgressingGoalSummary =
   | {
       readonly id: string;
-      readonly status: "active_cycle";
+      readonly status: 'active_cycle';
       readonly currentVersion: GoalVersionView;
       readonly activeCycle: {
         readonly id: string;
         readonly sequenceNumber: number;
-        readonly selectedFrameHint?: "plan" | "do" | "check" | "action";
+        readonly selectedFrameHint?: 'plan' | 'do' | 'check' | 'action';
       };
     }
   | {
       readonly id: string;
-      readonly status: "goal_review";
+      readonly status: 'goal_review';
       readonly currentVersion: GoalVersionView;
       readonly review: {
         readonly draftId: string;
@@ -816,7 +816,7 @@ type ProgressingGoalSummary =
 
 type GoalHistorySummary = {
   readonly id: string;
-  readonly status: "active_cycle" | "goal_review" | "achieved" | "ended";
+  readonly status: 'active_cycle' | 'goal_review' | 'achieved' | 'ended';
   readonly currentOrFinalVersion: GoalVersionView;
   readonly cycleCount: number;
   readonly createdAt: string;
@@ -838,10 +838,10 @@ Frontend reducer / query cacheは`ProgressingGoalSummary[]`を扱い、`currentG
 
 ```ts
 type SaveState =
-  | { readonly kind: "saved" }
-  | { readonly kind: "dirty" }
-  | { readonly kind: "saving" }
-  | { readonly kind: "failed"; readonly errorCode: string };
+  | { readonly kind: 'saved' }
+  | { readonly kind: 'dirty' }
+  | { readonly kind: 'saving' }
+  | { readonly kind: 'failed'; readonly errorCode: string };
 ```
 
 Goal DraftとCycle Editorは別々のSaveStateを持つ。複数Goal解放後も`subjectKey`ごとにmap可能な設計にする。
@@ -850,17 +850,17 @@ Goal DraftとCycle Editorは別々のSaveStateを持つ。複数Goal解放後も
 
 ```ts
 type GoalRefineState =
-  | { readonly kind: "idle" }
-  | { readonly kind: "running"; readonly sourceRevision: number }
+  | { readonly kind: 'idle' }
+  | { readonly kind: 'running'; readonly sourceRevision: number }
   | {
-      readonly kind: "suggested";
+      readonly kind: 'suggested';
       readonly generationId: string;
       readonly sourceRevision: number;
       readonly sourceBody: string;
       readonly suggestion: string;
       readonly contextChanged: boolean;
     }
-  | { readonly kind: "failed"; readonly errorCode: string };
+  | { readonly kind: 'failed'; readonly errorCode: string };
 ```
 
 - AI suggestionはDraftとは別stateで表示する。
@@ -872,9 +872,9 @@ type GoalRefineState =
 
 ```ts
 type ActionAIState =
-  | { readonly kind: "idle" }
-  | { readonly kind: "generating"; readonly generationId?: string }
-  | { readonly kind: "refining"; readonly generationId?: string };
+  | { readonly kind: 'idle' }
+  | { readonly kind: 'generating'; readonly generationId?: string }
+  | { readonly kind: 'refining'; readonly generationId?: string };
 ```
 
 ## 11.5 Eligibility
@@ -955,17 +955,17 @@ stateDiagram-v2
 
 ## 12.1 Allowed transitions
 
-| Current      | Operation             | Next         | Side effects                   |
-| ------------ | --------------------- | ------------ | ------------------------------ |
-| —            | Start Goal            | active_cycle | Version1 + Cycle1              |
-| active_cycle | Complete Cycle        | goal_review  | Cycle completed + Review Draft |
-| goal_review  | Continue unchanged    | active_cycle | 現Version + Cycle N+1          |
-| goal_review  | Continue changed      | active_cycle | Version N+1 + Cycle N+1        |
-| active_cycle | Achieve               | achieved     | Active Cycle canceled          |
-| active_cycle | End                   | ended        | Active Cycle canceled          |
-| goal_review  | Achieve               | achieved     | Draft破棄、Version不変         |
-| goal_review  | End                   | ended        | Draft破棄、Version不変         |
-| any          | Delete Goal Aggregate | removed      | Aggregate content delete       |
+| Current | Operation | Next | Side effects |
+|---|---|---|---|
+| — | Start Goal | active_cycle | Version1 + Cycle1 |
+| active_cycle | Complete Cycle | goal_review | Cycle completed + Review Draft |
+| goal_review | Continue unchanged | active_cycle | 現Version + Cycle N+1 |
+| goal_review | Continue changed | active_cycle | Version N+1 + Cycle N+1 |
+| active_cycle | Achieve | achieved | Active Cycle canceled |
+| active_cycle | End | ended | Active Cycle canceled |
+| goal_review | Achieve | achieved | Draft破棄、Version不変 |
+| goal_review | End | ended | Draft破棄、Version不変 |
+| any | Delete Goal Aggregate | removed | Aggregate content delete |
 
 `achieved` / `ended`から他stateへの遷移はない。
 
@@ -1077,19 +1077,21 @@ Frontend confirmationは、Draftに変更がある場合に次を明示する。
 
 ## 14.8 Immutability matrix
 
-| Resource                  |             Editable |                 Destructive delete |
-| ------------------------- | -------------------: | ---------------------------------: |
-| Goal Creation Draft(open) |                  Yes |           abandon / Account Delete |
-| Goal current state        | state transitionのみ |              Goal Aggregate Delete |
-| Goal Version              |                   No |              Goal Aggregate Delete |
-| Goal Review Draft(open)   |                  Yes |              resolve / Goal Delete |
-| Active Cycle              |                  Yes |       Goal Delete / Account Delete |
-| Completed Cycle           |                   No |       Goal Delete / Account Delete |
-| Canceled Cycle            |                   No |       Goal Delete / Account Delete |
-| AI Generation content     |                   No |      Draft / Goal / Account delete |
-| AI Usage Event            |                   No | Account delete / retention cleanup |
+| Resource | Editable | Destructive delete |
+|---|---:|---:|
+| Goal Creation Draft(open) | Yes | abandon / Account Delete |
+| Goal current state | state transitionのみ | Goal Aggregate Delete |
+| Goal Version | No | Goal Aggregate Delete |
+| Goal Review Draft(open) | Yes | resolve / Goal Delete |
+| Active Cycle | Yes | Goal Delete / Account Delete |
+| Completed Cycle | No | Goal Delete / Account Delete |
+| Canceled Cycle | No | Goal Delete / Account Delete |
+| AI Generation content | No | Draft / Goal / Account delete |
+| AI Usage Event | No | Account delete / retention cleanup |
+
 
 ---
+
 
 # 15. Domain Model
 
@@ -1112,12 +1114,12 @@ GoalはAggregate Rootであり、Goal Version、Goal Review Draft、Cycle、Goal
 
 ## 15.2 User
 
-| Field        | Domain Type  | Required | Rule                     |
-| ------------ | ------------ | -------: | ------------------------ |
-| id           | UserID(UUID) |      Yes | immutable                |
-| lastActiveAt | Instant      |      Yes | activity touchをcoalesce |
-| createdAt    | Instant      |      Yes | server UTC               |
-| updatedAt    | Instant      |      Yes | server UTC               |
+| Field | Domain Type | Required | Rule |
+|---|---|---:|---|
+| id | UserID(UUID) | Yes | immutable |
+| lastActiveAt | Instant | Yes | activity touchをcoalesce |
+| createdAt | Instant | Yes | server UTC |
+| updatedAt | Instant | Yes | server UTC |
 
 `isAnonymous` booleanは持たない。Google `AuthIdentity`の有無から連携状態を導出する。
 
@@ -1125,18 +1127,18 @@ GoalはAggregate Rootであり、Goal Version、Goal Review Draft、Cycle、Goal
 
 Goal Creation DraftとGoal Review Draftを同一Entityで表現し、`draftType`でInvariantを分ける。
 
-| Field             | Type                  |   Required | Rule                              |
-| ----------------- | --------------------- | ---------: | --------------------------------- |
-| id                | GoalDraftID(UUID)     |        Yes | immutable                         |
-| userId            | UserID                |        Yes | owner                             |
-| draftType         | `creation` / `review` |        Yes | immutable                         |
-| goalId            | GoalID                | reviewのみ | creationではnone                  |
-| baseGoalVersionId | GoalVersionID         | reviewのみ | Review開始時のVersion             |
-| reviewCycleId     | CycleID               | reviewのみ | Reviewを開始させたCompleted Cycle |
-| body              | GoalText              |        Yes | 0..80 chars                       |
-| revision          | int64                 |        Yes | save / AI採用ごと+1               |
-| createdAt         | Instant               |        Yes | UTC                               |
-| updatedAt         | Instant               |        Yes | UTC                               |
+| Field | Type | Required | Rule |
+|---|---|---:|---|
+| id | GoalDraftID(UUID) | Yes | immutable |
+| userId | UserID | Yes | owner |
+| draftType | `creation` / `review` | Yes | immutable |
+| goalId | GoalID | reviewのみ | creationではnone |
+| baseGoalVersionId | GoalVersionID | reviewのみ | Review開始時のVersion |
+| reviewCycleId | CycleID | reviewのみ | Reviewを開始させたCompleted Cycle |
+| body | GoalText | Yes | 0..80 chars |
+| revision | int64 | Yes | save / AI採用ごと+1 |
+| createdAt | Instant | Yes | UTC |
+| updatedAt | Instant | Yes | UTC |
 
 Invariant:
 
@@ -1148,106 +1150,106 @@ Invariant:
 
 ## 15.4 Goal
 
-| Field                   | Type                                                  |   Required | Rule                             |
-| ----------------------- | ----------------------------------------------------- | ---------: | -------------------------------- |
-| id                      | GoalID(UUID)                                          |        Yes | immutable                        |
-| userId                  | UserID                                                |        Yes | owner、immutable                 |
-| status                  | `active_cycle` / `goal_review` / `achieved` / `ended` |        Yes | state machineに従う              |
-| currentVersionNumber    | int32                                                 |        Yes | >=1、Version作成時のみ+1         |
-| nextCycleSequenceNumber | int32                                                 |        Yes | 次に作るGoal単位番号。>=2        |
-| revision                | int64                                                 |        Yes | status/current version変更ごと+1 |
-| terminalAt              | Instant                                               | terminal時 | progressing時none                |
-| terminalOperationId     | UUID                                                  | terminal時 | idempotency                      |
-| terminalRequestHash     | SHA-256 hex                                           | terminal時 | 同Key別Requestを拒否             |
-| createdAt               | Instant                                               |        Yes | UTC                              |
-| updatedAt               | Instant                                               |        Yes | UTC                              |
+| Field | Type | Required | Rule |
+|---|---|---:|---|
+| id | GoalID(UUID) | Yes | immutable |
+| userId | UserID | Yes | owner、immutable |
+| status | `active_cycle` / `goal_review` / `achieved` / `ended` | Yes | state machineに従う |
+| currentVersionNumber | int32 | Yes | >=1、Version作成時のみ+1 |
+| nextCycleSequenceNumber | int32 | Yes | 次に作るGoal単位番号。>=2 |
+| revision | int64 | Yes | status/current version変更ごと+1 |
+| terminalAt | Instant | terminal時 | progressing時none |
+| terminalOperationId | UUID | terminal時 | idempotency |
+| terminalRequestHash | SHA-256 hex | terminal時 | 同Key別Requestを拒否 |
+| createdAt | Instant | Yes | UTC |
+| updatedAt | Instant | Yes | UTC |
 
 `currentVersionNumber`から`GoalVersion(goalId, versionNumber)`を取得する。循環FKを避けるためcurrent version IDをGoal rowへ直接保持しない。
 
 ## 15.5 GoalVersion
 
-| Field                | Type                | Required | Rule                                      |
-| -------------------- | ------------------- | -------: | ----------------------------------------- |
-| id                   | GoalVersionID(UUID) |      Yes | immutable                                 |
-| userId               | UserID              |      Yes | owner                                     |
-| goalId               | GoalID              |      Yes | parent                                    |
-| versionNumber        | int32               |      Yes | Goal内1から連番                           |
-| body                 | GoalText            |      Yes | trim後非空、<=80                          |
-| createdByOperationId | UUID                |      Yes | initial start / review continue operation |
-| createdAt            | Instant             |      Yes | UTC                                       |
+| Field | Type | Required | Rule |
+|---|---|---:|---|
+| id | GoalVersionID(UUID) | Yes | immutable |
+| userId | UserID | Yes | owner |
+| goalId | GoalID | Yes | parent |
+| versionNumber | int32 | Yes | Goal内1から連番 |
+| body | GoalText | Yes | trim後非空、<=80 |
+| createdByOperationId | UUID | Yes | initial start / review continue operation |
+| createdAt | Instant | Yes | UTC |
 
 Update / individual delete operationは定義しない。Goal Aggregate DeleteまたはAccount Deleteだけで削除される。
 
 ## 15.6 PDCACycle
 
-| Field                              | Type                                |      Required | Invariant                             |
-| ---------------------------------- | ----------------------------------- | ------------: | ------------------------------------- |
-| id                                 | CycleID(UUID)                       |           Yes | immutable                             |
-| userId                             | UserID                              |           Yes | owner                                 |
-| goalId                             | GoalID                              |           Yes | parent、immutable                     |
-| goalVersionId                      | GoalVersionID                       |           Yes | same Goal、immutable                  |
-| sequenceNumber                     | int32                               |           Yes | Goal内1から連番                       |
-| status                             | `active` / `completed` / `canceled` |           Yes | terminalからactiveへ戻さない          |
-| startedAt                          | Instant                             |           Yes | immutable                             |
-| completedAt                        | Instant                             | completedのみ | active/canceledはnone                 |
-| canceledAt                         | Instant                             |  canceledのみ | active/completedはnone                |
-| cancellationReason                 | `goal_achieved` / `goal_ended`      |  canceledのみ | Goal terminal outcomeと一致           |
-| plan                               | string                              |           Yes | 0..200 chars                          |
-| do                                 | string                              |           Yes | 0..200 chars                          |
-| check                              | string                              |           Yes | 0..200 chars                          |
-| action                             | string                              |           Yes | 0..200 chars                          |
-| contentRevision                    | int64                               |           Yes | any frame save / Action AI applyで+1  |
-| planRevision                       | int64                               |           Yes | Plan saveで+1                         |
-| doRevision                         | int64                               |           Yes | Do saveで+1                           |
-| checkRevision                      | int64                               |           Yes | Check saveで+1                        |
-| actionRevision                     | int64                               |           Yes | User A save / Action AI applyで+1     |
-| actionLastAIAppliedContentRevision | int64                               |            No | AI適用直後revision                    |
-| actionUserModifiedAfterAI          | bool                                |           Yes | AI後にUserがA編集したか               |
-| startOperationId                   | UUID                                |           Yes | Initial / Review continue idempotency |
-| startRequestHash                   | SHA-256 hex                         |           Yes | same key different payload防止        |
-| completionOperationId              | UUID                                |   completed時 | Complete idempotency                  |
-| completionRequestHash              | SHA-256 hex                         |   completed時 | request reuse検証                     |
-| createdAt                          | Instant                             |           Yes | UTC                                   |
-| updatedAt                          | Instant                             |           Yes | UTC                                   |
+| Field | Type | Required | Invariant |
+|---|---|---:|---|
+| id | CycleID(UUID) | Yes | immutable |
+| userId | UserID | Yes | owner |
+| goalId | GoalID | Yes | parent、immutable |
+| goalVersionId | GoalVersionID | Yes | same Goal、immutable |
+| sequenceNumber | int32 | Yes | Goal内1から連番 |
+| status | `active` / `completed` / `canceled` | Yes | terminalからactiveへ戻さない |
+| startedAt | Instant | Yes | immutable |
+| completedAt | Instant | completedのみ | active/canceledはnone |
+| canceledAt | Instant | canceledのみ | active/completedはnone |
+| cancellationReason | `goal_achieved` / `goal_ended` | canceledのみ | Goal terminal outcomeと一致 |
+| plan | string | Yes | 0..200 chars |
+| do | string | Yes | 0..200 chars |
+| check | string | Yes | 0..200 chars |
+| action | string | Yes | 0..200 chars |
+| contentRevision | int64 | Yes | any frame save / Action AI applyで+1 |
+| planRevision | int64 | Yes | Plan saveで+1 |
+| doRevision | int64 | Yes | Do saveで+1 |
+| checkRevision | int64 | Yes | Check saveで+1 |
+| actionRevision | int64 | Yes | User A save / Action AI applyで+1 |
+| actionLastAIAppliedContentRevision | int64 | No | AI適用直後revision |
+| actionUserModifiedAfterAI | bool | Yes | AI後にUserがA編集したか |
+| startOperationId | UUID | Yes | Initial / Review continue idempotency |
+| startRequestHash | SHA-256 hex | Yes | same key different payload防止 |
+| completionOperationId | UUID | completed時 | Complete idempotency |
+| completionRequestHash | SHA-256 hex | completed時 | request reuse検証 |
+| createdAt | Instant | Yes | UTC |
+| updatedAt | Instant | Yes | UTC |
 
 ## 15.7 AIGeneration
 
 AI生成本文・再現性・分析用content record。Goal Aggregate Delete対象である。
 
-| Field                 | Type                                                |                  Required | Rule                                      |
-| --------------------- | --------------------------------------------------- | ------------------------: | ----------------------------------------- |
-| id                    | AIOperationID(UUID)                                 |                       Yes | logical operation ID                      |
-| userId                | UserID                                              |                       Yes | owner                                     |
-| operationType         | `goal_refine` / `action_generate` / `action_refine` |                       Yes | quota種別                                 |
-| status                | `running` / `succeeded` / `failed`                  |                       Yes | terminalからrunningへ戻さない             |
-| sourceGoalDraftId     | GoalDraftID                                         |         Goal Refine実行中 | finalized後はnoneへre-parent              |
-| goalId                | GoalID                                              | Goal確定後またはAction AI | creation refine中だけnone可               |
-| goalVersionId         | GoalVersionID                                       | Goal確定後またはAction AI | creation refine中だけnone可               |
-| cycleId               | CycleID                                             |             Action AIのみ | Goal Refineではnone                       |
-| targetRevision        | int64                                               |                       Yes | Draft revisionまたはCycle contentRevision |
-| idempotencyKey        | UUID                                                |                       Yes | User/type内unique                         |
-| inputHash             | SHA-256 hex                                         |                       Yes | canonical input hash                      |
-| sourceText            | string                                              |              refine系のみ | Goal <=80 / A <=200                       |
-| output                | string                                              |                 success時 | Goal <=80 / Action <=200                  |
-| contextCycleIds       | UUID[]                                              |                       Yes | 同一Goal、最大10                          |
-| provider              | string                                              |                       Yes | `openai`                                  |
-| model                 | string                                              |                       Yes | config snapshot                           |
-| promptVersion         | string                                              |                       Yes | operation別                               |
-| inputTokens           | int64                                               |               available時 | attempts合計                              |
-| outputTokens          | int64                                               |               available時 | attempts合計                              |
-| estimatedCostUsd      | decimal                                             |               available時 | attempts合計                              |
-| budgetMonthUtc        | LocalDate                                           |                       Yes | reservation month                         |
-| budgetReservedCostUsd | decimal                                             |                       Yes | running reservation                       |
-| attemptCount          | int16                                               |                       Yes | 1..configured max                         |
-| failureCode           | string                                              |                  failed時 | 本文を含めない                            |
-| providerRequestId     | string                                              |                        No | support / trace                           |
-| leaseExpiresAt        | Instant                                             |                 running時 | stale recovery                            |
-| contextChanged        | bool                                                |                terminal時 | start後target変更                         |
-| adoptedAt             | Instant                                             |     Goal suggestion採用時 | suggestion未採用ならnone                  |
-| adoptedDraftRevision  | int64                                               |     Goal suggestion採用時 | 採用後のDraft revision。未採用ならnone    |
-| appliedAt             | Instant                                             |       Action AI success時 | Aへ反映時刻                               |
-| startedAt             | Instant                                             |                       Yes | UTC                                       |
-| finishedAt            | Instant                                             |                terminal時 | UTC                                       |
+| Field | Type | Required | Rule |
+|---|---|---:|---|
+| id | AIOperationID(UUID) | Yes | logical operation ID |
+| userId | UserID | Yes | owner |
+| operationType | `goal_refine` / `action_generate` / `action_refine` | Yes | quota種別 |
+| status | `running` / `succeeded` / `failed` | Yes | terminalからrunningへ戻さない |
+| sourceGoalDraftId | GoalDraftID | Goal Refine実行中 | finalized後はnoneへre-parent |
+| goalId | GoalID | Goal確定後またはAction AI | creation refine中だけnone可 |
+| goalVersionId | GoalVersionID | Goal確定後またはAction AI | creation refine中だけnone可 |
+| cycleId | CycleID | Action AIのみ | Goal Refineではnone |
+| targetRevision | int64 | Yes | Draft revisionまたはCycle contentRevision |
+| idempotencyKey | UUID | Yes | User/type内unique |
+| inputHash | SHA-256 hex | Yes | canonical input hash |
+| sourceText | string | refine系のみ | Goal <=80 / A <=200 |
+| output | string | success時 | Goal <=80 / Action <=200 |
+| contextCycleIds | UUID[] | Yes | 同一Goal、最大10 |
+| provider | string | Yes | `openai` |
+| model | string | Yes | config snapshot |
+| promptVersion | string | Yes | operation別 |
+| inputTokens | int64 | available時 | attempts合計 |
+| outputTokens | int64 | available時 | attempts合計 |
+| estimatedCostUsd | decimal | available時 | attempts合計 |
+| budgetMonthUtc | LocalDate | Yes | reservation month |
+| budgetReservedCostUsd | decimal | Yes | running reservation |
+| attemptCount | int16 | Yes | 1..configured max |
+| failureCode | string | failed時 |本文を含めない |
+| providerRequestId | string | No | support / trace |
+| leaseExpiresAt | Instant | running時 | stale recovery |
+| contextChanged | bool | terminal時 | start後target変更 |
+| adoptedAt | Instant | Goal suggestion採用時 | suggestion未採用ならnone |
+| adoptedDraftRevision | int64 | Goal suggestion採用時 | 採用後のDraft revision。未採用ならnone |
+| appliedAt | Instant | Action AI success時 | Aへ反映時刻 |
+| startedAt | Instant | Yes | UTC |
+| finishedAt | Instant | terminal時 | UTC |
 
 Target invariant:
 
@@ -1260,23 +1262,23 @@ Target invariant:
 
 Quota判定とUser単位利用分析の最小record。AIGeneration contentとはlifecycleを分離し、Goal Delete後もQuota window中は保持できる。
 
-| Field                    | Type                                | Required | Rule                                                                             |
-| ------------------------ | ----------------------------------- | -------: | -------------------------------------------------------------------------------- |
-| operationId              | AIOperationID                       |      Yes | PK。AIGenerationと同じlogical IDだがFKにしない                                   |
-| userId                   | UserID                              |      Yes | Account Deleteでcascade                                                          |
-| goalId                   | GoalID                              |       No | Goal Delete時にnoneへredact可能                                                  |
-| operationType            | enum                                |      Yes | 3種                                                                              |
-| status                   | `accepted` / `succeeded` / `failed` |      Yes | quotaはaccepted時点で消費                                                        |
-| provider                 | string                              |      Yes | contentなし                                                                      |
-| model                    | string                              |      Yes | contentなし                                                                      |
-| promptVersion            | string                              |      Yes | contentなし                                                                      |
-| acceptedAt               | Instant                             |      Yes | rolling window基準                                                               |
-| inputTokens              | int64                               |       No | final usage                                                                      |
-| outputTokens             | int64                               |       No | final usage                                                                      |
-| estimatedCostUsd         | decimal                             |       No | final cost                                                                       |
-| providerUsageFinalizedAt | Instant                             |       No | Provider attemptsのUsage/Costを集計済みであることを示す。CASにより二重計上を防ぐ |
-| quotaRetainUntil         | Instant                             |      Yes | acceptedAt + rolling window + safety margin                                      |
-| contentDeleted           | bool                                |      Yes | Goal/Draft content削除済みを示す                                                 |
+| Field | Type | Required | Rule |
+|---|---|---:|---|
+| operationId | AIOperationID | Yes | PK。AIGenerationと同じlogical IDだがFKにしない |
+| userId | UserID | Yes | Account Deleteでcascade |
+| goalId | GoalID | No | Goal Delete時にnoneへredact可能 |
+| operationType | enum | Yes | 3種 |
+| status | `accepted` / `succeeded` / `failed` | Yes | quotaはaccepted時点で消費 |
+| provider | string | Yes | contentなし |
+| model | string | Yes | contentなし |
+| promptVersion | string | Yes | contentなし |
+| acceptedAt | Instant | Yes | rolling window基準 |
+| inputTokens | int64 | No | final usage |
+| outputTokens | int64 | No | final usage |
+| estimatedCostUsd | decimal | No | final cost |
+| providerUsageFinalizedAt | Instant | No | Provider attemptsのUsage/Costを集計済みであることを示す。CASにより二重計上を防ぐ |
+| quotaRetainUntil | Instant | Yes | acceptedAt + rolling window + safety margin |
+| contentDeleted | bool | Yes | Goal/Draft content削除済みを示す |
 
 Content deletion時:
 
@@ -1299,14 +1301,14 @@ Application User、外部AuthIdentity、Session、Anonymous Bootstrapを分離�
 
 Goal Deleteのnetwork retryをidempotentにするcontent-free短命record。
 
-| Field          | Type        | Required | Rule                    |
-| -------------- | ----------- | -------: | ----------------------- |
-| userId         | UserID      |      Yes | Account Deleteでcascade |
-| idempotencyKey | UUID        |      Yes | user内unique            |
-| deletedGoalId  | UUID        |      Yes | contentではない         |
-| requestHash    | SHA-256 hex |      Yes | key reuse検出           |
-| deletedAt      | Instant     |      Yes | UTC                     |
-| expiresAt      | Instant     |      Yes | default 24h             |
+| Field | Type | Required | Rule |
+|---|---|---:|---|
+| userId | UserID | Yes | Account Deleteでcascade |
+| idempotencyKey | UUID | Yes | user内unique |
+| deletedGoalId | UUID | Yes | contentではない |
+| requestHash | SHA-256 hex | Yes | key reuse検出 |
+| deletedAt | Instant | Yes | UTC |
+| expiresAt | Instant | Yes | default 24h |
 
 ---
 
@@ -2097,25 +2099,25 @@ Concurrent operation:
 
 ## 18.8 Concurrency matrix
 
-| Operation                        | Prevented race             | Mechanism                                                     | Guarantee                                       |
-| -------------------------------- | -------------------------- | ------------------------------------------------------------- | ----------------------------------------------- |
-| Anonymous bootstrap retry        | duplicate User             | bootstrap HMAC PK + Tx                                        | same bootstrap → same User                      |
-| Initial Goal concurrent starts   | Progressing Goal上限突破   | User row lock + count + entitlement                           | concurrentでも上限内                            |
-| Goal + Version1 + Cycle1         | partial creation           | single Tx                                                     | all or none                                     |
-| Cycle Auto Save same Frame       | stale overwrite            | per-frame revision CAS                                        | old write rejected                              |
-| Cycle Auto Save different Frames | needless conflict          | per-frame revisions                                           | independent save可能                            |
-| Goal Draft Auto Save             | stale overwrite            | draft revision CAS                                            | old write rejected                              |
-| Goal Refine double execution     | duplicate AI               | running partial unique + idempotency                          | subjectごとmax1                                 |
-| Goal suggestion adoption         | edited Draft overwrite     | generation sourceText comparison + current draft revision CAS | stale adoption rejected、同一本文への復元は許可 |
-| Action AI double execution       | duplicate paid call        | running partial unique + idempotency                          | Cycleごとmax1                                   |
-| Action AI vs P/D/C edit          | P/D/C loss                 | Aだけupdate                                                   | current P/D/C保持                               |
-| Action AI vs A edit              | User A loss                | UI read-only + Backend reject                                 | A競合なし                                       |
-| Cycle completion double tap      | duplicate Review Draft     | cycle row lock + operationId + unique draft                   | one completion                                  |
-| Review continue double tap       | duplicate Version/Cycle    | Goal row lock + startOperationId                              | one next Cycle                                  |
-| Goal terminate vs new start      | active limit inconsistency | User row lock                                                 | serial outcome                                  |
-| Goal delete retry                | 404 after response loss    | delete receipt                                                | same key returns success                        |
-| Google upgrade retry             | duplicate identity         | unique(provider,subject) + Tx                                 | at most one mapping                             |
-| Account delete                   | partial user data          | User lock + cascade + Tx                                      | app data atomic delete                          |
+| Operation | Prevented race | Mechanism | Guarantee |
+|---|---|---|---|
+| Anonymous bootstrap retry | duplicate User | bootstrap HMAC PK + Tx | same bootstrap → same User |
+| Initial Goal concurrent starts | Progressing Goal上限突破 | User row lock + count + entitlement | concurrentでも上限内 |
+| Goal + Version1 + Cycle1 | partial creation | single Tx | all or none |
+| Cycle Auto Save same Frame | stale overwrite | per-frame revision CAS | old write rejected |
+| Cycle Auto Save different Frames | needless conflict | per-frame revisions | independent save可能 |
+| Goal Draft Auto Save | stale overwrite | draft revision CAS | old write rejected |
+| Goal Refine double execution | duplicate AI | running partial unique + idempotency | subjectごとmax1 |
+| Goal suggestion adoption | edited Draft overwrite | generation sourceText comparison + current draft revision CAS | stale adoption rejected、同一本文への復元は許可 |
+| Action AI double execution | duplicate paid call | running partial unique + idempotency | Cycleごとmax1 |
+| Action AI vs P/D/C edit | P/D/C loss | Aだけupdate | current P/D/C保持 |
+| Action AI vs A edit | User A loss | UI read-only + Backend reject | A競合なし |
+| Cycle completion double tap | duplicate Review Draft | cycle row lock + operationId + unique draft | one completion |
+| Review continue double tap | duplicate Version/Cycle | Goal row lock + startOperationId | one next Cycle |
+| Goal terminate vs new start | active limit inconsistency | User row lock | serial outcome |
+| Goal delete retry | 404 after response loss | delete receipt | same key returns success |
+| Google upgrade retry | duplicate identity | unique(provider,subject) + Tx | at most one mapping |
+| Account delete | partial user data | User lock + cascade + Tx | app data atomic delete |
 
 ---
 
@@ -2154,7 +2156,9 @@ Concurrent operation:
 - Prompt version: `goal-refine-v2`, `action-generate-v2`, `action-refine-v2`。v1 assetは過去の監査可能性のためimmutableのまま保持する。
 - Product UIでは日本語を使い、内部Domain用語は本書の英語名へ統一する。
 
+
 ---
+
 
 # 20. API Design
 
@@ -2176,13 +2180,13 @@ Base path: `/api/v1`
 
 すべてのEndpointには、個別節へ重複記載していなくても次の共通Error Contractを適用する。
 
-| Condition                                    | HTTP / Code            | Applicability                                                                                         |
-| -------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------- |
-| Session Cookieなし                           | `401 SESSION_MISSING`  | `Auth=Session`の全Endpoint                                                                            |
-| Session期限切れまたはrevoke済み              | `401 SESSION_EXPIRED`  | `Auth=Session`の全Endpoint                                                                            |
-| CSRF tokenまたはOrigin不正                   | `403 CSRF_INVALID`     | Sessionを必要とするunsafe method                                                                      |
+| Condition | HTTP / Code | Applicability |
+|---|---|---|
+| Session Cookieなし | `401 SESSION_MISSING` | `Auth=Session`の全Endpoint |
+| Session期限切れまたはrevoke済み | `401 SESSION_EXPIRED` | `Auth=Session`の全Endpoint |
+| CSRF tokenまたはOrigin不正 | `403 CSRF_INVALID` | Sessionを必要とするunsafe method |
 | JSON decode、型、unknown field、共通形式不正 | `400 VALIDATION_ERROR` | Request body / path / queryを持つEndpoint。ただし、より具体的なCodeが定義されている場合はそちらを優先 |
-| 予期しない内部失敗                           | `500 INTERNAL_ERROR`   | 専用の安定Error Codeへ安全に分類できない場合                                                          |
+| 予期しない内部失敗 | `500 INTERNAL_ERROR` | 専用の安定Error Codeへ安全に分類できない場合 |
 
 §21〜§25の`Errors`は、上記に加わるUse Case固有Errorを中心に列挙する。認証・CSRF・一般Validation・予期しない内部失敗を個別節で省略しても、そのErrorが発生しないという意味ではない。
 
@@ -2209,36 +2213,36 @@ Base path: `/api/v1`
 
 `Auth=Session`はSession Cookie検証、unsafe methodではCSRFも必須を意味する。次表のMethod / Path / Auth / Authorization / Idempotency・Concurrency列は各Endpointの**規範的Contractの一部**であり、§21〜§25のRequest / Response / Validation / Error詳細と合わせて実装する。個別節が同じ内容を繰り返していない場合も、表の制約を省略してよいという意味ではない。
 
-| Method | Path                                                      | Use Case                   | Auth    | Authorization             | Idempotency / Concurrency          |
-| ------ | --------------------------------------------------------- | -------------------------- | ------- | ------------------------- | ---------------------------------- |
-| GET    | `/session`                                                | GetSession                 | Session | current User              | safe                               |
-| POST   | `/session/anonymous`                                      | CreateAnonymousSession     | none    | bootstrap                 | bootstrap HMAC unique              |
-| GET    | `/home`                                                   | GetHomeReadModel           | Session | current User              | safe                               |
-| POST   | `/goal-drafts`                                            | CreateGoalCreationDraft    | Session | current User              | one creation draft/user            |
-| GET    | `/goal-drafts/{draftId}`                                  | GetGoalCreationDraft       | Session | owner + creation          | safe                               |
-| PATCH  | `/goal-drafts/{draftId}`                                  | SaveGoalDraft              | Session | owner + open              | draft revision CAS                 |
-| DELETE | `/goal-drafts/{draftId}`                                  | AbandonGoalCreationDraft   | Session | owner + creation          | repeated delete→404                |
-| POST   | `/goal-drafts/{draftId}/refinements`                      | RefineGoalDraft            | Session | owner + creation          | Idempotency-Key + running unique   |
-| POST   | `/goal-drafts/{draftId}/refinements/{generationId}/adopt` | AdoptGoalSuggestion        | Session | owner + generation target | source text + current revision CAS |
-| POST   | `/goal-drafts/{draftId}/start`                            | StartGoal                  | Session | owner + creation          | operationId + User row lock        |
-| GET    | `/goals`                                                  | ListGoals                  | Session | owner only                | safe / cursor                      |
-| GET    | `/goals/{goalId}`                                         | GetGoal                    | Session | owner                     | safe                               |
-| DELETE | `/goals/{goalId}`                                         | DeleteGoalAggregate        | Session | owner                     | Idempotency-Key + receipt          |
-| POST   | `/goals/{goalId}/termination`                             | TerminateGoal              | Session | owner + progressing       | operationId + User/Goal lock       |
-| GET    | `/goals/{goalId}/review`                                  | GetGoalReview              | Session | owner + goal_review       | safe                               |
-| PATCH  | `/goals/{goalId}/review`                                  | SaveGoalReviewDraft        | Session | owner + goal_review       | draft revision CAS                 |
-| POST   | `/goals/{goalId}/review/refinements`                      | RefineGoalReviewDraft      | Session | owner + goal_review       | Idempotency-Key + running unique   |
-| POST   | `/goals/{goalId}/review/refinements/{generationId}/adopt` | AdoptReviewSuggestion      | Session | owner + generation        | source text + current revision CAS |
-| POST   | `/goals/{goalId}/review/continue`                         | ContinueGoal               | Session | owner + goal_review       | operationId + Goal lock            |
-| GET    | `/goals/{goalId}/cycles`                                  | ListGoalCycles             | Session | owner                     | safe / cursor                      |
-| GET    | `/goals/{goalId}/cycles/{cycleId}`                        | GetCycle                   | Session | owner + same Goal         | safe                               |
-| PATCH  | `/goals/{goalId}/cycles/{cycleId}/frames/{frame}`         | SaveFrame                  | Session | owner + Active            | frame revision CAS                 |
-| POST   | `/goals/{goalId}/cycles/{cycleId}/actions/generate`       | GenerateAction             | Session | owner + Active            | Idempotency-Key + running unique   |
-| POST   | `/goals/{goalId}/cycles/{cycleId}/actions/refine`         | RefineAction               | Session | owner + Active            | Idempotency-Key + running unique   |
-| POST   | `/goals/{goalId}/cycles/{cycleId}/complete`               | CompleteCycle              | Session | owner + Active            | operationId + Cycle/Goal lock      |
-| POST   | `/auth/google/upgrade`                                    | UpgradeAnonymousWithGoogle | Session | current User              | subject unique + Tx                |
-| POST   | `/auth/google/login`                                      | LoginExistingGoogleUser    | Session | verified linked User      | session rotation                   |
-| DELETE | `/account`                                                | DeleteAccount              | Session | current User              | atomic hard delete                 |
+| Method | Path | Use Case | Auth | Authorization | Idempotency / Concurrency |
+|---|---|---|---|---|---|
+| GET | `/session` | GetSession | Session | current User | safe |
+| POST | `/session/anonymous` | CreateAnonymousSession | none | bootstrap | bootstrap HMAC unique |
+| GET | `/home` | GetHomeReadModel | Session | current User | safe |
+| POST | `/goal-drafts` | CreateGoalCreationDraft | Session | current User | one creation draft/user |
+| GET | `/goal-drafts/{draftId}` | GetGoalCreationDraft | Session | owner + creation | safe |
+| PATCH | `/goal-drafts/{draftId}` | SaveGoalDraft | Session | owner + open | draft revision CAS |
+| DELETE | `/goal-drafts/{draftId}` | AbandonGoalCreationDraft | Session | owner + creation | repeated delete→404 |
+| POST | `/goal-drafts/{draftId}/refinements` | RefineGoalDraft | Session | owner + creation | Idempotency-Key + running unique |
+| POST | `/goal-drafts/{draftId}/refinements/{generationId}/adopt` | AdoptGoalSuggestion | Session | owner + generation target | source text + current revision CAS |
+| POST | `/goal-drafts/{draftId}/start` | StartGoal | Session | owner + creation | operationId + User row lock |
+| GET | `/goals` | ListGoals | Session | owner only | safe / cursor |
+| GET | `/goals/{goalId}` | GetGoal | Session | owner | safe |
+| DELETE | `/goals/{goalId}` | DeleteGoalAggregate | Session | owner | Idempotency-Key + receipt |
+| POST | `/goals/{goalId}/termination` | TerminateGoal | Session | owner + progressing | operationId + User/Goal lock |
+| GET | `/goals/{goalId}/review` | GetGoalReview | Session | owner + goal_review | safe |
+| PATCH | `/goals/{goalId}/review` | SaveGoalReviewDraft | Session | owner + goal_review | draft revision CAS |
+| POST | `/goals/{goalId}/review/refinements` | RefineGoalReviewDraft | Session | owner + goal_review | Idempotency-Key + running unique |
+| POST | `/goals/{goalId}/review/refinements/{generationId}/adopt` | AdoptReviewSuggestion | Session | owner + generation | source text + current revision CAS |
+| POST | `/goals/{goalId}/review/continue` | ContinueGoal | Session | owner + goal_review | operationId + Goal lock |
+| GET | `/goals/{goalId}/cycles` | ListGoalCycles | Session | owner | safe / cursor |
+| GET | `/goals/{goalId}/cycles/{cycleId}` | GetCycle | Session | owner + same Goal | safe |
+| PATCH | `/goals/{goalId}/cycles/{cycleId}/frames/{frame}` | SaveFrame | Session | owner + Active | frame revision CAS |
+| POST | `/goals/{goalId}/cycles/{cycleId}/actions/generate` | GenerateAction | Session | owner + Active | Idempotency-Key + running unique |
+| POST | `/goals/{goalId}/cycles/{cycleId}/actions/refine` | RefineAction | Session | owner + Active | Idempotency-Key + running unique |
+| POST | `/goals/{goalId}/cycles/{cycleId}/complete` | CompleteCycle | Session | owner + Active | operationId + Cycle/Goal lock |
+| POST | `/auth/google/upgrade` | UpgradeAnonymousWithGoogle | Session | current User | subject unique + Tx |
+| POST | `/auth/google/login` | LoginExistingGoogleUser | Session | verified linked User | session rotation |
+| DELETE | `/account` | DeleteAccount | Session | current User | atomic hard delete |
 
 ## 20.4 Idempotency replay semantics
 
@@ -2761,12 +2765,12 @@ Response:
 ```ts
 type GoalCurrentWork =
   | {
-      readonly kind: "active_cycle";
+      readonly kind: 'active_cycle';
       readonly cycleId: string;
       readonly cycleSequenceNumber: number;
     }
   | {
-      readonly kind: "goal_review";
+      readonly kind: 'goal_review';
       readonly reviewDraftId: string;
       readonly triggerCycleId: string;
       readonly triggerCycleSequenceNumber: number;
@@ -3604,73 +3608,73 @@ Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除す�
 
 # 26. API Error Codes
 
-| HTTP | Code                                        | Meaning / UI action                           |
-| ---: | ------------------------------------------- | --------------------------------------------- |
-|  400 | `VALIDATION_ERROR`                          | field validation                              |
-|  400 | `GOAL_TEXT_REQUIRED`                        | Goal確定/Refine時にtrim後空                   |
-|  400 | `GOAL_TEXT_TOO_LONG`                        | 80文字超過                                    |
-|  400 | `FRAME_TEXT_TOO_LONG`                       | 200文字超過                                   |
-|  400 | `GOAL_REFINE_INPUT_EMPTY`                   | Goal Refine入力なし                           |
-|  400 | `ACTION_GENERATE_INPUT_INCOMPLETE`          | P/D/C不足                                     |
-|  400 | `ACTION_REFINE_INPUT_INCOMPLETE`            | P/D/C/A不足                                   |
-|  400 | `CYCLE_COMPLETION_INPUT_INCOMPLETE`         | P/D/C/A不足                                   |
-|  400 | `INVALID_GOAL_OUTCOME`                      | achieved/ended以外                            |
-|  400 | `INVALID_CURSOR`                            | list先頭から再取得                            |
-|  400 | `GOOGLE_ID_TOKEN_INVALID`                   | Google認証再実行                              |
-|  400 | `GOAL_REVIEW_DISCARD_CONFIRMATION_REQUIRED` | Review Draft変更破棄のconfirmへ戻す           |
-|  400 | `GOAL_DELETE_CONFIRMATION_REQUIRED`         | confirmへ戻す                                 |
-|  400 | `ACCOUNT_DELETE_CONFIRMATION_REQUIRED`      | confirmへ戻す                                 |
-|  401 | `SESSION_MISSING`                           | bootstrap/auth restore                        |
-|  401 | `SESSION_EXPIRED`                           | draft保持して再認証                           |
-|  403 | `CSRF_INVALID`                              | session refresh                               |
-|  403 | `ANONYMOUS_CREATION_BLOCKED`                | 時間を空ける案内                              |
-|  404 | `GOAL_DRAFT_NOT_FOUND`                      | owner外も同じ                                 |
-|  404 | `GOAL_NOT_FOUND`                            | owner外も同じ                                 |
-|  404 | `CYCLE_NOT_FOUND`                           | owner/Goal mismatchも同じ                     |
-|  404 | `AI_SUGGESTION_NOT_FOUND`                   | generation/target mismatch含む                |
-|  404 | `GOOGLE_ACCOUNT_NOT_LINKED`                 | current User維持                              |
-|  409 | `GOAL_ACTIVE_LIMIT_EXCEEDED`                | 上限2件のいずれかを達成/終了/削除するよう案内 |
-|  409 | `GOAL_CREATION_DRAFT_ALREADY_EXISTS`        | 既存Draftへ移動                               |
-|  409 | `GOAL_DRAFT_TYPE_MISMATCH`                  | 正しい画面へreload                            |
-|  409 | `GOAL_DRAFT_REVISION_CONFLICT`              | local draft保持                               |
-|  409 | `GOAL_REVIEW_NOT_ACTIVE`                    | reload Goal state                             |
-|  409 | `GOAL_REVIEW_REQUIRED`                      | Cycleを直接作らない                           |
-|  409 | `GOAL_REVIEW_DRAFT_REVISION_CONFLICT`       | local draft保持                               |
-|  409 | `GOAL_REFINE_CONTEXT_STALE`                 | 再生成または元案維持                          |
-|  409 | `GOAL_REFINE_RESULT_ALREADY_ADOPTED`        | current Draft再取得                           |
-|  409 | `GOAL_VERSION_CONFLICT`                     | current Goal Version再取得                    |
-|  409 | `GOAL_ALREADY_TERMINAL`                     | read-only historyへ                           |
-|  409 | `GOAL_STATE_CONFLICT`                       | current workへreload                          |
-|  409 | `GOAL_DELETE_CONFLICT`                      | current Goal再取得後に再確認                  |
-|  409 | `CYCLE_NOT_ACTIVE`                          | current Goalへreload                          |
-|  409 | `CYCLE_REVISION_CONFLICT`                   | local input保持                               |
-|  409 | `AI_OPERATION_IN_PROGRESS`                  | control disabled維持                          |
-|  409 | `ACTION_REPLACEMENT_CONFIRMATION_REQUIRED`  | dialog表示                                    |
-|  409 | `GOOGLE_IDENTITY_ALREADY_LINKED`            | cancel/existing login                         |
-|  409 | `IDEMPOTENCY_KEY_REUSED`                    | 新しいoperation/keyで再実行                   |
-|  429 | `AI_USER_ROLLING_LIMIT_EXCEEDED`            | retryAt案内                                   |
-|  429 | `AI_RATE_LIMIT_EXCEEDED`                    | retryAfter                                    |
-|  429 | `RATE_LIMIT_EXCEEDED`                       | generic rate limit                            |
-|  502 | `AI_INVALID_RESPONSE`                       | retry可能。本文は変更しない                   |
-|  503 | `AI_PROVIDER_UNAVAILABLE`                   | retry可能                                     |
-|  503 | `AI_SERVICE_BUDGET_EXCEEDED`                | AI一時停止                                    |
-|  503 | `ANTI_ABUSE_SERVICE_UNAVAILABLE`            | bootstrap再試行                               |
-|  503 | `GOOGLE_IDENTITY_VERIFICATION_UNAVAILABLE`  | retry                                         |
-|  504 | `AI_PROVIDER_TIMEOUT`                       | retry可能                                     |
-|  500 | `ACCOUNT_UPGRADE_FAILED`                    | Anonymous User維持                            |
-|  500 | `GOOGLE_LOGIN_FAILED`                       | current Session維持                           |
-|  500 | `GOAL_DRAFT_SAVE_FAILED`                    | Draft維持                                     |
-|  500 | `GOAL_DRAFT_DELETE_FAILED`                  | Draft維持                                     |
-|  500 | `GOAL_START_FAILED`                         | Draft維持                                     |
-|  500 | `FRAME_SAVE_FAILED`                         | Frame維持                                     |
-|  500 | `CYCLE_COMPLETION_FAILED`                   | Cycle active維持                              |
-|  500 | `GOAL_REVIEW_INVARIANT_BROKEN`              | 一般Error +運用alert                          |
-|  500 | `GOAL_REVIEW_DRAFT_SAVE_FAILED`             | Review Draft維持                              |
-|  500 | `GOAL_REVIEW_CONTINUE_FAILED`               | Review open維持                               |
-|  500 | `GOAL_TERMINATION_FAILED`                   | 元state維持                                   |
-|  500 | `GOAL_DELETE_FAILED`                        | Goal維持                                      |
-|  500 | `ACCOUNT_DELETE_FAILED`                     | Account維持                                   |
-|  500 | `INTERNAL_ERROR`                            | requestId付き一般Error                        |
+| HTTP | Code | Meaning / UI action |
+|---:|---|---|
+| 400 | `VALIDATION_ERROR` | field validation |
+| 400 | `GOAL_TEXT_REQUIRED` | Goal確定/Refine時にtrim後空 |
+| 400 | `GOAL_TEXT_TOO_LONG` | 80文字超過 |
+| 400 | `FRAME_TEXT_TOO_LONG` | 200文字超過 |
+| 400 | `GOAL_REFINE_INPUT_EMPTY` | Goal Refine入力なし |
+| 400 | `ACTION_GENERATE_INPUT_INCOMPLETE` | P/D/C不足 |
+| 400 | `ACTION_REFINE_INPUT_INCOMPLETE` | P/D/C/A不足 |
+| 400 | `CYCLE_COMPLETION_INPUT_INCOMPLETE` | P/D/C/A不足 |
+| 400 | `INVALID_GOAL_OUTCOME` | achieved/ended以外 |
+| 400 | `INVALID_CURSOR` | list先頭から再取得 |
+| 400 | `GOOGLE_ID_TOKEN_INVALID` | Google認証再実行 |
+| 400 | `GOAL_REVIEW_DISCARD_CONFIRMATION_REQUIRED` | Review Draft変更破棄のconfirmへ戻す |
+| 400 | `GOAL_DELETE_CONFIRMATION_REQUIRED` | confirmへ戻す |
+| 400 | `ACCOUNT_DELETE_CONFIRMATION_REQUIRED` | confirmへ戻す |
+| 401 | `SESSION_MISSING` | bootstrap/auth restore |
+| 401 | `SESSION_EXPIRED` | draft保持して再認証 |
+| 403 | `CSRF_INVALID` | session refresh |
+| 403 | `ANONYMOUS_CREATION_BLOCKED` | 時間を空ける案内 |
+| 404 | `GOAL_DRAFT_NOT_FOUND` | owner外も同じ |
+| 404 | `GOAL_NOT_FOUND` | owner外も同じ |
+| 404 | `CYCLE_NOT_FOUND` | owner/Goal mismatchも同じ |
+| 404 | `AI_SUGGESTION_NOT_FOUND` | generation/target mismatch含む |
+| 404 | `GOOGLE_ACCOUNT_NOT_LINKED` | current User維持 |
+| 409 | `GOAL_ACTIVE_LIMIT_EXCEEDED` | 上限2件のいずれかを達成/終了/削除するよう案内 |
+| 409 | `GOAL_CREATION_DRAFT_ALREADY_EXISTS` | 既存Draftへ移動 |
+| 409 | `GOAL_DRAFT_TYPE_MISMATCH` | 正しい画面へreload |
+| 409 | `GOAL_DRAFT_REVISION_CONFLICT` | local draft保持 |
+| 409 | `GOAL_REVIEW_NOT_ACTIVE` | reload Goal state |
+| 409 | `GOAL_REVIEW_REQUIRED` | Cycleを直接作らない |
+| 409 | `GOAL_REVIEW_DRAFT_REVISION_CONFLICT` | local draft保持 |
+| 409 | `GOAL_REFINE_CONTEXT_STALE` | 再生成または元案維持 |
+| 409 | `GOAL_REFINE_RESULT_ALREADY_ADOPTED` | current Draft再取得 |
+| 409 | `GOAL_VERSION_CONFLICT` | current Goal Version再取得 |
+| 409 | `GOAL_ALREADY_TERMINAL` | read-only historyへ |
+| 409 | `GOAL_STATE_CONFLICT` | current workへreload |
+| 409 | `GOAL_DELETE_CONFLICT` | current Goal再取得後に再確認 |
+| 409 | `CYCLE_NOT_ACTIVE` | current Goalへreload |
+| 409 | `CYCLE_REVISION_CONFLICT` | local input保持 |
+| 409 | `AI_OPERATION_IN_PROGRESS` | control disabled維持 |
+| 409 | `ACTION_REPLACEMENT_CONFIRMATION_REQUIRED` | dialog表示 |
+| 409 | `GOOGLE_IDENTITY_ALREADY_LINKED` | cancel/existing login |
+| 409 | `IDEMPOTENCY_KEY_REUSED` | 新しいoperation/keyで再実行 |
+| 429 | `AI_USER_ROLLING_LIMIT_EXCEEDED` | retryAt案内 |
+| 429 | `AI_RATE_LIMIT_EXCEEDED` | retryAfter |
+| 429 | `RATE_LIMIT_EXCEEDED` | generic rate limit |
+| 502 | `AI_INVALID_RESPONSE` | retry可能。本文は変更しない |
+| 503 | `AI_PROVIDER_UNAVAILABLE` | retry可能 |
+| 503 | `AI_SERVICE_BUDGET_EXCEEDED` | AI一時停止 |
+| 503 | `ANTI_ABUSE_SERVICE_UNAVAILABLE` | bootstrap再試行 |
+| 503 | `GOOGLE_IDENTITY_VERIFICATION_UNAVAILABLE` | retry |
+| 504 | `AI_PROVIDER_TIMEOUT` | retry可能 |
+| 500 | `ACCOUNT_UPGRADE_FAILED` | Anonymous User維持 |
+| 500 | `GOOGLE_LOGIN_FAILED` | current Session維持 |
+| 500 | `GOAL_DRAFT_SAVE_FAILED` | Draft維持 |
+| 500 | `GOAL_DRAFT_DELETE_FAILED` | Draft維持 |
+| 500 | `GOAL_START_FAILED` | Draft維持 |
+| 500 | `FRAME_SAVE_FAILED` | Frame維持 |
+| 500 | `CYCLE_COMPLETION_FAILED` | Cycle active維持 |
+| 500 | `GOAL_REVIEW_INVARIANT_BROKEN` | 一般Error +運用alert |
+| 500 | `GOAL_REVIEW_DRAFT_SAVE_FAILED` | Review Draft維持 |
+| 500 | `GOAL_REVIEW_CONTINUE_FAILED` | Review open維持 |
+| 500 | `GOAL_TERMINATION_FAILED` | 元state維持 |
+| 500 | `GOAL_DELETE_FAILED` | Goal維持 |
+| 500 | `ACCOUNT_DELETE_FAILED` | Account維持 |
+| 500 | `INTERNAL_ERROR` | requestId付き一般Error |
 
 Frontendは`message`文字列ではなく`code`で分岐する。`AI_CONTEXT_ISOLATION_VIOLATION`等のSecurity invariant violationは外部へ専用codeを出さず`INTERNAL_ERROR`へ正規化し、内部metric/logで区別する。
 
@@ -3758,6 +3762,7 @@ AND Cycle belongs to that Goal
 
 ---
 
+
 # 28. Auto Save / Draft Recovery
 
 ## 28.1 Targets
@@ -3819,7 +3824,7 @@ IndexedDBへ未保存差分だけを保存する。
 ```ts
 type DraftCacheRecord =
   | {
-      readonly kind: "goalCreation";
+      readonly kind: 'goalCreation';
       readonly userId: string;
       readonly draftId: string;
       readonly content: string;
@@ -3827,7 +3832,7 @@ type DraftCacheRecord =
       readonly updatedAt: string;
     }
   | {
-      readonly kind: "goalReview";
+      readonly kind: 'goalReview';
       readonly userId: string;
       readonly goalId: string;
       readonly reviewDraftId: string;
@@ -3836,11 +3841,11 @@ type DraftCacheRecord =
       readonly updatedAt: string;
     }
   | {
-      readonly kind: "cycleFrame";
+      readonly kind: 'cycleFrame';
       readonly userId: string;
       readonly goalId: string;
       readonly cycleId: string;
-      readonly frame: "plan" | "do" | "check" | "action";
+      readonly frame: 'plan' | 'do' | 'check' | 'action';
       readonly content: string;
       readonly baseFrameRevision: number;
       readonly updatedAt: string;
@@ -3869,20 +3874,21 @@ Server resource取得後:
 
 ## 28.7 Operation gating
 
-| Operation                        | Required save state                                  |
-| -------------------------------- | ---------------------------------------------------- |
-| Goal Refine                      | `saved`                                              |
-| Goal開始                         | `saved`                                              |
-| Goal Review Continue             | `saved`                                              |
-| Action Generate / Refine         | `saved`                                              |
-| Cycle Complete                   | `saved`                                              |
+| Operation | Required save state |
+|---|---|
+| Goal Refine | `saved` |
+| Goal開始 | `saved` |
+| Goal Review Continue | `saved` |
+| Action Generate / Refine | `saved` |
+| Cycle Complete | `saved` |
 | Active Cycle中のGoal achieve/end | Cycle save `saved`。最新入力をCanceled履歴へ残すため |
-| Review Goal achieve/end          | Draft save不要。Draft変更を破棄するため              |
-| Goal Delete                      | save不要。確認後queueをcancelしcontentごと削除       |
+| Review Goal achieve/end | Draft save不要。Draft変更を破棄するため |
+| Goal Delete | save不要。確認後queueをcancelしcontentごと削除 |
 
 Reviewからachieve/endする際、Frontendはqueued saveをcancelする。既にin-flightのsaveが先に完了しても、その本文を含めてDraft全体を破棄してterminal transitionを続行する。Terminal transactionが先に完了した後のlate PATCHは、Draft削除またはGoal state不一致により拒否され、terminal stateを変えない。
 
 ---
+
 
 # 29. Frontend Architecture
 
@@ -3905,13 +3911,13 @@ Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTa
 
 **[設計判断 / 実装契約]** Frontendは物理Directory名ではなく、次の論理責務を分離する。各論理領域を1つまたは複数のDirectory / fileへ配置してよいが、依存方向と責務を崩してはならない。
 
-| Logical area              | Required responsibility                                                                                                                                  | Dependency rule                                                                            |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Application composition   | Application bootstrap、Router、Provider、Query client、top-level error boundary                                                                          | Route composition、Feature、Shared technical modulesを組み立てる。Product Ruleを実装しない |
-| Route composition         | Route単位のdata取得、loading / error / navigation、Featureの画面構成                                                                                     | Featureの公開ContractとSharedだけを利用し、Domain Ruleを直接複製しない                     |
-| Feature modules           | Goal collection、Goal creation、Goal refine、Goal review、Goal history、Cycle editor、Action AI、Auth、Account等の機能単位のUI / state / use-case client | Shared technical modulesへ依存できる。他Featureの内部実装へdeep importしない               |
-| Shared technical modules  | API client / schema、汎用UI、Draft cache、Validation、Date、Typography、Locale copy、共通型                                                              | Product Featureへ依存しない。Product固有のState Transitionを持たない                       |
-| Test / evaluation support | Component / hook test、E2E、fixture、Fake adapter                                                                                                        | Production codeの公開Contractを通して検証し、Test専用分岐をProductionへ漏らさない          |
+| Logical area | Required responsibility | Dependency rule |
+|---|---|---|
+| Application composition | Application bootstrap、Router、Provider、Query client、top-level error boundary | Route composition、Feature、Shared technical modulesを組み立てる。Product Ruleを実装しない |
+| Route composition | Route単位のdata取得、loading / error / navigation、Featureの画面構成 | Featureの公開ContractとSharedだけを利用し、Domain Ruleを直接複製しない |
+| Feature modules | Goal collection、Goal creation、Goal refine、Goal review、Goal history、Cycle editor、Action AI、Auth、Account等の機能単位のUI / state / use-case client | Shared technical modulesへ依存できる。他Featureの内部実装へdeep importしない |
+| Shared technical modules | API client / schema、汎用UI、Draft cache、Validation、Date、Typography、Locale copy、共通型 | Product Featureへ依存しない。Product固有のState Transitionを持たない |
+| Test / evaluation support | Component / hook test、E2E、fixture、Fake adapter | Production codeの公開Contractを通して検証し、Test専用分岐をProductionへ漏らさない |
 
 追加機能は、既存Featureへ責務を押し込むのではなく、次を基準に配置する。
 
@@ -3924,17 +3930,17 @@ Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTa
 
 次の責務は実装上必須である。表の名称は論理責務であり、Component名またはfile名を固定しない。
 
-| Responsibility           | Required behavior                                                                                           |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| Home composition         | Goal collectionを取得・描画し、単数Goal前提のglobal stateを作らない                                         |
-| Progressing Goal summary | `ProgressingGoalSummary`のstate variantに応じてActive Cycle / Goal Reviewへの導線を表示する                 |
-| Goal Creation editor     | Creation Draft、Auto Save state、Goal Refine、Start eligibility、Draft recoveryを統合する                   |
-| Goal Refine comparison   | User draftとAI suggestionを同時表示し、明示Adoptだけを反映する                                              |
-| Goal Review editor       | Current Goal Version、Review Draft、Continue、Achieve、Endを扱い、terminal時のDraft破棄を説明する           |
-| Cycle editor             | P/D/C/A Tab、Textarea、Frame別revision、Save state、Action AI、Cycle completionを扱う                       |
-| Action eligibility       | Generate / Refine / Completeのpredicateをpure logicとして算出し、UI文言で判定しない                         |
-| Goal history timeline    | Cycleの`goalVersionId`変化からVersion change markerを生成し、Completed / Canceled detailをread-only表示する |
-| Session / account UI     | Anonymous state、Google connection、identity collision、Account Deleteを扱う                                |
+| Responsibility | Required behavior |
+|---|---|
+| Home composition | Goal collectionを取得・描画し、単数Goal前提のglobal stateを作らない |
+| Progressing Goal summary | `ProgressingGoalSummary`のstate variantに応じてActive Cycle / Goal Reviewへの導線を表示する |
+| Goal Creation editor | Creation Draft、Auto Save state、Goal Refine、Start eligibility、Draft recoveryを統合する |
+| Goal Refine comparison | User draftとAI suggestionを同時表示し、明示Adoptだけを反映する |
+| Goal Review editor | Current Goal Version、Review Draft、Continue、Achieve、Endを扱い、terminal時のDraft破棄を説明する |
+| Cycle editor | P/D/C/A Tab、Textarea、Frame別revision、Save state、Action AI、Cycle completionを扱う |
+| Action eligibility | Generate / Refine / Completeのpredicateをpure logicとして算出し、UI文言で判定しない |
+| Goal history timeline | Cycleの`goalVersionId`変化からVersion change markerを生成し、Completed / Canceled detailをread-only表示する |
+| Session / account UI | Anonymous state、Google connection、identity collision、Account Deleteを扱う |
 
 Route-level UIまたは汎用ComponentへProduct Ruleを直接埋め込まず、Feature-level model / reducer / predicateまたはshared domain-facing clientへ分離する。
 
@@ -3943,11 +3949,12 @@ Route-level UIまたは汎用ComponentへProduct Ruleを直接埋め込まず、
 TanStack Query key例:
 
 ```ts
-["goals", { status: "progressing" }][("goals", { status: "all", cursor })][
-  ("goal", goalId)
-][("goal-review", goalId)][("goal-cycles", goalId, { order: "desc" })][
-  ("cycle", goalId, cycleId)
-];
+['goals', { status: 'progressing' }]
+['goals', { status: 'all', cursor }]
+['goal', goalId]
+['goal-review', goalId]
+['goal-cycles', goalId, { order: 'desc' }]
+['cycle', goalId, cycleId]
 ```
 
 Create / Continue / Terminate / Deleteに加え、Frame/Draft Auto SaveとAI提案Adoptを含むserver mutation成功時は、responseを関連collection/detail cacheへ明示反映するかinvalidateする。保存済みserver stateをeditor local stateだけに保持せず、route往復でfreshな旧cacheを再表示しない。未保存入力はeditor local stateとBrowser Draft Cache、保存済みserver stateはTanStack Queryを正とする。Goalを単一global variableとして保持しない。
@@ -4041,6 +4048,7 @@ Actions:
 
 ---
 
+
 # 30. Backend Architecture
 
 ## 30.1 Technology
@@ -4061,18 +4069,18 @@ Actions:
 
 **[設計判断 / 実装契約]** Backendは次の論理境界を分離する。物理package名、file名、1 Use Caseあたりのfile数は固定しないが、依存方向と公開責務は固定する。
 
-| Logical area               | Required responsibility                                                                               | Prohibited dependency / behavior                                                  |
-| -------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Executable composition     | Config読込、dependency wiring、HTTP server / maintenance commandの起動                                | Product Ruleを実装しない。ProviderやRepositoryをDomainへ直接注入しない            |
-| Domain modules             | User、Goal、Goal Draft、Goal Version、Cycle、AI Usage等のValue / Entity / pure transition / invariant | HTTP、Database、OpenAI、Google、Cloudflare、Clock、ID生成へ依存しない             |
-| Application use cases      | Authorization scope、Transaction orchestration、Idempotency、Concurrency、Policy、Port呼出            | HTTP DTO、DB row、Provider SDK型を公開Contractにしない                            |
-| Application ports          | Repository、AI、Clock、ID、Anti-abuse、Entitlement、Transaction等の抽象境界                           | Infrastructure固有型を漏らさない                                                  |
-| Infrastructure adapters    | PostgreSQL、OpenAI、Google token verification、Turnstile、Session token、Telemetry                    | Product Ruleを独自に再定義しない。Domain validationを省略しない                   |
-| HTTP boundary              | Router、Middleware、Request / Response DTO、parse / validate、stable error mapping                    | Business RuleとTransaction orchestrationを実装しない                              |
-| Configuration              | Environment / file入力のparse、typed validation、startup fail-fast                                    | Product RuleをConfigurationで無効化しない                                         |
-| Versioned AI prompt assets | Prompt本文とimmutable prompt versionの対応                                                            | 長いPrompt本文をEnvironment Variableへ置かない。versionを変えずに意味を変更しない |
-| Schema / migration assets  | Baseline、forward migration、sqlc等のquery source、generated code境界                                 | User Data保存後に破壊的なDown Migrationを通常手順にしない                         |
-| Test / evaluation assets   | Unit、Integration、E2E support、AI quality fixture                                                    | 実User contentやSecretをfixtureへ含めない                                         |
+| Logical area | Required responsibility | Prohibited dependency / behavior |
+|---|---|---|
+| Executable composition | Config読込、dependency wiring、HTTP server / maintenance commandの起動 | Product Ruleを実装しない。ProviderやRepositoryをDomainへ直接注入しない |
+| Domain modules | User、Goal、Goal Draft、Goal Version、Cycle、AI Usage等のValue / Entity / pure transition / invariant | HTTP、Database、OpenAI、Google、Cloudflare、Clock、ID生成へ依存しない |
+| Application use cases | Authorization scope、Transaction orchestration、Idempotency、Concurrency、Policy、Port呼出 | HTTP DTO、DB row、Provider SDK型を公開Contractにしない |
+| Application ports | Repository、AI、Clock、ID、Anti-abuse、Entitlement、Transaction等の抽象境界 | Infrastructure固有型を漏らさない |
+| Infrastructure adapters | PostgreSQL、OpenAI、Google token verification、Turnstile、Session token、Telemetry | Product Ruleを独自に再定義しない。Domain validationを省略しない |
+| HTTP boundary | Router、Middleware、Request / Response DTO、parse / validate、stable error mapping | Business RuleとTransaction orchestrationを実装しない |
+| Configuration | Environment / file入力のparse、typed validation、startup fail-fast | Product RuleをConfigurationで無効化しない |
+| Versioned AI prompt assets | Prompt本文とimmutable prompt versionの対応 | 長いPrompt本文をEnvironment Variableへ置かない。versionを変えずに意味を変更しない |
+| Schema / migration assets | Baseline、forward migration、sqlc等のquery source、generated code境界 | User Data保存後に破壊的なDown Migrationを通常手順にしない |
+| Test / evaluation assets | Unit、Integration、E2E support、AI quality fixture | 実User contentやSecretをfixtureへ含めない |
 
 Module分割は、次を満たす範囲で実装者が決定する。
 
@@ -4192,30 +4200,31 @@ SQLを1巨大Repository methodへ隠しすぎず、Transaction object内のtyped
 
 ---
 
+
 # 31. Concurrency / Idempotency Matrix
 
-| Operation                        | Prevented race                  | Mechanism                                                       | Guarantee                                         |
-| -------------------------------- | ------------------------------- | --------------------------------------------------------------- | ------------------------------------------------- |
-| Anonymous retry                  | response lossで複数User         | bootstrap hash unique                                           | same bootstrap -> same User                       |
-| Goal Draft save                  | old save overwrites new         | revision CAS                                                    | stale write rejected                              |
-| Start Goal parallel              | Progressing Goal上限突破        | User row lock + Policy count                                    | concurrent requestsでもlimit内                    |
-| Start Goal partial               | Goalだけ/Cycleだけ              | DB Transaction + deferred FK                                    | Goal+Version1+Cycle1 or none                      |
-| Goal Review save                 | old draft overwrite             | revision CAS                                                    | latest save preserved                             |
-| Cycle Frame save                 | old same-frame overwrite        | queue + frame revision CAS                                      | stale same-frame write rejected                   |
-| Different Frame saves            | needless conflict               | per-frame revision                                              | independent changes可能                           |
-| Cycle Complete double tap        | duplicate Review Draft          | Cycle/Goal row locks + operationId + unique sourceCycle         | one transition                                    |
-| Complete vs Goal end             | inconsistent completed/canceled | Goal lock order                                                 | one command wins、other conflict/replay           |
-| Review Continue double tap       | duplicate Version/Cycle         | Goal/Draft lock + startOperationId                              | one next Cycle                                    |
-| Review Continue vs terminal      | Cycle created after terminal    | Goal row lock                                                   | one transition only                               |
-| Goal end vs new Goal create      | transient limit error/race      | User row lock first                                             | progressing count serialized                      |
-| Action AI double execution       | duplicate paid call             | idempotency key + running unique                                | max1 running per Cycle                            |
-| Goal Refine double execution     | duplicate paid call             | idempotency key + running unique                                | max1 running per Draft                            |
-| Goal Refine vs Draft edit        | AI overwrite                    | suggestion-only + source text comparison + current revision CAS | no automatic overwrite                            |
-| Goal suggestion adoption vs edit | newer text lost                 | Draft lock + source text comparison + current revision CAS      | stale suggestion rejected、同一本文への復元は許可 |
-| AI result vs P/D/C edit          | P/D/C overwritten               | A-only update                                                   | current P/D/C preserved                           |
-| Goal Delete vs AI                | late content restore            | locks + cancel + existence recheck                              | deleted Aggregate not recreated                   |
-| Goal Delete retry                | first success response loss     | deletion receipt                                                | same operation -> 204                             |
-| Account Delete                   | partial User data               | User lock + FK cascade Tx                                       | app data atomic delete                            |
+| Operation | Prevented race | Mechanism | Guarantee |
+|---|---|---|---|
+| Anonymous retry | response lossで複数User | bootstrap hash unique | same bootstrap -> same User |
+| Goal Draft save | old save overwrites new | revision CAS | stale write rejected |
+| Start Goal parallel | Progressing Goal上限突破 | User row lock + Policy count | concurrent requestsでもlimit内 |
+| Start Goal partial | Goalだけ/Cycleだけ | DB Transaction + deferred FK | Goal+Version1+Cycle1 or none |
+| Goal Review save | old draft overwrite | revision CAS | latest save preserved |
+| Cycle Frame save | old same-frame overwrite | queue + frame revision CAS | stale same-frame write rejected |
+| Different Frame saves | needless conflict | per-frame revision | independent changes可能 |
+| Cycle Complete double tap | duplicate Review Draft | Cycle/Goal row locks + operationId + unique sourceCycle | one transition |
+| Complete vs Goal end | inconsistent completed/canceled | Goal lock order | one command wins、other conflict/replay |
+| Review Continue double tap | duplicate Version/Cycle | Goal/Draft lock + startOperationId | one next Cycle |
+| Review Continue vs terminal | Cycle created after terminal | Goal row lock | one transition only |
+| Goal end vs new Goal create | transient limit error/race | User row lock first | progressing count serialized |
+| Action AI double execution | duplicate paid call | idempotency key + running unique | max1 running per Cycle |
+| Goal Refine double execution | duplicate paid call | idempotency key + running unique | max1 running per Draft |
+| Goal Refine vs Draft edit | AI overwrite | suggestion-only + source text comparison + current revision CAS | no automatic overwrite |
+| Goal suggestion adoption vs edit | newer text lost | Draft lock + source text comparison + current revision CAS | stale suggestion rejected、同一本文への復元は許可 |
+| AI result vs P/D/C edit | P/D/C overwritten | A-only update | current P/D/C preserved |
+| Goal Delete vs AI | late content restore | locks + cancel + existence recheck | deleted Aggregate not recreated |
+| Goal Delete retry | first success response loss | deletion receipt | same operation -> 204 |
+| Account Delete | partial User data | User lock + FK cascade Tx | app data atomic delete |
 
 ## 31.1 Global lock order
 
@@ -4242,13 +4251,13 @@ Operation ID / Idempotency-Key replayでは、canonical requestからSHA-256 req
 
 保存先:
 
-| Operation                                 | Hash field                                           |
-| ----------------------------------------- | ---------------------------------------------------- |
-| Initial Goal Start / Goal Review Continue | created Cycle `start_request_hash`                   |
-| Cycle Complete                            | completed Cycle `completion_request_hash`            |
-| Goal achieved / ended                     | Goal `terminal_request_hash`                         |
-| Goal Delete                               | `goal_delete_receipts.request_hash`                  |
-| AI logical operation                      | `ai_generations.input_hash` + unique Idempotency-Key |
+| Operation | Hash field |
+|---|---|
+| Initial Goal Start / Goal Review Continue | created Cycle `start_request_hash` |
+| Cycle Complete | completed Cycle `completion_request_hash` |
+| Goal achieved / ended | Goal `terminal_request_hash` |
+| Goal Delete | `goal_delete_receipts.request_hash` |
+| AI logical operation | `ai_generations.input_hash` + unique Idempotency-Key |
 
 DDLへ後付けの重複Columnを追加しない。§16のNormative DDLへ先に反映する。
 
@@ -4260,11 +4269,11 @@ DDLへ後付けの重複Columnを追加しない。§16のNormative DDLへ先に
 
 **[確定仕様]** AIはユーザーのGoalまたはActionを決定する主体ではない。次の3つのlogical operationだけを提供する。
 
-| Operation         | Input target                               | Result behavior                           |
-| ----------------- | ------------------------------------------ | ----------------------------------------- |
-| `goal_refine`     | Goal Creation DraftまたはGoal Review Draft | suggestionを返す。自動反映しない          |
-| `action_generate` | Active CycleのGoal Version + P/D/C         | 1〜3件を通常Textへ変換し、AへAtomicに反映 |
-| `action_refine`   | Active CycleのGoal Version + P/D/C/A       | Aの意図を維持して改善し、AへAtomicに反映  |
+| Operation | Input target | Result behavior |
+|---|---|---|
+| `goal_refine` | Goal Creation DraftまたはGoal Review Draft | suggestionを返す。自動反映しない |
+| `action_generate` | Active CycleのGoal Version + P/D/C | 1〜3件を通常Textへ変換し、AへAtomicに反映 |
+| `action_refine` | Active CycleのGoal Version + P/D/C/A | Aの意図を維持して改善し、AへAtomicに反映 |
 
 MVPではGoalのゼロベース生成、P/D/Cの自動生成・自動書換え、AIからの追加質問、Goalの合否判定を実装しない。
 
@@ -5414,8 +5423,15 @@ Thresholdは運用Configurationとする。
 :root,
 :root:lang(ja) {
   --font-family-body-ja:
-    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic",
-    Meiryo, "Noto Sans JP", "Noto Sans CJK JP", system-ui, sans-serif;
+    "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN",
+    "Yu Gothic UI",
+    "Yu Gothic",
+    Meiryo,
+    "Noto Sans JP",
+    "Noto Sans CJK JP",
+    system-ui,
+    sans-serif;
 
   --font-family-ui: var(--font-family-body-ja);
   --font-family-body: var(--font-family-body-ja);
@@ -5427,19 +5443,9 @@ Thresholdは運用Configurationとする。
 ComponentへFont名を直接書かず、Design Tokenだけを参照する。
 
 ```css
-body {
-  font-family: var(--font-family-body);
-}
-button,
-input,
-textarea,
-select {
-  font: inherit;
-}
-.goal-editor,
-.cycle-editor {
-  font-family: var(--font-family-editor);
-}
+body { font-family: var(--font-family-body); }
+button, input, textarea, select { font: inherit; }
+.goal-editor, .cycle-editor { font-family: var(--font-family-editor); }
 ```
 
 ## 43.2 Rationale
@@ -5461,8 +5467,8 @@ Trade-offは、OS間で字形・文字幅・weightが異なり、Brand上の完�
 
 ```css
 :root {
-  --font-size-body: 1rem; /* 16px at default browser setting */
-  --font-size-editor: 1rem; /* Mobile Safari zoom防止も考慮 */
+  --font-size-body: 1rem;             /* 16px at default browser setting */
+  --font-size-editor: 1rem;           /* Mobile Safari zoom防止も考慮 */
   --font-size-small: 0.875rem;
   --font-size-title: clamp(1.25rem, 4vw, 1.75rem);
 
@@ -5488,12 +5494,12 @@ Trade-offは、OS間で字形・文字幅・weightが異なり、Brand上の完�
 
 ## 43.4 Main alternatives
 
-| Candidate                              | Merits                                                  | Demerits / trade-off                                                  | MVP decision                                      |
-| -------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------- |
-| Noto Sans JP self-hosted Variable Font | OS間で比較的一貫、豊富なweight、OFL、Latin/Japanese調和 | CJK payloadが大きい。subset/build/cache/FOIT/FOUT対策が必要           | Requiredにしない。Brand統一が必要になった時に評価 |
-| BIZ UDPGothic self-hosted              | UD設計、小さいUIや識別性を重視、OFL                     | Weight/表情の選択肢と一般的なBrand toneが限定的。本文の好みが分かれる | Accessibility-focused optionとして評価候補        |
-| Source Han Sans / Noto Sans CJK        | 広いCJK coverage、OFL                                   | 複数Script全体のassetが大きく、MVP日本語専用には過剰                  | 多言語CJK拡張時候補                               |
-| Browser default only                   | 実装最小                                                | Browser / OS差を制御できず、Font方針が仕様として固定されない          | 採用しない。明示Stackを使う                       |
+| Candidate | Merits | Demerits / trade-off | MVP decision |
+|---|---|---|---|
+| Noto Sans JP self-hosted Variable Font | OS間で比較的一貫、豊富なweight、OFL、Latin/Japanese調和 | CJK payloadが大きい。subset/build/cache/FOIT/FOUT対策が必要 | Requiredにしない。Brand統一が必要になった時に評価 |
+| BIZ UDPGothic self-hosted | UD設計、小さいUIや識別性を重視、OFL | Weight/表情の選択肢と一般的なBrand toneが限定的。本文の好みが分かれる | Accessibility-focused optionとして評価候補 |
+| Source Han Sans / Noto Sans CJK | 広いCJK coverage、OFL | 複数Script全体のassetが大きく、MVP日本語専用には過剰 | 多言語CJK拡張時候補 |
+| Browser default only | 実装最小 | Browser / OS差を制御できず、Font方針が仕様として固定されない | 採用しない。明示Stackを使う |
 
 ## 43.5 Web Fontを将来採用する条件
 
@@ -5548,11 +5554,11 @@ MVP UIは日本語のみだが、将来次のように差し替え可能にす�
 
 **[確定仕様]** FUKAMU Cycleの画面は、白を基調に次の青系3色をBrand paletteとして使用する。
 
-| Token      | Value     | Main use                                 |
-| ---------- | --------- | ---------------------------------------- |
-| Light Blue | `#D6E9FF` | 面、区切り、選択前の穏やかな状態         |
-| Blue       | `#4A90E2` | Accent、Focus、進行や変化の手掛かり      |
-| Deep Blue  | `#0D3B8E` | Primary Action、文字Wordmark、重要見出し |
+| Token | Value | Main use |
+|---|---|---|
+| Light Blue | `#D6E9FF` | 面、区切り、選択前の穏やかな状態 |
+| Blue | `#4A90E2` | Accent、Focus、進行や変化の手掛かり |
+| Deep Blue | `#0D3B8E` | Primary Action、文字Wordmark、重要見出し |
 
 - 印象は静か、明快、幾何学的、信頼できるものとし、思考・行動・学びが深く積み重なる感覚を、余白、階層、直線的な色面、控えめな奥行きで表現する。
 - Primary ActionはDeep Blueを使い、通常本文をBlueだけで表示しない。文字、Focus、状態、境界はWCAG 2.2 AA相当のcontrastを満たす。
@@ -5804,27 +5810,27 @@ Processを起動しない条件:
 
 ## 46.1 Selection table
 
-| Area                | Adopted                                                 | Rationale                                               | Main alternative                          | Trade-off                                           |
-| ------------------- | ------------------------------------------------------- | ------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------- |
-| Frontend            | React 19.2 + TypeScript strict                          | 成熟、Component ecosystem、AI coding agentが扱いやすい  | Vue, Svelte                               | React固有conceptが増える                            |
-| Build               | Vite 8系                                                | SPAに十分、開発/buildが単純                             | Next.js, Rsbuild                          | SSRを持たない                                       |
-| Routing             | React Router                                            | 画面規模に対して成熟・十分                              | TanStack Router                           | Search param型安全は弱め                            |
-| Server State        | TanStack Query v5                                       | cache、mutation、infinite queryを標準化                 | SWR, custom                               | Library concept追加                                 |
-| Form                | React Hook Form                                         | Textarea stateとvalidationを分離しやすい                | Controlled React only                     | 単純formには依存追加                                |
-| Frontend validation | Zod 4                                                   | `unknown`からtyped DTOへ境界検証                        | Valibot                                   | Bundle最小ではない                                  |
-| Backend             | Go 1.26系                                               | 確定要件、静的型、single binary                         | —                                         | Frontendと型を直接共有しない                        |
-| HTTP                | `net/http` + chi                                        | 薄く標準互換、MVPに十分                                 | standard mux, Gin                         | batteries-includedではない                          |
-| Database            | PostgreSQL / Neon                                       | Tx、row lock、partial unique、FK、cursor                | MySQL, SQLite                             | Managed DB cost / connection管理                    |
-| DB access           | pgx/v5 + sqlc                                           | SQLを明示し型生成、Transaction制御が明瞭                | GORM, ent                                 | SQL知識が必要                                       |
-| Migration           | golang-migrate                                          | 成熟したSQL migration                                   | goose                                     | Schema DSLなし                                      |
-| Auth                | Opaque Session + Google GIS                             | Anonymous upgrade、revoke、deleteを明確化               | Firebase Auth                             | Session storageを自前管理                           |
-| AI                  | OpenAI Responses + Structured Outputs + official Go SDK | Schema validation、Provider adapter実装が容易           | raw HTTP / another provider               | Provider dependency                                 |
-| AI model            | GPT-5.6 Luna first, Terra release-time alternative      | Cost-sensitive operationを優先し品質evalでdefaultを選定 | single high-tier model / runtime fallback | Eval運用が必要。request途中の自動fallbackは行わない |
-| Abuse               | Turnstile + app limits                                  | 低摩擦とServer-side防御                                 | reCAPTCHA                                 | Vendor dependency                                   |
-| Hosting             | Workers Static Assets + Container + Neon                | Same-origin SPA/Go、Managed deployment                  | Cloud Run, Fly, Render                    | Cloudflare container運用知識                        |
-| Logging             | `slog` JSON + OTel API                                  | Go標準とtrace連携                                       | Zap, Zerolog                              | 高度な集計基盤は別途                                |
-| Testing             | Go testing, Vitest/RTL, Playwright                      | Layer別に成熟                                           | Jest/Cypress                              | Toolchain複数                                       |
-| Typography          | Explicit Japanese system stack                          | 高速、可読、FOIT/CLS回避                                | Noto Sans JP web font                     | OS差が残る                                          |
+| Area | Adopted | Rationale | Main alternative | Trade-off |
+|---|---|---|---|---|
+| Frontend | React 19.2 + TypeScript strict | 成熟、Component ecosystem、AI coding agentが扱いやすい | Vue, Svelte | React固有conceptが増える |
+| Build | Vite 8系 | SPAに十分、開発/buildが単純 | Next.js, Rsbuild | SSRを持たない |
+| Routing | React Router | 画面規模に対して成熟・十分 | TanStack Router | Search param型安全は弱め |
+| Server State | TanStack Query v5 | cache、mutation、infinite queryを標準化 | SWR, custom | Library concept追加 |
+| Form | React Hook Form | Textarea stateとvalidationを分離しやすい | Controlled React only | 単純formには依存追加 |
+| Frontend validation | Zod 4 | `unknown`からtyped DTOへ境界検証 | Valibot | Bundle最小ではない |
+| Backend | Go 1.26系 | 確定要件、静的型、single binary | — | Frontendと型を直接共有しない |
+| HTTP | `net/http` + chi | 薄く標準互換、MVPに十分 | standard mux, Gin | batteries-includedではない |
+| Database | PostgreSQL / Neon | Tx、row lock、partial unique、FK、cursor | MySQL, SQLite | Managed DB cost / connection管理 |
+| DB access | pgx/v5 + sqlc | SQLを明示し型生成、Transaction制御が明瞭 | GORM, ent | SQL知識が必要 |
+| Migration | golang-migrate | 成熟したSQL migration | goose | Schema DSLなし |
+| Auth | Opaque Session + Google GIS | Anonymous upgrade、revoke、deleteを明確化 | Firebase Auth | Session storageを自前管理 |
+| AI | OpenAI Responses + Structured Outputs + official Go SDK | Schema validation、Provider adapter実装が容易 | raw HTTP / another provider | Provider dependency |
+| AI model | GPT-5.6 Luna first, Terra release-time alternative | Cost-sensitive operationを優先し品質evalでdefaultを選定 | single high-tier model / runtime fallback | Eval運用が必要。request途中の自動fallbackは行わない |
+| Abuse | Turnstile + app limits | 低摩擦とServer-side防御 | reCAPTCHA | Vendor dependency |
+| Hosting | Workers Static Assets + Container + Neon | Same-origin SPA/Go、Managed deployment | Cloud Run, Fly, Render | Cloudflare container運用知識 |
+| Logging | `slog` JSON + OTel API | Go標準とtrace連携 | Zap, Zerolog | 高度な集計基盤は別途 |
+| Testing | Go testing, Vitest/RTL, Playwright | Layer別に成熟 | Jest/Cypress | Toolchain複数 |
+| Typography | Explicit Japanese system stack | 高速、可読、FOIT/CLS回避 | Noto Sans JP web font | OS差が残る |
 
 ## 46.2 Why Vite SPA, not Next.js
 
@@ -5869,16 +5875,16 @@ Goal / Version / Cycle / Review / AI Usageは強いtransactional consistencyを�
 
 ## 48.1 Test layers
 
-| Layer                     | Tool / style                                       | Purpose                                               |
-| ------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
-| Domain Unit               | Go `testing`, table-driven, fake clock/ID values   | Pure invariant / transition                           |
-| Application Use Case      | Fake ports + transaction spy                       | Orchestration、error mapping、side effect order       |
-| Repository                | 実PostgreSQL                                       | FK、CHECK、partial unique、row lock、rollback         |
-| API Integration           | `httptest` + 実PostgreSQL + fake external adapters | DTO、auth、authorization、stable error                |
-| Frontend Unit / Component | Vitest + React Testing Library                     | Reducer、eligibility、UI state、A11y                  |
-| E2E                       | Playwright + fake AI/Google/Turnstile              | Critical user journeys                                |
-| Provider Contract         | Staging/manual limited                             | OpenAI schema / Google verify / Turnstile integration |
-| AI Quality Evaluation     | Japanese fixture + rubric                          | 意図保持、幻覚、具体性                                |
+| Layer | Tool / style | Purpose |
+|---|---|---|
+| Domain Unit | Go `testing`, table-driven, fake clock/ID values | Pure invariant / transition |
+| Application Use Case | Fake ports + transaction spy | Orchestration、error mapping、side effect order |
+| Repository | 実PostgreSQL | FK、CHECK、partial unique、row lock、rollback |
+| API Integration | `httptest` + 実PostgreSQL + fake external adapters | DTO、auth、authorization、stable error |
+| Frontend Unit / Component | Vitest + React Testing Library | Reducer、eligibility、UI state、A11y |
+| E2E | Playwright + fake AI/Google/Turnstile | Critical user journeys |
+| Provider Contract | Staging/manual limited | OpenAI schema / Google verify / Turnstile integration |
+| AI Quality Evaluation | Japanese fixture + rubric | 意図保持、幻覚、具体性 |
 
 Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpartial index、deferred FK、row lockを検証するためである。
 
@@ -5892,182 +5898,182 @@ Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpa
 
 ## 48.3 Goal bootstrap / creation tests
 
-| ID          | Case                                           | Expected                                                      |
-| ----------- | ---------------------------------------------- | ------------------------------------------------------------- |
-| G-BOOT-01   | New anonymous bootstrap                        | User + Sessionのみ。Goal/Cycleなし                            |
-| G-BOOT-02   | User insert後Session失敗                       | Userもrollback                                                |
-| G-BOOT-03   | same bootstrap retry within TTL                | same User、new/reused Session。Goalなし                       |
-| G-BOOT-04   | expired bootstrap                              | old UserへbootstrapだけでSession発行不可                      |
-| G-CREATE-01 | Creation Draft作成                             | open Draft、body empty可                                      |
-| G-CREATE-02 | Goal 80 code points                            | save/start可                                                  |
-| G-CREATE-03 | Goal 81 code points                            | Frontend/Backend/DBで拒否                                     |
-| G-CREATE-04 | trim後空でstart                                | `GOAL_TEXT_REQUIRED`                                          |
-| G-CREATE-05 | valid start                                    | Goal + Version1 + Cycle1 committed                            |
-| G-CREATE-06 | Goal insert failure                            | Version/Cycleなし、Draft維持                                  |
-| G-CREATE-07 | Version insert failure                         | Goal/Cycleなし、Draft維持                                     |
-| G-CREATE-08 | Cycle insert failure                           | Goal/Versionなし、Draft維持                                   |
-| G-CREATE-09 | start response loss + same operationId         | duplicateなし。Resourceが進行済みなら§20.4のcurrent workspace |
-| G-CREATE-10 | same operationId different body/revision       | `IDEMPOTENCY_KEY_REUSED`                                      |
-| G-CREATE-11 | creation start while refine running            | `AI_OPERATION_IN_PROGRESS`                                    |
-| G-CREATE-12 | creation start with stale Draft revision       | conflict、Draft維持                                           |
-| G-CREATE-13 | Progressing Goal上限到達中にCreation Draft作成 | 作成・保存・Refine可。Startだけ拒否                           |
+| ID | Case | Expected |
+|---|---|---|
+| G-BOOT-01 | New anonymous bootstrap | User + Sessionのみ。Goal/Cycleなし |
+| G-BOOT-02 | User insert後Session失敗 | Userもrollback |
+| G-BOOT-03 | same bootstrap retry within TTL | same User、new/reused Session。Goalなし |
+| G-BOOT-04 | expired bootstrap | old UserへbootstrapだけでSession発行不可 |
+| G-CREATE-01 | Creation Draft作成 | open Draft、body empty可 |
+| G-CREATE-02 | Goal 80 code points | save/start可 |
+| G-CREATE-03 | Goal 81 code points | Frontend/Backend/DBで拒否 |
+| G-CREATE-04 | trim後空でstart | `GOAL_TEXT_REQUIRED` |
+| G-CREATE-05 | valid start | Goal + Version1 + Cycle1 committed |
+| G-CREATE-06 | Goal insert failure | Version/Cycleなし、Draft維持 |
+| G-CREATE-07 | Version insert failure | Goal/Cycleなし、Draft維持 |
+| G-CREATE-08 | Cycle insert failure | Goal/Versionなし、Draft維持 |
+| G-CREATE-09 | start response loss + same operationId | duplicateなし。Resourceが進行済みなら§20.4のcurrent workspace |
+| G-CREATE-10 | same operationId different body/revision | `IDEMPOTENCY_KEY_REUSED` |
+| G-CREATE-11 | creation start while refine running | `AI_OPERATION_IN_PROGRESS` |
+| G-CREATE-12 | creation start with stale Draft revision | conflict、Draft維持 |
+| G-CREATE-13 | Progressing Goal上限到達中にCreation Draft作成 | 作成・保存・Refine可。Startだけ拒否 |
 
 ## 48.4 Progressing Goal limit / future entitlement tests
 
-| ID         | Case                                                                    | Expected                                       |
-| ---------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
-| G-LIMIT-01 | no progressing Goal, max=2                                              | start可                                        |
-| G-LIMIT-02 | active_cycle 1件、max=2                                                 | second start可                                 |
-| G-LIMIT-03 | goal_review 1件、max=2                                                  | second start可                                 |
-| G-LIMIT-04 | active_cycle / goal_reviewが合計2件、max=2                              | third start拒否、Creation Draft維持            |
-| G-LIMIT-05 | achieved / ended only                                                   | new Goal start可                               |
-| G-LIMIT-06 | progressing Goal 1件から同一Draftへtwo concurrent start requests、max=2 | exactly one success、count=2以下               |
-| G-LIMIT-07 | 2件到達時のterminal transition concurrent with start                    | User lock順で最終count<=2                      |
-| G-LIMIT-08 | fake Paid policy max=3                                                  | 3件までSchema変更なしで作成可、4件目拒否       |
-| G-LIMIT-09 | DB schema inspection                                                    | User単位progressing Goal unique indexがない    |
-| G-LIMIT-10 | API type                                                                | `/goals` / `/home`がCollectionを返す           |
-| G-LIMIT-11 | Frontend reducer                                                        | 0..N Goal cardを扱える                         |
-| G-LIMIT-12 | Progressing Goal 2件 + Creation Draft                                   | Draftは上限に算入されず共存可能、Startだけ拒否 |
+| ID | Case | Expected |
+|---|---|---|
+| G-LIMIT-01 | no progressing Goal, max=2 | start可 |
+| G-LIMIT-02 | active_cycle 1件、max=2 | second start可 |
+| G-LIMIT-03 | goal_review 1件、max=2 | second start可 |
+| G-LIMIT-04 | active_cycle / goal_reviewが合計2件、max=2 | third start拒否、Creation Draft維持 |
+| G-LIMIT-05 | achieved / ended only | new Goal start可 |
+| G-LIMIT-06 | progressing Goal 1件から同一Draftへtwo concurrent start requests、max=2 | exactly one success、count=2以下 |
+| G-LIMIT-07 | 2件到達時のterminal transition concurrent with start | User lock順で最終count<=2 |
+| G-LIMIT-08 | fake Paid policy max=3 | 3件までSchema変更なしで作成可、4件目拒否 |
+| G-LIMIT-09 | DB schema inspection | User単位progressing Goal unique indexがない |
+| G-LIMIT-10 | API type | `/goals` / `/home`がCollectionを返す |
+| G-LIMIT-11 | Frontend reducer | 0..N Goal cardを扱える |
+| G-LIMIT-12 | Progressing Goal 2件 + Creation Draft | Draftは上限に算入されず共存可能、Startだけ拒否 |
 
 ## 48.5 Goal Version tests
 
-| ID    | Case                                     | Expected                              |
-| ----- | ---------------------------------------- | ------------------------------------- |
-| GV-01 | initial start                            | Version 1 exactly one                 |
-| GV-02 | Review body exact same                   | new Versionなし、Cycle2 references v1 |
-| GV-03 | Review body one char changed             | Version2 + Cycle2 references v2       |
-| GV-04 | whitespace/newline actual change         | Product ruleに従いnew Version         |
-| GV-05 | CRLF only difference after normalization | new Versionなし                       |
-| GV-06 | Version update repository call           | method不存在 / SQL update禁止         |
-| GV-07 | past Cycle after later Goal change       | original goalVersionId unchanged      |
-| GV-08 | concurrent Review continue               | one Version/Cycle only                |
-| GV-09 | Goal current version mismatch            | `GOAL_VERSION_CONFLICT`               |
-| GV-10 | Version deletion outside Goal Delete     | endpoint/repository methodなし        |
+| ID | Case | Expected |
+|---|---|---|
+| GV-01 | initial start | Version 1 exactly one |
+| GV-02 | Review body exact same | new Versionなし、Cycle2 references v1 |
+| GV-03 | Review body one char changed | Version2 + Cycle2 references v2 |
+| GV-04 | whitespace/newline actual change | Product ruleに従いnew Version |
+| GV-05 | CRLF only difference after normalization | new Versionなし |
+| GV-06 | Version update repository call | method不存在 / SQL update禁止 |
+| GV-07 | past Cycle after later Goal change | original goalVersionId unchanged |
+| GV-08 | concurrent Review continue | one Version/Cycle only |
+| GV-09 | Goal current version mismatch | `GOAL_VERSION_CONFLICT` |
+| GV-10 | Version deletion outside Goal Delete | endpoint/repository methodなし |
 
 ## 48.6 Cycle numbering / state tests
 
-| ID         | Case                                                             | Expected                                                                  |
-| ---------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| C-NUM-01   | Goal A start                                                     | Cycle1                                                                    |
-| C-NUM-02   | same Goal two reviews                                            | Cycle2, Cycle3                                                            |
-| C-NUM-03   | Goal B later starts                                              | Cycle1                                                                    |
-| C-NUM-04   | duplicate `(goalId, sequence)` insert                            | DB unique rejection                                                       |
-| C-STATE-01 | Active frame save                                                | allowed, revisions +1                                                     |
-| C-STATE-02 | Completed frame save                                             | rejected                                                                  |
-| C-STATE-03 | Canceled frame save                                              | rejected                                                                  |
-| C-STATE-04 | Completed individual delete                                      | endpointなし / Domain拒否                                                 |
-| C-STATE-05 | Canceled individual delete                                       | endpointなし / Domain拒否                                                 |
-| C-STATE-06 | Completed re-open                                                | impossible                                                                |
-| C-STATE-07 | Canceled re-open                                                 | impossible                                                                |
-| C-STATE-08 | complete with all fields                                         | completed + Goal review + Draft                                           |
-| C-STATE-09 | complete with whitespace P/D/C/A                                 | missing frames error                                                      |
-| C-STATE-10 | complete transaction review insert failure                       | Cycle active、Goal active_cycle                                           |
-| C-STATE-11 | complete success                                                 | next Cycleは作られない                                                    |
-| C-STATE-12 | double complete same opId                                        | duplicateなし。Review openならsame payload、進行済みならcurrent workspace |
-| C-STATE-13 | double complete different opId                                   | one success、other conflict                                               |
-| C-STATE-14 | complete response loss後にReview Continue、その後same opId retry | Review Draftを再作成せずcurrent Active Cycleを返す                        |
-| C-STATE-15 | Frame 200 code points                                            | save可                                                                    |
-| C-STATE-16 | Frame 201 code points                                            | Frontend/Backend/DBで拒否                                                 |
+| ID | Case | Expected |
+|---|---|---|
+| C-NUM-01 | Goal A start | Cycle1 |
+| C-NUM-02 | same Goal two reviews | Cycle2, Cycle3 |
+| C-NUM-03 | Goal B later starts | Cycle1 |
+| C-NUM-04 | duplicate `(goalId, sequence)` insert | DB unique rejection |
+| C-STATE-01 | Active frame save | allowed, revisions +1 |
+| C-STATE-02 | Completed frame save | rejected |
+| C-STATE-03 | Canceled frame save | rejected |
+| C-STATE-04 | Completed individual delete | endpointなし / Domain拒否 |
+| C-STATE-05 | Canceled individual delete | endpointなし / Domain拒否 |
+| C-STATE-06 | Completed re-open | impossible |
+| C-STATE-07 | Canceled re-open | impossible |
+| C-STATE-08 | complete with all fields | completed + Goal review + Draft |
+| C-STATE-09 | complete with whitespace P/D/C/A | missing frames error |
+| C-STATE-10 | complete transaction review insert failure | Cycle active、Goal active_cycle |
+| C-STATE-11 | complete success | next Cycleは作られない |
+| C-STATE-12 | double complete same opId | duplicateなし。Review openならsame payload、進行済みならcurrent workspace |
+| C-STATE-13 | double complete different opId | one success、other conflict |
+| C-STATE-14 | complete response loss後にReview Continue、その後same opId retry | Review Draftを再作成せずcurrent Active Cycleを返す |
+| C-STATE-15 | Frame 200 code points | save可 |
+| C-STATE-16 | Frame 201 code points | Frontend/Backend/DBで拒否 |
 
 ## 48.7 Auto Save / revision tests
 
-| ID    | Case                                   | Expected                            |
-| ----- | -------------------------------------- | ----------------------------------- |
-| AS-01 | typing interval <800ms                 | pauseまでAPI callなし               |
-| AS-02 | pause 800ms                            | one save                            |
-| AS-03 | blur / route change                    | immediate enqueue                   |
-| AS-04 | input during in-flight                 | latest queued、parallelなし         |
-| AS-05 | old same-frame request arrives late    | revision CASで拒否                  |
-| AS-06 | P and D save with own revisions        | both preserved                      |
-| AS-07 | no-op save                             | revision増加なし                    |
-| AS-08 | network failure                        | textarea + IndexedDB保持            |
-| AS-09 | retry backoff                          | configured sequence + jitter range  |
-| AS-10 | 5 failures                             | auto retry pause、manual retry可    |
-| AS-11 | pending/failed save                    | AI/start/continue/complete disabled |
-| AS-12 | Browser reload same revision           | Draft復元・autosave                 |
-| AS-13 | Browser reload revision mismatch       | auto overwriteなし、Local維持       |
-| AS-14 | Goal Delete success                    | related cache削除                   |
-| AS-15 | Account Delete success                 | User cache全削除                    |
-| AS-16 | Session expires                        | Draftを先に削除しない               |
-| AS-17 | dirty Review Draftからterminal success | IndexedDBのReview recordも削除      |
-| AS-18 | Creation Draft abandon success         | IndexedDBのCreation recordを削除    |
+| ID | Case | Expected |
+|---|---|---|
+| AS-01 | typing interval <800ms | pauseまでAPI callなし |
+| AS-02 | pause 800ms | one save |
+| AS-03 | blur / route change | immediate enqueue |
+| AS-04 | input during in-flight | latest queued、parallelなし |
+| AS-05 | old same-frame request arrives late | revision CASで拒否 |
+| AS-06 | P and D save with own revisions | both preserved |
+| AS-07 | no-op save | revision増加なし |
+| AS-08 | network failure | textarea + IndexedDB保持 |
+| AS-09 | retry backoff | configured sequence + jitter range |
+| AS-10 | 5 failures | auto retry pause、manual retry可 |
+| AS-11 | pending/failed save | AI/start/continue/complete disabled |
+| AS-12 | Browser reload same revision | Draft復元・autosave |
+| AS-13 | Browser reload revision mismatch | auto overwriteなし、Local維持 |
+| AS-14 | Goal Delete success | related cache削除 |
+| AS-15 | Account Delete success | User cache全削除 |
+| AS-16 | Session expires | Draftを先に削除しない |
+| AS-17 | dirty Review Draftからterminal success | IndexedDBのReview recordも削除 |
+| AS-18 | Creation Draft abandon success | IndexedDBのCreation recordを削除 |
 
 ## 48.8 Goal Review tests
 
-| ID    | Case                                                                | Expected                                  |
-| ----- | ------------------------------------------------------------------- | ----------------------------------------- |
-| GR-01 | Cycle complete                                                      | Goal=`goal_review`, Review Draft open     |
-| GR-02 | Review Draft initial body                                           | current Goal Version copy                 |
-| GR-03 | Review Draft auto save                                              | revision CAS                              |
-| GR-04 | keep same Goal + continue                                           | Version増加なし + next Cycle              |
-| GR-05 | edit + continue                                                     | Version N+1 + next Cycle in same Tx       |
-| GR-06 | Version insert succeeds, Cycle insert fails                         | all rollback、Review open                 |
-| GR-07 | stale Goal revision                                                 | conflict、Review open                     |
-| GR-08 | stale Draft revision                                                | conflict、Local input保持                 |
-| GR-09 | two continue requests                                               | one next Active Cycle only                |
-| GR-10 | continue after terminal                                             | rejected                                  |
-| GR-11 | direct next Cycle endpoint bypass                                   | endpointなし / `GOAL_REVIEW_REQUIRED`     |
-| GR-12 | Review refine running                                               | continue rejected                         |
+| ID | Case | Expected |
+|---|---|---|
+| GR-01 | Cycle complete | Goal=`goal_review`, Review Draft open |
+| GR-02 | Review Draft initial body | current Goal Version copy |
+| GR-03 | Review Draft auto save | revision CAS |
+| GR-04 | keep same Goal + continue | Version増加なし + next Cycle |
+| GR-05 | edit + continue | Version N+1 + next Cycle in same Tx |
+| GR-06 | Version insert succeeds, Cycle insert fails | all rollback、Review open |
+| GR-07 | stale Goal revision | conflict、Review open |
+| GR-08 | stale Draft revision | conflict、Local input保持 |
+| GR-09 | two continue requests | one next Active Cycle only |
+| GR-10 | continue after terminal | rejected |
+| GR-11 | direct next Cycle endpoint bypass | endpointなし / `GOAL_REVIEW_REQUIRED` |
+| GR-12 | Review refine running | continue rejected |
 | GR-13 | continue response loss後に作成Cycleが後続stateへ進みsame opId retry | next Cycleを重複作成せずcurrent workspace |
 
 ## 48.9 Goal termination tests
 
-| ID    | Case                                                    | Expected                                                              |
-| ----- | ------------------------------------------------------- | --------------------------------------------------------------------- |
-| GT-01 | active_cycle → achieved                                 | Active Cycle canceled、reason goal_achieved                           |
-| GT-02 | active_cycle → ended                                    | Active Cycle canceled、reason goal_ended                              |
-| GT-03 | canceled Cycle incomplete frames                        | valid, read-only                                                      |
-| GT-04 | goal_review → achieved, Draft unchanged                 | Draft delete、Version unchanged、no Cycle                             |
-| GT-05 | goal_review → achieved, Draft edited                    | edited Draft discarded、Version unchanged                             |
-| GT-06 | goal_review → ended, Draft edited                       | edited Draft discarded、Version unchanged                             |
-| GT-07 | terminal confirmation copy                              | Draft変更破棄を明示                                                   |
-| GT-08 | terminal Goal re-open request                           | endpointなし / `GOAL_ALREADY_TERMINAL`                                |
-| GT-09 | terminal Goal frame save                                | no Active Cycle、rejected                                             |
-| GT-10 | termination response loss + same opId                   | idempotent result                                                     |
-| GT-11 | same opId different outcome                             | `IDEMPOTENCY_KEY_REUSED`                                              |
-| GT-12 | termination concurrent with complete                    | one transition only、consistent state                                 |
-| GT-13 | termination concurrent with start new Goal              | Progressing count within policy                                       |
-| GT-14 | AI running normal termination                           | `AI_OPERATION_IN_PROGRESS`                                            |
+| ID | Case | Expected |
+|---|---|---|
+| GT-01 | active_cycle → achieved | Active Cycle canceled、reason goal_achieved |
+| GT-02 | active_cycle → ended | Active Cycle canceled、reason goal_ended |
+| GT-03 | canceled Cycle incomplete frames | valid, read-only |
+| GT-04 | goal_review → achieved, Draft unchanged | Draft delete、Version unchanged、no Cycle |
+| GT-05 | goal_review → achieved, Draft edited | edited Draft discarded、Version unchanged |
+| GT-06 | goal_review → ended, Draft edited | edited Draft discarded、Version unchanged |
+| GT-07 | terminal confirmation copy | Draft変更破棄を明示 |
+| GT-08 | terminal Goal re-open request | endpointなし / `GOAL_ALREADY_TERMINAL` |
+| GT-09 | terminal Goal frame save | no Active Cycle、rejected |
+| GT-10 | termination response loss + same opId | idempotent result |
+| GT-11 | same opId different outcome | `IDEMPOTENCY_KEY_REUSED` |
+| GT-12 | termination concurrent with complete | one transition only、consistent state |
+| GT-13 | termination concurrent with start new Goal | Progressing count within policy |
+| GT-14 | AI running normal termination | `AI_OPERATION_IN_PROGRESS` |
 | GT-15 | dirty/in-flight Review Draftからterminal + confirm=true | Draft revision conflictを要求せず、到達済み内容も含め破棄してterminal |
-| GT-16 | edited Review Draft + confirm absent/false              | `GOAL_REVIEW_DISCARD_CONFIRMATION_REQUIRED`、Goal/Draft維持           |
+| GT-16 | edited Review Draft + confirm absent/false | `GOAL_REVIEW_DISCARD_CONFIRMATION_REQUIRED`、Goal/Draft維持 |
 
 ## 48.10 Goal History tests
 
-| ID    | Case                                     | Expected                              |
-| ----- | ---------------------------------------- | ------------------------------------- |
-| GH-01 | Goal v1 cycles 1,2; v2 cycle3            | version marker between 2 and 3        |
-| GH-02 | no Version change                        | unnecessary markerなし                |
-| GH-03 | Canceled Cycle                           | statusと期間を表示、blank frames許容  |
-| GH-04 | Completed Cycle                          | P/D/C/A read-only                     |
-| GH-05 | achieved / ended                         | Goal outcome表示                      |
-| GH-06 | infinite scroll cursor                   | no duplicate/skip                     |
-| GH-07 | tampered cursor                          | `INVALID_CURSOR`                      |
-| GH-08 | cross-user Goal/Cycle                    | 404                                   |
-| GH-09 | cycle version reference                  | historical Goal body correct          |
+| ID | Case | Expected |
+|---|---|---|
+| GH-01 | Goal v1 cycles 1,2; v2 cycle3 | version marker between 2 and 3 |
+| GH-02 | no Version change | unnecessary markerなし |
+| GH-03 | Canceled Cycle | statusと期間を表示、blank frames許容 |
+| GH-04 | Completed Cycle | P/D/C/A read-only |
+| GH-05 | achieved / ended | Goal outcome表示 |
+| GH-06 | infinite scroll cursor | no duplicate/skip |
+| GH-07 | tampered cursor | `INVALID_CURSOR` |
+| GH-08 | cross-user Goal/Cycle | 404 |
+| GH-09 | cycle version reference | historical Goal body correct |
 | GH-10 | terminal Goal after Review Draft discard | discarded Draftをtimelineへ表示しない |
 
 ## 48.11 Goal Refine tests
 
-| ID        | Case                                                        | Expected                                                                    |
-| --------- | ----------------------------------------------------------- | --------------------------------------------------------------------------- |
-| AI-GR-01  | Initial Draft nonblank                                      | refine success candidate                                                    |
-| AI-GR-02  | Initial Draft blank                                         | input error、provider callなし                                              |
-| AI-GR-03  | Review refine                                               | Draft/current Goal/source Cycleを含む                                       |
-| AI-GR-04  | AI result success                                           | Draft自動上書きなし                                                         |
-| AI-GR-05  | Adopt explicit                                              | Draft更新 + revision+1                                                      |
-| AI-GR-06  | Dismiss / keep original                                     | Draft変更なし                                                               |
-| AI-GR-07  | edit Draft during AI                                        | result `contextChanged=true`                                                |
-| AI-GR-08  | adopt stale result                                          | `GOAL_REFINE_CONTEXT_STALE`                                                 |
-| AI-GR-08a | edit Draft after suggestion, then restore exact source text | 保存完了後にadopt可能                                                       |
-| AI-GR-09  | output 80 chars                                             | valid                                                                       |
-| AI-GR-10  | output 81 chars                                             | no truncate、retry then failure                                             |
-| AI-GR-11  | invalid schema                                              | bounded retry                                                               |
-| AI-GR-12  | timeout                                                     | Draft維持                                                                   |
-| AI-GR-13  | same Draft double AI                                        | second rejected                                                             |
-| AI-GR-14  | same idempotency replay                                     | no duplicate logical operation                                              |
-| AI-GR-15  | Goal Review termination after refine                        | Version unchanged、Draft/related AI content discarded、Usage quota retained |
-| AI-GR-16  | initial Draft abandon                                       | Generation content削除、Usage quota維持                                     |
-| AI-GR-17  | displayed suggestion後の再Refine失敗                        | 既存suggestionを維持し、再取得失敗を通知                                    |
+| ID | Case | Expected |
+|---|---|---|
+| AI-GR-01 | Initial Draft nonblank | refine success candidate |
+| AI-GR-02 | Initial Draft blank | input error、provider callなし |
+| AI-GR-03 | Review refine | Draft/current Goal/source Cycleを含む |
+| AI-GR-04 | AI result success | Draft自動上書きなし |
+| AI-GR-05 | Adopt explicit | Draft更新 + revision+1 |
+| AI-GR-06 | Dismiss / keep original | Draft変更なし |
+| AI-GR-07 | edit Draft during AI | result `contextChanged=true` |
+| AI-GR-08 | adopt stale result | `GOAL_REFINE_CONTEXT_STALE` |
+| AI-GR-08a | edit Draft after suggestion, then restore exact source text | 保存完了後にadopt可能 |
+| AI-GR-09 | output 80 chars | valid |
+| AI-GR-10 | output 81 chars | no truncate、retry then failure |
+| AI-GR-11 | invalid schema | bounded retry |
+| AI-GR-12 | timeout | Draft維持 |
+| AI-GR-13 | same Draft double AI | second rejected |
+| AI-GR-14 | same idempotency replay | no duplicate logical operation |
+| AI-GR-15 | Goal Review termination after refine | Version unchanged、Draft/related AI content discarded、Usage quota retained |
+| AI-GR-16 | initial Draft abandon | Generation content削除、Usage quota維持 |
+| AI-GR-17 | displayed suggestion後の再Refine失敗 | 既存suggestionを維持し、再取得失敗を通知 |
 
 ## 48.12 Goal Refine quality rule tests
 
@@ -6085,27 +6091,27 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 
 ## 48.13 Action AI tests
 
-| ID      | Case                               | Expected                              |
-| ------- | ---------------------------------- | ------------------------------------- |
-| AI-A-01 | Generate P/D/C present             | 1〜3 actions、A反映                   |
-| AI-A-02 | P/D/C不足                          | missingFrames、provider callなし      |
-| AI-A-03 | Refine P/D/C/A present             | A意図維持候補、A反映                  |
-| AI-A-04 | Refine A blank                     | input error                           |
-| AI-A-05 | Current Goal included              | provider input fixtureで確認          |
-| AI-A-06 | Same-Goal latest 10                | exactly max10                         |
-| AI-A-07 | another Goal data exists           | contextへ混入しない                   |
-| AI-A-08 | Context cycle partially fits       | Cycle unitごと除外                    |
-| AI-A-09 | AI running A PATCH                 | Backend rejection                     |
-| AI-A-10 | AI running P/D/C PATCH             | allowed                               |
-| AI-A-11 | P edit during AI                   | P保持、A反映、contextChanged=true     |
-| AI-A-12 | result >200                        | no truncate、bounded retry            |
-| AI-A-13 | invalid structured output          | bounded retry                         |
-| AI-A-14 | provider timeout                   | A unchanged                           |
-| AI-A-15 | same Cycle second AI               | rejected                              |
-| AI-A-16 | same Idempotency-Key retry         | no duplicate call after stored result |
-| AI-A-17 | lease expired                      | reservation解放、retry可              |
-| AI-A-18 | Goal becomes terminal before apply | result破棄、no resurrection           |
-| AI-A-19 | Goal Version mismatch              | apply拒否                             |
+| ID | Case | Expected |
+|---|---|---|
+| AI-A-01 | Generate P/D/C present | 1〜3 actions、A反映 |
+| AI-A-02 | P/D/C不足 | missingFrames、provider callなし |
+| AI-A-03 | Refine P/D/C/A present | A意図維持候補、A反映 |
+| AI-A-04 | Refine A blank | input error |
+| AI-A-05 | Current Goal included | provider input fixtureで確認 |
+| AI-A-06 | Same-Goal latest 10 | exactly max10 |
+| AI-A-07 | another Goal data exists | contextへ混入しない |
+| AI-A-08 | Context cycle partially fits | Cycle unitごと除外 |
+| AI-A-09 | AI running A PATCH | Backend rejection |
+| AI-A-10 | AI running P/D/C PATCH | allowed |
+| AI-A-11 | P edit during AI | P保持、A反映、contextChanged=true |
+| AI-A-12 | result >200 | no truncate、bounded retry |
+| AI-A-13 | invalid structured output | bounded retry |
+| AI-A-14 | provider timeout | A unchanged |
+| AI-A-15 | same Cycle second AI | rejected |
+| AI-A-16 | same Idempotency-Key retry | no duplicate call after stored result |
+| AI-A-17 | lease expired | reservation解放、retry可 |
+| AI-A-18 | Goal becomes terminal before apply | result破棄、no resurrection |
+| AI-A-19 | Goal Version mismatch | apply拒否 |
 
 ## 48.14 AI Context isolation tests
 
@@ -6120,47 +6126,47 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 
 ## 48.15 Quota / Cost tests
 
-| ID   | Case                                                      | Expected                                                                |
-| ---- | --------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Q-01 | 10 ops in rolling24h                                      | configured境界までallowed                                               |
-| Q-02 | 11th op                                                   | rejected before provider                                                |
-| Q-03 | Goal Refine 2 + Generate5 + Refine3                       | total10                                                                 |
-| Q-04 | Event just older than24h                                  | window外                                                                |
-| Q-05 | Provider retry twice                                      | quota1、cost attempts合計                                               |
-| Q-06 | same idempotency replay                                   | quota増加なし                                                           |
-| Q-07 | Goal Delete within window                                 | quota count維持                                                         |
-| Q-08 | Goal Delete content                                       | AIGeneration/本文削除                                                   |
-| Q-09 | Account Delete                                            | User usage削除                                                          |
-| Q-10 | concurrent budget reservations                            | ceiling内でserialize                                                    |
-| Q-11 | budget exhausted                                          | provider callなし                                                       |
-| Q-12 | success settlement                                        | reserved減、actual増                                                    |
-| Q-13 | failure with usage                                        | actualへ加算                                                            |
-| Q-14 | lease recovery                                            | reservation二重減算なし                                                 |
-| Q-15 | model-price mismatch                                      | startup fail                                                            |
-| Q-16 | Goal Delete後のlate provider result                       | reservation再減算なし、actual costはCASで一度だけ計上                   |
-| Q-17 | Account Delete中のrunning AI                              | reservationをunattributed costへ一度だけ移し、late resultは再計上しない |
-| Q-18 | Progressing Goal 2件で一方のquotaを消費後、他方からAI実行 | Goal別に増枠せずUser rolling quotaで拒否                                |
+| ID | Case | Expected |
+|---|---|---|
+| Q-01 | 10 ops in rolling24h | configured境界までallowed |
+| Q-02 | 11th op | rejected before provider |
+| Q-03 | Goal Refine 2 + Generate5 + Refine3 | total10 |
+| Q-04 | Event just older than24h | window外 |
+| Q-05 | Provider retry twice | quota1、cost attempts合計 |
+| Q-06 | same idempotency replay | quota増加なし |
+| Q-07 | Goal Delete within window | quota count維持 |
+| Q-08 | Goal Delete content | AIGeneration/本文削除 |
+| Q-09 | Account Delete | User usage削除 |
+| Q-10 | concurrent budget reservations | ceiling内でserialize |
+| Q-11 | budget exhausted | provider callなし |
+| Q-12 | success settlement | reserved減、actual増 |
+| Q-13 | failure with usage | actualへ加算 |
+| Q-14 | lease recovery | reservation二重減算なし |
+| Q-15 | model-price mismatch | startup fail |
+| Q-16 | Goal Delete後のlate provider result | reservation再減算なし、actual costはCASで一度だけ計上 |
+| Q-17 | Account Delete中のrunning AI | reservationをunattributed costへ一度だけ移し、late resultは再計上しない |
+| Q-18 | Progressing Goal 2件で一方のquotaを消費後、他方からAI実行 | Goal別に増枠せずUser rolling quotaで拒否 |
 
 ## 48.16 Goal Delete tests
 
-| ID    | Case                        | Expected                                                        |
-| ----- | --------------------------- | --------------------------------------------------------------- |
-| GD-01 | `active_cycle` Goal delete  | Goal/Version/Active Cycle/AI content削除                        |
-| GD-02 | Review Goal delete          | Draft/Completed Cycles/AI content削除                           |
-| GD-03 | achieved Goal delete        | entire Aggregate削除                                            |
-| GD-04 | ended Goal delete           | entire Aggregate削除                                            |
-| GD-05 | another Goal exists         | unaffected                                                      |
-| GD-06 | Completed/Canceled children | cascadeで削除、orphanなし                                       |
-| GD-07 | quota-window Usage          | redacted/minimal維持                                            |
-| GD-08 | old Usage outside retention | delete可                                                        |
-| GD-09 | running AI                  | cancel、reservationを一度だけrelease、Usageはcontent-freeで維持 |
-| GD-10 | late AI response            | Aggregate再作成なし、reservation再減算なし、Cost CAS一回        |
-| GD-11 | transaction failure         | Aggregate全体維持                                               |
-| GD-12 | same delete opId retry      | 204 receipt                                                     |
-| GD-13 | same opId different hash    | idempotency error                                               |
-| GD-14 | cross-user delete           | 404                                                             |
-| GD-15 | revision conflict           | Goal維持                                                        |
-| GD-16 | Browser cache               | 204後だけclear                                                  |
+| ID | Case | Expected |
+|---|---|---|
+| GD-01 | `active_cycle` Goal delete | Goal/Version/Active Cycle/AI content削除 |
+| GD-02 | Review Goal delete | Draft/Completed Cycles/AI content削除 |
+| GD-03 | achieved Goal delete | entire Aggregate削除 |
+| GD-04 | ended Goal delete | entire Aggregate削除 |
+| GD-05 | another Goal exists | unaffected |
+| GD-06 | Completed/Canceled children | cascadeで削除、orphanなし |
+| GD-07 | quota-window Usage | redacted/minimal維持 |
+| GD-08 | old Usage outside retention | delete可 |
+| GD-09 | running AI | cancel、reservationを一度だけrelease、Usageはcontent-freeで維持 |
+| GD-10 | late AI response | Aggregate再作成なし、reservation再減算なし、Cost CAS一回 |
+| GD-11 | transaction failure | Aggregate全体維持 |
+| GD-12 | same delete opId retry | 204 receipt |
+| GD-13 | same opId different hash | idempotency error |
+| GD-14 | cross-user delete | 404 |
+| GD-15 | revision conflict | Goal維持 |
+| GD-16 | Browser cache | 204後だけclear |
 
 ## 48.17 Auth / authorization tests
 
@@ -6237,12 +6243,12 @@ Structured Outputは形式だけを保証し、Goalの意図保持やActionの�
 
 Fixture corpusは最低限次のcase groupを区別する。物理Directory名とfile名は固定しない。
 
-| Case group               | Purpose                                                              |
-| ------------------------ | -------------------------------------------------------------------- |
-| Initial Goal Refine      | 過去Contextなしで意図を維持し、捏造せず明確化できるか                |
-| Goal Review Refine       | Current Goalと同一GoalのCycleから学びを反映できるか                  |
-| Action Generate          | Current GoalとP/D/Cに基づく具体的・検証可能なActionを生成できるか    |
-| Action Refine            | Current Aの方向性を維持して改善できるか                              |
+| Case group | Purpose |
+|---|---|
+| Initial Goal Refine | 過去Contextなしで意図を維持し、捏造せず明確化できるか |
+| Goal Review Refine | Current Goalと同一GoalのCycleから学びを反映できるか |
+| Action Generate | Current GoalとP/D/Cに基づく具体的・検証可能なActionを生成できるか |
+| Action Refine | Current Aの方向性を維持して改善できるか |
 | Adversarial user content | User本文中の命令、Prompt injection、無関係な誘導をDataとして扱えるか |
 
 FixtureはRepositoryでversion管理し、evaluation runnerから一意に発見できること。実User本文を使わず、人工または明示的な同意を得て匿名化したtest dataを使う。
@@ -6251,15 +6257,15 @@ FixtureはRepositoryでversion管理し、evaluation runnerから一意に発見
 
 各caseを0〜2で評価する。
 
-| Dimension           | 0               | 1            | 2                          |
-| ------------------- | --------------- | ------------ | -------------------------- |
-| Intent preservation | 別Goalへ変更    | 一部ずれる   | 元の方向性を維持           |
-| Specificity         | 改善なし/悪化   | やや改善     | 適切に明確化               |
-| Feasibility         | 無理な前提      | 不明瞭       | 入力範囲で実行可能         |
-| Progress judgment   | 判断不能        | 一部判断可能 | 達成/進展を判断しやすい    |
-| No invention        | 重要前提を捏造  | 軽微な推測   | 数値/期限/属性を捏造しない |
-| SMART-not-gated     | 拒否/強制定量化 | やや強制的   | 参考にするだけ             |
-| Japanese clarity    | 不自然/冗長     | 許容         | 自然で簡潔                 |
+| Dimension | 0 | 1 | 2 |
+|---|---|---|---|
+| Intent preservation | 別Goalへ変更 | 一部ずれる | 元の方向性を維持 |
+| Specificity | 改善なし/悪化 | やや改善 | 適切に明確化 |
+| Feasibility | 無理な前提 | 不明瞭 | 入力範囲で実行可能 |
+| Progress judgment | 判断不能 | 一部判断可能 | 達成/進展を判断しやすい |
+| No invention | 重要前提を捏造 | 軽微な推測 | 数値/期限/属性を捏造しない |
+| SMART-not-gated | 拒否/強制定量化 | やや強制的 | 参考にするだけ |
+| Japanese clarity | 不自然/冗長 | 許容 | 自然で簡潔 |
 
 Critical failure:
 
@@ -6323,9 +6329,9 @@ AIによる自動graderだけを唯一の合否判定にしない。
 
 次のPathだけを本書の物理Path Contractとする。
 
-| Path                 | Classification | Reason                                                                                                |
-| -------------------- | -------------- | ----------------------------------------------------------------------------------------------------- |
-| `docs/design.md`     | **[固定Path]** | FUKAMU Cycleの唯一のProduct Specification / Software Design / Implementation Contract                 |
+| Path | Classification | Reason |
+|---|---|---|
+| `docs/design.md` | **[固定Path]** | FUKAMU Cycleの唯一のProduct Specification / Software Design / Implementation Contract |
 | `.github/workflows/` | **[固定Path]** | §44で採用するGitHub Actionsがworkflowを発見するPlatform-defined root。個別workflow file名は固定しない |
 
 上表以外のFrontend source root、Backend source root、Migration、Prompt、Evaluation fixture、Infrastructure、Generated Code等の正確なPathは、本書では固定しない。物理Pathの発見には既存Repositoryのmanifest、build script、code generation設定、deployment設定を使用する。ただし、それらの挙動または責務が本書と矛盾する場合は本書を優先して修正する。
@@ -6341,18 +6347,18 @@ AIによる自動graderだけを唯一の合否判定にしない。
 
 Repositoryは最低限次の論理領域を持つ。各領域の物理Directory名、file名、深さは固定しない。
 
-| Logical area                  | Required responsibility / contract                                                            |
-| ----------------------------- | --------------------------------------------------------------------------------------------- |
-| Source-of-Truth documentation | 本書を保持し、補助文書がProduct Ruleを重複定義または上書きしない                              |
-| Frontend application          | §29のApplication composition、Route composition、Feature、Shared technical boundaryを実現する |
-| Backend application           | §30のDomain、Application、Port、Infrastructure、HTTP、Configuration boundaryを実現する        |
-| Database schema / migration   | §16のSchema、forward migration、empty-database baseline、migration testを管理する             |
-| Typed query / generated code  | Query sourceとgenerated outputを分離し、再生成差分をCIで検査する                              |
-| Versioned AI prompt assets    | Goal Refine、Action Generate、Action RefineのPrompt本文とimmutable versionを管理する          |
-| AI quality evaluation assets  | §49のfixture corpus、rubric、runnerまたは実行手順を管理する                                   |
-| Infrastructure / deployment   | Cloudflare、Database、Secret boundary、Terraform / Wrangler等のownershipを一意にする          |
-| CI/CD                         | §44、§48、§53のrequired checkとmigration-first deployを自動化する                             |
-| Test support                  | Unit、Integration、E2E、Fake Provider、security / authorization fixtureを管理する             |
+| Logical area | Required responsibility / contract |
+|---|---|
+| Source-of-Truth documentation | 本書を保持し、補助文書がProduct Ruleを重複定義または上書きしない |
+| Frontend application | §29のApplication composition、Route composition、Feature、Shared technical boundaryを実現する |
+| Backend application | §30のDomain、Application、Port、Infrastructure、HTTP、Configuration boundaryを実現する |
+| Database schema / migration | §16のSchema、forward migration、empty-database baseline、migration testを管理する |
+| Typed query / generated code | Query sourceとgenerated outputを分離し、再生成差分をCIで検査する |
+| Versioned AI prompt assets | Goal Refine、Action Generate、Action RefineのPrompt本文とimmutable versionを管理する |
+| AI quality evaluation assets | §49のfixture corpus、rubric、runnerまたは実行手順を管理する |
+| Infrastructure / deployment | Cloudflare、Database、Secret boundary、Terraform / Wrangler等のownershipを一意にする |
+| CI/CD | §44、§48、§53のrequired checkとmigration-first deployを自動化する |
+| Test support | Unit、Integration、E2E、Fake Provider、security / authorization fixtureを管理する |
 
 ## 50.3 Physical organization rules
 
