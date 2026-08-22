@@ -23,6 +23,43 @@ require_command() {
     || die "Required command '${command_name}' was not found. See docs/development.md."
 }
 
+require_standard_tool_versions() {
+  require_command node
+  require_command pnpm
+  require_command go
+
+  local node_version
+  local node_major
+  local pnpm_version
+  local go_version
+
+  node_version="$(node --version)"
+  node_version="${node_version#v}"
+  node_major="${node_version%%.*}"
+  if [[ ! "${node_major}" =~ ^[0-9]+$ ]] || ((node_major < 24)); then
+    die "Node.js 24 or newer is required; found ${node_version}."
+  fi
+
+  pnpm_version="$(pnpm --version)"
+  [[ "${pnpm_version}" == "11.22.0" ]] \
+    || die "pnpm 11.22.0 is required for reproducible local/CI builds; found ${pnpm_version}."
+
+  go_version="$(go env GOVERSION)"
+  go_version="${go_version#go}"
+  [[ "${go_version}" == "1.26.6" ]] \
+    || die "Go 1.26.6 is required for reproducible local/CI builds; found ${go_version}."
+}
+
+require_disposable_test_database_url() {
+  local database_url="${1:-}"
+  local local_test_database_pattern='^postgres(ql)?://[^/]+@(127\.0\.0\.1|localhost|\[::1\]):[0-9]+/[^/?#]*_test(\?[^#]*)?$'
+
+  [[ -n "${database_url}" ]] \
+    || die "Set TEST_DATABASE_URL to a disposable PostgreSQL test database."
+  [[ "${database_url}" =~ ${local_test_database_pattern} ]] \
+    || die "TEST_DATABASE_URL must target a localhost PostgreSQL database whose name ends in _test."
+}
+
 resolve_repo_root() {
   local script_path="$1"
   local script_dir

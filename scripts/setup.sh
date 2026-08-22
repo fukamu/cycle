@@ -32,25 +32,7 @@ while (($# > 0)); do
   esac
 done
 
-require_command node
-require_command pnpm
-require_command go
-
-node_version="$(node --version)"
-node_version="${node_version#v}"
-node_major="${node_version%%.*}"
-if [[ ! "${node_major}" =~ ^[0-9]+$ ]] || ((node_major < 24)); then
-  die "Node.js 24 or newer is required; found ${node_version}."
-fi
-
-pnpm_version="$(pnpm --version)"
-[[ "${pnpm_version}" == "11.22.0" ]] \
-  || die "pnpm 11.22.0 is required for reproducible local/CI builds; found ${pnpm_version}."
-
-go_version="$(go env GOVERSION)"
-go_version="${go_version#go}"
-[[ "${go_version}" == "1.26.6" ]] \
-  || die "Go 1.26.6 is required for reproducible local/CI builds; found ${go_version}."
+require_standard_tool_versions
 
 copy_example_if_missing() {
   local example="$1"

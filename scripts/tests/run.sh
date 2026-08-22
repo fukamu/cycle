@@ -164,6 +164,120 @@ EOF
   pass "check runs the frontend contract and rejects unsafe E2E scope"
 }
 
+test_before_commit_check() {
+  local fixture
+  fixture="$(new_fixture before-commit)"
+  local bin="${fixture}/bin"
+  local log="${fixture}/commands.log"
+  local test_database_url='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:55432/fukamu_cycle_test?sslmode=disable'
+  mkdir -p -- "${bin}" "${fixture}/.github/scripts"
+
+  cat >"${bin}/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'git %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+case "$*" in
+  'diff --cached --quiet --')
+    [[ "${FAKE_NO_STAGED_CHANGES:-false}" == "true" ]] && exit 0
+    exit 1
+    ;;
+  'diff --quiet --')
+    [[ "${FAKE_UNSTAGED_CHANGES:-false}" == "true" ]] && exit 1
+    exit 0
+    ;;
+  'ls-files --others --exclude-standard')
+    [[ "${FAKE_UNTRACKED_FILES:-false}" == "true" ]] && printf '%s\n' 'untracked.txt'
+    exit 0
+    ;;
+  'write-tree') printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
+  'diff --check' | 'diff --cached --check') ;;
+  *) exit 1 ;;
+esac
+EOF
+  cat >"${bin}/node" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'v24.19.0'
+EOF
+  cat >"${bin}/pnpm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf '%s\n' '11.22.0'
+else
+  printf 'pnpm %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+fi
+EOF
+  cat >"${bin}/go" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "env" && "${2:-}" == "GOVERSION" ]]
+printf '%s\n' 'go1.26.6'
+EOF
+  cat >"${bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "context" && "${2:-}" == "inspect" ]]; then
+  printf '%s\n' 'unix:///var/run/docker.sock'
+else
+  printf 'docker %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+fi
+EOF
+  cat >"${bin}/jq" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  cat >"${bin}/terraform" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  cat >"${fixture}/.github/scripts/resolve-ci-reuse.test.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'resolve-ci-reuse test' >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${fixture}/scripts/check.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'check CI=%s %s\n' "${CI:-}" "$*" >>"${TEST_COMMAND_LOG}"
+EOF
+  chmod +x \
+    "${bin}/git" "${bin}/node" "${bin}/pnpm" "${bin}/go" "${bin}/docker" \
+    "${bin}/jq" "${bin}/terraform" "${fixture}/scripts/check.sh" \
+    "${fixture}/.github/scripts/resolve-ci-reuse.test.sh"
+
+  PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" TEST_DATABASE_URL="${test_database_url}" \
+    bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
+  assert_file_contains "${log}" "pnpm install --frozen-lockfile"
+  assert_file_contains "${log}" "resolve-ci-reuse test"
+  grep -Fq -- 'rhysd/actionlint:1.7.12 -color' "${log}" \
+    || fail "before-commit check did not run pinned actionlint"
+  assert_file_contains "${log}" "check CI=true --e2e"
+  [[ "$(grep -Fxc -- 'git diff --check' "${log}")" == "2" ]] \
+    || fail "before-commit check did not validate unstaged whitespace before and after checks"
+  [[ "$(grep -Fxc -- 'git diff --cached --check' "${log}")" == "2" ]] \
+    || fail "before-commit check did not validate staged whitespace before and after checks"
+
+  assert_failure "before-commit check without a disposable database" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" TEST_DATABASE_URL= \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  assert_failure "before-commit check with a remote database" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    TEST_DATABASE_URL='postgres://user:password@database.example.com:5432/app_test' \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  assert_failure "before-commit check without staged changes" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    TEST_DATABASE_URL="${test_database_url}" FAKE_NO_STAGED_CHANGES=true \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  assert_failure "before-commit check with unstaged changes" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    TEST_DATABASE_URL="${test_database_url}" FAKE_UNSTAGED_CHANGES=true \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  assert_failure "before-commit check with untracked files" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    TEST_DATABASE_URL="${test_database_url}" FAKE_UNTRACKED_FILES=true \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  assert_failure "unknown before-commit option" \
+    bash "${fixture}/scripts/check-before-commit.sh" --quick
+  pass "before-commit check validates the exact staged tree with the CI-equivalent gate"
+}
+
 test_local_app() {
   local fixture
   fixture="$(new_fixture local-app)"
@@ -371,6 +485,7 @@ test_admission_helpers() {
 test_setup
 test_import_env
 test_frontend_check
+test_before_commit_check
 test_local_app
 test_sqlc_runner
 test_clean

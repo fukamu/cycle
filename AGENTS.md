@@ -57,9 +57,10 @@
 - Backendだけ: `./scripts/check.sh --scope backend`
 - 全体: `./scripts/check.sh`
 - E2E込み: 消去可能な`TEST_DATABASE_URL`を設定して `./scripts/check.sh --e2e`
+- Commit前の必須gate: 全変更をstageし、消去可能なlocal `*_test` DBを`TEST_DATABASE_URL`へ設定して `./scripts/check-before-commit.sh`
 - Safe cleanの対象確認: `./scripts/clean.sh --dry-run`
 - DB reset guardのdry-run: `./scripts/reset-local-db.sh --database-name fukamu_cycle --confirm-database-name fukamu_cycle --dry-run`
 
-Host tool不足で一部checkを実行できない場合は、実行できたcheck、未実行のcheck、理由を明記してください。Data消失やproduction変更を伴う操作をvalidationのために実行してはいけません。
+Host tool不足で一部checkを実行できない場合は、実行できたcheck、未実行のcheck、理由を明記してください。ただし、Commit前の必須gateを完走できない場合はcommitしてはいけません。Data消失やproduction変更を伴う操作をvalidationのために実行してはいけません。
 
-Commit前に`git diff --check`、対象scopeのcheck、generated code差分、Secret/旧仕様の混入を確認します。意味のある単位でcommitし、force pushや既存履歴の書き換えを行いません。
+Commit前に`./scripts/check-before-commit.sh`を完走し、成功後はindexとworking treeを変えずにcommitします。変更した場合は全gateを再実行します。加えてSecret/旧仕様の混入を確認し、意味のある単位でcommitします。Force pushや既存履歴の書き換えを行いません。詳細は[`docs/development.md`](docs/development.md)を参照します。

@@ -84,6 +84,7 @@ pnpm --filter fukamu-cycle-frontend run dev
 | 全品質check                           | `./scripts/check.sh`                                                               |
 | Frontend / Backend / Infrastructureだけcheck | `./scripts/check.sh --scope frontend` / `--scope backend` / `--scope infrastructure` |
 | E2Eを含むcheck                        | `./scripts/check.sh --e2e`                                                        |
+| Commit前の必須CI相当gate              | `./scripts/check-before-commit.sh`                                                |
 | AI quality evaluation手順             | [`docs/ai-evaluation.md`](docs/ai-evaluation.md)                                   |
 | Safe clean                            | `./scripts/clean.sh`                                                               |
 | 依存関係を含むfull clean              | `./scripts/clean.sh --all`                                                         |

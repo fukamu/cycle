@@ -15,7 +15,7 @@ usage() {
 Usage: ./scripts/check.sh [--scope all|frontend|backend|infrastructure] [--e2e]
 
 Run repository checks by scope. --e2e requires --scope all and a disposable
-TEST_DATABASE_URL.
+localhost TEST_DATABASE_URL whose database name ends in _test.
 EOF
 }
 
@@ -70,10 +70,21 @@ fi
 if [[ "${run_backend}" == "true" ]]; then
   require_command go
   require_command git
-  "${script_dir}/invoke-sqlc.sh" compile generate
+  require_command diff
   (
+    generated_dir="${repo_root}/backend/internal/infrastructure/postgres/generated"
+    generated_snapshot="$(mktemp -d)"
+    trap 'rm -rf -- "${generated_snapshot}"' EXIT
+    cp -R -- "${generated_dir}/." "${generated_snapshot}/"
+
+    "${script_dir}/invoke-sqlc.sh" compile generate
+    if ! diff -ru -- "${generated_snapshot}" "${generated_dir}"; then
+      die "sqlc generate changed generated code. Review and stage the generated files, then rerun checks."
+    fi
+    rm -rf -- "${generated_snapshot}"
+    trap - EXIT
+
     cd -- "${repo_root}/backend"
-    git diff --exit-code -- internal/infrastructure/postgres/generated
     untracked_generated="$(
       git ls-files --others --exclude-standard -- \
         internal/infrastructure/postgres/generated
@@ -128,21 +139,11 @@ if [[ "${run_infrastructure}" == "true" ]]; then
 fi
 
 if [[ "${run_e2e}" == "true" ]]; then
-  [[ -n "${TEST_DATABASE_URL:-}" ]] \
-    || die "Set TEST_DATABASE_URL to a disposable PostgreSQL test database before running E2E."
-  e2e_migrate="${repo_root}/.tmp/check/migrate"
-  e2e_server="${repo_root}/.tmp/check/server"
-  [[ -x "${e2e_migrate}" && -x "${e2e_server}" ]] \
-    || die "E2E binaries are missing. Run E2E with --scope all so the backend build runs first."
-
-  (
-    cd -- "${repo_root}/backend"
-    DATABASE_URL="${TEST_DATABASE_URL}" "${e2e_migrate}"
-  )
+  require_disposable_test_database_url "${TEST_DATABASE_URL:-}"
   (
     cd -- "${repo_root}"
-    FUKAMU_CYCLE_SERVER_BINARY="${e2e_server}" \
-      pnpm --filter fukamu-cycle-frontend run test:e2e
+    unset FUKAMU_CYCLE_GO_BINARY FUKAMU_CYCLE_SERVER_BINARY
+    CI=true pnpm --filter fukamu-cycle-frontend run test:e2e
   )
 fi
 

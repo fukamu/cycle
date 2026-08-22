@@ -12,7 +12,7 @@
 - Docker（PostgreSQLの簡易起動とCloudflare Container imageのbuildに使う場合）
 - Chromium（E2Eを実行する場合）
 - Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
-- `curl`、`openssl`、`realpath`、`sha256sum`、`base64`、`sed`、`awk`、`find`、`sort`、`mktemp`
+- `curl`、`jq`、`openssl`、`realpath`、`sha256sum`、`base64`、`sed`、`awk`、`find`、`sort`、`mktemp`
 
 CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.26.6、PostgreSQL 18.6を前提にし、Docker PostgreSQLは`postgres:18.6-alpine3.24`へ固定しています。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
 
@@ -143,7 +143,7 @@ export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fu
 ./scripts/check.sh --scope backend
 ```
 
-E2Eも同じ専用DBを使います。初回のみChromiumを導入し、`--e2e` を付けます。Check scriptはbuild済みのmigration/server binaryを使って事前migrationとPlaywright server起動を行い、終了時に子processを確実に停止します。
+E2Eも同じ専用DBを使います。安全のため、`TEST_DATABASE_URL`は`localhost`、`127.0.0.1`、`[::1]`のいずれかにある、名前が`_test`で終わるDBだけを受け付けます。初回のみChromiumを導入し、`--e2e` を付けます。Check scriptは`CI=true`を設定し、GitHub Actionsと同じPlaywright設定およびmigration/server起動経路を使い、終了時に子processを確実に停止します。
 
 ```bash
 pnpm --filter fukamu-cycle-frontend exec playwright install chromium
@@ -153,7 +153,16 @@ export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fu
 
 Playwright自身の既定portは55432です。このリポジトリのDocker例は5432なので、上記のように `TEST_DATABASE_URL` を明示してください。E2EではGoogle Identity、Turnstile、OpenAIのtest doubleを使い、外部APIを呼びません。
 
-CIと同じ個別コマンドが必要な場合は [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) を参照してください。
+### Commit前の必須gate
+
+Commitへ含める変更をすべてstageし、unstaged/untracked fileがない状態で次を実行します。この1コマンドはNode/pnpm/Goの標準version、frozen lockfile install、CI再利用判定test、actionlint 1.7.12、全scopeの品質check、CI設定のPlaywright E2Eを検証します。sqlc生成物は、検証開始時点から`sqlc generate`後に差分が増えないことも確認します。
+
+```bash
+export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable'
+./scripts/check-before-commit.sh
+```
+
+このgateが成功しない限りcommitしてはいけません。成功後にindexまたはworking treeを変更した場合は、その変更をstageして全gateを再実行します。成功messageに表示されたstaged treeだけを、そのままcommitしてください。GitHub-hosted runner固有の障害はローカルから排除できませんが、repository内容に対するCIの検証commandとE2E suiteはこのgateで先に実行されます。
 
 ### 性能変更の確認
 
