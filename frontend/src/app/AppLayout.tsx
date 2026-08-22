@@ -37,14 +37,18 @@ export function AppLayout() {
         </Link>
         <button
           ref={trigger}
-          className="icon-button"
+          className="menu-button"
           type="button"
           aria-label={open ? "メニューを閉じる" : "メニューを開く"}
           aria-expanded={open}
           aria-controls="app-menu"
           onClick={() => (open ? closeMenu(true) : setOpen(true))}
         >
-          <span aria-hidden="true">MENU</span>
+          <span className="menu-button__icon" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
         </button>
       </header>
       {open && (

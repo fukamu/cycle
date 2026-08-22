@@ -1,13 +1,9 @@
 .app-referral {
   margin-top: 40px;
   padding: clamp(20px, 4vw, 28px);
-  background:
-    linear-gradient(135deg, rgb(214 233 255 / 42%), transparent 58%),
-    var(--paper);
-  border: 1px solid var(--brand-light);
-  border-left: 4px solid var(--brand);
-  border-radius: 18px;
-  box-shadow: var(--shadow);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
 }
 
 .app-referral h2 {

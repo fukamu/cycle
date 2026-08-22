@@ -16,7 +16,12 @@ describe("AppLayout", () => {
         </Routes>
       </MemoryRouter>,
     );
-    await user.click(screen.getByRole("button", { name: "メニューを開く" }));
+    expect(screen.queryByText("MENU")).not.toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "メニューを開く" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(trigger);
+    expect(trigger).toHaveAccessibleName("メニューを閉じる");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(
       screen.getByRole("navigation", { name: "メインメニュー" }),
     ).toBeInTheDocument();

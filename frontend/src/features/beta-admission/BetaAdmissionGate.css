@@ -3,19 +3,15 @@
   min-height: 100vh;
   place-items: center;
   padding: 32px 16px;
-  background:
-    linear-gradient(145deg, rgb(214 233 255 / 86%), transparent 52%),
-    linear-gradient(180deg, var(--paper), var(--canvas));
+  background: var(--canvas);
 }
 
 .beta-admission__card {
   width: min(520px, 100%);
   padding: clamp(28px, 6vw, 48px);
-  background: rgb(255 255 255 / 96%);
+  background: var(--paper);
   border: 1px solid var(--line);
-  border-top: 5px solid var(--brand);
-  border-radius: 22px;
-  box-shadow: var(--shadow-raised);
+  border-radius: 12px;
 }
 
 .beta-admission__eyebrow {
