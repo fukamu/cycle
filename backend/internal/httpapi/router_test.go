@@ -79,8 +79,12 @@ func TestSecurityHeaders(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
 	NewRouter(Dependencies{Production: true}).ServeHTTP(response, request)
-	if response.Header().Get("Content-Security-Policy") == "" {
+	csp := response.Header().Get("Content-Security-Policy")
+	if csp == "" {
 		t.Fatal("Content-Security-Policy is missing")
+	}
+	if !strings.Contains(csp, "script-src 'self' https://accounts.google.com https://www.google.com https://www.gstatic.com https://challenges.cloudflare.com https://static.cloudflareinsights.com") {
+		t.Fatalf("Content-Security-Policy does not allow the Cloudflare Web Analytics beacon: %q", csp)
 	}
 	if response.Header().Get("Strict-Transport-Security") == "" {
 		t.Fatal("Strict-Transport-Security is missing in production")

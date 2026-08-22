@@ -43,7 +43,7 @@ func (server *api) securityHeaders(next http.Handler) http.Handler {
 		writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		writer.Header().Set("X-Frame-Options", "DENY")
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://accounts.google.com https://www.google.com https://www.gstatic.com https://challenges.cloudflare.com; connect-src 'self' https://accounts.google.com https://www.google.com https://challenges.cloudflare.com; frame-src https://accounts.google.com https://www.google.com https://challenges.cloudflare.com; img-src 'self' data: https:; style-src 'self' https://accounts.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com")
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://accounts.google.com https://www.google.com https://www.gstatic.com https://challenges.cloudflare.com https://static.cloudflareinsights.com; connect-src 'self' https://accounts.google.com https://www.google.com https://challenges.cloudflare.com; frame-src https://accounts.google.com https://www.google.com https://challenges.cloudflare.com; img-src 'self' data: https:; style-src 'self' https://accounts.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com")
 		if server.dependencies.Production {
 			writer.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}

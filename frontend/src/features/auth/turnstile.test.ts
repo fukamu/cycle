@@ -53,4 +53,36 @@ describe("getAnonymousBootstrapToken", () => {
     expect(execute).toHaveBeenCalledOnce();
     expect(remove).toHaveBeenCalledWith("widget-id");
   });
+
+  it("handles a widget error without allowing Turnstile's default retry", async () => {
+    vi.stubEnv("VITE_TURNSTILE_SITE_KEY", "site-key");
+    const remove = vi.fn();
+    const execute = vi.fn((widgetId: string) => {
+      expect(widgetId).toBe("widget-id");
+      expect(errorCallback?.("110200")).toBe(true);
+    });
+    let errorCallback: ((errorCode: string) => boolean) | undefined;
+    const render = vi.fn(
+      (_container: HTMLElement, options: Record<string, unknown>) => {
+        errorCallback = options["error-callback"] as (
+          errorCode: string,
+        ) => boolean;
+        return "widget-id";
+      },
+    );
+    window.turnstile = { render, execute, remove };
+    const { getAnonymousBootstrapToken } = await import("./turnstile");
+
+    const token = getAnonymousBootstrapToken();
+    document
+      .querySelector<HTMLScriptElement>(
+        'script[data-fukamu-cycle-turnstile="true"]',
+      )
+      ?.dispatchEvent(new Event("load"));
+
+    await expect(token).rejects.toThrow(
+      "Turnstile verification failed (110200)",
+    );
+    expect(remove).toHaveBeenCalledWith("widget-id");
+  });
 });
