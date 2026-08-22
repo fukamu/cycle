@@ -88,14 +88,16 @@ describe("GoalTimelinePage", () => {
 
     await screen.findByText("GOAL V2");
     const version = getVersion(container, 2);
+    const event = getEvent(container, 2);
     expect(version).toHaveAttribute("data-version-kind", "revision");
-    expect(within(version).getByText("目標を変更しました")).toBeVisible();
     expect(
-      version.querySelector(".timeline-segment__marker"),
-    ).toBeInTheDocument();
-    expect(
-      version.querySelector(".timeline-segment__rail"),
-    ).toBeInTheDocument();
+      within(version).queryByText("目標を変更しました"),
+    ).not.toBeInTheDocument();
+    expect(within(event).getByText("目標を変更しました")).toBeVisible();
+    expect(event).toHaveAttribute("data-timeline-event", "change");
+    expect(version.nextElementSibling).toBe(event);
+    expect(event.querySelector(".timeline-event__marker")).toBeInTheDocument();
+    expect(version.querySelector(".timeline-period__rail")).toBeInTheDocument();
     expect(screen.queryByText("GOAL V1")).not.toBeInTheDocument();
     expect(listCycles).toHaveBeenCalledWith(goalId, undefined);
   });
@@ -139,7 +141,7 @@ describe("GoalTimelinePage", () => {
     expect(within(v3).getByRole("link", { name: /Cycle 6/ })).toBeVisible();
 
     triggerIntersection();
-    await screen.findByText("GOAL V1");
+    await screen.findByRole("heading", { name: "Version 1の目標" });
     await waitFor(() => expect(listCycles).toHaveBeenCalledTimes(3));
     expect(listCycles).toHaveBeenNthCalledWith(3, goalId, "older-2");
 
@@ -156,10 +158,35 @@ describe("GoalTimelinePage", () => {
       "revision",
       "baseline",
     ]);
+    const entries = [
+      ...container.querySelectorAll<HTMLElement>(".timeline > li"),
+    ].map((entry) =>
+      entry.dataset.timelineEntry === "period"
+        ? `period-${entry.dataset.versionNumber}`
+        : `${entry.dataset.timelineEvent}-${entry.dataset.eventVersion}`,
+    );
+    expect(entries).toEqual([
+      "period-3",
+      "change-3",
+      "period-2",
+      "change-2",
+      "period-1",
+      "created-1",
+    ]);
     expect(screen.getAllByText("目標を変更しました")).toHaveLength(2);
     expect(
-      within(getVersion(container, 1)).queryByText("目標を変更しました"),
-    ).not.toBeInTheDocument();
+      within(getEvent(container, 3)).getByText("Cycle 4の終了後"),
+    ).toBeVisible();
+    expect(
+      within(getEvent(container, 2)).getByText("Cycle 2の終了後"),
+    ).toBeVisible();
+    expect(
+      within(getEvent(container, 1)).getByText("目標を設定しました"),
+    ).toBeVisible();
+    for (const version of versions)
+      expect(
+        within(version).queryByText("目標を変更しました"),
+      ).not.toBeInTheDocument();
     expect(
       within(getVersion(container, 2)).getByRole("link", { name: /Cycle 3/ }),
     ).toBeVisible();
@@ -199,6 +226,14 @@ function getVersion(container: HTMLElement, versionNumber: number) {
   );
   expect(version).not.toBeNull();
   return version!;
+}
+
+function getEvent(container: HTMLElement, versionNumber: number) {
+  const event = container.querySelector<HTMLElement>(
+    `[data-event-version="${versionNumber}"]`,
+  );
+  expect(event).not.toBeNull();
+  return event!;
 }
 
 function makeGoal(versionNumber: number): Goal {

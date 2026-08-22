@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { Fragment, useEffect, useMemo, useRef } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 
@@ -86,58 +86,85 @@ export function GoalTimelinePage() {
           · Cycle {current.cycleCount ?? 0}
         </p>
       </header>
-      <ol className="timeline">
-        {groups.map((group) => (
-          <li
-            className="timeline-segment"
-            data-version-kind={group.kind}
-            data-version-number={group.version.versionNumber}
-            key={group.version.id}
-          >
-            <span className="timeline-segment__marker" aria-hidden="true" />
-            {group.cycles.length > 0 && (
-              <span className="timeline-segment__rail" aria-hidden="true" />
-            )}
-            <div className="timeline-segment__content">
-              <div className="timeline-version">
-                {group.kind === "revision" && (
-                  <p className="version-change">目標を変更しました</p>
-                )}
-                <p className="eyebrow">GOAL V{group.version.versionNumber}</p>
-                <h2>{group.version.body}</h2>
-                {group.version.createdAt && (
-                  <time dateTime={group.version.createdAt}>
-                    {new Date(group.version.createdAt).toLocaleDateString(
-                      "ja-JP",
-                    )}
-                  </time>
-                )}
-              </div>
-              <ol
-                className="timeline-cycles"
-                aria-label={`Goal V${group.version.versionNumber}のサイクル`}
+      <ol className="timeline" aria-label="目標の履歴（新しい順）">
+        {groups.map((group, index) => {
+          const boundaryCycle = groups[index + 1]?.cycles[0];
+          const isRevision = group.kind === "revision";
+          return (
+            <Fragment key={group.version.id}>
+              <li
+                className="timeline-period"
+                data-timeline-entry="period"
+                data-version-kind={group.kind}
+                data-version-number={group.version.versionNumber}
               >
-                {group.cycles.map((cycle) => {
-                  const end = cycle.completedAt ?? cycle.canceledAt;
-                  return (
-                    <li key={cycle.id}>
-                      <Link to={`/goals/${goalId}/cycles/${cycle.id}`}>
-                        <span>Cycle {cycle.sequenceNumber}</span>
-                        <strong>{statusLabel[cycle.status]}</strong>
-                        <time>
-                          {end
-                            ? formatCompletedPeriod(cycle.startedAt, end)
-                            : formatActivePeriod(cycle.startedAt)}
-                        </time>
-                        <p>{cycle.planPreview || "Pは未入力です"}</p>
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ol>
-            </div>
-          </li>
-        ))}
+                {group.cycles.length > 0 && (
+                  <span className="timeline-period__rail" aria-hidden="true" />
+                )}
+                <div className="timeline-period__content">
+                  <div className="timeline-version">
+                    <p className="eyebrow">
+                      GOAL V{group.version.versionNumber}
+                    </p>
+                    <h2>{group.version.body}</h2>
+                  </div>
+                  <ol
+                    className="timeline-cycles"
+                    aria-label={`Goal V${group.version.versionNumber}のサイクル`}
+                  >
+                    {group.cycles.map((cycle) => {
+                      const end = cycle.completedAt ?? cycle.canceledAt;
+                      return (
+                        <li key={cycle.id}>
+                          <Link to={`/goals/${goalId}/cycles/${cycle.id}`}>
+                            <span>Cycle {cycle.sequenceNumber}</span>
+                            <strong>{statusLabel[cycle.status]}</strong>
+                            <time>
+                              {end
+                                ? formatCompletedPeriod(cycle.startedAt, end)
+                                : formatActivePeriod(cycle.startedAt)}
+                            </time>
+                            <p>{cycle.planPreview || "Pは未入力です"}</p>
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+              </li>
+              <li
+                className={`timeline-event timeline-event--${isRevision ? "change" : "created"}`}
+                data-event-version={group.version.versionNumber}
+                data-timeline-entry="event"
+                data-timeline-event={isRevision ? "change" : "created"}
+              >
+                <span className="timeline-event__marker" aria-hidden="true" />
+                <div>
+                  <p className="eyebrow">
+                    {isRevision
+                      ? `GOAL V${group.version.versionNumber - 1} → V${group.version.versionNumber}`
+                      : "GOAL V1"}
+                  </p>
+                  <p className="timeline-event__label">
+                    {isRevision ? "目標を変更しました" : "目標を設定しました"}
+                  </p>
+                  <p className="timeline-event__meta">
+                    {isRevision && boundaryCycle && (
+                      <span>Cycle {boundaryCycle.sequenceNumber}の終了後</span>
+                    )}
+                    {group.version.createdAt && (
+                      <time dateTime={group.version.createdAt}>
+                        {new Date(group.version.createdAt).toLocaleDateString(
+                          "ja-JP",
+                        )}
+                      </time>
+                    )}
+                  </p>
+                </div>
+              </li>
+            </Fragment>
+          );
+        })}
       </ol>
       <div ref={sentinel} className="load-sentinel" aria-hidden="true" />
       {cycles.isFetchingNextPage && (

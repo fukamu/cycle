@@ -606,12 +606,14 @@ Goal HistoryはGoalを最上位の閲覧単位とし、Cycleを単純に全User�
 表示例:
 
 ```text
-● 目標を変更しました
 Goal v2
 平日は18時までに主要業務を終えたい
 │
 ├─ Cycle 4  Canceled   2026/08/18
 └─ Cycle 3  Completed  2026/08/11 〜 2026/08/17
+
+● Goal v1 → v2
+   Cycle 2の終了後に目標を変更しました  2026/08/11
 
 Goal v1
 仕事に余裕を持てるようになりたい
@@ -619,16 +621,20 @@ Goal v1
 ├─ Cycle 2  Completed  2026/08/06 〜 2026/08/10
 └─ Cycle 1  Completed  2026/08/01 〜 2026/08/05
 
+○ Goal v1
+   目標を設定しました  2026/08/01
+
 Goal status: ended
 ```
 
 Required behavior:
 
-- Version markerには`versionNumber`、Goal本文、確定日時を表示する。
+- Version区間には`versionNumber`とGoal本文を表示し、対応するVersion開始eventには確定日時を表示する。
 - Cycle rowにはGoal単位のCycle番号、期間、`completed` / `canceled`、P previewを表示する。
 - Cycle Detailには、そのCycleが参照したGoal Version本文とP/D/C/AをRead-onlyで表示する。
-- Version変更地点は色だけでなく、marker icon、文言、Version番号でも識別可能にする。
-- V1は白抜きmarkerとLight Blueの独立segment、V2以降は各VersionをBlueの塗りmarkerとBlueの独立segmentで示す。Version固有色は増やさず、任意のVersionは番号と変更文言で識別する。
+- Version区間とVersion開始eventを別itemとして表示する。変更文言をVersion見出しやCycle群へ内包せず、最新順では新VersionのCycle群と旧Version区間の間に独立した変更eventを置く。
+- V1区間はLight Blueのrail、V2以降の区間はBlueのrailで示す。V1開始eventは白抜きmarker、V2以降の変更eventはBlueの塗りmarkerとし、Version固有色は増やさない。
+- Version変更eventは色だけでなく、`Goal Vn → Vn+1`、`目標を変更しました`、確定日時を表示する。直前Versionの最新Cycleを取得済みなら`Cycle Nの終了後`も表示し、変更を範囲ではなく時点として識別可能にする。
 - Timelineは最新Versionを先頭にし、各Version内のCycleも新しい順に表示する。Infinite Scrollで取得した古いpageは既存表示を移動させず末尾へ追加する。
 - Review Draftを変更後に`achieved` / `ended`へ遷移した場合、そのDraftはVersion化されないためTimelineにもmarkerを作らない。
 - Infinite Scrollのpage境界をまたいでも、各Cycle itemが持つ`goalVersion`を使って正しいVersion groupを維持する。

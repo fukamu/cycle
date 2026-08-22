@@ -794,49 +794,29 @@ textarea[readonly] {
   list-style: none;
 }
 
-.timeline-segment {
-  --timeline-marker-fill: var(--paper);
-  --timeline-marker-border: var(--line-strong);
+.timeline-period {
   --timeline-rail-color: var(--brand-light);
 
   position: relative;
   min-width: 0;
-  margin-bottom: 30px;
+  margin-bottom: 10px;
   padding-left: 34px;
 }
 
-.timeline-segment[data-version-kind="revision"] {
-  --timeline-marker-fill: var(--brand);
-  --timeline-marker-border: var(--brand);
+.timeline-period[data-version-kind="revision"] {
   --timeline-rail-color: var(--brand);
 }
 
-.timeline-segment:last-child {
-  margin-bottom: 0;
-}
-
-.timeline-segment__marker {
+.timeline-period__rail {
   position: absolute;
   top: 4px;
-  left: 0;
-  z-index: 1;
-  width: 18px;
-  height: 18px;
-  background: var(--timeline-marker-fill);
-  border: 3px solid var(--timeline-marker-border);
-  border-radius: 50%;
-}
-
-.timeline-segment__rail {
-  position: absolute;
-  top: 22px;
   bottom: 0;
   left: 8px;
   width: 2px;
   background: var(--timeline-rail-color);
 }
 
-.timeline-segment__content {
+.timeline-period__content {
   min-width: 0;
 }
 
@@ -848,15 +828,53 @@ textarea[readonly] {
   overflow-wrap: anywhere;
 }
 
-.timeline-version time {
-  color: var(--muted);
-  font-size: var(--font-size-small);
+.timeline-event {
+  --timeline-event-fill: var(--brand);
+  --timeline-event-border: var(--brand);
+
+  position: relative;
+  min-height: 58px;
+  margin-bottom: 30px;
+  padding: 10px 0 10px 34px;
 }
 
-.version-change {
-  margin: 0 0 4px;
-  color: var(--brand-dark);
+.timeline-event--created {
+  --timeline-event-fill: var(--paper);
+  --timeline-event-border: var(--line-strong);
+}
+
+.timeline-event:last-child {
+  margin-bottom: 0;
+}
+
+.timeline-event__marker {
+  position: absolute;
+  top: 14px;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  background: var(--timeline-event-fill);
+  border: 3px solid var(--timeline-event-border);
+  border-radius: 50%;
+}
+
+.timeline-event .eyebrow {
+  margin-bottom: 2px;
+}
+
+.timeline-event__label {
+  margin: 0;
+  color: var(--brand-deep);
   font-weight: var(--font-weight-medium);
+}
+
+.timeline-event__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-small);
 }
 
 .timeline-cycles {

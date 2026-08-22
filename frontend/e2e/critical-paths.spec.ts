@@ -190,6 +190,24 @@ test("timeline distinguishes V1, V2, and V3 goal segments", async ({
     ),
   ).toEqual(["3", "2", "1"]);
   await expect(page.getByText("目標を変更しました")).toHaveCount(2);
+  expect(
+    await page
+      .locator(".timeline > li")
+      .evaluateAll((entries) =>
+        entries.map((entry) =>
+          entry.getAttribute("data-timeline-entry") === "period"
+            ? `period-${entry.getAttribute("data-version-number")}`
+            : `${entry.getAttribute("data-timeline-event")}-${entry.getAttribute("data-event-version")}`,
+        ),
+      ),
+  ).toEqual([
+    "period-3",
+    "change-3",
+    "period-2",
+    "change-2",
+    "period-1",
+    "created-1",
+  ]);
 
   const v1 = page.locator('[data-version-number="1"]');
   const v2 = page.locator('[data-version-number="2"]');
@@ -197,24 +215,32 @@ test("timeline distinguishes V1, V2, and V3 goal segments", async ({
   await expect(v1).toHaveAttribute("data-version-kind", "baseline");
   await expect(v2).toHaveAttribute("data-version-kind", "revision");
   await expect(v3).toHaveAttribute("data-version-kind", "revision");
-  await expect(v1.locator(".timeline-segment__marker")).toHaveCSS(
-    "background-color",
-    "rgb(255, 255, 255)",
-  );
-  await expect(v1.locator(".timeline-segment__rail")).toHaveCSS(
+  await expect(v1.locator(".timeline-period__rail")).toHaveCSS(
     "background-color",
     "rgb(214, 233, 255)",
   );
   for (const revision of [v2, v3]) {
-    await expect(revision.locator(".timeline-segment__marker")).toHaveCSS(
-      "background-color",
-      "rgb(74, 144, 226)",
-    );
-    await expect(revision.locator(".timeline-segment__rail")).toHaveCSS(
+    await expect(revision.locator(".timeline-period__rail")).toHaveCSS(
       "background-color",
       "rgb(74, 144, 226)",
     );
   }
+  for (const versionNumber of [2, 3]) {
+    const event = page.locator(`[data-event-version="${versionNumber}"]`);
+    await expect(event.locator(".timeline-event__marker")).toHaveCSS(
+      "background-color",
+      "rgb(74, 144, 226)",
+    );
+  }
+  await expect(
+    page.locator('[data-event-version="1"]').locator(".timeline-event__marker"),
+  ).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expect(page.locator('[data-event-version="3"]')).toContainText(
+    "Cycle 2の終了後",
+  );
+  await expect(page.locator('[data-event-version="2"]')).toContainText(
+    "Cycle 1の終了後",
+  );
   await expect(v1.getByRole("link", { name: /Cycle 1/ })).toBeVisible();
   await expect(v2.getByRole("link", { name: /Cycle 2/ })).toBeVisible();
   await expect(v3.getByRole("link", { name: /Cycle 3/ })).toBeVisible();
