@@ -9,7 +9,7 @@ import {
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { SessionContext } from "../features/auth/sessionContext";
-import { cycleQueryKey } from "../features/goal-collection/goalCache";
+import { userQueryKeys } from "../features/goal-collection/goalCache";
 import type { Cycle, Goal, Session } from "../shared/api/schemas";
 import {
   getCycle,
@@ -124,8 +124,9 @@ describe("GoalWorkspacePage", () => {
     });
     await waitFor(() =>
       expect(
-        cache.getQueryData<{ cycle: Cycle }>(cycleQueryKey(goal.id, cycle.id))
-          ?.cycle.plan,
+        cache.getQueryData<{ cycle: Cycle }>(
+          userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+        )?.cycle.plan,
       ).toBe("自動保存後"),
     );
     first.unmount();

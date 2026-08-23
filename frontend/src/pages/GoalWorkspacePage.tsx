@@ -12,8 +12,7 @@ import { useSession } from "../features/auth/sessionContext";
 import {
   cacheCycleFrame,
   cacheReview,
-  cycleQueryKey,
-  goalQueryKey,
+  userQueryKeys,
 } from "../features/goal-collection/goalCache";
 import type { Cycle, Frame, Goal } from "../shared/api/schemas";
 import {
@@ -64,14 +63,16 @@ type WorkspaceConfirmation =
   | { readonly kind: "delete" };
 
 export function GoalWorkspacePage() {
+  const session = useSession();
+  const userId = session.user.id;
   const { goalId, cycleId } = useParams();
   const goalQuery = useQuery({
-    queryKey: goalQueryKey(goalId ?? ""),
+    queryKey: userQueryKeys.goal(userId, goalId ?? ""),
     queryFn: () => getGoal(goalId ?? ""),
     enabled: Boolean(goalId),
   });
   const cycleQuery = useQuery({
-    queryKey: cycleQueryKey(goalId ?? "", cycleId ?? ""),
+    queryKey: userQueryKeys.cycle(userId, goalId ?? "", cycleId ?? ""),
     queryFn: () => getCycle(goalId ?? "", cycleId ?? ""),
     enabled: Boolean(goalId && cycleId),
   });
@@ -112,6 +113,7 @@ function CycleWorkspace({
   readonly initial: Cycle;
 }) {
   const session = useSession();
+  const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
   const cycle = initial;
@@ -184,9 +186,9 @@ function CycleWorkspace({
   const deleteFrameDraft = useCallback(
     (frame: Frame) =>
       queueBrowserOperation(() =>
-        deleteBrowserDraft(session.user.id, `cycle:${cycle.id}:${frame}`),
+        deleteBrowserDraft(userId, `cycle:${cycle.id}:${frame}`),
       ),
-    [cycle.id, queueBrowserOperation, session.user.id],
+    [cycle.id, queueBrowserOperation, userId],
   );
 
   const cacheFrameDraft = useCallback(
@@ -194,7 +196,7 @@ function CycleWorkspace({
       if (cacheDisabledRef.current) return Promise.resolve();
       return queueBrowserOperation(() =>
         putBrowserDraft({
-          userId: session.user.id,
+          userId,
           goalId: goal.id,
           subjectKey: `cycle:${cycle.id}:${frame}`,
           body,
@@ -203,13 +205,12 @@ function CycleWorkspace({
         }),
       );
     },
-    [cycle.id, goal.id, queueBrowserOperation, session.user.id],
+    [cycle.id, goal.id, queueBrowserOperation, userId],
   );
 
   const clearGoalDraftCache = useCallback(
-    () =>
-      queueBrowserOperation(() => clearGoalDrafts(session.user.id, goal.id)),
-    [goal.id, queueBrowserOperation, session.user.id],
+    () => queueBrowserOperation(() => clearGoalDrafts(userId, goal.id)),
+    [goal.id, queueBrowserOperation, userId],
   );
 
   const persistFrameDraft = useCallback(
@@ -316,7 +317,7 @@ function CycleWorkspace({
           ...savedValuesRef.current,
           [frame]: result.content,
         };
-        cacheCycleFrame(cache, goal.id, result);
+        cacheCycleFrame(cache, userId, goal.id, result);
         if (pending.current.has(frame))
           void cacheFrameDraft(
             frame,
@@ -340,6 +341,7 @@ function CycleWorkspace({
     goal.id,
     persistFrameDraft,
     session.csrfToken,
+    userId,
   ]);
   drainDetachedRef.current = drainDetached;
 
@@ -388,7 +390,7 @@ function CycleWorkspace({
         valuesRef.current = { ...valuesRef.current, [frame]: result.content };
         if (mountedRef.current) setValues(valuesRef.current);
       }
-      cacheCycleFrame(cache, goal.id, result);
+      cacheCycleFrame(cache, userId, goal.id, result);
       if (!pending.current.has(frame)) void deleteFrameDraft(frame);
       else
         void cacheFrameDraft(
@@ -445,6 +447,7 @@ function CycleWorkspace({
     schedulePump,
     session.csrfToken,
     updateSaveState,
+    userId,
   ]);
   pumpRef.current = pump;
 
@@ -456,10 +459,7 @@ function CycleWorkspace({
         try {
           return {
             frame,
-            draft: await getBrowserDraft(
-              session.user.id,
-              `cycle:${cycle.id}:${frame}`,
-            ),
+            draft: await getBrowserDraft(userId, `cycle:${cycle.id}:${frame}`),
           };
         } catch {
           return { frame, failed: true as const };
@@ -507,7 +507,7 @@ function CycleWorkspace({
     editable,
     hasSavablePending,
     schedulePump,
-    session.user.id,
+    userId,
   ]);
 
   useEffect(() => {
@@ -688,7 +688,7 @@ function CycleWorkspace({
       contentRevision.current,
       nextContentRevision,
     );
-    cacheCycleFrame(cache, goal.id, {
+    cacheCycleFrame(cache, userId, goal.id, {
       cycleId: cycle.id,
       frame: "action",
       content: action,
@@ -782,9 +782,12 @@ function CycleWorkspace({
         contentRevision.current,
         session.csrfToken,
       );
-      await cache.invalidateQueries({ refetchType: "none" });
+      await cache.invalidateQueries({
+        queryKey: userQueryKeys.root(userId),
+        refetchType: "none",
+      });
       if ("goal" in result) {
-        cacheReview(cache, {
+        cacheReview(cache, userId, {
           goal: result.goal,
           reviewDraft: result.reviewDraft,
           triggerCycle: result.completedCycle,
@@ -813,7 +816,10 @@ function CycleWorkspace({
         { id: cycle.id, revision: contentRevision.current },
       );
       await finalizeDraftCache();
-      await cache.invalidateQueries({ refetchType: "none" });
+      await cache.invalidateQueries({
+        queryKey: userQueryKeys.root(userId),
+        refetchType: "none",
+      });
       navigate("/", { replace: true });
     } catch {
       resumeSaves();
@@ -828,7 +834,10 @@ function CycleWorkspace({
     try {
       await deleteGoal(goal.id, goal.revision, session.csrfToken);
       await finalizeDraftCache();
-      await cache.invalidateQueries({ refetchType: "none" });
+      await cache.invalidateQueries({
+        queryKey: userQueryKeys.root(userId),
+        refetchType: "none",
+      });
       navigate("/", { replace: true });
     } catch {
       resumeSaves();

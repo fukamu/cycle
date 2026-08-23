@@ -29,7 +29,7 @@ export function SettingsPage() {
       setError(undefined);
       try {
         const upgraded = await upgradeGoogle(credential, session.csrfToken);
-        replaceSession(upgraded);
+        await replaceSession(upgraded);
         setMessage("Google Accountを連携しました。");
       } catch (cause) {
         if (
@@ -52,7 +52,7 @@ export function SettingsPage() {
     setError(undefined);
     try {
       const loggedIn = await loginGoogle(credential, session.csrfToken);
-      replaceSession(loggedIn);
+      await replaceSession(loggedIn);
       setMessage("既存のFUKAMU Cycleアカウントへ切り替えました。");
     } catch (cause) {
       setError(errorMessage(cause, "Googleログインに失敗しました。"));

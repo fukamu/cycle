@@ -2,7 +2,11 @@ import { useEffect, useRef } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
-import { cacheGoals } from "../features/goal-collection/goalCache";
+import { useSession } from "../features/auth/sessionContext";
+import {
+  cacheGoals,
+  userQueryKeys,
+} from "../features/goal-collection/goalCache";
 import { listGoals } from "../shared/api/workspace";
 import {
   LoadMoreError,
@@ -16,9 +20,11 @@ import {
 } from "../shared/date/format";
 
 export function GoalHistoryPage() {
+  const session = useSession();
+  const userId = session.user.id;
   const cache = useQueryClient();
   const query = useInfiniteQuery({
-    queryKey: ["goals", "all"],
+    queryKey: userQueryKeys.goals(userId, "all"),
     queryFn: ({ pageParam }) => listGoals("all", pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
@@ -34,11 +40,12 @@ export function GoalHistoryPage() {
     if (query.data) {
       cacheGoals(
         cache,
+        userId,
         query.data.pages.flatMap((page) => page.items),
         query.dataUpdatedAt,
       );
     }
-  }, [cache, query.data, query.dataUpdatedAt]);
+  }, [cache, query.data, query.dataUpdatedAt, userId]);
   useEffect(() => {
     const element = sentinel.current;
     if (!element) return;

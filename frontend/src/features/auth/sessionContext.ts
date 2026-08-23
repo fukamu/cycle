@@ -4,7 +4,7 @@ import type { Session } from "../../shared/api/schemas";
 
 export const SessionContext = createContext<Session | null>(null);
 export const ReplaceSessionContext = createContext<
-  ((session: Session) => void) | null
+  ((session: Session) => Promise<void>) | null
 >(null);
 
 export function useSession(): Session {
@@ -15,7 +15,7 @@ export function useSession(): Session {
   return value;
 }
 
-export function useReplaceSession(): (session: Session) => void {
+export function useReplaceSession(): (session: Session) => Promise<void> {
   const value = useContext(ReplaceSessionContext);
   if (value === null) {
     throw new Error("useReplaceSession must be used within SessionProvider");

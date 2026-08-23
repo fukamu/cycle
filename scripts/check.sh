@@ -63,6 +63,9 @@ if [[ "${run_frontend}" == "true" ]]; then
     pnpm --filter fukamu-cycle-frontend run lint
     pnpm --filter fukamu-cycle-frontend run typecheck
     pnpm --filter fukamu-cycle-frontend test
+    if [[ "${run_e2e}" == "true" ]]; then
+      export VITE_GOOGLE_WEB_CLIENT_ID="fukamu-cycle-e2e-client"
+    fi
     pnpm --filter fukamu-cycle-frontend run build
   )
 fi

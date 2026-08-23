@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M2 identity・browser isolation
+- 状態: IN_PROGRESS / M3 Docker context isolation
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -552,6 +552,9 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: M23の`draft_recovery_total`はbrowser IndexedDB内だけで発生し、現行Backendへ安全に通知するcontractがないと判明した。元計画のmetric追加をそのまま実装せず、本文・identityを送らないtransportをownerが決めるまでこのmetricの新規境界だけを停止する。影響はM23の当該metricで、他のserver-side metric/PII allowlist testは継続する。
 - 2026-08-22: M27の「Apply EnvironmentだけがR2 credentialを保持」と、現行SoT/運用文書の「Plan/Applyがrepository secretを使い、Environmentはsecret storeにしない」が矛盾すると判明した。Credential topologyを推測で変更せず、owner判断まではsnapshot helper/local isolated testだけを行う。影響はworkflow secret配置とlive drillで、追加検証はPlan/Apply両方の最小権限matrixとfailure-before-apply testとする。
 - 2026-08-22: M29のReact Hook Form削除は現行`docs/design.md`の明示的technology selectionと矛盾すると判明した。単一textareaでは依存削除により複雑性を減らせるという元計画の根拠は維持するが、ownerの設計変更承認まではRHFとSoTを削除しない。影響はM29のRHF sliceだけで、chi更新等は独立して進める。承認時はcontrolled editorのbehavior test、bundle、dependency zero-referenceを追加検証する。
+- 2026-08-22: M2ではglobalな`["session"]`だけをidentity非依存のまま維持し、全server stateとcreate-draft mutationを`["user", userId]`配下へ移した。異User置換は直列化し、実行時のcurrent sessionを再読してold-user query cancel/remove、mutation cache clear、新session publishの順に行う。同一Userではsessionだけを更新し、query/mutation/browser draft/editor stateを維持する。IndexedDB draftは既存のUser ID分離を維持し、切替元recordを削除しない。影響はFrontend cache keyとaccount transitionだけで、API wire shapeとserver dataは不変。Component ordering、parallel replace、factory/cross-user cache、same-tab no-reload E2Eを追加検証した。
+- 2026-08-22: `MutationCache.clear()`は実行中requestをabortせず、detached Cycle saveも切替と競合し得ることを再監査で確認した。M2ではcapture済みold User prefix/IndexedDB key、keyed remount、serverのsession-bound CSRF/ownershipによりnew User data contaminationを防止する。Request abort、identity lease、late navigation抑止、one-shot account transition noticeはM8/M9のautosave/app-shell責務として追加検証する。これはM2のdata-isolation acceptanceを弱めず、影響は切替後に拒否される旧requestとUX副作用の停止強化に限る。
+- 2026-08-22: 新しいsame-tab Google collision E2Eはpublic client IDがないbundleではtest fakeを描画できず、`scripts/check.sh --e2e`だけの設定では直接buildするGitHub E2E jobが不一致になると判明した。Production/deploy設定は変更せず、CI E2E buildだけに同じdummy public IDを与えた。影響はtest bundleだけで、workflow syntax、target/full Playwright、full gateを追加検証した。
 - 2026-08-22: Free/MVPの進行Goal上限を2件に確定。
 - 2026-08-22: Homeは`GoalView/currentWork`共用に確定。
 - 2026-08-22: Goal Refine fieldを`suggestion`へ統一。
@@ -564,7 +567,12 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-22: M2完了。変更前REDは異User置換後もquery/mutationが各1件残りeditor入力も旧Userのまま、same-tab/no-reload Google login後もfresh Home cacheが切替元Goalを表示することを再現した。GREENではidentity transitionを直列化し、全query/cache helper/page caller/invalidationをcaptured User IDへscopeし、User ID変更時だけapp subtreeをremountした。同一User upgradeはcache objectと入力を保持し、切替元browser draftはUser ID分離したまま保存する。Productionの旧unscoped query keyはzero。Target Vitestは9 files / 36 tests、same-tab test 1/1、contract characterization 6/6が成功した。
+- 2026-08-22: M2 Frontend gateは固定tool環境で約64秒、28 files / 81 tests、format、lint、strict typecheck、production buildが成功。Fresh disposable PostgreSQL 18.6上のfull E2E gateは約227秒でFrontend 28/81、Backend/sqlc、shell/Compose/Terraform、Cloudflare 8 tests、Wrangler dry-run/Container build、Playwright 14/14が成功し、migration version 1・dirty=false、generated drift zeroを確認した。
+- 2026-08-22: M2の最初のcommit前必須gateは約181秒で成功。Actionlint、全scope、Playwright 14/14、candidate tree `10a9b8ce8d0871af8ec5dc808a2c73b7c1548ae8`の開始・終了一致を確認した。本entry追加でtreeを変更したため、完全stage後にgateを最初から再実行する。
+- 2026-08-22: M2検証環境では、最初のFrontend起動がpnpmのnon-TTY store確認、full E2Eの最初の2回がnested Dockerのpath aliasとGit safe-directory guardで停止した。いずれもtest/migration開始前の固定container構成問題で、`CI=true`、host/container同一absolute path、process-local Git configにより解消し、該当gateを最初から再実行した。Root-owned tool containerが作成したGit object/index ownershipもrepository metadataだけを通常Userへ戻し、source/index内容が不変であることを確認した。Code assertionの再実行だけで失敗を隠していない。
 - 2026-08-22: M1完了。Protected/unsafe全routeのauthn・exact Origin・CSRF、cookie/body limit/error code/redactionをHTTP contract testで固定。実PostgreSQLで同一bootstrapの4並行requestが1 User/1 record/4 Sessionへ収束し、20件のcross-user操作がresource-specific 404かつowner state不変であることを確認。Goal Refine明示採用、Google collision/login非merge、account delete/revisit、active termination/canceled read-only、Action AI failure等を追加し、Vitest 28 files / 73 tests、Playwright 13/13が成功。Aは261.85秒、空DBからのEは276.67秒、migration version 1、sqlc drift zero。
+- 2026-08-22: M1 commit前必須gateは270.26秒で成功。staged candidate tree `87c96e30b3eafda1cd92611a5392a0aeb4267333`、Vitest 28/73、Playwright 13/13、全scope、empty DB migration、sqlc drift zeroを確認。commit権限は明示されていないためcommitせずM2へ進んだ。
 - 2026-08-22: M0完了。Goal上限2、Home `GoalView/currentWork`、Goal Refine `suggestion`を`docs/design.md`内で収束。Aは153秒、空のPostgreSQL 18.6を使うEは224秒で成功し、Playwright 8/8とmigration version 1を確認。既存Markdown 13 filesのlocal link/reference/fence checkも成功した。
 - 2026-08-22: 実装開始baselineを固定Docker環境（Node 24.19.0 / pnpm 11.22.0 / Go 1.26.6 / Terraform 1.15.8 / PostgreSQL 18.6）で再実行。Frontend 26 files / 70 tests、Backend unit/integration/build、sqlc差分なし、shell/Compose/Terraform、Cloudflare 8 tests、Wrangler dry-run/Container buildが成功。空のdisposable `fukamu_cycle_test` DBへmigrationを適用し、Playwright 8/8 scenariosが成功。baseline commit/treeからのdriftなし。
 - 2026-08-22: M0 commit前必須gateはfresh disposable PostgreSQL 18.6上で228秒で成功。staged candidate tree `b10e66b9d20e4eea82ad371c66effea2fcfb8d35`、Playwright 8/8、sqlc drift zeroを確認。commit権限は明示されていないためcommitせずM1へ進んだ。
@@ -572,7 +580,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M2。User ID変更時のquery/mutation/cache境界を修正し、同一user upgradeではstateを維持する。
+- 現在の再開位置: M3。Synthetic secret canaryでDocker build contextを検査し、`.env.local`、全`node_modules`、secret-bearing file classをcontext/imageから除外する。
 
 ## 26. Final definition of done
 

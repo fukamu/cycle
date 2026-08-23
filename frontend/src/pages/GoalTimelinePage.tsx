@@ -2,7 +2,8 @@ import { Fragment, useEffect, useMemo, useRef } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 
-import { goalQueryKey } from "../features/goal-collection/goalCache";
+import { useSession } from "../features/auth/sessionContext";
+import { userQueryKeys } from "../features/goal-collection/goalCache";
 import { getGoal, listCycles } from "../shared/api/workspace";
 import {
   LoadMoreError,
@@ -17,13 +18,15 @@ import {
 import { buildTimelineGroups } from "./goalTimelineModel";
 
 export function GoalTimelinePage() {
+  const session = useSession();
+  const userId = session.user.id;
   const { goalId = "" } = useParams();
   const goal = useQuery({
-    queryKey: goalQueryKey(goalId),
+    queryKey: userQueryKeys.goal(userId, goalId),
     queryFn: () => getGoal(goalId),
   });
   const cycles = useInfiniteQuery({
-    queryKey: ["goal", goalId, "cycles"],
+    queryKey: userQueryKeys.goalCycles(userId, goalId),
     queryFn: ({ pageParam }) => listCycles(goalId, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,

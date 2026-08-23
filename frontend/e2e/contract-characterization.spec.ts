@@ -10,6 +10,10 @@ import {
   requestFromPage,
   type SessionView,
 } from "./support/api";
+import {
+  googleIdentityFakeButtonName,
+  installGoogleIdentityFake,
+} from "./support/googleIdentity";
 import { createProgressingGoal, saveFrame } from "./support/workspace";
 
 test("same bootstrap ID and session refresh converge on one anonymous identity", async ({
@@ -84,6 +88,74 @@ test("Google collision login selects the linked account without merging after re
       source.getByRole("link", { name: new RegExp(targetGoal) }),
     ).toBeVisible();
     await expect(source.getByText(sourceGoal)).toHaveCount(0);
+  } finally {
+    await targetContext.close();
+    await sourceContext.close();
+  }
+});
+
+test("same-tab Google collision login isolates a fresh Home cache without reloading", async ({
+  browser,
+}) => {
+  const targetContext = await browser.newContext();
+  const sourceContext = await browser.newContext();
+  try {
+    const subject = newUUIDv7();
+    const targetGoal = "切替先だけにある目標";
+    const sourceGoal = "切替元に残して表示してはいけない目標";
+
+    const target = await targetContext.newPage();
+    await createProgressingGoal(target, targetGoal);
+    const targetUpgrade = await postGoogle(target, "upgrade", subject);
+    expect(targetUpgrade.status).toBe(200);
+    const targetSession = targetUpgrade.payload as SessionView;
+
+    const source = await sourceContext.newPage();
+    await installGoogleIdentityFake(source, "test-google:" + subject);
+    await createProgressingGoal(source, sourceGoal);
+    await source.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
+    await expect(
+      source.getByRole("link", { name: new RegExp(sourceGoal) }),
+    ).toBeVisible();
+    await source.getByRole("button", { name: "メニューを開く" }).click();
+    await source.getByRole("link", { name: "設定" }).click();
+    await expect(source.getByRole("heading", { name: "設定" })).toBeVisible();
+
+    const documentMarker = newUUIDv7();
+    await source.evaluate((marker) => {
+      (
+        window as Window & {
+          __fukamuDocumentMarker?: string;
+        }
+      ).__fukamuDocumentMarker = marker;
+    }, documentMarker);
+
+    await source
+      .getByRole("button", { name: googleIdentityFakeButtonName })
+      .click();
+    const collision = source.getByRole("dialog");
+    await expect(collision).toContainText("現在の匿名データは統合されません");
+    await collision
+      .getByRole("button", { name: "既存アカウントでログイン" })
+      .click();
+
+    await expect(source.locator("code")).toHaveText(targetSession.user.id);
+    expect(
+      await source.evaluate(
+        () =>
+          (
+            window as Window & {
+              __fukamuDocumentMarker?: string;
+            }
+          ).__fukamuDocumentMarker,
+      ),
+    ).toBe(documentMarker);
+
+    await source.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
+    await expect(source.getByText(sourceGoal)).toHaveCount(0);
+    await expect(
+      source.getByRole("link", { name: new RegExp(targetGoal) }),
+    ).toBeVisible();
   } finally {
     await targetContext.close();
     await sourceContext.close();

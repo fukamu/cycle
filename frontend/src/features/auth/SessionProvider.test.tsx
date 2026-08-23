@@ -1,17 +1,40 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState, type ReactNode } from "react";
 
+import type { Session } from "../../shared/api/schemas";
 import { SessionProvider } from "./SessionProvider";
+import { useReplaceSession, useSession } from "./sessionContext";
 
 const requestID = "00000000-0000-7000-8000-000000000001";
-const session = {
+const session: Session = {
   user: {
     id: "00000000-0000-7000-8000-000000000002",
     googleConnected: false,
     googleEmail: null,
   },
   csrfToken: "csrf-token",
+};
+const switchedSession: Session = {
+  user: {
+    id: "00000000-0000-7000-8000-000000000003",
+    googleConnected: true,
+    googleEmail: "existing@example.com",
+  },
+  csrfToken: "switched-csrf-token",
+};
+const latestSession: Session = {
+  user: {
+    id: "00000000-0000-7000-8000-000000000004",
+    googleConnected: true,
+    googleEmail: "latest@example.com",
+  },
+  csrfToken: "latest-csrf-token",
 };
 
 describe("SessionProvider admission boundary", () => {
@@ -123,16 +146,293 @@ describe("SessionProvider admission boundary", () => {
   });
 });
 
-function renderProvider() {
-  const client = new QueryClient({
+describe("SessionProvider identity boundary", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("preserves query and mutation caches when the same user session is upgraded", async () => {
+    stubSession(session);
+    const client = createClient();
+    const { cachedHome, cachedMutation } = seedUserCaches(client);
+    const upgradedSession: Session = {
+      user: {
+        ...session.user,
+        googleConnected: true,
+        googleEmail: "upgraded@example.com",
+      },
+      csrfToken: "rotated-csrf-token",
+    };
+
+    renderProvider(
+      <SessionTransitionProbe nextSession={upgradedSession} showEditor />,
+      client,
+    );
+
+    expect(await screen.findByTestId("session-observation")).toHaveTextContent(
+      `${session.user.id}|${session.csrfToken}|1|1`,
+    );
+    const user = userEvent.setup();
+    const editor = screen.getByRole("textbox", {
+      name: "identity-bound editor",
+    });
+    await user.clear(editor);
+    await user.type(editor, "same-user local input");
+    await user.click(screen.getByRole("button", { name: "セッションを置換" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session-observation")).toHaveTextContent(
+        `${upgradedSession.user.id}|${upgradedSession.csrfToken}|1|1`,
+      ),
+    );
+    expect(client.getQueryData(userHomeQueryKey(session.user.id))).toBe(
+      cachedHome,
+    );
+    expect(client.getMutationCache().getAll()).toContain(cachedMutation);
+    expect(
+      screen.getByRole("textbox", { name: "identity-bound editor" }),
+    ).toHaveValue("same-user local input");
+  });
+
+  it("clears non-session query and mutation state before publishing a changed user", async () => {
+    stubSession(session);
+    const client = createClient();
+    const cancellation = deferredVoid();
+    const cancelQueries = vi
+      .spyOn(client, "cancelQueries")
+      .mockReturnValue(cancellation.promise);
+    seedUserCaches(client);
+
+    renderProvider(
+      <SessionTransitionProbe nextSession={switchedSession} />,
+      client,
+    );
+
+    expect(await screen.findByTestId("session-observation")).toHaveTextContent(
+      `${session.user.id}|${session.csrfToken}|1|1`,
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "セッションを置換" }));
+
+    await waitFor(() =>
+      expect(cancelQueries).toHaveBeenCalledWith({
+        queryKey: ["user", session.user.id],
+      }),
+    );
+    expect(screen.getByTestId("session-observation")).toHaveTextContent(
+      `${session.user.id}|${session.csrfToken}|1|1`,
+    );
+
+    cancellation.resolve();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-observation")).toHaveTextContent(
+        `${switchedSession.user.id}|${switchedSession.csrfToken}|0|0`,
+      ),
+    );
+    expect(
+      client.getQueryData(userHomeQueryKey(session.user.id)),
+    ).toBeUndefined();
+    expect(client.getMutationCache().getAll()).toHaveLength(0);
+  });
+
+  it("serializes concurrent replacements and re-reads the current identity", async () => {
+    stubSession(session);
+    const client = createClient();
+    const firstCancellation = deferredVoid();
+    const secondCancellation = deferredVoid();
+    const cancelQueries = vi
+      .spyOn(client, "cancelQueries")
+      .mockReturnValueOnce(firstCancellation.promise)
+      .mockReturnValueOnce(secondCancellation.promise);
+
+    renderProvider(
+      <QueuedSessionTransitionProbe
+        firstSession={switchedSession}
+        secondSession={latestSession}
+      />,
+      client,
+    );
+
+    expect(await screen.findByTestId("queued-session-user")).toHaveTextContent(
+      session.user.id,
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "置換を連続実行" }));
+
+    await waitFor(() =>
+      expect(cancelQueries).toHaveBeenNthCalledWith(1, {
+        queryKey: ["user", session.user.id],
+      }),
+    );
+    expect(client.getQueryData<Session>(["session"])).toEqual(session);
+
+    firstCancellation.resolve();
+    await waitFor(() =>
+      expect(cancelQueries).toHaveBeenNthCalledWith(2, {
+        queryKey: ["user", switchedSession.user.id],
+      }),
+    );
+    expect(client.getQueryData<Session>(["session"])).toEqual(switchedSession);
+
+    secondCancellation.resolve();
+    await waitFor(() =>
+      expect(screen.getByTestId("queued-session-user")).toHaveTextContent(
+        latestSession.user.id,
+      ),
+    );
+    expect(client.getQueryData<Session>(["session"])).toEqual(latestSession);
+  });
+
+  it("remounts the child subtree when the user identity changes", async () => {
+    stubSession(session);
+    renderProvider(
+      <SessionTransitionProbe nextSession={switchedSession} showEditor />,
+    );
+
+    const editor = await screen.findByRole("textbox", {
+      name: "identity-bound editor",
+    });
+    const user = userEvent.setup();
+    await user.clear(editor);
+    await user.type(editor, "old-user local input");
+    await user.click(screen.getByRole("button", { name: "セッションを置換" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session-observation")).toHaveTextContent(
+        switchedSession.user.id,
+      ),
+    );
+    expect(
+      screen.getByRole("textbox", { name: "identity-bound editor" }),
+    ).toHaveValue(`initial:${switchedSession.user.id}`);
+  });
+});
+
+function createClient() {
+  return new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+}
+
+function renderProvider(
+  children: ReactNode = <p>application ready</p>,
+  client = createClient(),
+) {
   render(
     <QueryClientProvider client={client}>
-      <SessionProvider>
-        <p>application ready</p>
-      </SessionProvider>
+      <SessionProvider>{children}</SessionProvider>
     </QueryClientProvider>,
+  );
+}
+
+function stubSession(value: Session) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : input.toString();
+      if (path === "/api/v1/session") {
+        return Response.json(value);
+      }
+      throw new Error(`unexpected request: ${path}`);
+    }),
+  );
+}
+
+function seedUserCaches(client: QueryClient) {
+  const cachedHome = { owner: session.user.id };
+  client.setQueryData(userHomeQueryKey(session.user.id), cachedHome);
+  const cachedMutation = client.getMutationCache().build(client, {
+    mutationKey: ["user", session.user.id, "save-goal-draft"],
+    mutationFn: async () => ({ owner: session.user.id }),
+  });
+  return { cachedHome, cachedMutation };
+}
+
+function userHomeQueryKey(userId: string) {
+  return ["user", userId, "home"] as const;
+}
+
+function deferredVoid() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((promiseResolve) => {
+    resolve = () => promiseResolve(undefined);
+  });
+  return { promise, resolve };
+}
+
+function SessionTransitionProbe({
+  nextSession,
+  showEditor = false,
+}: {
+  nextSession: Session;
+  showEditor?: boolean;
+}) {
+  const currentSession = useSession();
+  const replaceSession = useReplaceSession();
+  const queryClient = useQueryClient();
+  const nonSessionQueryCount = queryClient
+    .getQueryCache()
+    .getAll()
+    .filter((query) => query.queryKey[0] !== "session").length;
+  const mutationCount = queryClient.getMutationCache().getAll().length;
+
+  async function replace() {
+    await replaceSession(nextSession);
+  }
+
+  return (
+    <>
+      <p data-testid="session-observation">
+        {currentSession.user.id}|{currentSession.csrfToken}|
+        {nonSessionQueryCount}|{mutationCount}
+      </p>
+      <button type="button" onClick={() => void replace()}>
+        セッションを置換
+      </button>
+      {showEditor ? (
+        <IdentityBoundEditor userId={currentSession.user.id} />
+      ) : null}
+    </>
+  );
+}
+
+function QueuedSessionTransitionProbe({
+  firstSession,
+  secondSession,
+}: {
+  firstSession: Session;
+  secondSession: Session;
+}) {
+  const currentSession = useSession();
+  const replaceSession = useReplaceSession();
+
+  function replaceConcurrently() {
+    void replaceSession(firstSession);
+    void replaceSession(secondSession);
+  }
+
+  return (
+    <>
+      <p data-testid="queued-session-user">{currentSession.user.id}</p>
+      <button type="button" onClick={replaceConcurrently}>
+        置換を連続実行
+      </button>
+    </>
+  );
+}
+
+function IdentityBoundEditor({ userId }: { userId: string }) {
+  const [value, setValue] = useState(`initial:${userId}`);
+  return (
+    <label>
+      identity-bound editor
+      <input
+        value={value}
+        onChange={(event) => setValue(event.currentTarget.value)}
+      />
+    </label>
   );
 }
 

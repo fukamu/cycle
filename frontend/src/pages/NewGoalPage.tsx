@@ -6,6 +6,8 @@ import { useSession } from "../features/auth/sessionContext";
 import {
   cacheCreationDraft,
   cacheCycle,
+  userMutationKeys,
+  userQueryKeys,
 } from "../features/goal-collection/goalCache";
 import { GoalRefinementPanel } from "../features/goal-refine/GoalRefinementPanel";
 import { useGoalRefinement } from "../features/goal-refine/useGoalRefinement";
@@ -32,11 +34,16 @@ import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
 
 export function NewGoalPage() {
   const session = useSession();
+  const userId = session.user.id;
   const cache = useQueryClient();
-  const query = useQuery({ queryKey: ["home"], queryFn: getHome });
+  const query = useQuery({
+    queryKey: userQueryKeys.home(userId),
+    queryFn: getHome,
+  });
   const create = useMutation({
+    mutationKey: userMutationKeys.createGoalDraft(userId),
     mutationFn: () => createGoalDraft("", session.csrfToken),
-    onSuccess: ({ draft }) => cacheCreationDraft(cache, draft),
+    onSuccess: ({ draft }) => cacheCreationDraft(cache, userId, draft),
   });
   if (query.isPending) return <PageLoading />;
   if (query.isError) return <PageError retry={() => void query.refetch()} />;
@@ -75,6 +82,7 @@ function GoalDraftEditor({
   readonly home: Home;
 }) {
   const session = useSession();
+  const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
   const refinement = useGoalRefinement();
@@ -86,13 +94,13 @@ function GoalDraftEditor({
       const saved = (
         await saveGoalDraft(draft.id, body, revision, session.csrfToken)
       ).draft;
-      cacheCreationDraft(cache, saved);
+      cacheCreationDraft(cache, userId, saved);
       return saved;
     },
-    [cache, draft.id, session.csrfToken],
+    [cache, draft.id, session.csrfToken, userId],
   );
   const editor = useDraftAutoSave({
-    userId: session.user.id,
+    userId,
     goalId: null,
     subjectKey: `goal-draft:${draft.id}`,
     initialBody: draft.body,
@@ -120,7 +128,7 @@ function GoalDraftEditor({
         session.csrfToken,
       );
       editor.synchronize(result.draft.body, result.draft.revision);
-      cacheCreationDraft(cache, result.draft);
+      cacheCreationDraft(cache, userId, result.draft);
       refinement.dismiss();
     } catch {
       setError("提案を採用できませんでした。現在の下書きを確認してください。");
@@ -139,8 +147,11 @@ function GoalDraftEditor({
         session.csrfToken,
       );
       await editor.discard();
-      await cache.invalidateQueries({ refetchType: "none" });
-      cacheCycle(cache, result.goal, result.cycle);
+      await cache.invalidateQueries({
+        queryKey: userQueryKeys.root(userId),
+        refetchType: "none",
+      });
+      cacheCycle(cache, userId, result.goal, result.cycle);
       navigate(`/goals/${result.goal.id}/cycles/${result.cycle.id}`, {
         replace: true,
       });
@@ -159,7 +170,10 @@ function GoalDraftEditor({
     try {
       await discardGoalDraft(draft.id, session.csrfToken);
       await editor.discard();
-      await cache.invalidateQueries({ refetchType: "none" });
+      await cache.invalidateQueries({
+        queryKey: userQueryKeys.root(userId),
+        refetchType: "none",
+      });
       navigate("/", { replace: true });
     } catch {
       editor.resume();

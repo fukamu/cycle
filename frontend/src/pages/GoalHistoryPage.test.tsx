@@ -3,13 +3,23 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
-import type { Goal } from "../shared/api/schemas";
+import { SessionContext } from "../features/auth/sessionContext";
+import type { Goal, Session } from "../shared/api/schemas";
 import { listGoals } from "../shared/api/workspace";
 import { GoalHistoryPage } from "./GoalHistoryPage";
 
 vi.mock("../shared/api/workspace", () => ({
   listGoals: vi.fn(),
 }));
+
+const session: Session = {
+  user: {
+    id: "00000000-0000-7000-8000-000000000001",
+    googleConnected: false,
+    googleEmail: null,
+  },
+  csrfToken: "csrf-token",
+};
 
 let notifyIntersection: IntersectionObserverCallback;
 
@@ -80,9 +90,11 @@ function renderHistory() {
   });
   render(
     <QueryClientProvider client={cache}>
-      <MemoryRouter>
-        <GoalHistoryPage />
-      </MemoryRouter>
+      <SessionContext.Provider value={session}>
+        <MemoryRouter>
+          <GoalHistoryPage />
+        </MemoryRouter>
+      </SessionContext.Provider>
     </QueryClientProvider>,
   );
 }

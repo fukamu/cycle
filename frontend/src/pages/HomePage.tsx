@@ -7,6 +7,8 @@ import { AppReferralPromotion } from "../features/app-referral/AppReferralPromot
 import {
   cacheCreationDraft,
   cacheGoals,
+  userMutationKeys,
+  userQueryKeys,
 } from "../features/goal-collection/goalCache";
 import { createGoalDraft, getHome } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
@@ -14,20 +16,30 @@ import { statusLabel } from "../shared/copy/ja";
 
 export function HomePage() {
   const session = useSession();
+  const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const query = useQuery({ queryKey: ["home"], queryFn: getHome });
+  const query = useQuery({
+    queryKey: userQueryKeys.home(userId),
+    queryFn: getHome,
+  });
   const create = useMutation({
+    mutationKey: userMutationKeys.createGoalDraft(userId),
     mutationFn: () => createGoalDraft("", session.csrfToken),
     onSuccess: ({ draft }) => {
-      cacheCreationDraft(cache, draft);
+      cacheCreationDraft(cache, userId, draft);
       navigate("/goals/new");
     },
   });
   useEffect(() => {
     if (query.data)
-      cacheGoals(cache, query.data.progressingGoals, query.dataUpdatedAt);
-  }, [cache, query.data, query.dataUpdatedAt]);
+      cacheGoals(
+        cache,
+        userId,
+        query.data.progressingGoals,
+        query.dataUpdatedAt,
+      );
+  }, [cache, query.data, query.dataUpdatedAt, userId]);
   if (query.isPending) return <PageLoading />;
   if (query.isError) return <PageError retry={() => void query.refetch()} />;
   const home = query.data;

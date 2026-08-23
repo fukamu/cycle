@@ -6,6 +6,7 @@ import { useSession } from "../features/auth/sessionContext";
 import {
   cacheCycle,
   cacheReviewDraft,
+  userQueryKeys,
 } from "../features/goal-collection/goalCache";
 import { GoalRefinementPanel } from "../features/goal-refine/GoalRefinementPanel";
 import { useGoalRefinement } from "../features/goal-refine/useGoalRefinement";
@@ -31,9 +32,11 @@ import { frameCopy } from "../shared/copy/ja";
 import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
 
 export function GoalReviewPage() {
+  const session = useSession();
+  const userId = session.user.id;
   const { goalId = "" } = useParams();
   const query = useQuery({
-    queryKey: ["goal", goalId, "review"],
+    queryKey: userQueryKeys.review(userId, goalId),
     queryFn: () => getReview(goalId),
   });
   if (query.isPending) return <PageLoading />;
@@ -48,6 +51,7 @@ type ReviewConfirmation =
 function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const { goal, reviewDraft, triggerCycle } = review;
   const session = useSession();
+  const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
   const refinement = useGoalRefinement();
@@ -59,13 +63,13 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       const saved = (
         await saveReview(goal.id, body, revision, session.csrfToken)
       ).reviewDraft;
-      cacheReviewDraft(cache, goal.id, saved);
+      cacheReviewDraft(cache, userId, goal.id, saved);
       return saved;
     },
-    [cache, goal.id, session.csrfToken],
+    [cache, goal.id, session.csrfToken, userId],
   );
   const editor = useDraftAutoSave({
-    userId: session.user.id,
+    userId,
     goalId: goal.id,
     subjectKey: `goal-review:${goal.id}`,
     initialBody: reviewDraft.body,
@@ -95,7 +99,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         session.csrfToken,
       );
       editor.synchronize(result.reviewDraft.body, result.reviewDraft.revision);
-      cacheReviewDraft(cache, goal.id, result.reviewDraft);
+      cacheReviewDraft(cache, userId, goal.id, result.reviewDraft);
       refinement.dismiss();
     } catch {
       setError("提案を採用できませんでした。現在の下書きを確認してください。");
@@ -115,8 +119,11 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         session.csrfToken,
       );
       await editor.discard();
-      await cache.invalidateQueries({ refetchType: "none" });
-      cacheCycle(cache, result.goal, result.cycle);
+      await cache.invalidateQueries({
+        queryKey: userQueryKeys.root(userId),
+        refetchType: "none",
+      });
+      cacheCycle(cache, userId, result.goal, result.cycle);
       navigate(`/goals/${goal.id}/cycles/${result.cycle.id}`, {
         replace: true,
       });
@@ -142,7 +149,10 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         session.csrfToken,
       );
       await editor.discard();
-      await cache.invalidateQueries({ refetchType: "none" });
+      await cache.invalidateQueries({
+        queryKey: userQueryKeys.root(userId),
+        refetchType: "none",
+      });
       navigate("/", { replace: true });
     } catch {
       editor.resume();
@@ -157,7 +167,10 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     try {
       await deleteGoal(goal.id, goal.revision, session.csrfToken);
       await editor.discard();
-      await cache.invalidateQueries({ refetchType: "none" });
+      await cache.invalidateQueries({
+        queryKey: userQueryKeys.root(userId),
+        refetchType: "none",
+      });
       navigate("/", { replace: true });
     } catch {
       editor.resume();

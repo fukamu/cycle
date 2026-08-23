@@ -2,11 +2,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
+import { SessionContext } from "../features/auth/sessionContext";
 import type {
   CyclePage,
   CycleSummary,
   Goal,
   GoalVersion,
+  Session,
 } from "../shared/api/schemas";
 import { getGoal, listCycles } from "../shared/api/workspace";
 import { GoalTimelinePage } from "./GoalTimelinePage";
@@ -18,6 +20,15 @@ vi.mock("../shared/api/workspace", () => ({
 }));
 
 const goalId = "10000000-0000-7000-8000-000000000001";
+const session: Session = {
+  user: {
+    id: "00000000-0000-7000-8000-000000000001",
+    googleConnected: false,
+    googleEmail: null,
+  },
+  csrfToken: "csrf-token",
+};
+
 let notifyIntersection: IntersectionObserverCallback;
 
 describe("GoalTimelinePage", () => {
@@ -249,11 +260,16 @@ function renderTimeline() {
   });
   return render(
     <QueryClientProvider client={cache}>
-      <MemoryRouter initialEntries={[`/history/goals/${goalId}`]}>
-        <Routes>
-          <Route path="/history/goals/:goalId" element={<GoalTimelinePage />} />
-        </Routes>
-      </MemoryRouter>
+      <SessionContext.Provider value={session}>
+        <MemoryRouter initialEntries={[`/history/goals/${goalId}`]}>
+          <Routes>
+            <Route
+              path="/history/goals/:goalId"
+              element={<GoalTimelinePage />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </SessionContext.Provider>
     </QueryClientProvider>,
   );
 }

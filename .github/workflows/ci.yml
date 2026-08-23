@@ -183,6 +183,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter fukamu-cycle-frontend exec playwright install --with-deps chromium
       - run: pnpm --filter fukamu-cycle-frontend run build
+        env:
+          VITE_GOOGLE_WEB_CLIENT_ID: fukamu-cycle-e2e-client
       - run: pnpm --filter fukamu-cycle-frontend run test:e2e
         env:
           TEST_DATABASE_URL: postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable

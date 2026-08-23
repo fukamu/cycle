@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PropsWithChildren } from "react";
+import { useRef, type PropsWithChildren } from "react";
 
 import { APIError, requestJSON } from "../../shared/api/client";
 import { sessionSchema, type Session } from "../../shared/api/schemas";
@@ -10,6 +10,8 @@ import {
 } from "./bootstrapRepository";
 import { ReplaceSessionContext, SessionContext } from "./sessionContext";
 import { getAnonymousBootstrapToken } from "./turnstile";
+
+const sessionQueryKey = ["session"] as const;
 
 async function loadSession(): Promise<Session> {
   try {
@@ -38,8 +40,9 @@ async function loadSession(): Promise<Session> {
 
 export function SessionProvider({ children }: PropsWithChildren) {
   const queryClient = useQueryClient();
+  const transitionRef = useRef<Promise<void>>(Promise.resolve());
   const query = useQuery({
-    queryKey: ["session"],
+    queryKey: sessionQueryKey,
     queryFn: loadSession,
     staleTime: Number.POSITIVE_INFINITY,
     retry: (failureCount, error) =>
@@ -66,11 +69,35 @@ export function SessionProvider({ children }: PropsWithChildren) {
       </div>
     );
   }
+  const renderedSession = query.data;
+
+  function replaceSession(session: Session): Promise<void> {
+    const transition = transitionRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const currentSession =
+          queryClient.getQueryData<Session>(sessionQueryKey) ?? renderedSession;
+        if (currentSession.user.id === session.user.id) {
+          queryClient.setQueryData(sessionQueryKey, session);
+          return;
+        }
+
+        const oldUserQueryRoot = ["user", currentSession.user.id] as const;
+        await queryClient.cancelQueries({ queryKey: oldUserQueryRoot });
+        queryClient.removeQueries({ queryKey: oldUserQueryRoot });
+        queryClient.getMutationCache().clear();
+        queryClient.setQueryData(sessionQueryKey, session);
+      });
+    transitionRef.current = transition;
+    return transition;
+  }
+
   return (
-    <ReplaceSessionContext.Provider
-      value={(session) => queryClient.setQueryData(["session"], session)}
-    >
-      <SessionContext.Provider value={query.data}>
+    <ReplaceSessionContext.Provider value={replaceSession}>
+      <SessionContext.Provider
+        key={renderedSession.user.id}
+        value={renderedSession}
+      >
         {children}
       </SessionContext.Provider>
     </ReplaceSessionContext.Provider>
