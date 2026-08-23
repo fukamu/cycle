@@ -558,7 +558,7 @@ Hamburger Menu:
 
 ## 9.1 Home behavior
 
-Homeは`progressingGoals: ProgressingGoalSummary[]`をCollectionとして扱う。Freeでは0〜2件だが、型・API・Componentを固定長にしない。
+Homeは`progressingGoals: GoalView[]`をCollectionとして扱う。Freeでは0〜2件だが、型・API・Componentを固定長にしない。Goalの現在作業は専用summaryで重複表現せず、§23.2の`GoalView.currentWork`を使う。
 
 - `progressingGoals`はGoalの作成日時が古い順（`created_at ASC, id ASC`）で返し、Goalの更新によってCard位置を変えない。
 - Progressing Goal 0件: Creation Draftがあれば「目標の設定を続ける」、なければ「新しい目標を設定」。
@@ -801,27 +801,6 @@ stateDiagram-v2
 ## 11.1 Goal collection
 
 ```ts
-type ProgressingGoalSummary =
-  | {
-      readonly id: string;
-      readonly status: 'active_cycle';
-      readonly currentVersion: GoalVersionView;
-      readonly activeCycle: {
-        readonly id: string;
-        readonly sequenceNumber: number;
-        readonly selectedFrameHint?: 'plan' | 'do' | 'check' | 'action';
-      };
-    }
-  | {
-      readonly id: string;
-      readonly status: 'goal_review';
-      readonly currentVersion: GoalVersionView;
-      readonly review: {
-        readonly draftId: string;
-        readonly triggerCycleSequenceNumber: number;
-      };
-    };
-
 type GoalHistorySummary = {
   readonly id: string;
   readonly status: 'active_cycle' | 'goal_review' | 'achieved' | 'ended';
@@ -832,7 +811,7 @@ type GoalHistorySummary = {
 };
 
 type HomeReadModel = {
-  readonly progressingGoals: readonly ProgressingGoalSummary[];
+  readonly progressingGoals: readonly GoalView[];
   readonly creationDraft: GoalDraftView | null;
   readonly canCreateGoalDraft: boolean;
   readonly canStartProgressingGoal: boolean;
@@ -840,7 +819,7 @@ type HomeReadModel = {
 };
 ```
 
-Frontend reducer / query cacheは`ProgressingGoalSummary[]`を扱い、`currentGoal`単一objectをDomain前提にしない。
+`GoalView`とその`currentWork`は§23.2のGoal detailと同じcanonical contractである。Frontend reducer / query cacheは`GoalView[]`を扱い、`currentGoal`単一objectをDomain前提にしない。
 
 ## 11.2 Save State
 
@@ -1077,7 +1056,7 @@ Frontend confirmationは、Draftに変更がある場合に次を明示する。
 
 - Progressing Goal = status `active_cycle`または`goal_review`。
 - `GoalLimitPolicy.MaxProgressingGoals(userID)`で上限を取得する。
-- MVP実装は常に1を返す。
+- Free / MVP実装は常に2を返す。
 - Goal Creation DraftはGoal EntityではなくProgressing Goal上限に含めない。Draft作成・編集・Goal Refineは上限到達中も可能である。
 - Goal開始TransactionでのみUser rowを`FOR UPDATE`し、Progressing Goal数をcountしてから作成する。
 - Goal termination / Progressing Goal deletionもUser rowを同じ順序でlockし、開始との競合を直列化する。
@@ -2381,22 +2360,27 @@ Response:
         "versionNumber": 2,
         "body": "平日は主要業務を18時までに終えたい"
       },
-      "activeCycle": {
-        "id": "cycle-uuid",
-        "sequenceNumber": 3,
-        "startedAt": "2026-08-18T01:00:00Z"
-      }
+      "revision": 7,
+      "currentWork": {
+        "kind": "active_cycle",
+        "cycleId": "cycle-uuid",
+        "cycleSequenceNumber": 3
+      },
+      "nextCycleSequenceNumber": 4,
+      "cycleCount": 3,
+      "createdAt": "2026-08-01T00:00:00Z",
+      "terminalAt": null
     }
   ],
   "creationDraft": null,
   "canCreateGoalDraft": true,
-  "progressingGoalLimit": 1,
+  "progressingGoalLimit": 2,
   "canStartProgressingGoal": false
 }
 ```
 
 - `progressingGoals`はCollection。
-- MVP invariant violationで2件以上あってもAPI型は表現可能。BackendはErrorにせず返せるが、metric `progressing_goal_limit_invariant_violation`を記録し、新規作成を拒否する。
+- Free / MVP invariant violationで3件以上あってもAPI型は表現可能。BackendはErrorにせず返せるが、metric `progressing_goal_limit_invariant_violation`を記録し、新規作成を拒否する。
 - `creationDraft`はownerのopen creation draft。
 - `canCreateGoalDraft`はopen Creation Draftが存在しないことから算出する。Creation DraftはProgressing Goal上限へ算入しない。
 - `canStartProgressingGoal`はEntitlementと現在のProgressing Goal数から算出し、Goal開始可否を表す。
@@ -3941,7 +3925,7 @@ Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTa
 | Responsibility | Required behavior |
 |---|---|
 | Home composition | Goal collectionを取得・描画し、単数Goal前提のglobal stateを作らない |
-| Progressing Goal summary | `ProgressingGoalSummary`のstate variantに応じてActive Cycle / Goal Reviewへの導線を表示する |
+| Progressing Goal summary | canonical `GoalView.currentWork`のstate variantに応じてActive Cycle / Goal Reviewへの導線を表示する |
 | Goal Creation editor | Creation Draft、Auto Save state、Goal Refine、Start eligibility、Draft recoveryを統合する |
 | Goal Refine comparison | User draftとAI suggestionを同時表示し、明示Adoptだけを反映する |
 | Goal Review editor | Current Goal Version、Review Draft、Continue、Achieve、Endを扱い、terminal時のDraft破棄を説明する |
@@ -4373,7 +4357,7 @@ Goal Refine成功時:
 
 - Draft本文をupdateしない。
 - `AIGeneration.output`へsuggestionを保存する。
-- Responseで`generationId`, `suggestedGoal`, `sourceDraftRevision`, `contextChanged`を返す。
+- Responseで`generationId`, `suggestion`, `sourceDraftRevision`, `contextChanged`を返す。
 - ユーザーが`adopt` endpointを実行するまでDraftへ反映しない。
 - AI処理中もDraft編集を許可するが、結果は開始時snapshotに対するsuggestionである。
 - Draftが開始後に変更された場合は`contextChanged=true`。
@@ -4605,11 +4589,11 @@ Prompt version例: `action-refine-v1`。
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "suggestedGoal": {
+    "suggestion": {
       "type": "string"
     }
   },
-  "required": ["suggestedGoal"]
+  "required": ["suggestion"]
 }
 ```
 
@@ -5721,7 +5705,7 @@ drafts:
   browser_cache_ttl_hours: 24
 
 goals:
-  free_max_progressing_goals: 1
+  free_max_progressing_goals: 2
 
 ai:
   provider: openai
