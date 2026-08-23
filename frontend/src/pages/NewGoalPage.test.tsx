@@ -240,6 +240,171 @@ describe("NewGoalPage", () => {
     await waitFor(() => expect(editor).toHaveValue("整理された目標"));
   });
 
+  it.each(["resolve", "reject"] as const)(
+    "ignores a late Goal Refine settlement after identity quiescence: %s",
+    async (settlement) => {
+      const completion =
+        deferred<Awaited<ReturnType<typeof refineGoalDraft>>>();
+      vi.mocked(refineGoalDraft).mockReturnValue(completion.promise);
+      const cache = createCache();
+      renderPage(cache, false, true);
+      const editor = await screen.findByRole("textbox", {
+        name: "あなたの目標",
+      });
+      const cachedHome = cache.getQueryData<Home>(
+        userQueryKeys.home(session.user.id),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
+      await waitFor(() => expect(refineGoalDraft).toHaveBeenCalledOnce());
+      fireEvent.click(
+        screen.getByRole("button", { name: "異なるUserへの切替を模擬" }),
+      );
+      expect(await screen.findByText("切替準備完了")).toBeInTheDocument();
+
+      await act(async () => {
+        if (settlement === "resolve") {
+          completion.resolve({
+            generationId: "30000000-0000-7000-8000-000000000009",
+            sourceDraftRevision: draft.revision,
+            suggestion: "切替後に届いた提案",
+            contextChanged: false,
+          });
+        } else {
+          completion.reject(new Error("late failure"));
+        }
+      });
+      await act(async () => undefined);
+
+      expect(screen.getByRole("textbox", { name: "あなたの目標" })).toBe(
+        editor,
+      );
+      expect(editor).toHaveValue(draft.body);
+      expect(
+        cache.getQueryData<Home>(userQueryKeys.home(session.user.id)),
+      ).toBe(cachedHome);
+      expect(screen.queryByText("切替後に届いた提案")).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("現在のワークスペース"),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("ignores a late adoption from a replaced creation-draft generation", async () => {
+    const completion = deferred<Awaited<ReturnType<typeof adoptGoalDraft>>>();
+    const replacementDraft: GoalDraft = {
+      ...draft,
+      id: "20000000-0000-7000-8000-000000000008",
+      body: "採用待ちの間に届いた新しい下書きB",
+      updatedAt: "2026-08-20T00:08:00.000Z",
+    };
+    vi.mocked(adoptGoalDraft).mockReturnValue(completion.promise);
+    const cache = createCache();
+    renderPage(cache);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "AIで目標を整える" }),
+    );
+    expect(await screen.findByText("整理された目標")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+    await waitFor(() => expect(adoptGoalDraft).toHaveBeenCalledOnce());
+
+    act(() => {
+      cache.setQueryData<Home>(userQueryKeys.home(session.user.id), {
+        ...home,
+        creationDraft: replacementDraft,
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "あなたの目標" })).toHaveValue(
+        replacementDraft.body,
+      ),
+    );
+    const replacementEditor = screen.getByRole("textbox", {
+      name: "あなたの目標",
+    });
+
+    await act(async () =>
+      completion.resolve({
+        draft: {
+          ...draft,
+          body: "旧下書きAへの遅延採用結果",
+          revision: 1,
+          updatedAt: "2026-08-20T00:10:00.000Z",
+        },
+      }),
+    );
+    await act(async () => undefined);
+
+    expect(screen.getByRole("textbox", { name: "あなたの目標" })).toBe(
+      replacementEditor,
+    );
+    expect(replacementEditor).toHaveValue(replacementDraft.body);
+    expect(
+      cache.getQueryData<Home>(userQueryKeys.home(session.user.id))
+        ?.creationDraft,
+    ).toEqual(replacementDraft);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores a late adoption after identity quiescence: %s",
+    async (settlement) => {
+      const completion = deferred<Awaited<ReturnType<typeof adoptGoalDraft>>>();
+      vi.mocked(adoptGoalDraft).mockReturnValue(completion.promise);
+      const cache = createCache();
+      renderPage(cache, false, true);
+      const editor = await screen.findByRole("textbox", {
+        name: "あなたの目標",
+      });
+      const cachedHome = cache.getQueryData<Home>(
+        userQueryKeys.home(session.user.id),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
+      expect(await screen.findByText("整理された目標")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+      await waitFor(() => expect(adoptGoalDraft).toHaveBeenCalledOnce());
+      fireEvent.click(
+        screen.getByRole("button", { name: "異なるUserへの切替を模擬" }),
+      );
+      expect(await screen.findByText("切替準備完了")).toBeInTheDocument();
+
+      await act(async () => {
+        if (settlement === "resolve") {
+          completion.resolve({
+            draft: {
+              ...draft,
+              body: "切替後に届いた採用結果",
+              revision: 1,
+              updatedAt: "2026-08-20T00:10:00.000Z",
+            },
+          });
+        } else {
+          completion.reject(new Error("late failure"));
+        }
+      });
+      await act(async () => undefined);
+
+      expect(screen.getByRole("textbox", { name: "あなたの目標" })).toBe(
+        editor,
+      );
+      expect(editor).toHaveValue(draft.body);
+      expect(
+        cache.getQueryData<Home>(userQueryKeys.home(session.user.id)),
+      ).toBe(cachedHome);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("現在のワークスペース"),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it("retries an ambiguous Start response with the same operation and resolves the canonical workspace", async () => {
     vi.mocked(startGoal)
       .mockRejectedValueOnce(new TypeError("response lost"))

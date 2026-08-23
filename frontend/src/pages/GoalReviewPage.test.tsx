@@ -28,10 +28,12 @@ import type {
 } from "../shared/api/schemas";
 import { APIError } from "../shared/api/client";
 import {
+  adoptReview,
   continueReview,
   deleteGoal,
   getGoal,
   getReview,
+  refineReview,
   saveReview,
   terminateGoal,
 } from "../shared/api/workspace";
@@ -230,6 +232,21 @@ describe("GoalReviewPage", () => {
     vi.mocked(deleteBrowserDraft).mockResolvedValue(undefined);
     vi.mocked(deleteBrowserDraftIfUnchanged).mockResolvedValue(undefined);
     vi.mocked(saveReview).mockResolvedValue({ reviewDraft });
+    vi.mocked(refineReview).mockResolvedValue({
+      generationId: "30000000-0000-7000-8000-000000000003",
+      sourceDraftRevision: reviewDraft.revision,
+      sourceGoalRevision: goal.revision,
+      suggestion: "整理されたレビュー目標",
+      contextChanged: false,
+    });
+    vi.mocked(adoptReview).mockResolvedValue({
+      reviewDraft: {
+        ...reviewDraft,
+        body: "整理されたレビュー目標",
+        revision: 1,
+        updatedAt: "2026-08-20T00:02:00.000Z",
+      },
+    });
     vi.mocked(continueReview).mockResolvedValue({
       goal: continuedGoal,
       versionCreated: false,
@@ -268,6 +285,266 @@ describe("GoalReviewPage", () => {
     expect(editor).toHaveValue(eightyCodePoints);
     expect(screen.getByText("80 / 80")).toBeInTheDocument();
   });
+
+  it("keeps Review refinement separate until the user explicitly adopts it", async () => {
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
+
+    expect(
+      await screen.findByText("整理されたレビュー目標"),
+    ).toBeInTheDocument();
+    expect(editor).toHaveValue(reviewDraft.body);
+    expect(adoptReview).not.toHaveBeenCalled();
+    expect(saveReview).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+
+    await waitFor(() =>
+      expect(adoptReview).toHaveBeenCalledWith(
+        sessionLease,
+        goal.id,
+        "30000000-0000-7000-8000-000000000003",
+        reviewDraft.revision,
+        goal.revision,
+        session.csrfToken,
+      ),
+    );
+    await waitFor(() => expect(editor).toHaveValue("整理されたレビュー目標"));
+  });
+
+  it("clears a prior adoption error when retry succeeds", async () => {
+    vi.mocked(adoptReview).mockRejectedValueOnce(new Error("unavailable"));
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
+    expect(
+      await screen.findByText("整理されたレビュー目標"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "提案を採用できませんでした。現在の下書きを確認してください。",
+    );
+    expect(editor).toHaveValue(reviewDraft.body);
+
+    fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+
+    await waitFor(() => expect(adoptReview).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(editor).toHaveValue("整理されたレビュー目標"));
+    await waitFor(() =>
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("ignores an adoption response bound to a different review draft", async () => {
+    vi.mocked(adoptReview).mockResolvedValue({
+      reviewDraft: replacementReviewDraft,
+    });
+    const cache = createCache();
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
+    expect(
+      await screen.findByText("整理されたレビュー目標"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+    await waitFor(() => expect(adoptReview).toHaveBeenCalledOnce());
+    await act(async () => undefined);
+
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toBe(editor);
+    expect(editor).toHaveValue(reviewDraft.body);
+    expect(
+      cache.getQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+      )?.reviewDraft,
+    ).toEqual(reviewDraft);
+    expect(screen.getByText("整理されたレビュー目標")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores a late Review Refine settlement after identity quiescence: %s",
+    async (settlement) => {
+      const completion = deferred<Awaited<ReturnType<typeof refineReview>>>();
+      vi.mocked(refineReview).mockReturnValue(completion.promise);
+      const cache = createCache();
+      renderPage(cache, false, true);
+      const editor = await screen.findByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      });
+      const cachedReview = cache.getQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
+      await waitFor(() => expect(refineReview).toHaveBeenCalledOnce());
+      fireEvent.click(
+        screen.getByRole("button", { name: "異なるUserへの切替を模擬" }),
+      );
+      expect(await screen.findByText("切替準備完了")).toBeInTheDocument();
+
+      await act(async () => {
+        if (settlement === "resolve") {
+          completion.resolve({
+            generationId: "30000000-0000-7000-8000-000000000009",
+            sourceDraftRevision: reviewDraft.revision,
+            sourceGoalRevision: goal.revision,
+            suggestion: "切替後に届いたReview提案",
+            contextChanged: false,
+          });
+        } else {
+          completion.reject(new Error("late failure"));
+        }
+      });
+      await act(async () => undefined);
+
+      expect(
+        screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+      ).toBe(editor);
+      expect(editor).toHaveValue(reviewDraft.body);
+      expect(
+        cache.getQueryData<GoalReview>(
+          userQueryKeys.review(session.user.id, goal.id),
+        ),
+      ).toBe(cachedReview);
+      expect(
+        screen.queryByText("切替後に届いたReview提案"),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("現在のワークスペース"),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("ignores a late adoption from a replaced review-draft generation", async () => {
+    const completion = deferred<Awaited<ReturnType<typeof adoptReview>>>();
+    vi.mocked(adoptReview).mockReturnValue(completion.promise);
+    const cache = createCache();
+    renderPage(cache);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "AIで目標を整える" }),
+    );
+    expect(
+      await screen.findByText("整理されたレビュー目標"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+    await waitFor(() => expect(adoptReview).toHaveBeenCalledOnce());
+
+    act(() => {
+      cache.setQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+        replacementReview,
+      );
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", {
+          name: "次のサイクルで目指す目標",
+        }),
+      ).toHaveValue(replacementReviewDraft.body),
+    );
+    const replacementEditor = screen.getByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    await act(async () =>
+      completion.resolve({
+        reviewDraft: {
+          ...reviewDraft,
+          body: "旧レビュー下書きAへの遅延採用結果",
+          revision: 1,
+          updatedAt: "2026-08-20T00:10:00.000Z",
+        },
+      }),
+    );
+    await act(async () => undefined);
+
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toBe(replacementEditor);
+    expect(replacementEditor).toHaveValue(replacementReviewDraft.body);
+    expect(
+      cache.getQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+      )?.reviewDraft,
+    ).toEqual(replacementReviewDraft);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores a late Review adoption after identity quiescence: %s",
+    async (settlement) => {
+      const completion = deferred<Awaited<ReturnType<typeof adoptReview>>>();
+      vi.mocked(adoptReview).mockReturnValue(completion.promise);
+      const cache = createCache();
+      renderPage(cache, false, true);
+      const editor = await screen.findByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      });
+      const cachedReview = cache.getQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
+      expect(
+        await screen.findByText("整理されたレビュー目標"),
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+      await waitFor(() => expect(adoptReview).toHaveBeenCalledOnce());
+      fireEvent.click(
+        screen.getByRole("button", { name: "異なるUserへの切替を模擬" }),
+      );
+      expect(await screen.findByText("切替準備完了")).toBeInTheDocument();
+
+      await act(async () => {
+        if (settlement === "resolve") {
+          completion.resolve({
+            reviewDraft: {
+              ...reviewDraft,
+              body: "切替後に届いたReview採用結果",
+              revision: 1,
+              updatedAt: "2026-08-20T00:10:00.000Z",
+            },
+          });
+        } else {
+          completion.reject(new Error("late failure"));
+        }
+      });
+      await act(async () => undefined);
+
+      expect(
+        screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+      ).toBe(editor);
+      expect(editor).toHaveValue(reviewDraft.body);
+      expect(
+        cache.getQueryData<GoalReview>(
+          userQueryKeys.review(session.user.id, goal.id),
+        ),
+      ).toBe(cachedReview);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("現在のワークスペース"),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("normalizes line endings before autosave without trimming whitespace", async () => {
     const normalizedBody = "\t一行目\n二行目\n三行目 \t";

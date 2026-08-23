@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M10 Goal creation/review feature boundary
+- 状態: IN_PROGRESS / M11 Cycle/history feature boundary
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -591,6 +591,12 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-23: M10完了。Fresh disposable PostgreSQL 18.6でcommit前必須gateを最初から実行し、staged candidate tree `7d74637d0593d71bcb3ec47cd471812d8dd88b8f`、Actionlint、CI reuse resolver、全scope、Frontend 50 files / 413 tests、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18、開始・終了tree一致まで成功した。検証DBは停止・削除済みでcommitしていない。本entryとM11再開位置でtreeを変更するため、plan-inclusive final treeを再stageし、別のfresh DBでCを最初から再実行する。
+- 2026-08-23: M10 final FはPrettier、ESLint、strict typecheck、Frontend 50 files / 413 tests、production buildまで成功した。Fresh disposable PostgreSQL 18.6の対象E2EはCreation入力・Refine明示採用・Start・Review Refine/失敗時旧提案保持・ContinueとReview terminalの2/2、別のfresh DBによるfull EはBackend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18まで成功した。検証DBは停止・削除済みで、API wire、route、DOM copy/order、baseline migration、sqlc生成物は不変。次に全treeをstageしてCを実行する。
+- 2026-08-23: M10変更前REDはCreation/Review双方でidentity quiescence後のlate Refine resolve/reject、別Draft世代へのlate Adopt、route内product policyとdeep Feature importを再現し、behavior 6/38、architecture 6/6が失敗した。Goal Creation/ReviewのDraft作成、autosave、refine/adopt、start/continue/terminal/delete、recovery、UIを公開Featureへ移し、routeをquery/load/error/Feature compositionだけへ縮小した。Public query contractとFeature index、再帰AST architecture gate、Refine request generation/scope fence、Adoptのmounted/active scope/current Draft/response Draft bindingを実装した。
+- 2026-08-23: M10 focused GREENは共通Refine hook、Creation、Review、architectureの4 files / 51 testsから、監査修正後にCreation 18・Review 27 testsへ拡張した。Reviewの通常Refine/明示Adopt、失敗後retry error消去、別Draft response拒否、Creation/Review双方のquiesced Adopt resolve/rejectを固定した。独立した境界・fence・E2E互換監査で検出したarchitecture gate bypass、Review response ID非対称、retry後の旧error残留、Adopt quiescence test gapを解消し、再監査でP0/P1/P2なしを確認した。
+- 2026-08-23: M10対象Playwrightの最初の2試行はtestDirを二重指定したfile filterと、project/fileを含むfull titleへのanchored grepによりtest 0件で停止した。Server/migration以外は走らず、test dataがないことを保ったまま、listで対象2件だけを事前確認した正しいfile filter/unanchored grepへ修正し、実journey 2/2を成功させた。Product assertionや実装は変更していない。
+- 2026-08-23: M9完了記録を含む最終commit前必須gateを別のfresh disposable PostgreSQL 18.6で最初から再実行し、staged tree `e7eff41bc5b4e797ba02f93a2521500cc640d1ce`、Actionlint、全scope、Frontend 49/391、Playwright 18/18、開始・終了tree一致まで成功した。検証DBは停止・削除済みで、indexを変更せず、commitしていない。M10はこの検証済みtreeから開始する。
 - 2026-08-23: M9完了。最初のcommit前必須gateはfresh disposable PostgreSQL 18.6とstaged candidate tree `98cdfbbe74e9d44fba82632378d1c9c9f30cb4ba`で成功した。Actionlint、CI reuse resolver、Frontend 49 files / 391 tests、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18、開始・終了tree一致を確認した。検証DBは停止・削除済みでcommitしていない。本entryとM10再開位置でtreeを変更するため、再stage後に別のfresh DBでCを最初から再実行する。
 - 2026-08-23: M9の最終GREENでは、二層Error Boundary、固定copy/validated request IDだけのerror presentation、Expected/Actual User双方向binding、`UNVERIFIED > DRIFT > missing/expired > CSRF`のrecovery priority、identity lease/世代fence、origin-wide exclusive Web Lock、二段階Account Delete advisory、salted digestだけのIndexedDB tombstoneを統合した。Web Lock callback未実行、initial discovery abort、delete確認通知とcleanup失敗の競合もREDから修正し、独立security/E2E監査はいずれもP0/P1/P2なしだった。
 - 2026-08-23: 最初のM9 full Eは15/18 Playwright成功後、409本文をrecovery後に読むPlaywright resource race、test helperの追加`GET /session`によるSPA保持CSRFの失効、既存E2EのIndexedDB v1固定openerの3 test defectで停止した。409本文を`route.fetch()`中にcaptureし、二tab delete testを実際の「新匿名user・Draftなし」状態へ合わせ、現行DB versionを開くよう修正した。実装assertionは弱めず、専用DBを分けたtarget journey 3/3でGREENを確認してからfull Eを最初から再実行した。
@@ -639,7 +645,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M9は完了し、完了記録を含む最終treeのC再実行待ち。C成功後はcommitせず、M10の変更前REDとして旧Creation/Review世代またはidentity quiescence後のlate Refine/Adoptが新editor/cache/error/navigationへ作用しないtestと、routeがproduct policyを所有しないarchitecture testを追加する。その後、wire/UIを維持したままGoal creation/review policyをfeatureへ移し、F、該当E2E、E、Cを実行する。
+- 現在の再開位置: M10は完了。完了記録を含むplan-inclusive final treeのCを別のfresh disposable PostgreSQL 18.6で最初から再実行し、開始・終了tree一致まで成功したら、このfileとindexを変更せずcommitもしないでM11 Cycle/history feature boundaryの変更前REDへ進む。
 
 ## 26. Final definition of done
 

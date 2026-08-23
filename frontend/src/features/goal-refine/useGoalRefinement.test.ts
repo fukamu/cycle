@@ -54,4 +54,64 @@ describe("useGoalRefinement", () => {
 
     expect(result.current.state).toEqual({ kind: "failed" });
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores a late settlement when its editor scope is no longer current: %s",
+    async (settlement) => {
+      let resolve!: (value: GoalRefineResponse) => void;
+      let reject!: (reason: unknown) => void;
+      const completion = new Promise<GoalRefineResponse>((done, fail) => {
+        resolve = done;
+        reject = fail;
+      });
+      let current = true;
+      const { result } = renderHook(() => useGoalRefinement());
+      let request!: Promise<void>;
+
+      act(() => {
+        request = result.current.request(
+          "元の目標",
+          () => completion,
+          () => current,
+        );
+      });
+      expect(result.current.state).toEqual({ kind: "running" });
+
+      current = false;
+      await act(async () => {
+        if (settlement === "resolve") {
+          resolve(suggestion);
+        } else {
+          reject(new Error("late failure"));
+        }
+        await request;
+      });
+
+      expect(result.current.state).toEqual({ kind: "running" });
+      expect(result.current.requestError).toBeUndefined();
+    },
+  );
+
+  it("invalidates an in-flight request when the suggestion is dismissed", async () => {
+    let resolve!: (value: GoalRefineResponse) => void;
+    const completion = new Promise<GoalRefineResponse>((done) => {
+      resolve = done;
+    });
+    const { result } = renderHook(() => useGoalRefinement());
+    let request!: Promise<void>;
+
+    act(() => {
+      request = result.current.request("元の目標", () => completion);
+    });
+    expect(result.current.state).toEqual({ kind: "running" });
+
+    act(() => result.current.dismiss());
+    await act(async () => {
+      resolve(suggestion);
+      await request;
+    });
+
+    expect(result.current.state).toEqual({ kind: "idle" });
+    expect(result.current.requestError).toBeUndefined();
+  });
 });
