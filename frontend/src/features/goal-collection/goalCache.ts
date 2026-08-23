@@ -31,17 +31,27 @@ export const userMutationKeys = {
     [...userQueryRoot(userId), "create-goal-draft"] as const,
 };
 
+export function preferGoal(current: Goal | undefined, incoming: Goal): Goal {
+  return current && current.revision >= incoming.revision ? current : incoming;
+}
+
 export function cacheGoal(
   cache: QueryClient,
   userId: string,
   goal: Goal,
   updatedAt?: number,
-): void {
+): Goal {
+  const queryKey = userQueryKeys.goal(userId, goal.id);
+  const current = cache.getQueryData<{ readonly goal: Goal }>(queryKey);
+  const canonicalGoal = preferGoal(current?.goal, goal);
+  if (current?.goal === canonicalGoal) return canonicalGoal;
+
   cache.setQueryData(
-    userQueryKeys.goal(userId, goal.id),
-    { goal },
+    queryKey,
+    { goal: canonicalGoal },
     updatedAt === undefined ? undefined : { updatedAt },
   );
+  return canonicalGoal;
 }
 
 export function cacheGoals(

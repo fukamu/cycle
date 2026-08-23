@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
 import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
@@ -709,6 +709,46 @@ describe("NewGoalPage", () => {
     expect(deleteBrowserDraft).toHaveBeenCalledTimes(2);
   });
 
+  it("does not publish Start cleanup success into a replacement route generation", async () => {
+    const cleanupGate = deferred<void>();
+    vi.mocked(deleteBrowserDraft)
+      .mockImplementationOnce(async () => cleanupGate.promise)
+      .mockResolvedValue(undefined);
+    const cache = createCache();
+    const invalidateQueries = vi.spyOn(cache, "invalidateQueries");
+    renderPage(cache, false, false, true);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "この目標で始める" }),
+    );
+    await waitFor(() => expect(startGoal).toHaveBeenCalledOnce());
+    await waitFor(() => expect(deleteBrowserDraft).toHaveBeenCalledOnce());
+    expect(
+      await screen.findByText("ブラウザに残る下書きを削除しています…"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("link", { name: "クリーンアップ中に別routeへ移動" }),
+    );
+    await act(async () => cleanupGate.resolve());
+
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+    expect(invalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: userQueryKeys.root(session.user.id),
+      refetchType: "none",
+    });
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, startedGoal.id)),
+    ).toBeUndefined();
+    expect(
+      cache.getQueryData(
+        userQueryKeys.cycle(session.user.id, startedGoal.id, startedCycle.id),
+      ),
+    ).toBeUndefined();
+    expect(startGoal).toHaveBeenCalledOnce();
+  });
+
   it("retries only browser cleanup after Creation abandon succeeds", async () => {
     vi.mocked(deleteBrowserDraft)
       .mockRejectedValueOnce(new Error("indexeddb unavailable"))
@@ -920,6 +960,7 @@ function renderPage(
   cache = createCache(),
   realCanonicalRoutes = false,
   identityQuiesceControl = false,
+  cleanupRouteSwitch = false,
 ) {
   return render(
     <QueryClientProvider client={cache}>
@@ -930,6 +971,9 @@ function renderPage(
           session={session}
         >
           <MemoryRouter initialEntries={["/goals/new"]}>
+            {cleanupRouteSwitch ? (
+              <Link to="/external">クリーンアップ中に別routeへ移動</Link>
+            ) : null}
             <PostCommitCleanupBoundary
               runSessionOperation={async (_expectedUserId, operation) =>
                 operation(() => true)
@@ -945,6 +989,7 @@ function renderPage(
                   path="/goals/:goalId"
                   element={<p>現在のワークスペース</p>}
                 />
+                <Route path="/external" element={<p>外部route</p>} />
               </Routes>
             </PostCommitCleanupBoundary>
           </MemoryRouter>

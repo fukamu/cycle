@@ -1,10 +1,20 @@
-import { useCallback, useRef, useState, type PropsWithChildren } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PropsWithChildren,
+} from "react";
 import { flushSync } from "react-dom";
+import { useLocation } from "react-router-dom";
 
 import { useAutoSaveScopeRegistry } from "../autosave/AutoSaveScopeProvider";
 import {
   PostCommitCleanupContext,
+  PostCommitRouteOwnershipContext,
+  type CapturePostCommitRouteOwnership,
   type PostCommitCleanupTask,
+  type PostCommitRouteOwnershipToken,
   type PostCommitSessionOperationRunner,
   type RunPostCommitCleanup,
 } from "./postCommitCleanupContext";
@@ -35,6 +45,26 @@ export function PostCommitCleanupBoundary({
   children,
   runSessionOperation,
 }: PostCommitCleanupBoundaryProps) {
+  const location = useLocation();
+  const routeGenerationRef = useRef({
+    generation: 0,
+    locationKey: location.key,
+  });
+  useLayoutEffect(() => {
+    const current = routeGenerationRef.current;
+    if (current.locationKey === location.key) return;
+    routeGenerationRef.current = {
+      generation: current.generation + 1,
+      locationKey: location.key,
+    };
+  }, [location.key]);
+  const captureRouteOwnership =
+    useCallback<CapturePostCommitRouteOwnership>(() => {
+      const generation = routeGenerationRef.current.generation;
+      return Object.freeze({
+        isCurrent: () => routeGenerationRef.current.generation === generation,
+      }) as PostCommitRouteOwnershipToken;
+    }, []);
   const registry = useAutoSaveScopeRegistry();
   const activeEntryRef = useRef<CleanupEntry | undefined>(undefined);
   const queuedEntriesRef = useRef<CleanupEntry[]>([]);
@@ -57,6 +87,9 @@ export function PostCommitCleanupBoundary({
       const attempt = (async () => {
         try {
           const identityIsCurrent = entry.identityIsCurrent;
+          const publicationIsCurrent = () =>
+            identityIsCurrent() &&
+            (entry.task.routeOwnership?.isCurrent() ?? true);
           if (identityIsCurrent()) {
             // Keep the route mounted until quiesce snapshots every active callback.
             // Replacing children first would let their layout-effect cleanup
@@ -65,14 +98,14 @@ export function PostCommitCleanupBoundary({
           }
           setCleanupState({ kind: "pending", entry });
           await entry.task.cleanup();
-          if (identityIsCurrent()) {
-            await entry.task.onSuccess(identityIsCurrent);
+          if (publicationIsCurrent()) {
+            await entry.task.onSuccess(publicationIsCurrent);
           }
           return {
             succeeded: true,
             retainTerminal:
               Boolean(entry.task.retainTerminalOnSuccess) &&
-              identityIsCurrent(),
+              publicationIsCurrent(),
           };
         } catch {
           setCleanupState({ kind: "failed", entry });
@@ -198,15 +231,17 @@ export function PostCommitCleanupBoundary({
 
   const quiescing = cleanupState?.kind === "quiescing";
   return (
-    <PostCommitCleanupContext.Provider value={runPostCommitCleanup}>
-      {quiescing ? (
-        <div className="app-message" role="status" aria-live="polite">
-          {cleanupState.entry.task.pendingMessage}
+    <PostCommitRouteOwnershipContext.Provider value={captureRouteOwnership}>
+      <PostCommitCleanupContext.Provider value={runPostCommitCleanup}>
+        {quiescing ? (
+          <div className="app-message" role="status" aria-live="polite">
+            {cleanupState.entry.task.pendingMessage}
+          </div>
+        ) : null}
+        <div hidden={quiescing} inert={quiescing}>
+          {children}
         </div>
-      ) : null}
-      <div hidden={quiescing} inert={quiescing}>
-        {children}
-      </div>
-    </PostCommitCleanupContext.Provider>
+      </PostCommitCleanupContext.Provider>
+    </PostCommitRouteOwnershipContext.Provider>
   );
 }

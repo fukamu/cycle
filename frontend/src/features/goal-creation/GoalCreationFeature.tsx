@@ -43,7 +43,10 @@ import {
   type DraftLatestResolution,
   useDraftAutoSave,
 } from "../../shared/hooks/useDraftAutoSave";
-import { usePostCommitCleanup } from "../../shared/cleanup/postCommitCleanupContext";
+import {
+  useCapturePostCommitRouteOwnership,
+  usePostCommitCleanup,
+} from "../../shared/cleanup/postCommitCleanupContext";
 import { deleteBrowserDraft } from "../../shared/drafts/browserDraftCache";
 import {
   codePointCount,
@@ -108,6 +111,7 @@ function GoalDraftEditor({
   const navigate = useNavigate();
   const cache = useQueryClient();
   const runPostCommitCleanup = usePostCommitCleanup();
+  const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const mountedGenerationRef = useRef(true);
   useLayoutEffect(() => {
     mountedGenerationRef.current = true;
@@ -273,6 +277,7 @@ function GoalDraftEditor({
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       void runPostCommitCleanup({
         expectedUserId: userId,
+        routeOwnership: captureRouteOwnership(),
         cleanup: () => deleteBrowserDraft(userId, subjectKey),
         onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
@@ -307,6 +312,7 @@ function GoalDraftEditor({
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       void runPostCommitCleanup({
         expectedUserId: userId,
+        routeOwnership: captureRouteOwnership(),
         cleanup: () => deleteBrowserDraft(userId, subjectKey),
         onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({

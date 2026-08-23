@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
 import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
@@ -1172,6 +1172,48 @@ describe("GoalReviewPage", () => {
     expect(deleteBrowserDraft).toHaveBeenCalledTimes(2);
   });
 
+  it("does not publish Continue cleanup success into a replacement route generation", async () => {
+    const cleanupGate = deferred<void>();
+    vi.mocked(deleteBrowserDraft)
+      .mockImplementationOnce(async () => cleanupGate.promise)
+      .mockResolvedValue(undefined);
+    const cache = createCache();
+    const invalidateQueries = vi.spyOn(cache, "invalidateQueries");
+    renderPage(cache, false, false, true);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "この目標で次のサイクルへ",
+      }),
+    );
+    await waitFor(() => expect(continueReview).toHaveBeenCalledOnce());
+    await waitFor(() => expect(deleteBrowserDraft).toHaveBeenCalledOnce());
+    expect(
+      await screen.findByText("ブラウザに残るReview下書きを削除しています…"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("link", { name: "クリーンアップ中に別routeへ移動" }),
+    );
+    await act(async () => cleanupGate.resolve());
+
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+    expect(invalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: userQueryKeys.root(session.user.id),
+      refetchType: "none",
+    });
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(
+      cache.getQueryData(
+        userQueryKeys.cycle(session.user.id, goal.id, replayedCycle.id),
+      ),
+    ).toBeUndefined();
+    expect(continueReview).toHaveBeenCalledOnce();
+  });
+
   it("retries only browser cleanup after dirty Review terminal success", async () => {
     vi.mocked(deleteBrowserDraft)
       .mockRejectedValueOnce(new Error("indexeddb unavailable"))
@@ -1311,6 +1353,7 @@ function renderPage(
   cache = createCache(),
   realCanonicalRoutes = false,
   identityQuiesceControl = false,
+  cleanupRouteSwitch = false,
 ) {
   return render(
     <QueryClientProvider client={cache}>
@@ -1321,6 +1364,9 @@ function renderPage(
           session={session}
         >
           <MemoryRouter initialEntries={[`/goals/${goal.id}/review`]}>
+            {cleanupRouteSwitch ? (
+              <Link to="/external">クリーンアップ中に別routeへ移動</Link>
+            ) : null}
             <PostCommitCleanupBoundary
               runSessionOperation={async (_expectedUserId, operation) =>
                 operation(() => true)
@@ -1346,6 +1392,7 @@ function renderPage(
                   path="/history/goals/:goalId"
                   element={<p>canonical goal history</p>}
                 />
+                <Route path="/external" element={<p>外部route</p>} />
               </Routes>
             </PostCommitCleanupBoundary>
           </MemoryRouter>

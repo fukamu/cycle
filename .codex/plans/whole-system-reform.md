@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M11 Cycle/history feature boundary
+- 状態: IN_PROGRESS / M11 final commit gate
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -579,6 +579,8 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-23: Session recovery priorityをUNVERIFIED > DRIFT > MISSING/EXPIRED > CSRFとし、上位が下位をabortする。Cookie writerは標準Web Locksの固定exclusive lockでtab間直列化し、取得後ownershipを再確認する。新dependencyは追加せず、API欠落・例外・callback未実行時はCookie変更をdispatchしない。
 - 2026-08-23: Account Deleteは`204`直後とBrowser cleanup完了後の二段階advisory、origin salt付きUser digestだけのdurable IndexedDB tombstone、put/checkとtombstone/deleteのatomic transactionでlate writeを防ぐ。Draftの24h TTLと異なりtombstoneはsite data削除まで保持するprivacy/security tradeoffを採用し、raw User ID・本文は永続privacy recordやtelemetryへ残さない。
 - 2026-08-23: M9でBrowser Draft DBをv1からv2へupgradeしたため、旧v1 openerへの全面revertは`VersionError`になる。Rollbackでもv2 schema/tombstone互換とidentity/Cookie security guardを維持し、障害時はrelease停止とforward fixを行う。
+- 2026-08-23: M11ではGoalWorkspace/GoalHistory/GoalTimeline routeをparameter解決と公開Feature compositionだけにし、現行API wire、UI/DOM、query key、Historyの`scope=all`順序、Cycleの`${userId}:${cycleId}` remount keyを維持する。Cycle eligibilityとTimeline groupingはFeature private modelへ移し、旧cycle-editor/page modelを削除する。History/Timelineは一つのprivate infinite-scroll ownerを共有し、同期in-flight guardと`cancelRefetch: false`で同一cursorのobserver/retryをcoalesceして既読pageを保持する。Goal detail cacheはrevision単調採用とし、同revisionではcurrentを維持する。
+- 2026-08-23: Post-commit cleanup自体はroute移動後も完遂・retry可能に保つ一方、optionalなmonotonic route-generation ownershipで旧routeのcleanup成功後にcache invalidation、cache publish、navigation、terminal表示をreplacement routeへ公開しない。Route-scoped taskはCreation 2件、Review 3件、Cycle 3件の全8件を機械検証し、Account Deleteはrouteを越えて完了する既存session ownershipだけを維持する。
 - 2026-08-22: Free/MVPの進行Goal上限を2件に確定。
 - 2026-08-22: Homeは`GoalView/currentWork`共用に確定。
 - 2026-08-22: Goal Refine fieldを`suggestion`へ統一。
@@ -591,6 +593,11 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-23: M10完了記録を含むplan-inclusive final treeのcommit前必須gateを別のfresh disposable PostgreSQL 18.6で最初から再実行し、staged tree `9a67fabc9b576ff5b57fd5fc4a4ac55363a9fddc`、Frontend 50 files / 413 tests、全scope、Playwright 18/18、開始・終了tree一致まで成功した。Migrationはversion 1・dirty=false、検証DBは停止・削除済みで、indexを変更せずcommitしていない。M11はこの検証済みtreeから開始した。
+- 2026-08-23: M11変更前REDではroute composition/public index/unique policy owner、重複intersection/retry、late Goal collectionによる新しいdetail cacheのrollback、Timeline retryの不要な再取得、Complete cleanup後のreplacement route publication、Cycle eligibilityとGoal preferenceの重複を再現した。GREENではCycleWorkspace/GoalHistory/GoalTimeline Feature、共有pagination owner、revision-monotonic Goal cache、private eligibility/timeline model、route-generation publication fenceへ収束した。
+- 2026-08-23: M11完了前の独立監査で、route-generation fenceがCycleだけに適用され、Creation/Reviewの5 taskが同一Userのreplacement routeへ旧cache/navigationを公開できるP1を検出した。Creation Start、Review Continue、全route-scoped taskの構造gateは修正前3 failures / 60 passesを再現し、8/8 taskへtokenを横展開後3 files / 63 tests、最終focused 10 files / 141 testsが成功した。再監査ではroute composition、pagination/cache/eligibility、DOM/API/query/order互換に残るP0/P1はなかった。
+- 2026-08-23: M11 final FはPrettier、ESLint、strict typecheck、Frontend 51 files / 436 tests、production build 229 modulesまで成功した。Fresh PostgreSQL 18.6で事前listしたCycle/history/timeline/autosave/mobile/termination対象Playwright 6/6、別のfresh PostgreSQL 18.6によるfull EでBackend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18、migration version 1・dirty=falseまで成功した。両DBは停止・削除済みで、API wire、History順序、baseline migration、sqlc生成物は不変だった。
+- 2026-08-23: M11 validation中、既存生成物`cloudflare/.wrangler`と`frontend/test-results`のroot所有権、固定image内Chromiumの非root cache path、誤って選んだPostgreSQL 17 imageでcode assertion前またはgate途中に停止した。生成物だけの所有権を限定修復し、Chromiumをworkspace外からread-only mountした。PostgreSQL 17の成功結果は採用せず、対象E2E/full Eをそれぞれfresh PostgreSQL 18.6で最初から再実行した。誤った`pnpm run`引数境界による対象list 0件も直接Playwright invocationへ修正し、assertionやproduct codeを弱めていない。
 - 2026-08-23: M10完了。Fresh disposable PostgreSQL 18.6でcommit前必須gateを最初から実行し、staged candidate tree `7d74637d0593d71bcb3ec47cd471812d8dd88b8f`、Actionlint、CI reuse resolver、全scope、Frontend 50 files / 413 tests、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18、開始・終了tree一致まで成功した。検証DBは停止・削除済みでcommitしていない。本entryとM11再開位置でtreeを変更するため、plan-inclusive final treeを再stageし、別のfresh DBでCを最初から再実行する。
 - 2026-08-23: M10 final FはPrettier、ESLint、strict typecheck、Frontend 50 files / 413 tests、production buildまで成功した。Fresh disposable PostgreSQL 18.6の対象E2EはCreation入力・Refine明示採用・Start・Review Refine/失敗時旧提案保持・ContinueとReview terminalの2/2、別のfresh DBによるfull EはBackend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18まで成功した。検証DBは停止・削除済みで、API wire、route、DOM copy/order、baseline migration、sqlc生成物は不変。次に全treeをstageしてCを実行する。
 - 2026-08-23: M10変更前REDはCreation/Review双方でidentity quiescence後のlate Refine resolve/reject、別Draft世代へのlate Adopt、route内product policyとdeep Feature importを再現し、behavior 6/38、architecture 6/6が失敗した。Goal Creation/ReviewのDraft作成、autosave、refine/adopt、start/continue/terminal/delete、recovery、UIを公開Featureへ移し、routeをquery/load/error/Feature compositionだけへ縮小した。Public query contractとFeature index、再帰AST architecture gate、Refine request generation/scope fence、Adoptのmounted/active scope/current Draft/response Draft bindingを実装した。
@@ -645,7 +652,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M10は完了。完了記録を含むplan-inclusive final treeのCを別のfresh disposable PostgreSQL 18.6で最初から再実行し、開始・終了tree一致まで成功したら、このfileとindexを変更せずcommitもしないでM11 Cycle/history feature boundaryの変更前REDへ進む。
+- 現在の再開位置: M11のRED/GREEN、F、対象E2E、full Eは完了。全変更と本記録を完全stageし、fresh disposable PostgreSQL 18.6でcommit前必須gateを最初から実行する。成功後にM11完了tree hashとM12再開位置を記録して再stageし、別のfresh DBでplan-inclusive final treeのgateを再実行する。Commitしない。
 
 ## 26. Final definition of done
 

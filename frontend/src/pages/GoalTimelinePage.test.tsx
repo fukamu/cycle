@@ -1,11 +1,17 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
 import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import type {
-  CyclePage,
   CycleSummary,
   Goal,
   GoalVersion,
@@ -13,7 +19,6 @@ import type {
 } from "../shared/api/schemas";
 import { getGoal, listCycles } from "../shared/api/workspace";
 import { GoalTimelinePage } from "./GoalTimelinePage";
-import { buildTimelineGroups } from "./goalTimelineModel";
 
 vi.mock("../shared/api/workspace", () => ({
   getGoal: vi.fn(),
@@ -61,36 +66,6 @@ describe("GoalTimelinePage", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("keeps newest cycles first while grouping V3, V2, and V1 segments", () => {
-    const pages: CyclePage[] = [
-      {
-        items: [
-          makeCycle(6, 3),
-          makeCycle(5, 3),
-          makeCycle(4, 2),
-          makeCycle(3, 2),
-          makeCycle(2, 1),
-          makeCycle(1, 1),
-        ],
-        nextCursor: null,
-      },
-    ];
-
-    const groups = buildTimelineGroups(pages, makeVersion(3));
-
-    expect(
-      groups.map((group) => ({
-        version: group.version.versionNumber,
-        kind: group.kind,
-        cycles: group.cycles.map((cycle) => cycle.sequenceNumber),
-      })),
-    ).toEqual([
-      { version: 3, kind: "revision", cycles: [6, 5] },
-      { version: 2, kind: "revision", cycles: [4, 3] },
-      { version: 1, kind: "baseline", cycles: [2, 1] },
-    ]);
-  });
-
   it("marks V2 as a revision when it is the first loaded segment", async () => {
     vi.mocked(getGoal).mockResolvedValue({ goal: makeGoal(2) });
     vi.mocked(listCycles).mockResolvedValue({
@@ -128,6 +103,33 @@ describe("GoalTimelinePage", () => {
     );
   });
 
+  it("retries only the failed initial cycles query", async () => {
+    vi.mocked(getGoal).mockResolvedValue({ goal: makeGoal(1) });
+    vi.mocked(listCycles)
+      .mockRejectedValueOnce(new TypeError("network"))
+      .mockResolvedValueOnce({
+        items: [makeCycle(1, 1)],
+        nextCursor: null,
+      });
+
+    renderTimeline();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "再試行",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "Version 1の目標",
+      }),
+    ).toBeVisible();
+    expect(getGoal).toHaveBeenCalledOnce();
+    expect(listCycles).toHaveBeenCalledTimes(2);
+  });
+
   it("marks the V1 period and creation event as current before any revision", async () => {
     vi.mocked(getGoal).mockResolvedValue({ goal: makeGoal(1) });
     vi.mocked(listCycles).mockResolvedValue({
@@ -152,6 +154,52 @@ describe("GoalTimelinePage", () => {
     expect(getEvent(container, 1)).toHaveAttribute(
       "data-timeline-event",
       "created",
+    );
+  });
+
+  it("keeps loaded groups and coalesces duplicate retry clicks for a failed next page", async () => {
+    vi.mocked(getGoal).mockResolvedValue({ goal: makeGoal(2) });
+    vi.mocked(listCycles)
+      .mockResolvedValueOnce({
+        items: [makeCycle(4, 2)],
+        nextCursor: "older",
+      })
+      .mockRejectedValueOnce(new TypeError("network"))
+      .mockResolvedValueOnce({
+        items: [makeCycle(2, 1)],
+        nextCursor: null,
+      });
+
+    renderTimeline();
+
+    expect(await screen.findByText("GOAL V2")).toBeVisible();
+    triggerIntersection();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "続きを読み込めませんでした。",
+    );
+    expect(screen.getByText("GOAL V2")).toBeVisible();
+    const retry = screen.getByRole("button", { name: "もう一度読み込む" });
+    act(() => {
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+    });
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "Version 1の目標",
+      }),
+    ).toBeVisible();
+    expect(screen.getByText("GOAL V2")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(listCycles).toHaveBeenCalledTimes(3);
+    expect(listCycles).toHaveBeenNthCalledWith(
+      3,
+      sessionLease,
+      goalId,
+      "older",
+      expect.any(AbortSignal),
     );
   });
 

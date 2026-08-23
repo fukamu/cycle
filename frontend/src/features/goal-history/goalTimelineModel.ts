@@ -2,7 +2,7 @@ import type {
   CyclePage,
   CycleSummary,
   GoalVersion,
-} from "../shared/api/schemas";
+} from "../../shared/api/schemas";
 
 export type TimelineVersionKind = "baseline" | "revision";
 

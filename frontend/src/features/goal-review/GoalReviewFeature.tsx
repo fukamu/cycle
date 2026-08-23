@@ -34,7 +34,10 @@ import {
 } from "../../shared/components/AsyncState";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
 import { frameCopy } from "../../shared/copy/ja";
-import { usePostCommitCleanup } from "../../shared/cleanup/postCommitCleanupContext";
+import {
+  useCapturePostCommitRouteOwnership,
+  usePostCommitCleanup,
+} from "../../shared/cleanup/postCommitCleanupContext";
 import {
   clearGoalDrafts,
   deleteBrowserDraft,
@@ -71,6 +74,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const navigate = useNavigate();
   const cache = useQueryClient();
   const runPostCommitCleanup = usePostCommitCleanup();
+  const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const mountedGenerationRef = useRef(true);
   useLayoutEffect(() => {
     mountedGenerationRef.current = true;
@@ -273,6 +277,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       void runPostCommitCleanup({
         expectedUserId: userId,
+        routeOwnership: captureRouteOwnership(),
         cleanup: () => deleteBrowserDraft(userId, subjectKey),
         onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
@@ -327,6 +332,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       void runPostCommitCleanup({
         expectedUserId: userId,
+        routeOwnership: captureRouteOwnership(),
         cleanup: () => deleteBrowserDraft(userId, subjectKey),
         onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
@@ -367,6 +373,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       void runPostCommitCleanup({
         expectedUserId: userId,
+        routeOwnership: captureRouteOwnership(),
         cleanup: () => clearGoalDrafts(userId, goal.id),
         onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({

@@ -1920,6 +1920,61 @@ describe("GoalWorkspacePage", () => {
     expect(completeCycle).toHaveBeenCalledOnce();
   });
 
+  it("does not publish Complete cleanup success into a replacement route generation", async () => {
+    const cleanupGate = deferred<void>();
+    const nextCycle: Cycle = {
+      ...completableCycle,
+      id: currentCycleId,
+      sequenceNumber: 2,
+      plan: "次のCycleの計画",
+    };
+    vi.mocked(getCycle).mockImplementation(
+      async (_lease, _goalId, requestedCycleId) =>
+        requestedCycleId === nextCycle.id
+          ? { cycle: nextCycle }
+          : { cycle: completableCycle },
+    );
+    vi.mocked(completeCycle).mockResolvedValue(goalReviewReplay);
+    vi.mocked(deleteBrowserDraftIfUnchanged).mockResolvedValue(undefined);
+    vi.mocked(deleteBrowserDraft)
+      .mockImplementationOnce(async () => cleanupGate.promise)
+      .mockResolvedValue(undefined);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const invalidateQueries = vi.spyOn(cache, "invalidateQueries");
+    const nextCycleQueryKey = userQueryKeys.cycle(
+      session.user.id,
+      goal.id,
+      nextCycle.id,
+    );
+    cache.setQueryData(nextCycleQueryKey, { cycle: nextCycle });
+    renderPage(cache, { cleanupSwitchCycleId: nextCycle.id });
+
+    await confirmCycleCompletion();
+    await waitFor(() => expect(completeCycle).toHaveBeenCalledOnce());
+    await waitFor(() => expect(deleteBrowserDraft).toHaveBeenCalledOnce());
+    expect(
+      await screen.findByText("この端末のサイクル下書きを削除しています…"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("link", { name: "クリーンアップ中に別のCycleへ移動" }),
+    );
+    await act(async () => cleanupGate.resolve());
+
+    expect(
+      await screen.findByDisplayValue("次のCycleの計画"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("現在の目標レビュー")).not.toBeInTheDocument();
+    expect(cache.getQueryState(nextCycleQueryKey)?.isInvalidated).toBe(false);
+    expect(invalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: userQueryKeys.root(session.user.id),
+      refetchType: "none",
+    });
+    expect(completeCycle).toHaveBeenCalledOnce();
+  });
+
   it("ignores a late AI result after identity quiescence", async () => {
     const readyCycle: Cycle = {
       ...completableCycle,
@@ -2186,6 +2241,7 @@ async function confirmCycleCompletion() {
 function renderPage(
   cache: QueryClient,
   options: {
+    readonly cleanupSwitchCycleId?: string;
     readonly identityQuiesceControl?: boolean;
     readonly strictMode?: boolean;
     readonly switchCycleId?: string;
@@ -2202,6 +2258,13 @@ function renderPage(
             initialEntries={[`/workspace/${goal.id}/cycles/${cycle.id}`]}
           >
             {options.identityQuiesceControl ? <IdentityQuiesceControl /> : null}
+            {options.cleanupSwitchCycleId ? (
+              <Link
+                to={`/workspace/${goal.id}/cycles/${options.cleanupSwitchCycleId}`}
+              >
+                クリーンアップ中に別のCycleへ移動
+              </Link>
+            ) : null}
             <PostCommitCleanupBoundary
               runSessionOperation={async (_expectedUserId, operation) =>
                 operation(() => true)

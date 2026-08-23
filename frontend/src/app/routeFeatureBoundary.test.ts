@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +16,16 @@ type RouteBoundary = {
   readonly allowedJsx: readonly string[];
   readonly localDeclarations: readonly string[];
   readonly allowedCalls: readonly string[];
+};
+
+type CompositionBoundary = {
+  readonly page: string;
+  readonly pageExport: string;
+  readonly feature: string;
+  readonly featureExport: string;
+  readonly localDeclarations: readonly string[];
+  readonly allowedCalls: readonly string[];
+  readonly featureProps: readonly string[];
 };
 
 const boundaries: readonly RouteBoundary[] = [
@@ -63,6 +73,47 @@ const boundaries: readonly RouteBoundary[] = [
       "useQuery",
       "useSession",
     ],
+  },
+] as const;
+
+const compositionBoundaries: readonly CompositionBoundary[] = [
+  {
+    page: "GoalWorkspacePage",
+    pageExport: "GoalWorkspacePage",
+    feature: "cycle-workspace",
+    featureExport: "CycleWorkspaceFeature",
+    localDeclarations: ['{goalId="",cycleId=""}=useParams()'],
+    allowedCalls: ["useParams"],
+    featureProps: ["cycleId=cycleId", "goalId=goalId"],
+  },
+  {
+    page: "GoalHistoryPage",
+    pageExport: "GoalHistoryPage",
+    feature: "goal-history",
+    featureExport: "GoalHistoryFeature",
+    localDeclarations: [],
+    allowedCalls: [],
+    featureProps: [],
+  },
+  {
+    page: "GoalTimelinePage",
+    pageExport: "GoalTimelinePage",
+    feature: "goal-history",
+    featureExport: "GoalTimelineFeature",
+    localDeclarations: ['{goalId=""}=useParams()'],
+    allowedCalls: ["useParams"],
+    featureProps: ["goalId=goalId"],
+  },
+] as const;
+
+const compositionFeatureContracts = [
+  {
+    feature: "cycle-workspace",
+    exports: ["CycleWorkspaceFeature"],
+  },
+  {
+    feature: "goal-history",
+    exports: ["GoalHistoryFeature", "GoalTimelineFeature"],
   },
 ] as const;
 
@@ -453,3 +504,184 @@ describe.each(boundaries)(
     });
   },
 );
+
+describe.each(compositionBoundaries)(
+  "$page composition-only route boundary",
+  ({
+    page,
+    pageExport,
+    feature,
+    featureExport,
+    localDeclarations,
+    allowedCalls,
+    featureProps,
+  }) => {
+    it("keeps the route at parameter resolution and feature composition only", () => {
+      const source = sourceFile(`pages/${page}.tsx`);
+      const expectedImports = [
+        `../features/${feature}`,
+        ...(localDeclarations.length > 0 ? ["react-router-dom"] : []),
+      ].sort();
+
+      expect(modulePaths(source).sort()).toEqual(expectedImports);
+      expect(jsxTags(source)).toEqual([featureExport]);
+
+      const implementationStatements = source.statements.filter(
+        (statement) => !ts.isImportDeclaration(statement),
+      );
+      expect(implementationStatements).toHaveLength(1);
+      const pageFunction = implementationStatements[0];
+      expect(pageFunction && ts.isFunctionDeclaration(pageFunction)).toBe(true);
+      if (!pageFunction || !ts.isFunctionDeclaration(pageFunction)) return;
+      expect(pageFunction.name?.text).toBe(pageExport);
+      expect(
+        pageFunction.modifiers?.some(
+          (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+        ),
+      ).toBe(true);
+      expect(localDeclarationSignatures(pageFunction)).toEqual(
+        localDeclarations,
+      );
+      expect(callExpressionNames(pageFunction)).toEqual(
+        [...allowedCalls].sort(),
+      );
+
+      const body = pageFunction.body;
+      expect(body).toBeDefined();
+      if (!body) return;
+      expect(
+        body.statements.map((statement) =>
+          ts.isVariableStatement(statement)
+            ? "variable"
+            : ts.isReturnStatement(statement)
+              ? "return"
+              : "unsupported:" + ts.SyntaxKind[statement.kind],
+        ),
+      ).toEqual([...localDeclarations.map(() => "variable"), "return"]);
+
+      const featureOpenings = jsxOpenings(source, featureExport);
+      expect(featureOpenings).toHaveLength(1);
+      const featureOpening = featureOpenings[0];
+      if (featureOpening) {
+        expect(jsxPropSignatures(source, featureOpening)).toEqual([
+          ...featureProps,
+        ]);
+      }
+    });
+  },
+);
+
+describe.each(compositionFeatureContracts)(
+  "$feature public composition contract",
+  ({ feature, exports }) => {
+    it("publishes only route-composable feature components", () => {
+      const featureIndex = sourceFile(`features/${feature}/index.ts`);
+      const contract = publicIndexContract(featureIndex);
+      expect(contract.invalidStatements).toEqual([]);
+      expect([...contract.names].sort()).toEqual([...exports].sort());
+    });
+
+    it("uses public indexes for every cross-feature import", () => {
+      const directory = resolve(featuresDirectory, feature);
+      const violations: string[] = [];
+      let crossFeatureImportCount = 0;
+
+      for (const file of productionTypeScriptFiles(directory)) {
+        for (const modulePath of modulePaths(sourceFileAt(file))) {
+          if (!modulePath.startsWith(".")) continue;
+          const resolvedImport = resolve(dirname(file), modulePath);
+          const targetFeature = targetFeatureName(resolvedImport);
+          if (!targetFeature || targetFeature === feature) continue;
+          crossFeatureImportCount += 1;
+          if (!isPublicFeatureIndex(resolvedImport, targetFeature)) {
+            violations.push(relative(srcDirectory, file) + " -> " + modulePath);
+          }
+        }
+      }
+
+      expect(crossFeatureImportCount).toBeGreaterThan(0);
+      expect(violations).toEqual([]);
+    });
+  },
+);
+
+it("owns infinite-scroll observer policy once inside goal-history", () => {
+  const owners = productionTypeScriptFiles(
+    resolve(featuresDirectory, "goal-history"),
+  )
+    .filter((file) =>
+      readFileSync(file, "utf8").includes("new IntersectionObserver"),
+    )
+    .map((file) => relative(srcDirectory, file));
+
+  expect(owners).toEqual(["features/goal-history/useInfiniteScrollTrigger.ts"]);
+});
+
+it("fences every route-owned post-commit publication by route generation", () => {
+  const routeOwnedFeatures = [
+    "features/goal-creation/GoalCreationFeature.tsx",
+    "features/goal-review/GoalReviewFeature.tsx",
+    "features/cycle-workspace/CycleWorkspaceFeature.tsx",
+  ];
+
+  for (const feature of routeOwnedFeatures) {
+    const source = readFileSync(resolve(srcDirectory, feature), "utf8");
+    const taskCount =
+      source.match(/\bvoid runPostCommitCleanup\(\{/g)?.length ?? 0;
+    const routeOwnershipCount =
+      source.match(/\brouteOwnership: captureRouteOwnership\(\),/g)?.length ??
+      0;
+
+    expect(taskCount).toBeGreaterThan(0);
+    expect(routeOwnershipCount).toBe(taskCount);
+  }
+});
+
+it("keeps cycle workspace generation and product policy owners unique", () => {
+  const workspacePath = resolve(
+    featuresDirectory,
+    "cycle-workspace/CycleWorkspaceFeature.tsx",
+  );
+  const workspaceSource = sourceFileAt(workspacePath);
+  const workspaceOpenings = jsxOpenings(workspaceSource, "CycleWorkspace");
+  expect(workspaceOpenings).toHaveLength(1);
+  const workspaceOpening = workspaceOpenings[0];
+  expect(workspaceOpening).toBeDefined();
+  if (!workspaceOpening) return;
+
+  const keyAttribute = workspaceOpening.attributes.properties.find(
+    (property) =>
+      ts.isJsxAttribute(property) &&
+      property.name.getText(workspaceSource) === "key",
+  );
+  expect(keyAttribute && ts.isJsxAttribute(keyAttribute)).toBe(true);
+  if (!keyAttribute || !ts.isJsxAttribute(keyAttribute)) return;
+  expect(
+    keyAttribute.initializer &&
+      ts.isJsxExpression(keyAttribute.initializer) &&
+      keyAttribute.initializer.expression?.getText(workspaceSource),
+  ).toBe("`${userId}:${cycleQuery.data.cycle.id}`");
+
+  expect(
+    existsSync(resolve(featuresDirectory, "cycle-editor/model/eligibility.ts")),
+  ).toBe(false);
+
+  const productionFiles = productionTypeScriptFiles(featuresDirectory);
+  const eligibilityOwners = productionFiles
+    .filter((file) =>
+      readFileSync(file, "utf8").includes("function getCycleEligibility("),
+    )
+    .map((file) => relative(srcDirectory, file));
+  expect(eligibilityOwners).toEqual([
+    "features/cycle-workspace/model/eligibility.ts",
+  ]);
+
+  const goalPreferenceOwners = productionFiles
+    .filter((file) =>
+      readFileSync(file, "utf8").includes("function preferGoal("),
+    )
+    .map((file) => relative(srcDirectory, file));
+  expect(goalPreferenceOwners).toEqual([
+    "features/goal-collection/goalCache.ts",
+  ]);
+});

@@ -5,8 +5,11 @@ import {
   cacheCreationDraft,
   cacheCycle,
   cacheCycleFrame,
+  cacheGoal,
+  cacheGoals,
   cacheReview,
   cacheReviewDraft,
+  preferGoal,
   userMutationKeys,
   userQueryKeys,
 } from "./goalCache";
@@ -200,6 +203,49 @@ describe("goal cache", () => {
       plan: "newer",
       contentRevision: 3,
       frameRevisions: { plan: 2 },
+    });
+  });
+
+  it("does not let a late goal collection snapshot regress a newer detail", () => {
+    const cache = new QueryClient();
+    const newer = {
+      ...goal,
+      revision: 2,
+      currentVersion: { ...goal.currentVersion, body: "新しい目標" },
+    };
+    const older = {
+      ...goal,
+      revision: 1,
+      currentVersion: { ...goal.currentVersion, body: "古い目標" },
+    };
+    cache.setQueryData(userQueryKeys.goal(userId, goal.id), { goal: newer });
+
+    cacheGoals(cache, userId, [older]);
+
+    expect(cache.getQueryData(userQueryKeys.goal(userId, goal.id))).toEqual({
+      goal: newer,
+    });
+  });
+
+  it("returns the canonical goal selected by the shared revision policy", () => {
+    const cache = new QueryClient();
+    const newer = {
+      ...goal,
+      revision: 2,
+      currentVersion: { ...goal.currentVersion, body: "新しい目標" },
+    };
+    const older = {
+      ...goal,
+      revision: 1,
+      currentVersion: { ...goal.currentVersion, body: "古い目標" },
+    };
+
+    expect(preferGoal(older, newer)).toBe(newer);
+    expect(preferGoal(newer, older)).toBe(newer);
+    expect(cacheGoal(cache, userId, newer)).toBe(newer);
+    expect(cacheGoal(cache, userId, older)).toBe(newer);
+    expect(cache.getQueryData(userQueryKeys.goal(userId, goal.id))).toEqual({
+      goal: newer,
     });
   });
 
