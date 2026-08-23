@@ -11,7 +11,10 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 
-import { useSession } from "../features/auth/sessionContext";
+import {
+  useAuthenticatedRequestLease,
+  useSession,
+} from "../features/auth/sessionContext";
 import {
   cacheCycleFrame,
   cacheReview,
@@ -128,16 +131,18 @@ type WorkspaceConfirmation =
 
 export function GoalWorkspacePage() {
   const session = useSession();
+  const sessionLease = useAuthenticatedRequestLease();
   const userId = session.user.id;
   const { goalId, cycleId } = useParams();
   const goalQuery = useQuery({
     queryKey: userQueryKeys.goal(userId, goalId ?? ""),
-    queryFn: () => getGoal(goalId ?? ""),
+    queryFn: ({ signal }) => getGoal(sessionLease, goalId ?? "", signal),
     enabled: Boolean(goalId),
   });
   const cycleQuery = useQuery({
     queryKey: userQueryKeys.cycle(userId, goalId ?? "", cycleId ?? ""),
-    queryFn: () => getCycle(goalId ?? "", cycleId ?? ""),
+    queryFn: ({ signal }) =>
+      getCycle(sessionLease, goalId ?? "", cycleId ?? "", signal),
     enabled: Boolean(goalId && cycleId),
   });
   if (goalQuery.isPending || (cycleId && cycleQuery.isPending))
@@ -180,6 +185,7 @@ function CycleWorkspace({
   readonly initial: Cycle;
 }) {
   const session = useSession();
+  const sessionLease = useAuthenticatedRequestLease();
   const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
@@ -346,6 +352,7 @@ function CycleWorkspace({
         const baseRevision = revisions.current[entry.key];
         attemptRevisionsRef.current.set(signal, baseRevision);
         return saveCycleFrame(
+          sessionLease,
           goal.id,
           cycle.id,
           entry.key,
@@ -445,7 +452,7 @@ function CycleWorkspace({
         if (!isCurrentRefresh()) return;
         if (mountedRef.current) setError(undefined);
 
-        let latestGoal = await getGoal(goal.id, lease.signal);
+        let latestGoal = await getGoal(sessionLease, goal.id, lease.signal);
         if (!isCurrentRefresh()) return;
         const cachedGoal = cache.getQueryData<{ readonly goal: Goal }>(
           userQueryKeys.goal(userId, goal.id),
@@ -455,6 +462,7 @@ function CycleWorkspace({
         const currentCycleId =
           currentWork?.kind === "active_cycle" ? currentWork.cycleId : cycle.id;
         const latestCycle = await getCycle(
+          sessionLease,
           goal.id,
           currentCycleId,
           lease.signal,
@@ -472,7 +480,11 @@ function CycleWorkspace({
           currentWork?.kind === "active_cycle" &&
           currentWork.cycleId === cycleBeforeGoalConfirmation.id
         ) {
-          const confirmedGoal = await getGoal(goal.id, lease.signal);
+          const confirmedGoal = await getGoal(
+            sessionLease,
+            goal.id,
+            lease.signal,
+          );
           if (!isCurrentRefresh()) return;
           latestGoal = {
             goal: preferGoal(latestGoal.goal, confirmedGoal.goal),
@@ -701,6 +713,7 @@ function CycleWorkspace({
       goal.id,
       isActivePage,
       lease.signal,
+      sessionLease,
       userId,
     ],
   );
@@ -1062,6 +1075,7 @@ function CycleWorkspace({
               }),
               (operationId) =>
                 generateAction(
+                  sessionLease,
                   goal.id,
                   cycle.id,
                   expectedContentRevision,
@@ -1079,10 +1093,16 @@ function CycleWorkspace({
                 expectedContentRevision,
               }),
               (operationId) =>
-                refineAction(goal.id, cycle.id, expectedContentRevision, {
-                  operationId,
-                  csrfToken: session.csrfToken,
-                }),
+                refineAction(
+                  sessionLease,
+                  goal.id,
+                  cycle.id,
+                  expectedContentRevision,
+                  {
+                    operationId,
+                    csrfToken: session.csrfToken,
+                  },
+                ),
             );
       if (!isActivePage()) return;
       if (
@@ -1140,6 +1160,7 @@ function CycleWorkspace({
         }),
         (operationId) =>
           completeCycle(
+            sessionLease,
             goal.id,
             cycle.id,
             expectedGoalRevision,
@@ -1151,16 +1172,18 @@ function CycleWorkspace({
           ),
       );
       if (!isActivePage()) return;
-      runPostCommitCleanup({
+      void runPostCommitCleanup({
+        expectedUserId: userId,
         cleanup: async () => {
           for (const frame of frames)
             await deleteBrowserDraft(userId, "cycle:" + cycle.id + ":" + frame);
         },
-        onSuccess: async () => {
+        onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
             queryKey: userQueryKeys.root(userId),
             refetchType: "none",
           });
+          if (!identityIsCurrent()) return;
           if ("goal" in result) {
             cacheReview(cache, userId, {
               goal: result.goal,
@@ -1176,6 +1199,7 @@ function CycleWorkspace({
               exact: true,
             })
             .catch(() => undefined);
+          if (!identityIsCurrent()) return;
           navigate(replayWorkspacePath(goal.id, result.currentWorkspace), {
             replace: true,
           });
@@ -1213,6 +1237,7 @@ function CycleWorkspace({
         }),
         (operationId) =>
           terminateGoal(
+            sessionLease,
             goal.id,
             outcome,
             goal.revision,
@@ -1225,13 +1250,15 @@ function CycleWorkspace({
           ),
       );
       if (!isActivePage()) return;
-      runPostCommitCleanup({
+      void runPostCommitCleanup({
+        expectedUserId: userId,
         cleanup: () => clearGoalDrafts(userId, goal.id),
-        onSuccess: async () => {
+        onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
             queryKey: userQueryKeys.root(userId),
             refetchType: "none",
           });
+          if (!identityIsCurrent()) return;
           navigate("/", { replace: true });
         },
         pendingMessage: "この端末の目標下書きを削除しています…",
@@ -1255,19 +1282,21 @@ function CycleWorkspace({
           expectedGoalRevision: goal.revision,
         }),
         (operationId) =>
-          deleteGoal(goal.id, goal.revision, {
+          deleteGoal(sessionLease, goal.id, goal.revision, {
             operationId,
             csrfToken: session.csrfToken,
           }),
       );
       if (!isActivePage()) return;
-      runPostCommitCleanup({
+      void runPostCommitCleanup({
+        expectedUserId: userId,
         cleanup: () => clearGoalDrafts(userId, goal.id),
-        onSuccess: async () => {
+        onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
             queryKey: userQueryKeys.root(userId),
             refetchType: "none",
           });
+          if (!identityIsCurrent()) return;
           navigate("/", { replace: true });
         },
         pendingMessage: "この端末の目標下書きを削除しています…",

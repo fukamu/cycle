@@ -2,7 +2,10 @@ import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
-import { useSession } from "../features/auth/sessionContext";
+import {
+  useAuthenticatedRequestLease,
+  useSession,
+} from "../features/auth/sessionContext";
 import { AppReferralPromotion } from "../features/app-referral/AppReferralPromotion";
 import {
   cacheCreationDraft,
@@ -16,16 +19,17 @@ import { statusLabel } from "../shared/copy/ja";
 
 export function HomePage() {
   const session = useSession();
+  const sessionLease = useAuthenticatedRequestLease();
   const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
   const query = useQuery({
     queryKey: userQueryKeys.home(userId),
-    queryFn: getHome,
+    queryFn: ({ signal }) => getHome(sessionLease, signal),
   });
   const create = useMutation({
     mutationKey: userMutationKeys.createGoalDraft(userId),
-    mutationFn: () => createGoalDraft("", session.csrfToken),
+    mutationFn: () => createGoalDraft(sessionLease, "", session.csrfToken),
     onSuccess: ({ draft }) => {
       cacheCreationDraft(cache, userId, draft);
       navigate("/goals/new");

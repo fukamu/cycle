@@ -8,7 +8,10 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { useSession } from "../features/auth/sessionContext";
+import {
+  useAuthenticatedRequestLease,
+  useSession,
+} from "../features/auth/sessionContext";
 import {
   cacheCycle,
   cacheReviewDraft,
@@ -60,11 +63,12 @@ import {
 
 export function GoalReviewPage() {
   const session = useSession();
+  const sessionLease = useAuthenticatedRequestLease();
   const userId = session.user.id;
   const { goalId = "" } = useParams();
   const query = useQuery({
     queryKey: userQueryKeys.review(userId, goalId),
-    queryFn: () => getReview(goalId),
+    queryFn: ({ signal }) => getReview(sessionLease, goalId, signal),
   });
   if (query.isPending) return <PageLoading />;
   if (query.isError) return <PageError retry={() => void query.refetch()} />;
@@ -79,6 +83,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const { goal, reviewDraft, triggerCycle } = review;
   const session = useSession();
   const userId = session.user.id;
+  const sessionLease = useAuthenticatedRequestLease();
   const navigate = useNavigate();
   const cache = useQueryClient();
   const runPostCommitCleanup = usePostCommitCleanup();
@@ -101,6 +106,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     async (body: string, revision: number, signal: AbortSignal) => {
       const saved = (
         await saveReview(
+          sessionLease,
           goal.id,
           reviewDraft.id,
           body,
@@ -116,13 +122,13 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         cacheReviewDraft(cache, userId, goal.id, saved);
       return saved;
     },
-    [cache, goal.id, reviewDraft.id, session.csrfToken, userId],
+    [cache, goal.id, reviewDraft.id, session.csrfToken, sessionLease, userId],
   );
   const loadLatest = useCallback(
     async (signal: AbortSignal) => {
-      return (await getReview(goal.id, signal)).reviewDraft;
+      return (await getReview(sessionLease, goal.id, signal)).reviewDraft;
     },
-    [goal.id],
+    [goal.id, sessionLease],
   );
   const acceptLatest = useCallback(
     (
@@ -183,10 +189,16 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           expectedGoalRevision,
         }),
         (operationId) =>
-          refineReview(goal.id, expectedDraftRevision, expectedGoalRevision, {
-            operationId,
-            csrfToken: session.csrfToken,
-          }),
+          refineReview(
+            sessionLease,
+            goal.id,
+            expectedDraftRevision,
+            expectedGoalRevision,
+            {
+              operationId,
+              csrfToken: session.csrfToken,
+            },
+          ),
       ),
     );
   }
@@ -195,6 +207,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     setPending(true);
     try {
       const result = await adoptReview(
+        sessionLease,
         goal.id,
         refinement.state.response.generationId,
         editor.revision,
@@ -217,7 +230,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     try {
       const canonical = await cache.fetchQuery({
         queryKey: userQueryKeys.goal(userId, goal.id),
-        queryFn: () => getGoal(goal.id),
+        queryFn: ({ signal }) => getGoal(sessionLease, goal.id, signal),
         staleTime: 0,
       });
       cache.setQueryData(userQueryKeys.goal(userId, goal.id), canonical);
@@ -250,19 +263,27 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           expectedGoalRevision,
         }),
         (operationId) =>
-          continueReview(goal.id, expectedGoalRevision, expectedDraftRevision, {
-            operationId,
-            csrfToken: session.csrfToken,
-          }),
+          continueReview(
+            sessionLease,
+            goal.id,
+            expectedGoalRevision,
+            expectedDraftRevision,
+            {
+              operationId,
+              csrfToken: session.csrfToken,
+            },
+          ),
       );
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
-      runPostCommitCleanup({
+      void runPostCommitCleanup({
+        expectedUserId: userId,
         cleanup: () => deleteBrowserDraft(userId, subjectKey),
-        onSuccess: async () => {
+        onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
             queryKey: userQueryKeys.root(userId),
             refetchType: "none",
           });
+          if (!identityIsCurrent()) return;
           cacheCycle(cache, userId, result.goal, result.cycle);
           navigate(`/goals/${goal.id}`, { replace: true });
         },
@@ -295,19 +316,28 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           expectedState: "goal_review",
         }),
         (operationId) =>
-          terminateGoal(goal.id, outcome, goal.revision, "goal_review", {
-            operationId,
-            csrfToken: session.csrfToken,
-          }),
+          terminateGoal(
+            sessionLease,
+            goal.id,
+            outcome,
+            goal.revision,
+            "goal_review",
+            {
+              operationId,
+              csrfToken: session.csrfToken,
+            },
+          ),
       );
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
-      runPostCommitCleanup({
+      void runPostCommitCleanup({
+        expectedUserId: userId,
         cleanup: () => deleteBrowserDraft(userId, subjectKey),
-        onSuccess: async () => {
+        onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
             queryKey: userQueryKeys.root(userId),
             refetchType: "none",
           });
+          if (!identityIsCurrent()) return;
           navigate("/", { replace: true });
         },
         pendingMessage: "ブラウザに残るReview下書きを削除しています…",
@@ -333,19 +363,21 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           expectedGoalRevision: goal.revision,
         }),
         (operationId) =>
-          deleteGoal(goal.id, goal.revision, {
+          deleteGoal(sessionLease, goal.id, goal.revision, {
             operationId,
             csrfToken: session.csrfToken,
           }),
       );
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
-      runPostCommitCleanup({
+      void runPostCommitCleanup({
+        expectedUserId: userId,
         cleanup: () => clearGoalDrafts(userId, goal.id),
-        onSuccess: async () => {
+        onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
             queryKey: userQueryKeys.root(userId),
             refetchType: "none",
           });
+          if (!identityIsCurrent()) return;
           navigate("/", { replace: true });
         },
         pendingMessage: "ブラウザに残るGoal関連下書きを削除しています…",

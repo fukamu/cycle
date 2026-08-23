@@ -2,7 +2,10 @@ import { Fragment, useEffect, useMemo, useRef } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 
-import { useSession } from "../features/auth/sessionContext";
+import {
+  useAuthenticatedRequestLease,
+  useSession,
+} from "../features/auth/sessionContext";
 import { userQueryKeys } from "../features/goal-collection/goalCache";
 import { getGoal, listCycles } from "../shared/api/workspace";
 import {
@@ -19,15 +22,17 @@ import { buildTimelineGroups } from "./goalTimelineModel";
 
 export function GoalTimelinePage() {
   const session = useSession();
+  const sessionLease = useAuthenticatedRequestLease();
   const userId = session.user.id;
   const { goalId = "" } = useParams();
   const goal = useQuery({
     queryKey: userQueryKeys.goal(userId, goalId),
-    queryFn: () => getGoal(goalId),
+    queryFn: ({ signal }) => getGoal(sessionLease, goalId, signal),
   });
   const cycles = useInfiniteQuery({
     queryKey: userQueryKeys.goalCycles(userId, goalId),
-    queryFn: ({ pageParam }) => listCycles(goalId, pageParam),
+    queryFn: ({ pageParam, signal }) =>
+      listCycles(sessionLease, goalId, pageParam, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });

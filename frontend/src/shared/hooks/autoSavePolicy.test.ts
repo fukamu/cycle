@@ -21,7 +21,7 @@ describe("auto save policy", () => {
 
   it("retries only network, timeout, generic rate limit, and server errors", () => {
     const apiError = (status: number) =>
-      new APIError(status, "TEST", "test", "request-id");
+      new APIError(status, "VALIDATION_ERROR", "test", "request-id");
     expect(isRetryableAutoSaveError(new TypeError("network"))).toBe(true);
     expect(isRetryableAutoSaveError(apiError(408))).toBe(true);
     expect(isRetryableAutoSaveError(apiError(429))).toBe(true);

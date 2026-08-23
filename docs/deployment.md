@@ -275,6 +275,12 @@ Migrationに失敗した場合、Wrangler deployへ進みません。Wrangler de
 
 Custom domainは [`cloudflare/wrangler.jsonc`](../cloudflare/wrangler.jsonc) の`custom_domain` routeから作られ、CloudflareがDNS recordとcertificateを管理します。同名DNS recordが既にある場合は内容・利用者を確認し、不要と確認できたrecordだけをDashboardから除去して再deployします。`workers.dev`とpreview URLは無効です。
 
+[Protected Response identity binding](./design.md#201-common-conventions)を変更するreleaseでは、Backend Headerと検証するFrontend bundleを同じrelease candidateとして検証します。既に開かれているtabは新しいhashed assetへ自動移行せず、additive Response Headerを旧bundleが無視し得るため、次をrelease記録へ残します。
+
+- Closed Beta testerへ全tabのreloadを案内し、旧tabが残っていないことを確認してからaccount-switch検証を開始する。
+- Fresh tabのNetwork記録で`/api/v1`の`Cache-Control: no-store`、認証済みResponseの`X-Fukamu-Authenticated-User-ID`、配信assetの対象commitを確認する。Header値やUser ID自体をrelease記録へ転記しない。
+- 同一Browser Contextの二tabでidentity切替journeyを実行し、旧tabがreloadなしでauthoritative Userへ収束することを確認する。失敗時はreleaseを停止し、required request Header等の非互換なad-hoc gateで迂回しない。
+
 ## 9. Post-deploy verification
 
 - `https://cycle.staging.fukamu.matoruru.com/healthz` が200。

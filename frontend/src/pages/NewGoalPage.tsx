@@ -8,7 +8,10 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
-import { useSession } from "../features/auth/sessionContext";
+import {
+  useAuthenticatedRequestLease,
+  useSession,
+} from "../features/auth/sessionContext";
 import {
   cacheCreationDraft,
   cacheCycle,
@@ -57,15 +60,16 @@ import {
 
 export function NewGoalPage() {
   const session = useSession();
+  const sessionLease = useAuthenticatedRequestLease();
   const userId = session.user.id;
   const cache = useQueryClient();
   const query = useQuery({
     queryKey: userQueryKeys.home(userId),
-    queryFn: getHome,
+    queryFn: ({ signal }) => getHome(sessionLease, signal),
   });
   const create = useMutation({
     mutationKey: userMutationKeys.createGoalDraft(userId),
-    mutationFn: () => createGoalDraft("", session.csrfToken),
+    mutationFn: () => createGoalDraft(sessionLease, "", session.csrfToken),
     onSuccess: ({ draft }) => cacheCreationDraft(cache, userId, draft),
   });
   if (query.isPending) return <PageLoading />;
@@ -112,6 +116,7 @@ function GoalDraftEditor({
 }) {
   const session = useSession();
   const userId = session.user.id;
+  const sessionLease = useAuthenticatedRequestLease();
   const navigate = useNavigate();
   const cache = useQueryClient();
   const runPostCommitCleanup = usePostCommitCleanup();
@@ -131,7 +136,14 @@ function GoalDraftEditor({
   const save = useCallback(
     async (body: string, revision: number, signal: AbortSignal) => {
       const saved = (
-        await saveGoalDraft(draft.id, body, revision, session.csrfToken, signal)
+        await saveGoalDraft(
+          sessionLease,
+          draft.id,
+          body,
+          revision,
+          session.csrfToken,
+          signal,
+        )
       ).draft;
       const current = cache.getQueryData<Home>(
         userQueryKeys.home(userId),
@@ -140,13 +152,13 @@ function GoalDraftEditor({
         cacheCreationDraft(cache, userId, saved);
       return saved;
     },
-    [cache, draft.id, session.csrfToken, userId],
+    [cache, draft.id, session.csrfToken, sessionLease, userId],
   );
   const loadLatest = useCallback(
     async (signal: AbortSignal) => {
-      return (await getGoalDraft(draft.id, signal)).draft;
+      return (await getGoalDraft(sessionLease, draft.id, signal)).draft;
     },
-    [draft.id],
+    [draft.id, sessionLease],
   );
   const acceptLatest = useCallback(
     (latest: GoalDraft): DraftLatestResolution<GoalDraft> => {
@@ -197,7 +209,7 @@ function GoalDraftEditor({
           expectedDraftRevision,
         }),
         (operationId) =>
-          refineGoalDraft(draft.id, expectedDraftRevision, {
+          refineGoalDraft(sessionLease, draft.id, expectedDraftRevision, {
             operationId,
             csrfToken: session.csrfToken,
           }),
@@ -210,6 +222,7 @@ function GoalDraftEditor({
     setError(undefined);
     try {
       const result = await adoptGoalDraft(
+        sessionLease,
         draft.id,
         refinement.state.response.generationId,
         editor.revision,
@@ -231,7 +244,7 @@ function GoalDraftEditor({
     try {
       await cache.fetchQuery({
         queryKey: userQueryKeys.home(userId),
-        queryFn: getHome,
+        queryFn: ({ signal }) => getHome(sessionLease, signal),
         staleTime: 0,
       });
       navigate("/", { replace: true });
@@ -252,19 +265,21 @@ function GoalDraftEditor({
           expectedDraftRevision,
         }),
         (operationId) =>
-          startGoal(draft.id, expectedDraftRevision, {
+          startGoal(sessionLease, draft.id, expectedDraftRevision, {
             operationId,
             csrfToken: session.csrfToken,
           }),
       );
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
-      runPostCommitCleanup({
+      void runPostCommitCleanup({
+        expectedUserId: userId,
         cleanup: () => deleteBrowserDraft(userId, subjectKey),
-        onSuccess: async () => {
+        onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
             queryKey: userQueryKeys.root(userId),
             refetchType: "none",
           });
+          if (!identityIsCurrent()) return;
           cacheCycle(cache, userId, result.goal, result.cycle);
           navigate(`/goals/${result.goal.id}`, { replace: true });
         },
@@ -288,15 +303,17 @@ function GoalDraftEditor({
     setError(undefined);
     editor.pause();
     try {
-      await discardGoalDraft(draft.id, session.csrfToken);
+      await discardGoalDraft(sessionLease, draft.id, session.csrfToken);
       if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
-      runPostCommitCleanup({
+      void runPostCommitCleanup({
+        expectedUserId: userId,
         cleanup: () => deleteBrowserDraft(userId, subjectKey),
-        onSuccess: async () => {
+        onSuccess: async (identityIsCurrent) => {
           await cache.invalidateQueries({
             queryKey: userQueryKeys.root(userId),
             refetchType: "none",
           });
+          if (!identityIsCurrent()) return;
           navigate("/", { replace: true });
         },
         pendingMessage: "ブラウザに残る下書きを削除しています…",

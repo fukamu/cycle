@@ -87,6 +87,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Get("/readyz", server.readyHandler)
 	if dependencies.Sessions != nil && dependencies.Workspace != nil {
 		router.Route("/api/v1", func(v1 chi.Router) {
+			v1.Use(server.noStoreMiddleware)
 			v1.Post("/session/anonymous", server.createAnonymous)
 			v1.Group(func(protected chi.Router) {
 				protected.Use(server.authenticateMiddleware)

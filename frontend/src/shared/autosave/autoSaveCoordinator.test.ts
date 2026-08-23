@@ -215,8 +215,8 @@ describe("AutoSaveCoordinator", () => {
     { status: 400, code: "VALIDATION_ERROR" },
     { status: 401, code: "SESSION_EXPIRED" },
     { status: 403, code: "CSRF_INVALID" },
-    { status: 409, code: "GOAL_NOT_EDITABLE" },
-  ])(
+    { status: 409, code: "GOAL_STATE_CONFLICT" },
+  ] as const)(
     "does not restart non-retryable $status failures when online",
     async ({ status, code }) => {
       const save = vi

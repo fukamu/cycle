@@ -99,6 +99,7 @@ func TestClassifyErrorMatchesPublicStatusCodeMatrix(t *testing.T) {
 	}{
 		{"request validation", errRequestValidation, 400, "VALIDATION_ERROR"},
 		{"session missing", appsession.ErrSessionMissing, 401, "SESSION_MISSING"},
+		{"session identity changed", errSessionIdentityChanged, 409, "SESSION_IDENTITY_CHANGED"},
 		{"session expired", appsession.ErrSessionExpired, 401, "SESSION_EXPIRED"},
 		{"csrf invalid", appsession.ErrCSRFInvalid, 403, "CSRF_INVALID"},
 		{"bootstrap ID", appsession.ErrBootstrapID, 400, "VALIDATION_ERROR"},

@@ -4,8 +4,12 @@ import { MemoryRouter } from "react-router-dom";
 import { useEffect, useLayoutEffect, useState } from "react";
 
 import { AccountDeletionProvider } from "../features/auth/AccountDeletionProvider";
+import { AccountDeletionAdvisoryPublishContext } from "../features/auth/accountDeletionContext";
+import { SessionTransitionNoticeProvider } from "../features/auth/SessionTransitionNoticeProvider";
 import {
-  ReplaceSessionContext,
+  AuthenticatedRequestLeaseContext,
+  RunTerminalSessionOperationContext,
+  RunSessionTransitionContext,
   SessionContext,
 } from "../features/auth/sessionContext";
 import {
@@ -13,7 +17,7 @@ import {
   loginGoogle,
   upgradeGoogle,
 } from "../shared/api/account";
-import { APIError } from "../shared/api/client";
+import { APIError, type AuthenticatedRequestLease } from "../shared/api/client";
 import {
   AutoSaveScopeProvider,
   useAutoSaveScopeRegistry,
@@ -21,6 +25,7 @@ import {
   type AutoSaveScopeLease,
 } from "../shared/autosave/AutoSaveScopeProvider";
 import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBoundary";
+import type { PostCommitSessionOwnershipToken } from "../shared/cleanup/postCommitCleanupContext";
 import { clearUserDrafts } from "../shared/drafts/browserDraftCache";
 import type { Session } from "../shared/api/schemas";
 import { SettingsPage } from "./SettingsPage";
@@ -76,12 +81,28 @@ const switchedSession: Session = {
   csrfToken: "switched-csrf-token",
 };
 
+const currentRequestLease: AuthenticatedRequestLease = {
+  expectedUserId: session.user.id,
+  signal: new AbortController().signal,
+  isCurrent: () => true,
+};
+
+const currentSessionOwnership = Object.freeze({
+  isCurrent: () => true,
+}) as PostCommitSessionOwnershipToken;
+const publishAccountDeletionAdvisory = vi.fn<(deletedUserId: string) => void>();
+
 describe("SettingsPage", () => {
   beforeEach(() => {
     vi.mocked(deleteAccount).mockReset();
     vi.mocked(loginGoogle).mockReset();
     vi.mocked(upgradeGoogle).mockReset();
     vi.mocked(clearUserDrafts).mockReset();
+    publishAccountDeletionAdvisory.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("identifies the connected Google Account by its verified email", () => {
@@ -101,6 +122,60 @@ describe("SettingsPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("uses fixed copy for an internal error and shows only a validated request ID", async () => {
+    vi.mocked(upgradeGoogle).mockRejectedValue(
+      new APIError(
+        500,
+        "INTERNAL_ERROR",
+        "upstream token=server-secret-value",
+        "00000000-0000-7000-8000-000000000099",
+      ),
+    );
+    renderPage();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Google Account 連携" }),
+    );
+
+    const presentation = await screen.findByRole("alert");
+    expect(presentation).toHaveTextContent(
+      "処理中にエラーが発生しました。入力内容は保持されています。もう一度お試しください。",
+    );
+    expect(presentation).toHaveTextContent("問い合わせID:");
+    expect(presentation).toHaveTextContent(
+      "00000000-0000-7000-8000-000000000099",
+    );
+    expect(presentation).not.toHaveTextContent("INTERNAL_ERROR");
+    expect(presentation).not.toHaveTextContent(
+      "upstream token=server-secret-value",
+    );
+    expect(document.body).not.toHaveTextContent("server-secret-value");
+  });
+
+  it("does not expose an unrecognized server error or invalid request ID", async () => {
+    vi.mocked(upgradeGoogle).mockRejectedValue(
+      Object.assign(new Error("upstream token=another-server-secret"), {
+        code: "PRIVATE_PROVIDER_FAILURE",
+        requestId: "invalid-request-id token=invalid-id-secret",
+      }),
+    );
+    renderPage();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Google Account 連携" }),
+    );
+
+    const presentation = await screen.findByRole("alert");
+    expect(presentation).toHaveTextContent(
+      "予期しないエラーが発生しました。もう一度お試しください。",
+    );
+    expect(presentation).not.toHaveTextContent("PRIVATE_PROVIDER_FAILURE");
+    expect(presentation).not.toHaveTextContent("another-server-secret");
+    expect(presentation).not.toHaveTextContent("invalid-request-id");
+    expect(presentation).not.toHaveTextContent("invalid-id-secret");
+    expect(presentation).not.toHaveTextContent("問い合わせID:");
+  });
+
   it("awaits same-user replacement before reporting Google connection success", async () => {
     const replacement = deferredVoid();
     const replaceSession = vi.fn(() => replacement.promise);
@@ -113,6 +188,7 @@ describe("SettingsPage", () => {
 
     await waitFor(() =>
       expect(upgradeGoogle).toHaveBeenCalledWith(
+        currentRequestLease,
         "google-credential",
         session.csrfToken,
       ),
@@ -130,7 +206,6 @@ describe("SettingsPage", () => {
 
   it("awaits changed-user replacement before reporting login success", async () => {
     const replacement = deferredVoid();
-    const replaceSession = vi.fn(() => replacement.promise);
     vi.mocked(upgradeGoogle).mockRejectedValue(
       new APIError(
         409,
@@ -140,7 +215,7 @@ describe("SettingsPage", () => {
       ),
     );
     vi.mocked(loginGoogle).mockResolvedValue(switchedSession);
-    renderPage(session, replaceSession);
+    renderIdentityTransitionPage(replacement.promise);
 
     await userEvent.click(
       screen.getByRole("button", { name: "Google Account 連携" }),
@@ -153,23 +228,94 @@ describe("SettingsPage", () => {
 
     await waitFor(() =>
       expect(loginGoogle).toHaveBeenCalledWith(
+        currentRequestLease,
         "google-credential",
         session.csrfToken,
       ),
     );
-    expect(replaceSession).toHaveBeenCalledWith(switchedSession);
+    expect(screen.getByText(session.user.id)).toBeInTheDocument();
     expect(
       screen.queryByText("既存のFUKAMU Cycleアカウントへ切り替えました。"),
     ).not.toBeInTheDocument();
 
     replacement.resolve();
     expect(
+      await screen.findByText(switchedSession.user.id),
+    ).toBeInTheDocument();
+    expect(
       await screen.findByText("既存のFUKAMU Cycleアカウントへ切り替えました。"),
     ).toBeInTheDocument();
   });
 
+  it("reports a changed-user login exactly once after the identity-keyed subtree remounts", async () => {
+    vi.mocked(upgradeGoogle).mockRejectedValue(
+      new APIError(
+        409,
+        "GOOGLE_IDENTITY_ALREADY_LINKED",
+        "already linked",
+        "request-id",
+      ),
+    );
+    vi.mocked(loginGoogle).mockResolvedValue(switchedSession);
+    renderIdentityTransitionPage();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Google Account 連携" }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "既存アカウントでログイン",
+      }),
+    );
+
+    expect(
+      await screen.findByText(switchedSession.user.id),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText("既存のFUKAMU Cycleアカウントへ切り替えました。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText("既存のFUKAMU Cycleアカウントへ切り替えました。"),
+    ).toHaveLength(1);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "設定画面を再マウント" }),
+    );
+    expect(
+      screen.queryByText("既存のFUKAMU Cycleアカウントへ切り替えました。"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not report an account switch when replacement keeps the same user", async () => {
+    vi.mocked(upgradeGoogle).mockRejectedValue(
+      new APIError(
+        409,
+        "GOOGLE_IDENTITY_ALREADY_LINKED",
+        "already linked",
+        "request-id",
+      ),
+    );
+    vi.mocked(loginGoogle).mockResolvedValue(upgradedSession);
+    renderIdentityTransitionPage();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Google Account 連携" }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "既存アカウントでログイン",
+      }),
+    );
+
+    expect(await screen.findByText("person@example.com")).toBeInTheDocument();
+    expect(
+      screen.queryByText("既存のFUKAMU Cycleアカウントへ切り替えました。"),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps local drafts when server deletion fails", async () => {
     const events: string[] = [];
+    let activeLease: AutoSaveScopeLease | undefined;
     const persistDraft = vi.fn(async () => {
       events.push("persist");
     });
@@ -180,9 +326,14 @@ describe("SettingsPage", () => {
     );
     vi.mocked(deleteAccount).mockImplementation(async () => {
       events.push("delete");
-      throw new Error("network");
+      throw new TypeError("network token=do-not-render");
     });
-    renderPage(session, undefined, { onQuiesce });
+    renderPage(session, undefined, {
+      onLease: (lease) => {
+        activeLease = lease;
+      },
+      onQuiesce,
+    });
 
     await userEvent.click(
       screen.getByRole("button", { name: "アカウントを削除" }),
@@ -194,14 +345,22 @@ describe("SettingsPage", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "アカウントを削除できませんでした",
+      "予期しないエラーが発生しました。もう一度お試しください。",
     );
-    expect(onQuiesce).toHaveBeenCalledWith(
-      expect.objectContaining({ preserveDrafts: true }),
+    expect(screen.getByRole("alert")).not.toHaveTextContent(
+      "network token=do-not-render",
     );
-    expect(persistDraft).toHaveBeenCalledOnce();
-    expect(events).toEqual(["persist", "delete"]);
+    expect(deleteAccount).toHaveBeenCalledWith(
+      currentRequestLease,
+      session.csrfToken,
+    );
+    expect(onQuiesce).not.toHaveBeenCalled();
+    expect(persistDraft).not.toHaveBeenCalled();
+    expect(events).toEqual(["delete"]);
+    expect(activeLease?.isCurrent()).toBe(true);
+    expect(activeLease?.signal.aborted).toBe(false);
     expect(clearUserDrafts).not.toHaveBeenCalled();
+    expect(publishAccountDeletionAdvisory).not.toHaveBeenCalled();
     expect(screen.getByText(session.user.id)).toBeInTheDocument();
   });
 
@@ -221,12 +380,82 @@ describe("SettingsPage", () => {
     expect(deleteAccount).not.toHaveBeenCalled();
   });
 
-  it("quiesces writers before deletion and clears only this user's drafts after a successful 204", async () => {
+  it("holds the cookie-writer lock through delete confirmation but not browser cleanup", async () => {
+    const cleanup = deferredVoid();
+    const reloadApplication = vi.fn();
+    vi.mocked(deleteAccount).mockResolvedValue(undefined);
+    vi.mocked(clearUserDrafts).mockReturnValue(cleanup.promise);
+    let grantLock!: () => void;
+    let lockReleased = false;
+    const lockRequest = vi.fn(
+      (
+        _name: string,
+        options: LockOptions,
+        callback: LockGrantedCallback<unknown>,
+      ) =>
+        new Promise<unknown>((resolve, reject) => {
+          grantLock = () => {
+            void (async () => {
+              try {
+                resolve(
+                  await callback({
+                    name: "test-session-cookie-writer",
+                    mode: "exclusive",
+                  }),
+                );
+              } catch (error) {
+                reject(error);
+              } finally {
+                lockReleased = true;
+              }
+            })();
+          };
+          expect(options.mode).toBe("exclusive");
+        }),
+    );
+    vi.stubGlobal("navigator", { locks: { request: lockRequest } });
+    renderPage(session, undefined, undefined, reloadApplication);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "アカウントを削除" }),
+    );
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "アカウントを削除",
+      }),
+    );
+
+    await waitFor(() => expect(lockRequest).toHaveBeenCalledOnce());
+    expect(deleteAccount).not.toHaveBeenCalled();
+    expect(publishAccountDeletionAdvisory).not.toHaveBeenCalled();
+
+    grantLock();
+
+    await waitFor(() => expect(deleteAccount).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(publishAccountDeletionAdvisory).toHaveBeenCalledOnce(),
+    );
+    await waitFor(() => expect(clearUserDrafts).toHaveBeenCalledOnce());
+    expect(lockReleased).toBe(true);
+    expect(reloadApplication).not.toHaveBeenCalled();
+
+    cleanup.resolve();
+
+    await waitFor(() => expect(reloadApplication).toHaveBeenCalledOnce());
+    expect(publishAccountDeletionAdvisory).toHaveBeenCalledTimes(2);
+    const [name] = lockRequest.mock.calls[0]!;
+    expect(name).toBe("fukamu-session-cookie-writer-v1");
+  });
+
+  it("fences writers after deletion commits and clears only this user's drafts", async () => {
     const persistence = deferredVoid();
     const events: string[] = [];
     let staleQueue!: AutoSaveScopeLease["queueBrowserOperation"];
     const onQuiesce = vi.fn<AutoSaveQuiesceCallback>(
       async ({ queueBrowserOperation }) => {
+        expect(
+          screen.getByText(session.user.id).closest("div[hidden][inert]"),
+        ).not.toBeNull();
         await queueBrowserOperation(async () => {
           events.push("persist-start");
           await persistence.promise;
@@ -239,6 +468,9 @@ describe("SettingsPage", () => {
     });
     vi.mocked(clearUserDrafts).mockImplementation(async () => {
       events.push("clear");
+    });
+    publishAccountDeletionAdvisory.mockImplementation(() => {
+      events.push("advisory");
     });
     renderPage(session, undefined, {
       onLease: (lease) => {
@@ -256,8 +488,10 @@ describe("SettingsPage", () => {
       }),
     );
 
-    await waitFor(() => expect(events).toEqual(["persist-start"]));
-    expect(deleteAccount).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(events).toEqual(["delete", "advisory", "persist-start"]),
+    );
+    expect(deleteAccount).toHaveBeenCalledOnce();
     expect(clearUserDrafts).not.toHaveBeenCalled();
 
     persistence.resolve();
@@ -268,21 +502,34 @@ describe("SettingsPage", () => {
       expect.objectContaining({ preserveDrafts: true }),
     );
     expect(events).toEqual([
+      "delete",
+      "advisory",
       "persist-start",
       "persist-finish",
-      "delete",
       "clear",
+      "advisory",
     ]);
+    expect(publishAccountDeletionAdvisory).toHaveBeenCalledTimes(2);
+    expect(publishAccountDeletionAdvisory).toHaveBeenNthCalledWith(
+      1,
+      session.user.id,
+    );
+    expect(publishAccountDeletionAdvisory).toHaveBeenNthCalledWith(
+      2,
+      session.user.id,
+    );
 
     expect(staleQueue).toBeTypeOf("function");
     await staleQueue(async () => {
       events.push("late-write");
     });
     expect(events).toEqual([
+      "delete",
+      "advisory",
       "persist-start",
       "persist-finish",
-      "delete",
       "clear",
+      "advisory",
     ]);
   });
 
@@ -360,6 +607,7 @@ describe("SettingsPage", () => {
     ).not.toBeInTheDocument();
     expect(deleteAccount).toHaveBeenCalledOnce();
     expect(clearUserDrafts).toHaveBeenCalledOnce();
+    expect(publishAccountDeletionAdvisory).toHaveBeenCalledOnce();
     expect(reloadApplication).not.toHaveBeenCalled();
 
     await userEvent.click(
@@ -373,6 +621,7 @@ describe("SettingsPage", () => {
     expect(clearUserDrafts).toHaveBeenCalledTimes(2);
     expect(clearUserDrafts).toHaveBeenNthCalledWith(1, session.user.id);
     expect(clearUserDrafts).toHaveBeenNthCalledWith(2, session.user.id);
+    expect(publishAccountDeletionAdvisory).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -387,25 +636,156 @@ function renderPage(
   onSettingsUnmount?: () => void,
   withRouteNavigation = false,
 ) {
+  const runSessionTransition = async (
+    _expectedUserId: string,
+    request: (
+      currentSession: Session,
+      lease: AuthenticatedRequestLease,
+    ) => Promise<Session>,
+  ) => {
+    const nextSession = await request(value, currentRequestLease);
+    await replaceSession(nextSession);
+    return { previousSession: value, session: nextSession };
+  };
+  const runTerminalSessionOperation = async <Result,>(
+    _expectedUserId: string,
+    operation: (
+      currentSession: Session,
+      _lease: AuthenticatedRequestLease,
+      _ownership: PostCommitSessionOwnershipToken,
+    ) => Promise<Result>,
+  ) => operation(value, currentRequestLease, currentSessionOwnership);
+
   render(
     <AutoSaveScopeProvider>
       {autoSaveScope && <AutoSaveScopeProbe {...autoSaveScope} />}
-      <ReplaceSessionContext.Provider value={replaceSession}>
-        <SessionContext.Provider value={value}>
-          <MemoryRouter>
-            <PostCommitCleanupBoundary>
-              <AccountDeletionProvider reloadApplication={reloadApplication}>
-                {withRouteNavigation ? (
-                  <SettingsRouteHarness onUnmount={onSettingsUnmount} />
-                ) : (
-                  <SettingsRouteProbe onUnmount={onSettingsUnmount} />
-                )}
-              </AccountDeletionProvider>
-            </PostCommitCleanupBoundary>
-          </MemoryRouter>
-        </SessionContext.Provider>
-      </ReplaceSessionContext.Provider>
+      <SessionTransitionNoticeProvider>
+        <RunTerminalSessionOperationContext.Provider
+          value={runTerminalSessionOperation}
+        >
+          <RunSessionTransitionContext.Provider value={runSessionTransition}>
+            <SessionContext.Provider value={value}>
+              <AuthenticatedRequestLeaseContext.Provider
+                value={currentRequestLease}
+              >
+                <MemoryRouter>
+                  <PostCommitCleanupBoundary
+                    runSessionOperation={async (_expectedUserId, operation) =>
+                      operation(() => true)
+                    }
+                  >
+                    <AccountDeletionAdvisoryPublishContext.Provider
+                      value={publishAccountDeletionAdvisory}
+                    >
+                      <AccountDeletionProvider
+                        reloadApplication={reloadApplication}
+                      >
+                        {withRouteNavigation ? (
+                          <SettingsRouteHarness onUnmount={onSettingsUnmount} />
+                        ) : (
+                          <SettingsRouteProbe onUnmount={onSettingsUnmount} />
+                        )}
+                      </AccountDeletionProvider>
+                    </AccountDeletionAdvisoryPublishContext.Provider>
+                  </PostCommitCleanupBoundary>
+                </MemoryRouter>
+              </AuthenticatedRequestLeaseContext.Provider>
+            </SessionContext.Provider>
+          </RunSessionTransitionContext.Provider>
+        </RunTerminalSessionOperationContext.Provider>
+      </SessionTransitionNoticeProvider>
     </AutoSaveScopeProvider>,
+  );
+}
+
+function renderIdentityTransitionPage(replacementGate?: Promise<void>) {
+  render(
+    <AutoSaveScopeProvider>
+      <MemoryRouter>
+        <PostCommitCleanupBoundary
+          runSessionOperation={async (_expectedUserId, operation) =>
+            operation(() => true)
+          }
+        >
+          <SessionTransitionNoticeProvider>
+            <IdentityTransitionHarness replacementGate={replacementGate} />
+          </SessionTransitionNoticeProvider>
+        </PostCommitCleanupBoundary>
+      </MemoryRouter>
+    </AutoSaveScopeProvider>,
+  );
+}
+
+function IdentityTransitionHarness({
+  replacementGate,
+}: {
+  readonly replacementGate: Promise<void> | undefined;
+}) {
+  const [currentSession, setCurrentSession] = useState(session);
+  const [routeGeneration, setRouteGeneration] = useState(0);
+
+  async function runSessionTransition(
+    _expectedUserId: string,
+    request: (
+      currentSession: Session,
+      lease: AuthenticatedRequestLease,
+    ) => Promise<Session>,
+  ) {
+    const previousSession = currentSession;
+    const nextSession = await request(previousSession, currentRequestLease);
+    await replacementGate;
+    setCurrentSession(nextSession);
+    return { previousSession, session: nextSession };
+  }
+
+  async function runTerminalSessionOperation<Result>(
+    _expectedUserId: string,
+    operation: (
+      currentSession: Session,
+      _lease: AuthenticatedRequestLease,
+      _ownership: PostCommitSessionOwnershipToken,
+    ) => Promise<Result>,
+  ) {
+    return operation(
+      currentSession,
+      currentRequestLease,
+      currentSessionOwnership,
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setRouteGeneration((generation) => generation + 1)}
+      >
+        設定画面を再マウント
+      </button>
+      <RunTerminalSessionOperationContext.Provider
+        value={runTerminalSessionOperation}
+      >
+        <RunSessionTransitionContext.Provider value={runSessionTransition}>
+          <SessionContext.Provider
+            key={currentSession.user.id}
+            value={currentSession}
+          >
+            <AuthenticatedRequestLeaseContext.Provider
+              value={currentRequestLease}
+            >
+              <AccountDeletionAdvisoryPublishContext.Provider
+                value={publishAccountDeletionAdvisory}
+              >
+                <AccountDeletionProvider reloadApplication={() => undefined}>
+                  <div key={routeGeneration}>
+                    <SettingsPage />
+                  </div>
+                </AccountDeletionProvider>
+              </AccountDeletionAdvisoryPublishContext.Provider>
+            </AuthenticatedRequestLeaseContext.Provider>
+          </SessionContext.Provider>
+        </RunSessionTransitionContext.Provider>
+      </RunTerminalSessionOperationContext.Provider>
+    </>
   );
 }
 

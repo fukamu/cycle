@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
-import { SessionContext } from "../features/auth/sessionContext";
+import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
+import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import type { Session } from "../shared/api/schemas";
 import { AutoSaveScopeProvider } from "../shared/autosave/AutoSaveScopeProvider";
 import { App } from "./App";
@@ -13,6 +15,8 @@ const session: Session = {
   },
   csrfToken: "csrf-token",
 };
+
+const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
 
 vi.mock("../pages/HomePage", () => ({ HomePage: () => <h1>ホーム</h1> }));
 vi.mock("../pages/NewGoalPage", () => ({ NewGoalPage: () => null }));
@@ -28,9 +32,14 @@ describe("App", () => {
   it("renders the G-PDCA home route", () => {
     render(
       <AutoSaveScopeProvider>
-        <SessionContext.Provider value={session}>
-          <App />
-        </SessionContext.Provider>
+        <AuthenticatedSessionTestProvider
+          lease={sessionLease}
+          session={session}
+        >
+          <MemoryRouter>
+            <App />
+          </MemoryRouter>
+        </AuthenticatedSessionTestProvider>
       </AutoSaveScopeProvider>,
     );
     expect(screen.getByRole("heading", { name: "ホーム" })).toBeInTheDocument();

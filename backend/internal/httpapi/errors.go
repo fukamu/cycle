@@ -26,6 +26,7 @@ type apiError struct {
 }
 
 var (
+	errSessionIdentityChanged    = errors.New("authenticated session identity changed")
 	errAccountUpgradeFailed      = errors.New("account upgrade failed")
 	errGoogleLoginFailed         = errors.New("google login failed")
 	errGoalDraftSaveFailed       = errors.New("goal draft save failed")
@@ -69,6 +70,8 @@ func classifyError(err error) (int, string, string) {
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
 	case errors.Is(err, appsession.ErrSessionMissing):
 		return 401, "SESSION_MISSING", "セッションがありません。"
+	case errors.Is(err, errSessionIdentityChanged):
+		return 409, "SESSION_IDENTITY_CHANGED", "セッションの利用者が変更されています。ページを再読み込みしてください。"
 	case errors.Is(err, appsession.ErrSessionExpired):
 		return 401, "SESSION_EXPIRED", "セッションが切れました。入力内容は保持されています。"
 	case errors.Is(err, appsession.ErrCSRFInvalid):

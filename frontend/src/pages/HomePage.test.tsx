@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
-import { SessionContext } from "../features/auth/sessionContext";
+import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
+import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import type { CurrentWork, Goal, Home, Session } from "../shared/api/schemas";
 import { createGoalDraft, getHome } from "../shared/api/workspace";
 import { HomePage } from "./HomePage";
@@ -23,6 +24,8 @@ const session: Session = {
   },
   csrfToken: "csrf-token",
 };
+
+const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
 
 type ActiveGoal = Goal & {
   readonly status: "active_cycle";
@@ -73,6 +76,7 @@ describe("HomePage progressing goal collection", () => {
     renderHome();
 
     expect(await screen.findByText("2 / 2")).toBeInTheDocument();
+    expect(getHome).toHaveBeenCalledWith(sessionLease, expect.any(AbortSignal));
     expect(screen.getByRole("link", { name: /最初の目標/ })).toHaveAttribute(
       "href",
       `/goals/${firstGoal.id}/cycles/${firstGoal.currentWork?.cycleId}`,
@@ -139,11 +143,11 @@ function renderHome() {
   });
   render(
     <QueryClientProvider client={cache}>
-      <SessionContext.Provider value={session}>
+      <AuthenticatedSessionTestProvider lease={sessionLease} session={session}>
         <MemoryRouter>
           <HomePage />
         </MemoryRouter>
-      </SessionContext.Provider>
+      </AuthenticatedSessionTestProvider>
     </QueryClientProvider>,
   );
 }

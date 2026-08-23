@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { requestJSON } from "./client";
+import {
+  requestAuthenticatedJSON,
+  type AuthenticatedRequestLease,
+} from "./client";
 import {
   aiResponseSchema,
   cyclePageSchema,
@@ -69,39 +72,72 @@ export type CommandRequestOptions = {
   readonly csrfToken: string;
 };
 
-export const getHome = () => requestJSON("/api/v1/home", homeSchema);
-export const createGoalDraft = (initialBody: string, csrfToken: string) =>
-  requestJSON("/api/v1/goal-drafts", draftEnvelope, {
+export const getHome = (
+  lease: AuthenticatedRequestLease,
+  signal?: AbortSignal,
+) => requestAuthenticatedJSON(lease, "/api/v1/home", homeSchema, { signal });
+export const createGoalDraft = (
+  lease: AuthenticatedRequestLease,
+  initialBody: string,
+  csrfToken: string,
+) =>
+  requestAuthenticatedJSON(lease, "/api/v1/goal-drafts", draftEnvelope, {
     method: "POST",
     csrfToken,
     body: { initialBody },
   });
-export const getGoalDraft = (draftId: string, signal?: AbortSignal) =>
-  requestJSON(`/api/v1/goal-drafts/${draftId}`, draftEnvelope, { signal });
+export const getGoalDraft = (
+  lease: AuthenticatedRequestLease,
+  draftId: string,
+  signal?: AbortSignal,
+) =>
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goal-drafts/${draftId}`,
+    draftEnvelope,
+    { signal },
+  );
 export const saveGoalDraft = (
+  lease: AuthenticatedRequestLease,
   draftId: string,
   body: string,
   expectedRevision: number,
   csrfToken: string,
   signal?: AbortSignal,
 ) =>
-  requestJSON(`/api/v1/goal-drafts/${draftId}`, draftEnvelope, {
-    method: "PATCH",
-    csrfToken,
-    signal,
-    body: { body, expectedRevision },
-  });
-export const discardGoalDraft = (draftId: string, csrfToken: string) =>
-  requestJSON(`/api/v1/goal-drafts/${draftId}`, z.undefined(), {
-    method: "DELETE",
-    csrfToken,
-  });
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goal-drafts/${draftId}`,
+    draftEnvelope,
+    {
+      method: "PATCH",
+      csrfToken,
+      signal,
+      body: { body, expectedRevision },
+    },
+  );
+export const discardGoalDraft = (
+  lease: AuthenticatedRequestLease,
+  draftId: string,
+  csrfToken: string,
+) =>
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goal-drafts/${draftId}`,
+    z.undefined(),
+    {
+      method: "DELETE",
+      csrfToken,
+    },
+  );
 export const refineGoalDraft = (
+  lease: AuthenticatedRequestLease,
   draftId: string,
   expectedDraftRevision: number,
   options: CommandRequestOptions,
 ) =>
-  requestJSON(
+  requestAuthenticatedJSON(
+    lease,
     `/api/v1/goal-drafts/${draftId}/refinements`,
     goalRefineResponseSchema,
     {
@@ -112,12 +148,14 @@ export const refineGoalDraft = (
     },
   );
 export const adoptGoalDraft = (
+  lease: AuthenticatedRequestLease,
   draftId: string,
   generationId: string,
   expectedDraftRevision: number,
   csrfToken: string,
 ) =>
-  requestJSON(
+  requestAuthenticatedJSON(
+    lease,
     `/api/v1/goal-drafts/${draftId}/refinements/${generationId}/adopt`,
     adoptedDraftEnvelope,
     {
@@ -127,26 +165,60 @@ export const adoptGoalDraft = (
     },
   );
 export const startGoal = (
+  lease: AuthenticatedRequestLease,
   draftId: string,
   expectedDraftRevision: number,
   options: CommandRequestOptions,
 ) =>
-  requestJSON(`/api/v1/goal-drafts/${draftId}/start`, startEnvelope, {
-    method: "POST",
-    csrfToken: options.csrfToken,
-    body: { operationId: options.operationId, expectedDraftRevision },
-  });
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goal-drafts/${draftId}/start`,
+    startEnvelope,
+    {
+      method: "POST",
+      csrfToken: options.csrfToken,
+      body: { operationId: options.operationId, expectedDraftRevision },
+    },
+  );
 
-export const listGoals = (scope = "all", cursor?: string) => {
+export const listGoals = (
+  lease: AuthenticatedRequestLease,
+  scope = "all",
+  cursor?: string,
+  signal?: AbortSignal,
+) => {
   const query = new URLSearchParams({ scope, limit: "20" });
   if (cursor) query.set("cursor", cursor);
-  return requestJSON(`/api/v1/goals?${query}`, goalPageSchema);
+  return requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goals?${query}`,
+    goalPageSchema,
+    { signal },
+  );
 };
-export const getGoal = (goalId: string, signal?: AbortSignal) =>
-  requestJSON(`/api/v1/goals/${goalId}`, goalEnvelope, { signal });
-export const getReview = (goalId: string, signal?: AbortSignal) =>
-  requestJSON(`/api/v1/goals/${goalId}/review`, reviewSchema, { signal });
+export const getGoal = (
+  lease: AuthenticatedRequestLease,
+  goalId: string,
+  signal?: AbortSignal,
+) =>
+  requestAuthenticatedJSON(lease, `/api/v1/goals/${goalId}`, goalEnvelope, {
+    signal,
+  });
+export const getReview = (
+  lease: AuthenticatedRequestLease,
+  goalId: string,
+  signal?: AbortSignal,
+) =>
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goals/${goalId}/review`,
+    reviewSchema,
+    {
+      signal,
+    },
+  );
 export const saveReview = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   expectedReviewDraftId: string,
   body: string,
@@ -154,19 +226,26 @@ export const saveReview = (
   csrfToken: string,
   signal?: AbortSignal,
 ) =>
-  requestJSON(`/api/v1/goals/${goalId}/review`, reviewDraftEnvelope, {
-    method: "PATCH",
-    csrfToken,
-    signal,
-    body: { body, expectedReviewDraftId, expectedRevision },
-  });
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goals/${goalId}/review`,
+    reviewDraftEnvelope,
+    {
+      method: "PATCH",
+      csrfToken,
+      signal,
+      body: { body, expectedReviewDraftId, expectedRevision },
+    },
+  );
 export const refineReview = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   expectedDraftRevision: number,
   expectedGoalRevision: number,
   options: CommandRequestOptions,
 ) =>
-  requestJSON(
+  requestAuthenticatedJSON(
+    lease,
     `/api/v1/goals/${goalId}/review/refinements`,
     goalRefineResponseSchema,
     {
@@ -177,13 +256,15 @@ export const refineReview = (
     },
   );
 export const adoptReview = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   generationId: string,
   expectedDraftRevision: number,
   expectedGoalRevision: number,
   csrfToken: string,
 ) =>
-  requestJSON(
+  requestAuthenticatedJSON(
+    lease,
     `/api/v1/goals/${goalId}/review/refinements/${generationId}/adopt`,
     adoptedReviewDraftEnvelope,
     {
@@ -193,21 +274,28 @@ export const adoptReview = (
     },
   );
 export const continueReview = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   expectedGoalRevision: number,
   expectedDraftRevision: number,
   options: CommandRequestOptions,
 ) =>
-  requestJSON(`/api/v1/goals/${goalId}/review/continue`, continueEnvelope, {
-    method: "POST",
-    csrfToken: options.csrfToken,
-    body: {
-      operationId: options.operationId,
-      expectedGoalRevision,
-      expectedDraftRevision,
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goals/${goalId}/review/continue`,
+    continueEnvelope,
+    {
+      method: "POST",
+      csrfToken: options.csrfToken,
+      body: {
+        operationId: options.operationId,
+        expectedGoalRevision,
+        expectedDraftRevision,
+      },
     },
-  });
+  );
 export const terminateGoal = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   outcome: "achieved" | "ended",
   expectedGoalRevision: number,
@@ -215,48 +303,68 @@ export const terminateGoal = (
   options: CommandRequestOptions,
   active?: { id: string; revision: number },
 ) =>
-  requestJSON(`/api/v1/goals/${goalId}/termination`, terminateEnvelope, {
-    method: "POST",
-    csrfToken: options.csrfToken,
-    body: {
-      operationId: options.operationId,
-      outcome,
-      expectedGoalRevision,
-      expectedState,
-      activeCycleId: active?.id,
-      expectedCycleContentRevision: active?.revision,
-      confirmDiscardReviewDraft: expectedState === "goal_review",
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goals/${goalId}/termination`,
+    terminateEnvelope,
+    {
+      method: "POST",
+      csrfToken: options.csrfToken,
+      body: {
+        operationId: options.operationId,
+        outcome,
+        expectedGoalRevision,
+        expectedState,
+        activeCycleId: active?.id,
+        expectedCycleContentRevision: active?.revision,
+        confirmDiscardReviewDraft: expectedState === "goal_review",
+      },
     },
-  });
+  );
 export const deleteGoal = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   expectedGoalRevision: number,
   options: CommandRequestOptions,
 ) =>
-  requestJSON(`/api/v1/goals/${goalId}`, z.undefined(), {
+  requestAuthenticatedJSON(lease, `/api/v1/goals/${goalId}`, z.undefined(), {
     method: "DELETE",
     csrfToken: options.csrfToken,
     idempotencyKey: options.operationId,
     body: { confirmed: true, expectedGoalRevision },
   });
 
-export const listCycles = (goalId: string, cursor?: string) => {
+export const listCycles = (
+  lease: AuthenticatedRequestLease,
+  goalId: string,
+  cursor?: string,
+  signal?: AbortSignal,
+) => {
   const query = new URLSearchParams({ limit: "20" });
   if (cursor) query.set("cursor", cursor);
-  return requestJSON(
+  return requestAuthenticatedJSON(
+    lease,
     `/api/v1/goals/${goalId}/cycles?${query}`,
     cyclePageSchema,
+    { signal },
   );
 };
 export const getCycle = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   cycleId: string,
   signal?: AbortSignal,
 ) =>
-  requestJSON(`/api/v1/goals/${goalId}/cycles/${cycleId}`, cycleEnvelope, {
-    signal,
-  });
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goals/${goalId}/cycles/${cycleId}`,
+    cycleEnvelope,
+    {
+      signal,
+    },
+  );
 export const saveCycleFrame = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   cycleId: string,
   frame: Frame,
@@ -265,7 +373,8 @@ export const saveCycleFrame = (
   csrfToken: string,
   signal?: AbortSignal,
 ) =>
-  requestJSON(
+  requestAuthenticatedJSON(
+    lease,
     `/api/v1/goals/${goalId}/cycles/${cycleId}/frames/${frame}`,
     saveFrameSchema,
     {
@@ -276,13 +385,15 @@ export const saveCycleFrame = (
     },
   );
 export const generateAction = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   cycleId: string,
   expectedContentRevision: number,
   confirmReplace: boolean,
   options: CommandRequestOptions,
 ) =>
-  requestJSON(
+  requestAuthenticatedJSON(
+    lease,
     `/api/v1/goals/${goalId}/cycles/${cycleId}/actions/generate`,
     aiResponseSchema,
     {
@@ -293,12 +404,14 @@ export const generateAction = (
     },
   );
 export const refineAction = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   cycleId: string,
   expectedContentRevision: number,
   options: CommandRequestOptions,
 ) =>
-  requestJSON(
+  requestAuthenticatedJSON(
+    lease,
     `/api/v1/goals/${goalId}/cycles/${cycleId}/actions/refine`,
     aiResponseSchema,
     {
@@ -309,13 +422,15 @@ export const refineAction = (
     },
   );
 export const completeCycle = (
+  lease: AuthenticatedRequestLease,
   goalId: string,
   cycleId: string,
   expectedGoalRevision: number,
   expectedContentRevision: number,
   options: CommandRequestOptions,
 ) =>
-  requestJSON(
+  requestAuthenticatedJSON(
+    lease,
     `/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
     z.union([completeEnvelope, commandReplayEnvelope]),
     {

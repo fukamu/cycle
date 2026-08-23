@@ -317,7 +317,7 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   const browserDraftBodies = await page.evaluate(
     () =>
       new Promise<string[]>((resolve, reject) => {
-        const open = indexedDB.open("fukamu-cycle-browser-drafts-v2", 1);
+        const open = indexedDB.open("fukamu-cycle-browser-drafts-v2");
         open.onerror = () => reject(open.error);
         open.onsuccess = () => {
           const database = open.result;

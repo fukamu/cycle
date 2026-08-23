@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { AuthenticatedRequestLease } from "./client";
 import {
   completeCycle,
   continueReview,
@@ -8,6 +9,7 @@ import {
   getCycle,
   getGoal,
   getGoalDraft,
+  getHome,
   getReview,
   listCycles,
   refineAction,
@@ -28,43 +30,81 @@ const commandOptions = {
   operationId: suppliedOperationId,
   csrfToken: "csrf",
 } as const;
+const lease: AuthenticatedRequestLease = {
+  expectedUserId: goalId,
+  signal: new AbortController().signal,
+  isCurrent: () => true,
+};
+
+const authenticatedJSON = (payload: unknown) =>
+  Response.json(payload, {
+    headers: { "X-Fukamu-Authenticated-User-ID": goalId },
+  });
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("goal-scoped workspace API", () => {
+  it("requires an authenticated lease and disables browser HTTP caching", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          progressingGoals: [],
+          creationDraft: null,
+          canCreateGoalDraft: true,
+          progressingGoalLimit: 3,
+          canStartProgressingGoal: true,
+        },
+        { headers: { "X-Fukamu-Authenticated-User-ID": goalId } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getHome(lease)).resolves.toBeDefined();
+    expect(fetchMock.mock.calls[0]?.[1]?.cache).toBe("no-store");
+  });
+
   it.each([
     {
       name: "goal draft load",
-      invoke: (signal: AbortSignal) => getGoalDraft(goalId, signal),
+      invoke: (signal: AbortSignal) => getGoalDraft(lease, goalId, signal),
     },
     {
       name: "goal draft save",
       invoke: (signal: AbortSignal) =>
-        saveGoalDraft(goalId, "目標", 0, "csrf", signal),
+        saveGoalDraft(lease, goalId, "目標", 0, "csrf", signal),
     },
     {
       name: "goal load",
-      invoke: (signal: AbortSignal) => getGoal(goalId, signal),
+      invoke: (signal: AbortSignal) => getGoal(lease, goalId, signal),
     },
     {
       name: "review load",
-      invoke: (signal: AbortSignal) => getReview(goalId, signal),
+      invoke: (signal: AbortSignal) => getReview(lease, goalId, signal),
     },
     {
       name: "review save",
       invoke: (signal: AbortSignal) =>
-        saveReview(goalId, reviewDraftId, "見直し", 0, "csrf", signal),
+        saveReview(lease, goalId, reviewDraftId, "見直し", 0, "csrf", signal),
     },
     {
       name: "cycle load",
-      invoke: (signal: AbortSignal) => getCycle(goalId, cycleId, signal),
+      invoke: (signal: AbortSignal) => getCycle(lease, goalId, cycleId, signal),
     },
     {
       name: "cycle frame save",
       invoke: (signal: AbortSignal) =>
-        saveCycleFrame(goalId, cycleId, "plan", "計画", 0, "csrf", signal),
+        saveCycleFrame(
+          lease,
+          goalId,
+          cycleId,
+          "plan",
+          "計画",
+          0,
+          "csrf",
+          signal,
+        ),
     },
-  ])("forwards one lease signal to $name", async ({ invoke }) => {
+  ])("composes the caller and lease signals for $name", async ({ invoke }) => {
     const controller = new AbortController();
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -74,58 +114,72 @@ describe("goal-scoped workspace API", () => {
     await expect(invoke(controller.signal)).rejects.toBeInstanceOf(TypeError);
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+    const forwardedSignal = fetchMock.mock.calls[0]?.[1]?.signal;
+    expect(forwardedSignal).not.toBe(controller.signal);
+    expect(forwardedSignal).not.toBe(lease.signal);
+    expect(forwardedSignal?.aborted).toBe(false);
+    controller.abort();
+    expect(forwardedSignal?.aborted).toBe(true);
   });
 
   it.each([
     {
       name: "goal draft refinement",
       wire: "header",
-      invoke: () => refineGoalDraft(goalId, 0, commandOptions),
+      invoke: () => refineGoalDraft(lease, goalId, 0, commandOptions),
     },
     {
       name: "goal start",
       wire: "body",
-      invoke: () => startGoal(goalId, 0, commandOptions),
+      invoke: () => startGoal(lease, goalId, 0, commandOptions),
     },
     {
       name: "goal review refinement",
       wire: "header",
-      invoke: () => refineReview(goalId, 0, 1, commandOptions),
+      invoke: () => refineReview(lease, goalId, 0, 1, commandOptions),
     },
     {
       name: "goal review continuation",
       wire: "body",
-      invoke: () => continueReview(goalId, 1, 0, commandOptions),
+      invoke: () => continueReview(lease, goalId, 1, 0, commandOptions),
     },
     {
       name: "goal termination",
       wire: "body",
       invoke: () =>
-        terminateGoal(goalId, "ended", 1, "active_cycle", commandOptions, {
-          id: cycleId,
-          revision: 4,
-        }),
+        terminateGoal(
+          lease,
+          goalId,
+          "ended",
+          1,
+          "active_cycle",
+          commandOptions,
+          {
+            id: cycleId,
+            revision: 4,
+          },
+        ),
     },
     {
       name: "goal deletion",
       wire: "header",
-      invoke: () => deleteGoal(goalId, 1, commandOptions),
+      invoke: () => deleteGoal(lease, goalId, 1, commandOptions),
     },
     {
       name: "action generation",
       wire: "header",
-      invoke: () => generateAction(goalId, cycleId, 4, false, commandOptions),
+      invoke: () =>
+        generateAction(lease, goalId, cycleId, 4, false, commandOptions),
     },
     {
       name: "action refinement",
       wire: "header",
-      invoke: () => refineAction(goalId, cycleId, 4, commandOptions),
+      invoke: () => refineAction(lease, goalId, cycleId, 4, commandOptions),
     },
     {
       name: "cycle completion",
       wire: "body",
-      invoke: () => completeCycle(goalId, cycleId, 1, 4, commandOptions),
+      invoke: () => completeCycle(lease, goalId, cycleId, 1, 4, commandOptions),
     },
   ])(
     "sends the same caller-owned ID on two $name attempts",
@@ -168,9 +222,9 @@ describe("goal-scoped workspace API", () => {
     };
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(Response.json(response));
+      .mockResolvedValue(authenticatedJSON(response));
     vi.stubGlobal("fetch", fetchMock);
-    await saveCycleFrame(goalId, cycleId, "plan", "計画", 0, "csrf");
+    await saveCycleFrame(lease, goalId, cycleId, "plan", "計画", 0, "csrf");
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       `/api/v1/goals/${goalId}/cycles/${cycleId}/frames/plan`,
     );
@@ -185,9 +239,9 @@ describe("goal-scoped workspace API", () => {
   it("uses a signed cursor opaquely when listing a goal timeline", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(Response.json({ items: [], nextCursor: null }));
+      .mockResolvedValue(authenticatedJSON({ items: [], nextCursor: null }));
     vi.stubGlobal("fetch", fetchMock);
-    await listCycles(goalId, "opaque+cursor/=");
+    await listCycles(lease, goalId, "opaque+cursor/=");
     expect(fetchMock.mock.calls[0]?.[0]).toContain(
       "cursor=opaque%2Bcursor%2F%3D",
     );
@@ -206,10 +260,10 @@ describe("goal-scoped workspace API", () => {
     };
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(Response.json(response));
+      .mockResolvedValue(authenticatedJSON(response));
     vi.stubGlobal("fetch", fetchMock);
 
-    await saveReview(goalId, reviewDraftId, "見直した目標", 0, "csrf");
+    await saveReview(lease, goalId, reviewDraftId, "見直した目標", 0, "csrf");
 
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
       JSON.stringify({
@@ -221,12 +275,15 @@ describe("goal-scoped workspace API", () => {
   });
 
   it("sends goal and cycle revisions when completing without creating a next cycle client-side", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(new Response(null, { status: 500 }));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(null, {
+        status: 500,
+        headers: { "X-Fukamu-Authenticated-User-ID": goalId },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     await expect(
-      completeCycle(goalId, cycleId, 4, 9, commandOptions),
+      completeCycle(lease, goalId, cycleId, 4, 9, commandOptions),
     ).rejects.toBeDefined();
     const options = fetchMock.mock.calls[0]?.[1];
     const body = JSON.parse(String(options?.body)) as Record<string, unknown>;
@@ -241,7 +298,7 @@ describe("goal-scoped workspace API", () => {
   it("accepts a command replay response after the workspace has already advanced", async () => {
     const nextCycleId = "00000000-0000-7000-8000-000000000003";
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      Response.json({
+      authenticatedJSON({
         replayed: true,
         operation: "complete_cycle",
         resourceIds: { goalId, cycleId },
@@ -254,7 +311,14 @@ describe("goal-scoped workspace API", () => {
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const result = await completeCycle(goalId, cycleId, 4, 9, commandOptions);
+    const result = await completeCycle(
+      lease,
+      goalId,
+      cycleId,
+      4,
+      9,
+      commandOptions,
+    );
     expect(result).toMatchObject({
       replayed: true,
       operation: "complete_cycle",
@@ -264,7 +328,7 @@ describe("goal-scoped workspace API", () => {
 
   it("rejects an incomplete current workspace replay", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      Response.json({
+      authenticatedJSON({
         replayed: true,
         operation: "complete_cycle",
         resourceIds: { goalId, cycleId },
@@ -275,13 +339,13 @@ describe("goal-scoped workspace API", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      completeCycle(goalId, cycleId, 4, 9, commandOptions),
+      completeCycle(lease, goalId, cycleId, 4, 9, commandOptions),
     ).rejects.toBeDefined();
   });
 
   it("preserves revision zero in a goal review refinement response", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      Response.json({
+      authenticatedJSON({
         generationId: "00000000-0000-7000-8000-000000000003",
         sourceDraftRevision: 0,
         sourceGoalRevision: 1,
@@ -291,14 +355,14 @@ describe("goal-scoped workspace API", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await refineReview(goalId, 0, 1, commandOptions);
+    const result = await refineReview(lease, goalId, 0, 1, commandOptions);
 
     expect(result.sourceDraftRevision).toBe(0);
   });
 
   it("rejects a goal refinement response without its source revision", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      Response.json({
+      authenticatedJSON({
         generationId: "00000000-0000-7000-8000-000000000003",
         suggestion: "AIからの提案",
         contextChanged: false,
@@ -307,7 +371,7 @@ describe("goal-scoped workspace API", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      refineReview(goalId, 0, 1, commandOptions),
+      refineReview(lease, goalId, 0, 1, commandOptions),
     ).rejects.toBeDefined();
   });
 });

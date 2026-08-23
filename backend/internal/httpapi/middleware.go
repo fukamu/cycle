@@ -14,6 +14,11 @@ import (
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
 )
 
+const (
+	authenticatedUserIDHeader = "X-Fukamu-Authenticated-User-ID"
+	expectedUserIDHeader      = "X-Fukamu-Expected-User-ID"
+)
+
 type contextKey string
 
 const (
@@ -34,6 +39,13 @@ func (server *api) requestIDMiddleware(next http.Handler) http.Handler {
 		}
 		writer.Header().Set("X-Request-ID", requestID)
 		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), requestIDContextKey, requestID)))
+	})
+}
+
+func (server *api) noStoreMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(writer, request)
 	})
 }
 
@@ -103,9 +115,30 @@ func (server *api) authenticateMiddleware(next http.Handler) http.Handler {
 			server.writeError(writer, request, err, nil)
 			return
 		}
+		writer.Header().Set(authenticatedUserIDHeader, string(record.UserID))
+		expectedUserID, present, err := expectedAuthenticatedUserID(request)
+		if err != nil {
+			server.writeError(writer, request, err, nil)
+			return
+		}
+		if present && expectedUserID != string(record.UserID) {
+			server.writeError(writer, request, errSessionIdentityChanged, nil)
+			return
+		}
 		ctx := context.WithValue(request.Context(), sessionContextKey, record)
 		next.ServeHTTP(writer, request.WithContext(ctx))
 	})
+}
+
+func expectedAuthenticatedUserID(request *http.Request) (string, bool, error) {
+	values, present := request.Header[http.CanonicalHeaderKey(expectedUserIDHeader)]
+	if !present {
+		return "", false, nil
+	}
+	if len(values) != 1 || !isCanonicalUUIDv7(values[0]) {
+		return "", true, errRequestValidation
+	}
+	return values[0], true, nil
 }
 
 func (server *api) validatedPath(next http.HandlerFunc, names ...string) http.HandlerFunc {

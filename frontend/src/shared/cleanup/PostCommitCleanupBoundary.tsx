@@ -1,82 +1,172 @@
 import { useCallback, useRef, useState, type PropsWithChildren } from "react";
+import { flushSync } from "react-dom";
 
 import { useAutoSaveScopeRegistry } from "../autosave/AutoSaveScopeProvider";
 import {
   PostCommitCleanupContext,
   type PostCommitCleanupTask,
+  type PostCommitSessionOperationRunner,
   type RunPostCommitCleanup,
 } from "./postCommitCleanupContext";
 
-type CleanupState = {
-  readonly kind: "pending" | "failed";
+type CleanupEntry = {
   readonly task: PostCommitCleanupTask;
+  identityIsCurrent: () => boolean;
+  ownershipStarted: boolean;
+  releaseOwnership: (() => void) | undefined;
+  readonly resolveCompletion: () => void;
 };
 
-export function PostCommitCleanupBoundary({ children }: PropsWithChildren) {
+type CleanupState = {
+  readonly kind: "quiescing" | "pending" | "failed";
+  readonly entry: CleanupEntry;
+};
+
+type CleanupAttemptResult = {
+  readonly succeeded: boolean;
+  readonly retainTerminal: boolean;
+};
+
+type PostCommitCleanupBoundaryProps = PropsWithChildren<{
+  readonly runSessionOperation: PostCommitSessionOperationRunner;
+}>;
+
+export function PostCommitCleanupBoundary({
+  children,
+  runSessionOperation,
+}: PostCommitCleanupBoundaryProps) {
   const registry = useAutoSaveScopeRegistry();
-  const activeTaskRef = useRef<PostCommitCleanupTask | undefined>(undefined);
-  const queuedTasksRef = useRef<PostCommitCleanupTask[]>([]);
-  const attemptRef = useRef<Promise<boolean> | undefined>(undefined);
+  const activeEntryRef = useRef<CleanupEntry | undefined>(undefined);
+  const queuedEntriesRef = useRef<CleanupEntry[]>([]);
+  const attemptRef = useRef<Promise<CleanupAttemptResult> | undefined>(
+    undefined,
+  );
   const retainTerminalRef = useRef(false);
-  const attemptCleanupRef = useRef<(task: PostCommitCleanupTask) => void>(
+  const attemptCleanupRef = useRef<(entry: CleanupEntry) => void>(
+    () => undefined,
+  );
+  const startOwnershipRef = useRef<(entry: CleanupEntry) => void>(
     () => undefined,
   );
   const [cleanupState, setCleanupState] = useState<CleanupState>();
 
   const attemptCleanup = useCallback(
-    (task: PostCommitCleanupTask) => {
-      if (attemptRef.current || activeTaskRef.current !== task) return;
+    (entry: CleanupEntry) => {
+      if (attemptRef.current || activeEntryRef.current !== entry) return;
 
       const attempt = (async () => {
         try {
-          // Keep the route mounted until quiesce snapshots every active callback.
-          // Replacing children first would let their layout-effect cleanup
-          // unregister callbacks before the browser-operation tail is fenced.
-          await registry.quiesce({ preserveDrafts: true });
-          setCleanupState({ kind: "pending", task });
-          await task.cleanup();
-          await task.onSuccess();
-          return true;
+          const identityIsCurrent = entry.identityIsCurrent;
+          if (identityIsCurrent()) {
+            // Keep the route mounted until quiesce snapshots every active callback.
+            // Replacing children first would let their layout-effect cleanup
+            // unregister callbacks before the browser-operation tail is fenced.
+            await registry.quiesce({ preserveDrafts: true });
+          }
+          setCleanupState({ kind: "pending", entry });
+          await entry.task.cleanup();
+          if (identityIsCurrent()) {
+            await entry.task.onSuccess(identityIsCurrent);
+          }
+          return {
+            succeeded: true,
+            retainTerminal:
+              Boolean(entry.task.retainTerminalOnSuccess) &&
+              identityIsCurrent(),
+          };
         } catch {
-          setCleanupState({ kind: "failed", task });
-          return false;
+          setCleanupState({ kind: "failed", entry });
+          return { succeeded: false, retainTerminal: false };
         }
       })();
       attemptRef.current = attempt;
-      void attempt.then((succeeded) => {
+      void attempt.then((result) => {
         if (attemptRef.current !== attempt) return;
         attemptRef.current = undefined;
-        if (!succeeded) return;
+        if (!result.succeeded) return;
 
-        retainTerminalRef.current ||= Boolean(task.retainTerminalOnSuccess);
-        const nextTask = queuedTasksRef.current.shift();
-        if (nextTask) {
-          activeTaskRef.current = nextTask;
-          attemptCleanupRef.current(nextTask);
+        retainTerminalRef.current ||= result.retainTerminal;
+        if (retainTerminalRef.current) return;
+
+        entry.releaseOwnership?.();
+        entry.releaseOwnership = undefined;
+        const nextEntry = queuedEntriesRef.current.shift();
+        if (nextEntry) {
+          activeEntryRef.current = nextEntry;
+          flushSync(() => {
+            setCleanupState({ kind: "quiescing", entry: nextEntry });
+          });
+          startOwnershipRef.current(nextEntry);
+          entry.resolveCompletion();
           return;
         }
 
-        activeTaskRef.current = undefined;
-        if (!retainTerminalRef.current) setCleanupState(undefined);
+        activeEntryRef.current = undefined;
+        setCleanupState(undefined);
+        entry.resolveCompletion();
       });
     },
     [registry],
   );
   attemptCleanupRef.current = attemptCleanup;
 
-  const runPostCommitCleanup = useCallback<RunPostCommitCleanup>(
-    (task) => {
-      if (activeTaskRef.current) {
-        queuedTasksRef.current.push(task);
+  const startOwnership = useCallback(
+    (entry: CleanupEntry) => {
+      if (entry.task.sessionOwnership) {
+        entry.identityIsCurrent = entry.task.sessionOwnership.isCurrent;
+        entry.ownershipStarted = true;
+        attemptCleanupRef.current(entry);
         return;
       }
-      activeTaskRef.current = task;
-      attemptCleanup(task);
+      if (entry.ownershipStarted) {
+        attemptCleanupRef.current(entry);
+        return;
+      }
+
+      entry.ownershipStarted = true;
+      void runSessionOperation(
+        entry.task.expectedUserId,
+        (identityIsCurrent) => {
+          entry.identityIsCurrent = identityIsCurrent;
+          return new Promise<void>((resolve) => {
+            entry.releaseOwnership = resolve;
+            attemptCleanupRef.current(entry);
+          });
+        },
+      ).catch(() => {
+        if (activeEntryRef.current !== entry) return;
+        entry.ownershipStarted = false;
+        setCleanupState({ kind: "failed", entry });
+      });
     },
-    [attemptCleanup],
+    [runSessionOperation],
+  );
+  startOwnershipRef.current = startOwnership;
+
+  const runPostCommitCleanup = useCallback<RunPostCommitCleanup>(
+    (task) =>
+      new Promise<void>((resolveCompletion) => {
+        const entry: CleanupEntry = {
+          task,
+          identityIsCurrent: () => false,
+          ownershipStarted: false,
+          releaseOwnership: undefined,
+          resolveCompletion,
+        };
+        if (activeEntryRef.current) {
+          queuedEntriesRef.current.push(entry);
+          return;
+        }
+        activeEntryRef.current = entry;
+        flushSync(() => {
+          setCleanupState({ kind: "quiescing", entry });
+        });
+        startOwnership(entry);
+      }),
+    [startOwnership],
   );
 
-  if (cleanupState) {
+  if (cleanupState?.kind === "pending" || cleanupState?.kind === "failed") {
     return (
       <main className="page settings-page">
         <header className="page-heading">
@@ -86,18 +176,18 @@ export function PostCommitCleanupBoundary({ children }: PropsWithChildren) {
         <section className="settings-card">
           {cleanupState.kind === "pending" ? (
             <p role="status" aria-live="polite">
-              {cleanupState.task.pendingMessage}
+              {cleanupState.entry.task.pendingMessage}
             </p>
           ) : (
             <>
               <p className="inline-error" role="alert">
-                {cleanupState.task.failureMessage}
+                {cleanupState.entry.task.failureMessage}
               </p>
               <button
                 type="button"
-                onClick={() => attemptCleanup(cleanupState.task)}
+                onClick={() => startOwnershipRef.current(cleanupState.entry)}
               >
-                {cleanupState.task.retryLabel ?? "完了処理を再試行"}
+                {cleanupState.entry.task.retryLabel ?? "完了処理を再試行"}
               </button>
             </>
           )}
@@ -106,9 +196,17 @@ export function PostCommitCleanupBoundary({ children }: PropsWithChildren) {
     );
   }
 
+  const quiescing = cleanupState?.kind === "quiescing";
   return (
     <PostCommitCleanupContext.Provider value={runPostCommitCleanup}>
-      {children}
+      {quiescing ? (
+        <div className="app-message" role="status" aria-live="polite">
+          {cleanupState.entry.task.pendingMessage}
+        </div>
+      ) : null}
+      <div hidden={quiescing} inert={quiescing}>
+        {children}
+      </div>
     </PostCommitCleanupContext.Provider>
   );
 }

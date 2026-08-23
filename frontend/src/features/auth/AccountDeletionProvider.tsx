@@ -1,14 +1,15 @@
 import { useCallback, useRef, type PropsWithChildren } from "react";
 
 import { deleteAccount } from "../../shared/api/account";
-import { useAutoSaveScopeRegistry } from "../../shared/autosave/AutoSaveScopeProvider";
 import { usePostCommitCleanup } from "../../shared/cleanup/postCommitCleanupContext";
 import { clearUserDrafts } from "../../shared/drafts/browserDraftCache";
 import {
   AccountDeletionContext,
+  usePublishAccountDeletionAdvisory,
   type DeleteCurrentAccount,
 } from "./accountDeletionContext";
-import { useSession } from "./sessionContext";
+import { runSessionCookieWriter } from "./sessionCookieWriter";
+import { useRunTerminalSessionOperation, useSession } from "./sessionContext";
 
 type AccountDeletionProviderProps = PropsWithChildren<{
   readonly reloadApplication?: () => void;
@@ -19,27 +20,48 @@ export function AccountDeletionProvider({
   reloadApplication = reloadFromServer,
 }: AccountDeletionProviderProps) {
   const session = useSession();
-  const autoSaveScopes = useAutoSaveScopeRegistry();
+  const runTerminalSessionOperation = useRunTerminalSessionOperation();
   const runPostCommitCleanup = usePostCommitCleanup();
+  const publishAccountDeletion = usePublishAccountDeletionAdvisory();
   const deletionAttempt = useRef<Promise<void> | undefined>(undefined);
 
   const deleteCurrentAccount = useCallback<DeleteCurrentAccount>(() => {
     if (deletionAttempt.current) return deletionAttempt.current;
 
-    const { csrfToken, user } = session;
-    const attempt = (async () => {
-      await autoSaveScopes.quiesce({ preserveDrafts: true });
-      await deleteAccount(csrfToken);
-      runPostCommitCleanup({
-        cleanup: () => clearUserDrafts(user.id),
-        onSuccess: reloadApplication,
-        pendingMessage: "ブラウザに残る下書きを削除しています…",
-        failureMessage:
-          "アカウントは削除されましたが、このブラウザに残る下書きを削除できませんでした。再試行してください。",
-        retryLabel: "ブラウザデータの削除を再試行",
-        retainTerminalOnSuccess: true,
-      });
-    })().catch((error: unknown) => {
+    const displayedUserId = session.user.id;
+    const attempt = runTerminalSessionOperation(
+      displayedUserId,
+      async (currentSession, lease, sessionOwnership) => {
+        if (currentSession.user.id !== displayedUserId) {
+          throw new Error("session identity changed");
+        }
+        const deletionCommitted = await runSessionCookieWriter(
+          { isCurrent: () => sessionOwnership.isCurrent() },
+          async () => {
+            await deleteAccount(lease, currentSession.csrfToken);
+            publishAccountDeletion(currentSession.user.id);
+            return true as const;
+          },
+        );
+        if (deletionCommitted === null) {
+          throw new Error("account deletion interrupted");
+        }
+        await runPostCommitCleanup({
+          expectedUserId: currentSession.user.id,
+          sessionOwnership,
+          cleanup: async () => {
+            await clearUserDrafts(currentSession.user.id);
+            publishAccountDeletion(currentSession.user.id);
+          },
+          onSuccess: reloadApplication,
+          pendingMessage: "ブラウザに残る下書きを削除しています…",
+          failureMessage:
+            "アカウントは削除されましたが、このブラウザに残る下書きを削除できませんでした。再試行してください。",
+          retryLabel: "ブラウザデータの削除を再試行",
+          retainTerminalOnSuccess: true,
+        });
+      },
+    ).catch((error: unknown) => {
       if (deletionAttempt.current === attempt) {
         deletionAttempt.current = undefined;
       }
@@ -47,7 +69,13 @@ export function AccountDeletionProvider({
     });
     deletionAttempt.current = attempt;
     return attempt;
-  }, [autoSaveScopes, reloadApplication, runPostCommitCleanup, session]);
+  }, [
+    publishAccountDeletion,
+    reloadApplication,
+    runPostCommitCleanup,
+    runTerminalSessionOperation,
+    session.user.id,
+  ]);
 
   return (
     <AccountDeletionContext.Provider value={deleteCurrentAccount}>

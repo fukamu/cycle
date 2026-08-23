@@ -12,7 +12,8 @@ import { useState } from "react";
 
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { SessionContext } from "../features/auth/sessionContext";
+import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
+import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import {
   AutoSaveScopeProvider,
   useAutoSaveScopeRegistry,
@@ -186,6 +187,8 @@ const session: Session = {
   csrfToken: "csrf-token",
 };
 
+const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
+
 function IdentityQuiesceControl() {
   const registry = useAutoSaveScopeRegistry();
   const [quiesced, setQuiesced] = useState(false);
@@ -280,6 +283,11 @@ describe("GoalReviewPage", () => {
       name: "次のサイクルで目指す目標",
     });
 
+    expect(getReview).toHaveBeenCalledWith(
+      sessionLease,
+      goal.id,
+      expect.any(AbortSignal),
+    );
     fireEvent.change(editor, {
       target: { value: "\t一行目\r\n二行目\r三行目 \t" },
     });
@@ -287,6 +295,7 @@ describe("GoalReviewPage", () => {
 
     await waitFor(() =>
       expect(saveReview).toHaveBeenCalledWith(
+        sessionLease,
         goal.id,
         reviewDraft.id,
         normalizedBody,
@@ -388,6 +397,7 @@ describe("GoalReviewPage", () => {
 
     await waitFor(() =>
       expect(terminateGoal).toHaveBeenCalledWith(
+        sessionLease,
         goal.id,
         "ended",
         goal.revision,
@@ -426,14 +436,15 @@ describe("GoalReviewPage", () => {
 
     expect(await screen.findByText("現在のワークスペース")).toBeInTheDocument();
     expect(continueReview).toHaveBeenCalledTimes(2);
-    const firstOptions = vi.mocked(continueReview).mock.calls[0]?.[3];
-    const secondOptions = vi.mocked(continueReview).mock.calls[1]?.[3];
+    const firstOptions = vi.mocked(continueReview).mock.calls[0]?.[4];
+    const secondOptions = vi.mocked(continueReview).mock.calls[1]?.[4];
     expect(firstOptions).toEqual({
       operationId: expect.any(String),
       csrfToken: session.csrfToken,
     });
     expect(secondOptions?.operationId).toBe(firstOptions?.operationId);
     expect(continueReview).toHaveBeenLastCalledWith(
+      sessionLease,
       goal.id,
       goal.revision,
       reviewDraft.revision,
@@ -531,6 +542,7 @@ describe("GoalReviewPage", () => {
 
     await waitFor(() =>
       expect(saveReview).toHaveBeenLastCalledWith(
+        sessionLease,
         goal.id,
         reviewDraft.id,
         nextBody,
@@ -579,6 +591,7 @@ describe("GoalReviewPage", () => {
     fireEvent.blur(editorA);
     await waitFor(() =>
       expect(saveReview).toHaveBeenCalledWith(
+        sessionLease,
         goal.id,
         reviewDraft.id,
         reviewABody,
@@ -635,6 +648,7 @@ describe("GoalReviewPage", () => {
     fireEvent.blur(editorB);
     await waitFor(() =>
       expect(saveReview).toHaveBeenLastCalledWith(
+        sessionLease,
         goal.id,
         replacementReviewDraft.id,
         reviewBBody,
@@ -928,6 +942,12 @@ describe("GoalReviewPage", () => {
     );
     expect(deleteGoal).toHaveBeenCalledOnce();
     expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id);
+    expect(deleteGoal).toHaveBeenCalledWith(
+      sessionLease,
+      goal.id,
+      goal.revision,
+      expect.objectContaining({ csrfToken: session.csrfToken }),
+    );
     expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
 
     fireEvent.click(
@@ -995,7 +1015,11 @@ describe("GoalReviewPage", () => {
     expect(
       await screen.findByText("canonical goal history"),
     ).toBeInTheDocument();
-    expect(getGoal).toHaveBeenCalledWith(goal.id);
+    expect(getGoal).toHaveBeenCalledWith(
+      sessionLease,
+      goal.id,
+      expect.any(AbortSignal),
+    );
     expect(getReview).toHaveBeenCalledTimes(2);
   });
 });
@@ -1015,9 +1039,16 @@ function renderPage(
     <QueryClientProvider client={cache}>
       <AutoSaveScopeProvider>
         {identityQuiesceControl ? <IdentityQuiesceControl /> : null}
-        <SessionContext.Provider value={session}>
+        <AuthenticatedSessionTestProvider
+          lease={sessionLease}
+          session={session}
+        >
           <MemoryRouter initialEntries={[`/goals/${goal.id}/review`]}>
-            <PostCommitCleanupBoundary>
+            <PostCommitCleanupBoundary
+              runSessionOperation={async (_expectedUserId, operation) =>
+                operation(() => true)
+              }
+            >
               <Routes>
                 <Route path="/" element={<p>ホーム</p>} />
                 <Route
@@ -1041,7 +1072,7 @@ function renderPage(
               </Routes>
             </PostCommitCleanupBoundary>
           </MemoryRouter>
-        </SessionContext.Provider>
+        </AuthenticatedSessionTestProvider>
       </AutoSaveScopeProvider>
     </QueryClientProvider>,
   );

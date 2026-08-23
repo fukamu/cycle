@@ -10,7 +10,8 @@ import {
 import { StrictMode, useState } from "react";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { SessionContext } from "../features/auth/sessionContext";
+import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
+import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import { userQueryKeys } from "../features/goal-collection/goalCache";
 import { APIError } from "../shared/api/client";
 import {
@@ -147,6 +148,8 @@ const session: Session = {
   csrfToken: "csrf-token",
 };
 
+const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
+
 describe("GoalWorkspacePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -188,6 +191,17 @@ describe("GoalWorkspacePage", () => {
     renderPage(cache, { strictMode: true });
 
     fireEvent.click(await screen.findByRole("tab", { name: /A\s*Action/ }));
+    expect(getGoal).toHaveBeenCalledWith(
+      sessionLease,
+      goal.id,
+      expect.any(AbortSignal),
+    );
+    expect(getCycle).toHaveBeenCalledWith(
+      sessionLease,
+      goal.id,
+      cycle.id,
+      expect.any(AbortSignal),
+    );
 
     expect(screen.getByText("保存中")).toBeInTheDocument();
     expect(
@@ -270,6 +284,7 @@ describe("GoalWorkspacePage", () => {
     await waitFor(
       () =>
         expect(saveCycleFrame).toHaveBeenCalledWith(
+          sessionLease,
           goal.id,
           cycle.id,
           "plan",
@@ -337,6 +352,7 @@ describe("GoalWorkspacePage", () => {
     await waitFor(
       () =>
         expect(saveCycleFrame).toHaveBeenCalledWith(
+          sessionLease,
           goal.id,
           cycle.id,
           "plan",
@@ -385,7 +401,7 @@ describe("GoalWorkspacePage", () => {
       }),
     );
     await waitFor(() => expect(deleteGoal).toHaveBeenCalledOnce());
-    expect(vi.mocked(saveCycleFrame).mock.calls[0]?.[6]).toEqual(
+    expect(vi.mocked(saveCycleFrame).mock.calls[0]?.[7]).toEqual(
       expect.objectContaining({ aborted: true }),
     );
 
@@ -408,6 +424,7 @@ describe("GoalWorkspacePage", () => {
     ).toBeInTheDocument();
     await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledTimes(2));
     expect(saveCycleFrame).toHaveBeenLastCalledWith(
+      sessionLease,
       goal.id,
       cycle.id,
       "plan",
@@ -428,14 +445,15 @@ describe("GoalWorkspacePage", () => {
       sequenceNumber: 2,
       plan: "次のサイクルの計画",
     };
-    vi.mocked(getCycle).mockImplementation(async (_goalId, requestedCycleId) =>
-      requestedCycleId === nextCycle.id ? { cycle: nextCycle } : { cycle },
+    vi.mocked(getCycle).mockImplementation(
+      async (_lease, _goalId, requestedCycleId) =>
+        requestedCycleId === nextCycle.id ? { cycle: nextCycle } : { cycle },
     );
     vi.mocked(getBrowserDraft).mockImplementation(async (_userId, key) =>
       key.startsWith("cycle:" + cycle.id + ":") ? oldHydration.promise : null,
     );
     vi.mocked(saveCycleFrame).mockImplementation(
-      async (_goalId, cycleId, frame, content) => ({
+      async (_lease, _goalId, cycleId, frame, content) => ({
         cycleId,
         frame,
         content,
@@ -464,6 +482,7 @@ describe("GoalWorkspacePage", () => {
     await waitFor(
       () =>
         expect(saveCycleFrame).toHaveBeenCalledWith(
+          sessionLease,
           goal.id,
           cycle.id,
           "plan",
@@ -510,6 +529,7 @@ describe("GoalWorkspacePage", () => {
     await waitFor(
       () =>
         expect(saveCycleFrame).toHaveBeenCalledWith(
+          sessionLease,
           goal.id,
           cycle.id,
           "plan",
@@ -593,6 +613,7 @@ describe("GoalWorkspacePage", () => {
     await waitFor(() =>
       expect(saveCycleFrame).toHaveBeenNthCalledWith(
         1,
+        sessionLease,
         goal.id,
         cycle.id,
         "plan",
@@ -620,6 +641,7 @@ describe("GoalWorkspacePage", () => {
     await waitFor(() =>
       expect(saveCycleFrame).toHaveBeenNthCalledWith(
         2,
+        sessionLease,
         goal.id,
         cycle.id,
         "plan",
@@ -675,6 +697,7 @@ describe("GoalWorkspacePage", () => {
     await waitFor(() =>
       expect(saveCycleFrame).toHaveBeenNthCalledWith(
         2,
+        sessionLease,
         goal.id,
         cycle.id,
         "plan",
@@ -730,6 +753,7 @@ describe("GoalWorkspacePage", () => {
     await waitFor(() =>
       expect(saveCycleFrame).toHaveBeenNthCalledWith(
         2,
+        sessionLease,
         goal.id,
         cycle.id,
         "do",
@@ -832,6 +856,7 @@ describe("GoalWorkspacePage", () => {
 
     await waitFor(() =>
       expect(saveCycleFrame).toHaveBeenCalledWith(
+        sessionLease,
         goal.id,
         cycle.id,
         "plan",
@@ -958,6 +983,7 @@ describe("GoalWorkspacePage", () => {
 
     await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledTimes(2));
     expect(saveCycleFrame).toHaveBeenLastCalledWith(
+      sessionLease,
       goal.id,
       cycle.id,
       "plan",
@@ -1015,6 +1041,7 @@ describe("GoalWorkspacePage", () => {
     expect(doEditor).toHaveValue("この端末の実行");
     await waitFor(() =>
       expect(saveCycleFrame).toHaveBeenCalledWith(
+        sessionLease,
         goal.id,
         cycle.id,
         "do",
@@ -1103,6 +1130,7 @@ describe("GoalWorkspacePage", () => {
     await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledTimes(2));
     expect(saveCycleFrame).toHaveBeenNthCalledWith(
       2,
+      sessionLease,
       goal.id,
       cycle.id,
       "plan",
@@ -1282,6 +1310,7 @@ describe("GoalWorkspacePage", () => {
     ).toBeInTheDocument();
     expect(getGoal).toHaveBeenCalledTimes(3);
     expect(getCycle).toHaveBeenLastCalledWith(
+      sessionLease,
       goal.id,
       currentCycleId,
       expect.any(AbortSignal),
@@ -1588,6 +1617,7 @@ describe("GoalWorkspacePage", () => {
     fireEvent.blur(editor);
     await waitFor(() =>
       expect(saveCycleFrame).toHaveBeenCalledWith(
+        sessionLease,
         goal.id,
         cycle.id,
         "plan",
@@ -1746,6 +1776,7 @@ describe("GoalWorkspacePage", () => {
     );
     await waitFor(() =>
       expect(saveCycleFrame).toHaveBeenLastCalledWith(
+        sessionLease,
         goal.id,
         cycle.id,
         "plan",
@@ -1819,6 +1850,7 @@ describe("GoalWorkspacePage", () => {
     expect(editor).toHaveValue("現在のA");
     expect(screen.getByRole("button", { name: "AIで推敲" })).toBeEnabled();
     expect(refineAction).toHaveBeenCalledWith(
+      sessionLease,
       goal.id,
       readyCycle.id,
       readyCycle.contentRevision,
@@ -1857,10 +1889,11 @@ describe("GoalWorkspacePage", () => {
       sequenceNumber: 2,
       plan: "次のCycleの計画",
     };
-    vi.mocked(getCycle).mockImplementation(async (_goalId, requestedCycleId) =>
-      requestedCycleId === nextCycle.id
-        ? { cycle: nextCycle }
-        : { cycle: completableCycle },
+    vi.mocked(getCycle).mockImplementation(
+      async (_lease, _goalId, requestedCycleId) =>
+        requestedCycleId === nextCycle.id
+          ? { cycle: nextCycle }
+          : { cycle: completableCycle },
     );
     vi.mocked(completeCycle).mockReturnValue(completion.promise);
     const cache = new QueryClient({
@@ -2083,6 +2116,7 @@ describe("GoalWorkspacePage", () => {
 
       expect(await screen.findByText(destination)).toBeInTheDocument();
       expect(completeCycle).toHaveBeenCalledWith(
+        sessionLease,
         goal.id,
         cycle.id,
         goal.revision,
@@ -2125,8 +2159,8 @@ describe("GoalWorkspacePage", () => {
 
     expect(await screen.findByText("現在のサイクル")).toBeInTheDocument();
     expect(completeCycle).toHaveBeenCalledTimes(2);
-    const firstOptions = vi.mocked(completeCycle).mock.calls[0]?.[4];
-    const secondOptions = vi.mocked(completeCycle).mock.calls[1]?.[4];
+    const firstOptions = vi.mocked(completeCycle).mock.calls[0]?.[5];
+    const secondOptions = vi.mocked(completeCycle).mock.calls[1]?.[5];
     expect(secondOptions?.operationId).toBe(firstOptions?.operationId);
     expect(clearGoalDrafts).not.toHaveBeenCalled();
     expect(browserDrafts.has(nextCycleDraftKey)).toBe(true);
@@ -2160,12 +2194,19 @@ function renderPage(
   const tree = (
     <QueryClientProvider client={cache}>
       <AutoSaveScopeProvider>
-        <SessionContext.Provider value={session}>
+        <AuthenticatedSessionTestProvider
+          lease={sessionLease}
+          session={session}
+        >
           <MemoryRouter
             initialEntries={[`/workspace/${goal.id}/cycles/${cycle.id}`]}
           >
             {options.identityQuiesceControl ? <IdentityQuiesceControl /> : null}
-            <PostCommitCleanupBoundary>
+            <PostCommitCleanupBoundary
+              runSessionOperation={async (_expectedUserId, operation) =>
+                operation(() => true)
+              }
+            >
               {options.switchCycleId ? (
                 <Link
                   to={`/workspace/${goal.id}/cycles/${options.switchCycleId}`}
@@ -2194,7 +2235,7 @@ function renderPage(
               </Routes>
             </PostCommitCleanupBoundary>
           </MemoryRouter>
-        </SessionContext.Provider>
+        </AuthenticatedSessionTestProvider>
       </AutoSaveScopeProvider>
     </QueryClientProvider>
   );

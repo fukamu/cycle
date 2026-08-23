@@ -1,49 +1,50 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, type PropsWithChildren } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PropsWithChildren,
+} from "react";
 
-import { APIError, requestJSON } from "../../shared/api/client";
-import { sessionSchema, type Session } from "../../shared/api/schemas";
+import type { SessionRecoverySubscription } from "../../shared/api/sessionRecoveryEvents";
 import {
   AutoSaveScopeProvider,
   useAutoSaveScopeRegistry,
 } from "../../shared/autosave/AutoSaveScopeProvider";
 import { cleanupExpiredBrowserDrafts } from "../../shared/drafts/browserDraftCache";
-import { BetaAdmissionGate } from "../beta-admission/BetaAdmissionGate";
+import type { AccountDeletionAdvisoryFactory } from "./accountDeletionAdvisory";
+import { AccountDeletionAdvisoryPublishContext } from "./accountDeletionContext";
+import { useAuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
+import { SessionBoundaryPresentation } from "./SessionBoundaryPresentation";
 import {
-  clearBootstrapID,
-  getOrCreateBootstrapID,
-} from "./bootstrapRepository";
-import { ReplaceSessionContext, SessionContext } from "./sessionContext";
-import { getAnonymousBootstrapToken } from "./turnstile";
+  createAnonymousSession,
+  isUnavailableSession,
+  requestCurrentSession,
+  sessionQueryKey,
+} from "./sessionDiscovery";
+import type { SessionIdentityAdvisoryFactory } from "./sessionIdentityAdvisory";
+import { useSessionIdentityAdvisory } from "./useSessionIdentityAdvisory";
+import { useSessionOperationRunners } from "./sessionOperationRunners";
+import { useSessionRecoveryController } from "./sessionRecoveryController";
+import { useAccountDeletionAdvisory } from "./useAccountDeletionAdvisory";
+import { useInitialSessionDiscovery } from "./useInitialSessionDiscovery";
+import { useSessionPublicationController } from "./useSessionPublicationController";
 
-const sessionQueryKey = ["session"] as const;
+export { SessionIdentityBoundary } from "./SessionBoundaryPresentation";
 
-async function loadSession(): Promise<Session> {
-  try {
-    return await requestJSON("/api/v1/session", sessionSchema);
-  } catch (error) {
-    if (
-      !(error instanceof APIError) ||
-      (error.code !== "SESSION_MISSING" && error.code !== "SESSION_EXPIRED")
-    ) {
-      throw error;
-    }
-  }
-  const bootstrapId = await getOrCreateBootstrapID();
-  const turnstileToken = await getAnonymousBootstrapToken();
-  const session = await requestJSON(
-    "/api/v1/session/anonymous",
-    sessionSchema,
-    {
-      method: "POST",
-      body: { bootstrapId, turnstileToken },
-    },
-  );
-  await clearBootstrapID();
-  return session;
-}
+type SessionProviderProps = PropsWithChildren<{
+  readonly reloadApplication?: () => void;
+  readonly advisoryFactory?: SessionIdentityAdvisoryFactory;
+  readonly accountDeletionAdvisoryFactory?: AccountDeletionAdvisoryFactory;
+}>;
 
-export function SessionProvider({ children }: PropsWithChildren) {
+export function SessionProvider({
+  children,
+  reloadApplication = reloadFromServer,
+  advisoryFactory,
+  accountDeletionAdvisoryFactory,
+}: SessionProviderProps) {
   const browserDraftCleanupStarted = useRef(false);
 
   useEffect(() => {
@@ -54,79 +55,143 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   return (
     <AutoSaveScopeProvider>
-      <SessionBoundary>{children}</SessionBoundary>
+      <SessionBoundary
+        reloadApplication={reloadApplication}
+        advisoryFactory={advisoryFactory}
+        accountDeletionAdvisoryFactory={accountDeletionAdvisoryFactory}
+      >
+        {children}
+      </SessionBoundary>
     </AutoSaveScopeProvider>
   );
 }
 
-function SessionBoundary({ children }: PropsWithChildren) {
+function SessionBoundary({
+  children,
+  reloadApplication,
+  advisoryFactory,
+  accountDeletionAdvisoryFactory,
+}: PropsWithChildren<{
+  readonly reloadApplication: () => void;
+  readonly advisoryFactory: SessionIdentityAdvisoryFactory | undefined;
+  readonly accountDeletionAdvisoryFactory:
+    | AccountDeletionAdvisoryFactory
+    | undefined;
+}>) {
   const queryClient = useQueryClient();
-  const transitionRef = useRef<Promise<void>>(Promise.resolve());
+  const leaseOwner = useAuthenticatedRequestLeaseOwner();
   const autoSaveScopes = useAutoSaveScopeRegistry();
-  const query = useQuery({
-    queryKey: sessionQueryKey,
-    queryFn: loadSession,
-    staleTime: Number.POSITIVE_INFINITY,
-    retry: (failureCount, error) =>
-      !isBetaAdmissionRequired(error) && failureCount < 2,
+  const transitionRef = useRef<Promise<void>>(Promise.resolve());
+  const recoverySubscriptionRef = useRef<SessionRecoverySubscription | null>(
+    null,
+  );
+  const childrenWrapperRef = useRef<HTMLDivElement | null>(null);
+  const [unboundAdvisoryAbortController] = useState(
+    () => new AbortController(),
+  );
+  const query = useInitialSessionDiscovery(
+    leaseOwner,
+    unboundAdvisoryAbortController.signal,
+  );
+
+  const enqueueTransition = useCallback(
+    <Result,>(operation: () => Promise<Result>): Promise<Result> => {
+      const transition = transitionRef.current
+        .catch(() => undefined)
+        .then(operation);
+      transitionRef.current = transition.then(
+        () => undefined,
+        () => undefined,
+      );
+      return transition;
+    },
+    [],
+  );
+
+  const handleUnboundIdentityAdvisory = useCallback(() => {
+    unboundAdvisoryAbortController.abort();
+    reloadApplication();
+  }, [reloadApplication, unboundAdvisoryAbortController]);
+
+  const publication = useSessionPublicationController({
+    queryClient,
+    sessionQueryKey,
+    autoSaveScopes,
+    childrenWrapperRef,
+    leaseOwner,
+    recoverySubscriptionRef,
+  });
+  const publishIdentityAdvisory = useSessionIdentityAdvisory({
+    queryClient,
+    sessionQueryKey,
+    factory: advisoryFactory,
+    onUnboundIdentityAdvisory: handleUnboundIdentityAdvisory,
+  });
+  const publishAccountDeletionAdvisory = useAccountDeletionAdvisory({
+    queryClient,
+    sessionQueryKey,
+    autoSaveScopes,
+    suspendInteractionAndInvalidateLease:
+      publication.suspendInteractionAndInvalidateLease,
+    onUnboundAccountDeletionAdvisory: handleUnboundIdentityAdvisory,
+    reloadApplication,
+    factory: accountDeletionAdvisoryFactory,
+  });
+  const recovery = useSessionRecoveryController({
+    queryClient,
+    sessionQueryKey,
+    enqueueTransition,
+    autoSaveScopes,
+    childrenWrapperRef,
+    leaseOwner,
+    recoverySubscriptionRef,
+    identityUnverifiedRef: publication.identityUnverifiedRef,
+    advanceRecoveryGeneration: publication.advanceRecoveryGeneration,
+    setRuntimeRecovery: publication.setRuntimeRecovery,
+    publishSession: publication.publishSession,
+    publishIdentityAdvisory,
+    requestCurrentSession,
+    createAnonymousSession,
+    isUnavailableSession,
+  });
+  const runners = useSessionOperationRunners({
+    queryClient,
+    sessionQueryKey,
+    enqueueTransition,
+    leaseOwner,
+    recoverySubscriptionRef,
+    suspendInteractionAndInvalidateLease:
+      publication.suspendInteractionAndInvalidateLease,
+    markSessionRecoveryRequired: recovery.markSessionRecoveryRequired,
+    handoffStaleRecovery: recovery.handoffStaleRecovery,
+    publishIdentityAdvisory,
+    publishSession: publication.publishSession,
   });
 
-  if (query.isPending) {
-    return (
-      <div className="app-message" role="status" aria-live="polite">
-        セッションを準備しています…
-      </div>
-    );
-  }
-  if (query.isError) {
-    if (isBetaAdmissionRequired(query.error)) {
-      return <BetaAdmissionGate onAdmitted={() => query.refetch()} />;
-    }
-    return (
-      <div className="app-message app-message--error" role="alert">
-        <p>FUKAMU Cycleを開始できませんでした。</p>
-        <button type="button" onClick={() => void query.refetch()}>
-          再試行
-        </button>
-      </div>
-    );
-  }
-  const renderedSession = query.data;
-
-  function replaceSession(session: Session): Promise<void> {
-    const transition = transitionRef.current
-      .catch(() => undefined)
-      .then(async () => {
-        const currentSession =
-          queryClient.getQueryData<Session>(sessionQueryKey) ?? renderedSession;
-        if (currentSession.user.id === session.user.id) {
-          queryClient.setQueryData(sessionQueryKey, session);
-          return;
-        }
-
-        const oldUserQueryRoot = ["user", currentSession.user.id] as const;
-        await autoSaveScopes.quiesce({ preserveDrafts: true });
-        await queryClient.cancelQueries({ queryKey: oldUserQueryRoot });
-        queryClient.removeQueries({ queryKey: oldUserQueryRoot });
-        queryClient.getMutationCache().clear();
-        queryClient.setQueryData(sessionQueryKey, session);
-      });
-    transitionRef.current = transition;
-    return transition;
-  }
-
   return (
-    <ReplaceSessionContext.Provider value={replaceSession}>
-      <SessionContext.Provider
-        key={renderedSession.user.id}
-        value={renderedSession}
+    <AccountDeletionAdvisoryPublishContext.Provider
+      value={publishAccountDeletionAdvisory}
+    >
+      <SessionBoundaryPresentation
+        query={query}
+        recoverySubscriptionReady={recovery.recoverySubscriptionReady}
+        leaseOwner={leaseOwner}
+        sessionBoundaryGeneration={publication.sessionBoundaryGeneration}
+        runtimeRecovery={publication.runtimeRecovery}
+        interactionSuspended={publication.interactionSuspended}
+        childrenWrapperRef={childrenWrapperRef}
+        recoverSession={recovery.recoverSession}
+        reloadApplication={reloadApplication}
+        runTerminalSessionOperation={runners.runTerminalSessionOperation}
+        runPostCommitSessionOperation={runners.runPostCommitSessionOperation}
+        runSessionTransition={runners.runSessionTransition}
       >
         {children}
-      </SessionContext.Provider>
-    </ReplaceSessionContext.Provider>
+      </SessionBoundaryPresentation>
+    </AccountDeletionAdvisoryPublishContext.Provider>
   );
 }
 
-function isBetaAdmissionRequired(error: unknown): boolean {
-  return error instanceof APIError && error.code === "BETA_ADMISSION_REQUIRED";
+function reloadFromServer(): void {
+  window.location.reload();
 }

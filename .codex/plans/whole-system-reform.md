@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M8 final commit gate
+- 状態: IN_PROGRESS / M10 Goal creation/review feature boundary
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -87,7 +87,7 @@
 - **Actor / precondition / trigger**: anonymousまたはauthenticated userがsession refresh、Google upgrade、既存Google identityへのlogin、account deleteを行う。
 - **Expected result / persisted state**: 同一user upgradeはuser/Goalを維持してidentityを追加する。既存identity loginはtarget userへsessionを切り替え、user同士をmergeしない。Deleteはown accountと関連dataを削除しsessionを失効する。
 - **Error / permission / edge cases**: Google collision、unverified token、concurrent session revoke、cross-user操作はstable errorまたは404。User IDが変わるloginでは旧server cacheとbrowser draftを表示・送信しない。
-- **Current tests / missing tests / evidence**: `backend/internal/application/session/service_test.go`、`backend/internal/application/account/service_test.go`、`frontend/src/pages/SettingsPage.test.tsx`が部分保護。Google upgrade/switch E2E、cache isolation、session CAS、delete/revisitが不足。根拠はaccount/session handlers、repositories、`SessionProvider.tsx`。
+- **Current tests / missing tests / evidence**: Backend session/account、Settings/SessionProvider、same-tab/cross-tab Google、cache isolation、delete/revisit、Expected User、Web Lock、deletion advisory/tombstone testが保護する。DB上のsession revoke/account delete同時実行CASはM13で追加する。根拠はaccount/session handlers、repositories、`SessionProvider.tsx`、`contract-characterization.spec.ts`。
 
 ### 7.3 Homeと同時進行Goal上限
 
@@ -143,7 +143,7 @@
 - **Actor / precondition / trigger**: 全user flowでsession expiry、network loss、409、provider failure、server restart、malformed inputが発生する。
 - **Expected result / persisted state**: committed server stateを正本とし、未保存browser inputを明示選択で回復する。Operation IDは成功・明示破棄まで維持し、retryで副作用を重複させない。
 - **Error / permission / edge cases**: Unknown JSON、oversized body、CSRF/Origin failure、cross-owner、quota/budget、timeout/cancelをstable codeへmappingし、本文/secretをlogしない。
-- **Current tests / missing tests / evidence**: API/client tests、autosave failure E2E、cross-user API E2Eが部分保護。Session expiry、top-level Error Boundary、real revision conflict、response-loss journeyが不足。根拠はHTTP middleware/errors、API client、observability/security sections。
+- **Current tests / missing tests / evidence**: API/client、session expiry/preemption、二層Error Boundary、real revision conflict、response-loss、autosave failure、cross-user testが保護する。External provider transport failureとserver restart recoveryの網羅はM19/M33で追加する。根拠はHTTP middleware/errors、API client、observability/security sections。
 
 ## 8. Current architecture
 
@@ -386,7 +386,7 @@ Frontendはroute pageがAPI orchestration、state machine、autosave、IndexedDB
 | M6 | 409後に最新server revisionを取得し、overwriteせずuser選択または再適用で復旧 |
 | M7 | 80/81・200/201 non-BMP、CRLF/CR、trailing whitespaceのFrontend/Backend testが一致 |
 | M8 | 全editorが一つのautosave coreを使い、single in-flight、latest coalescing、browser recoveryを維持 |
-| M9 | top-level Error Boundary、identity-aware session transition、stable error presentationをapp層が所有 |
+| M9 | app層が二層Error Boundary、stable error、双方向identity binding、優先度付きsession recovery、origin-wide Cookie writer、cross-tab delete/tombstoneを所有し、旧User payloadと削除済みDraftを公開・復活させない |
 | M10 | Goal creation/review routeはload/compositionだけで、policyとstate machineはfeature内 |
 | M11 | Cycle/history routeはcompositionだけで、pagination/autosave/cache policyの重複がない |
 | M12 | Complete/Terminate競合がdeadlockせず、global lock order structural/integration testがgreen |
@@ -465,7 +465,7 @@ TEST_DATABASE_URL='<explicit disposable *_test database>' ./scripts/check-before
 | M6 | F、409 component/API test、E、C |
 | M7 | F、B、Unicode/newline boundary tests、E、C |
 | M8 | F、autosave fake-timer/serialization tests、E、C |
-| M9 | F、session expiry/Error Boundary/account-switch tests、E、C |
+| M9 | F、Error Boundary/stable error、Expected/Actual User matrix、recovery priority/ABA、Web Lock、同一Browser Context二tabのGoogle/account delete、tombstone transaction/privacy tests、E、C |
 | M10 | F、Goal creation/refine/review E2E、E、C |
 | M11 | F、Cycle/history/timeline/mobile E2E、E、C |
 | M12 | B、deterministic Complete/Terminate integration、E、C |
@@ -505,7 +505,8 @@ M26で作成する`./scripts/check-staging-critical.sh`は、`STAGING_BASE_URL`�
 | M6 | 409 recovery UIだけをrevertし、server contractを維持。Autosave不能時はmanual copyを案内 |
 | M7 | Shared normalization predicateと全callerを同一commitでrevert |
 | M8 | Editorごとの旧autosave adapterをmilestone中だけ保持し、全editor移行成功後に削除。失敗時はcommit全体をrevert |
-| M9–M11 | Feature/app-shell単位のcommitをrevert。Route/API wire shapeは各commitで完結させる |
+| M9 | Security guard障害ではreleaseを停止してforward fixする。IndexedDBはv2へupgrade後にv1 openerへ戻すと`VersionError`になるため、rollbackでもv2 schemaとdeletion tombstone互換を維持し、Expected/Actual User、Web Lock、deleted-draft resurrection guardを外さない |
+| M10–M11 | Feature単位のcommitをrevert。Route/API wire shapeは各commitで完結させる |
 | M12 | Lock-order commitをrevertすると既知deadlock riskが戻るためdeploy停止。Schema rollbackは不要 |
 | M13 | CAS/concurrency commitをrevertし、費用/整合性riskのためdeploy停止 |
 | M14–M18 | Use-case単位のcommitをrevert。旧adapterは当該milestone完了まで削除しない |
@@ -532,6 +533,8 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 | --- | --- | --- |
 | 旧user dataの表示・送信 | Critical | M2を最優先しaccount-switch E2E |
 | DB deadlock・二重遷移 | Critical | deterministic concurrency test、共通lock order |
+| Same-origin Session Cookieのtab間上書き | Critical | Expected/Actual User binding、exclusive Web Lock、cross-tab E2E |
+| Account Delete後のBrowser Draft復活 | Critical | atomic salted-digest tombstone、delete advisory、put/clear順序test |
 | Autosave refactorによる入力消失 | High | characterization、single in-flight、browser recovery E2E |
 | Idempotency破損による重複操作・AI費用 | High | caller-owned key、response-loss test |
 | 6,720行SoT整理時の契約消失 | High | 条項trace、test先行、小さな文書commit |
@@ -568,6 +571,14 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-23: M8のterminal commandはserver commit前にscopeをquiesceせず、成功応答とcurrent mounted generation/identity leaseを確認してから共通`PostCommitCleanupBoundary`へ渡す。Boundaryは全scopeをdraft保持でquiesceし、captured raw browser key/Goal prefixをFIFO削除してからcache更新/navigationを行う。Cleanup失敗時はserver commandを再送せず端末cleanupだけをretryし、account deleteも204後の旧User draft削除完了前にreloadしない。Identity切替・route移動後のlate responseはcleanup/cache/navigationを実行しない。
 - 2026-08-23: Identity切替では旧Userのdirty入力をIndexedDBへbest-effort退避してから新identityを公開し、旧User内容を新identityへ引き渡したり表示をblockしたりしない。IndexedDB自体のput失敗時はin-memory入力をrecoverableに保持できず失われ得る残存riskがある。Server cookieのidentity変更後に旧User UIを維持する方がcross-user isolationを損なうため、identity隔離を優先する。安全なpre-transition storage protocolまたは失敗UXを決めるにはproduct/security判断が必要であり、M8ではDraftCacheWarningと通常時のretry可能性を維持してbest-effort境界として記録する。
 - 2026-08-23: M8横断監査で、AI提案adoptのlate successがmounted/identity lease確認前にeditor/cacheへ作用し、同一Userの後続Draft世代をrollbackし得る既存の非terminal P2を確認した。Autosave/terminal cleanupのM8 acceptanceとは独立し、M8前のindex版にも存在するため、M10 feature boundaryで全command completion fenceを統一するREDとして追跡する。M8のP0/P1完了条件は弱めない。
+- 2026-08-23: M9のError Boundaryは、Provider初期化失敗を扱うouter boundaryと、Session/PostCommit ownerを維持したままroute render失敗を回復するinner boundaryの二層とした。React 19 root callbackはraw Errorやcomponent stackをproduction logへ渡さず、固定event/phase/codeとvalidated UUID v7 request IDだけを記録する。Wire errorはBackendのstable code unionへ閉じ、server message/detailsを`APIError`へ保持せず、UIはcode別の固定copyだけを表示する。
+- 2026-08-23: Runtime session recoveryはrequest開始時generationをcaptureするnotification-only busとApplication compositionの直列queueへ集約した。Exact `401 SESSION_MISSING` / `SESSION_EXPIRED`は先にUIをhidden / inert化してDraft保持quiesce後にsession discovery/bootstrap、exact `403 CSRF_INVALID`は同一Userならeditor/cacheを維持したrefreshとする。Initial/focus/reconnect自動refetchは無効化し、strong recovery preemption、unmount/late response fence、失敗retryでもquiesce済みscopeをfresh leaseへremountする。
+- 2026-08-23: Auth/login/account terminal/post-commit operationは同じsession transition queueでdispatchからcleanup成功まで順序付ける。Google 200でCookie更新後にbody parseやnetwork responseが不確実になった場合は旧UIを同期停止してauthoritative session discoveryへ収束する。PostCommit ownerはidentity-keyed subtreeとinner Error Boundaryの外に置き、失敗retry中もqueue ownershipを保持する。Account Deleteはserver commit前にquiesceせず、`204`後だけcaptured旧User browser dataを削除してreloadする。
+- 2026-08-23: Same-origin Session Cookieがtab間で共有され、旧tabのsafe GETが切替先payloadを旧User query keyへ保存できるP1を確認した。Backendは全`/api/v1`を`no-store`とし、認証成功Responseへsource Userの`X-Fukamu-Authenticated-User-ID`を付与する。Frontendは全protected APIをABA-safe authenticated request leaseへ必須化し、Header不一致をstatus/bodyより優先してpayload公開前にrecovery、欠落/malformedをreload-onlyでfail-closedにする。Cross-tab channelは早期停止用advisoryでありHeader検証を置換しない。
+- 2026-08-23: Deployment bundleを識別する必須version Headerはrolling compatibilityを壊すため追加しない。一方、lease-bound `X-Fukamu-Expected-User-ID`は別のidentity preconditionとして新Frontendでは必須、Backendでは既に開かれた旧bundle互換のため欠落だけを許容する。新Backend/旧bundleではresponse検証しないriskが残るため、Closed Beta rolloutで既存tabのreloadを要求し、新bundle利用確認までrelease gateを開けない。Production deployは本作業範囲外で実行しない。
+- 2026-08-23: Session recovery priorityをUNVERIFIED > DRIFT > MISSING/EXPIRED > CSRFとし、上位が下位をabortする。Cookie writerは標準Web Locksの固定exclusive lockでtab間直列化し、取得後ownershipを再確認する。新dependencyは追加せず、API欠落・例外・callback未実行時はCookie変更をdispatchしない。
+- 2026-08-23: Account Deleteは`204`直後とBrowser cleanup完了後の二段階advisory、origin salt付きUser digestだけのdurable IndexedDB tombstone、put/checkとtombstone/deleteのatomic transactionでlate writeを防ぐ。Draftの24h TTLと異なりtombstoneはsite data削除まで保持するprivacy/security tradeoffを採用し、raw User ID・本文は永続privacy recordやtelemetryへ残さない。
+- 2026-08-23: M9でBrowser Draft DBをv1からv2へupgradeしたため、旧v1 openerへの全面revertは`VersionError`になる。Rollbackでもv2 schema/tombstone互換とidentity/Cookie security guardを維持し、障害時はrelease停止とforward fixを行う。
 - 2026-08-22: Free/MVPの進行Goal上限を2件に確定。
 - 2026-08-22: Homeは`GoalView/currentWork`共用に確定。
 - 2026-08-22: Goal Refine fieldを`suggestion`へ統一。
@@ -580,6 +591,15 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-23: M9完了。最初のcommit前必須gateはfresh disposable PostgreSQL 18.6とstaged candidate tree `98cdfbbe74e9d44fba82632378d1c9c9f30cb4ba`で成功した。Actionlint、CI reuse resolver、Frontend 49 files / 391 tests、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18、開始・終了tree一致を確認した。検証DBは停止・削除済みでcommitしていない。本entryとM10再開位置でtreeを変更するため、再stage後に別のfresh DBでCを最初から再実行する。
+- 2026-08-23: M9の最終GREENでは、二層Error Boundary、固定copy/validated request IDだけのerror presentation、Expected/Actual User双方向binding、`UNVERIFIED > DRIFT > missing/expired > CSRF`のrecovery priority、identity lease/世代fence、origin-wide exclusive Web Lock、二段階Account Delete advisory、salted digestだけのIndexedDB tombstoneを統合した。Web Lock callback未実行、initial discovery abort、delete確認通知とcleanup失敗の競合もREDから修正し、独立security/E2E監査はいずれもP0/P1/P2なしだった。
+- 2026-08-23: 最初のM9 full Eは15/18 Playwright成功後、409本文をrecovery後に読むPlaywright resource race、test helperの追加`GET /session`によるSPA保持CSRFの失効、既存E2EのIndexedDB v1固定openerの3 test defectで停止した。409本文を`route.fetch()`中にcaptureし、二tab delete testを実際の「新匿名user・Draftなし」状態へ合わせ、現行DB versionを開くよう修正した。実装assertionは弱めず、専用DBを分けたtarget journey 3/3でGREENを確認してからfull Eを最初から再実行した。
+- 2026-08-23: M9 final FはPrettier、ESLint、strict typecheck、Frontend 49 files / 391 tests、production buildが成功した。Fresh empty PostgreSQL 18.6によるfull EもBackend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、同一Browser Context二tabのidentity/account deleteを含むPlaywright 18/18まで成功した。検証DBはすべて停止・削除済みで、baseline migration/sqlc生成物は不変。次に完全treeをstageしてCを実行する。
+- 2026-08-23: M9 app-shell/session sliceの変更前REDではtop-level render例外、React root raw error、stable error redaction、並行401/403 recovery、identity transition、account notice、post-commit ownership、uncertain Google response、quiesce後retryの不足を再現した。二層Error Boundary、typed presentation、generation bus、single transition queue、stable PostCommit ownerへ収束後、focused 9 files / 137 testsが成功した。独立read-only監査では進行中cross-tab slice以外にproduction P0/P1はなかった。
+- 2026-08-23: Cross-tab identity bindingのBackend REDは認証成功6経路のHeader欠落と`/api/v1` 2経路の`no-store`欠落を再現した。Middleware/router実装後、`backend/internal/httpapi` focused contractとpackage全testがGo 1.26.6固定containerで成功し、auth失敗/anonymous/healthのnegative contract、Google login source A/body target B、account delete `204`まで固定した。
+- 2026-08-23: Frontend transport/API wrapperの変更前REDは4 filesで43 tests失敗・27成功となり、protected transport export、identity mismatch/missing/malformed/ABA、`no-store`、全workspace/account wrapperのlease必須化が未実装であることを確認した。現在はtransport、SessionProvider lease、cross-tab advisory、6 route caller/signal forwardingを並行実装中で、統合後にfocused F、full F/E/Cを実行する。
+- 2026-08-23: M9 Error/app shellの先行GREENはAPI/root/session eventを含む7 files / 32 tests、Session/PostCommit/Settings/App compositionを含むfocused 9 files / 137 testsで成功した。PostCommit test fixtureのReact ref lintをeffectへ移して対象lintと7 testsを再度成功させた。Global typecheckは並行transport signature移行中のため未確定であり、milestone GREENとしてはまだ扱わない。
+- 2026-08-23: Scope-moved修正後のM8 commit前必須gateはfresh disposable PostgreSQL 18.6とstaged candidate tree `827290d0871bf58399aebc3f883529da56eda24a`で成功した。Frontend 34 files / 234 tests、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 15/15、migration version 1・dirty=false、開始・終了tree一致を確認した。検証DBは停止・削除済みでcommitしていない。本entryとM9再開位置でindexを変更するため、plan-inclusive final treeのCをfresh DBで最初から再実行してからM9実装へ進む。
 - 2026-08-23: M8変更前REDでは、editor間のsingle in-flight/latest coalescing、5回backoffとonline/input/manual再開、identity/route late response fence、terminal後cleanup retry、same-revision browser recoveryを既存のpage別queueでは満たせないことをfake-timer/component regressionで再現した。実装後のtargetは13 files / 182 testsで成功し、Creation/Review/Cycleが一つのcore contractを共有すること、Cycle 4 frameの直列化、24時間TTL cleanup、conflict/moved recovery、terminal/account cleanup、quiesce中の入力保全を固定した。
 - 2026-08-23: 最初のM8 Cはstaged candidate tree `dd1652a7cb1a8fe1dbaf41a2178755f738941823`、Frontend 34/234、Playwright 15/15、migration `1|f`、開始・終了tree一致で成功した。しかし完了確定前の独立監査で、scope-moved時にdirty queueを解除して150ms後の条件付きIndexedDB削除を起動するP1を検出したため、このtreeとC結果をsupersededとした。Direct moved/conflict movedの両既存testへ削除不実行assertionを追加して2/22 REDを確認し、scopeをpaused+blocked dirtyとして保持する修正後に22/22、M8 target 13/182をGREENへ戻した。
 - 2026-08-23: Scope-moved修正後のM8 final Fはformat、eslint、strict typecheck、Frontend 34 files / 234 tests、production buildで成功した。Fresh empty PostgreSQL 18.6によるfull EもBackend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 15/15、migration version 1・dirty=falseまで成功した。検証DBは停止・削除済みで、baseline migration/sqlc生成物は不変。独立再監査で他の新規P0/P1はなく、既知のIndexedDB preservation failure残存riskだけをDecision logへ記録した。
@@ -619,7 +639,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M8 Autosave coordinatorの最終C。RED/GREEN、target 13 files / 182 tests、full F 34/234、fresh full E、Decision/Progress更新まで完了した。全変更をstageしてcandidate treeを固定し、別のfresh disposable PostgreSQLで`./scripts/check-before-commit.sh`を実行する。成功後はC結果を追記して最終treeを再stage・再検証し、commitせずM9 Frontend app shellへ進む。
+- 現在の再開位置: M9は完了し、完了記録を含む最終treeのC再実行待ち。C成功後はcommitせず、M10の変更前REDとして旧Creation/Review世代またはidentity quiescence後のlate Refine/Adoptが新editor/cache/error/navigationへ作用しないtestと、routeがproduct policyを所有しないarchitecture testを追加する。その後、wire/UIを維持したままGoal creation/review policyをfeatureへ移し、F、該当E2E、E、Cを実行する。
 
 ## 26. Final definition of done
 

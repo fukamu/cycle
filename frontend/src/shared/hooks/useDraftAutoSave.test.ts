@@ -650,8 +650,8 @@ describe("useDraftAutoSave", () => {
     { status: 400, code: "VALIDATION_ERROR" },
     { status: 401, code: "SESSION_EXPIRED" },
     { status: 403, code: "CSRF_INVALID" },
-    { status: 409, code: "GOAL_NOT_EDITABLE" },
-  ])(
+    { status: 409, code: "GOAL_STATE_CONFLICT" },
+  ] as const)(
     "does not resend a non-retryable $status failure on an online event",
     async ({ status, code }) => {
       vi.useFakeTimers();

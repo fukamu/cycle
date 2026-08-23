@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { UUID_V7_PATTERN } from "../id/uuid";
+import { stableAPIErrorCodeSchema } from "./errorCodes";
 import {
   FRAME_TEXT_MAX_CODE_POINTS,
   GOAL_TEXT_MAX_CODE_POINTS,
@@ -185,7 +186,7 @@ export type GoalRefineResponse = z.infer<typeof goalRefineResponseSchema>;
 
 const apiErrorSchema = z.object({
   error: z.object({
-    code: z.string(),
+    code: stableAPIErrorCodeSchema,
     message: z.string(),
     requestId: uuid,
     details: z.record(z.string(), z.unknown()).optional(),

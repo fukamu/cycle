@@ -12,7 +12,8 @@ import { useState } from "react";
 
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { SessionContext } from "../features/auth/sessionContext";
+import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
+import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import {
   AutoSaveScopeProvider,
   useAutoSaveScopeRegistry,
@@ -87,6 +88,8 @@ const session: Session = {
   },
   csrfToken: "csrf-token",
 };
+
+const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
 
 const startedCycle: Cycle = {
   id: "40000000-0000-7000-8000-000000000001",
@@ -227,6 +230,7 @@ describe("NewGoalPage", () => {
 
     await waitFor(() =>
       expect(adoptGoalDraft).toHaveBeenCalledWith(
+        sessionLease,
         draft.id,
         "30000000-0000-7000-8000-000000000001",
         draft.revision,
@@ -261,14 +265,15 @@ describe("NewGoalPage", () => {
 
     expect(await screen.findByText("現在のワークスペース")).toBeInTheDocument();
     expect(startGoal).toHaveBeenCalledTimes(2);
-    const firstOptions = vi.mocked(startGoal).mock.calls[0]?.[2];
-    const secondOptions = vi.mocked(startGoal).mock.calls[1]?.[2];
+    const firstOptions = vi.mocked(startGoal).mock.calls[0]?.[3];
+    const secondOptions = vi.mocked(startGoal).mock.calls[1]?.[3];
     expect(firstOptions).toEqual({
       operationId: expect.any(String),
       csrfToken: session.csrfToken,
     });
     expect(secondOptions?.operationId).toBe(firstOptions?.operationId);
     expect(startGoal).toHaveBeenLastCalledWith(
+      sessionLease,
       draft.id,
       draft.revision,
       secondOptions,
@@ -345,6 +350,7 @@ describe("NewGoalPage", () => {
     expect(editor).toHaveAttribute("readonly");
     expect(getGoalDraft).toHaveBeenCalledTimes(1);
     expect(getGoalDraft).toHaveBeenCalledWith(
+      sessionLease,
       draft.id,
       expect.any(AbortSignal),
     );
@@ -374,6 +380,7 @@ describe("NewGoalPage", () => {
     );
     await waitFor(() =>
       expect(saveGoalDraft).toHaveBeenLastCalledWith(
+        sessionLease,
         draft.id,
         localBody,
         latestDraft.revision,
@@ -388,6 +395,7 @@ describe("NewGoalPage", () => {
     fireEvent.blur(editor);
     await waitFor(() =>
       expect(saveGoalDraft).toHaveBeenLastCalledWith(
+        sessionLease,
         draft.id,
         nextLocalBody,
         2,
@@ -457,6 +465,10 @@ describe("NewGoalPage", () => {
       await screen.findByRole("heading", { name: "目標から、次の一歩へ。" }),
     ).toBeInTheDocument();
     expect(getHome).toHaveBeenCalledTimes(2);
+    for (const [lease, signal] of vi.mocked(getHome).mock.calls) {
+      expect(lease).toBe(sessionLease);
+      expect(signal).toBeInstanceOf(AbortSignal);
+    }
     expect(screen.queryByText("目標の設定を続ける")).not.toBeInTheDocument();
   });
 
@@ -676,6 +688,7 @@ describe("NewGoalPage", () => {
     fireEvent.blur(editor);
     await waitFor(() =>
       expect(saveGoalDraft).toHaveBeenCalledWith(
+        sessionLease,
         draft.id,
         draftABody,
         draft.revision,
@@ -709,6 +722,7 @@ describe("NewGoalPage", () => {
         ?.creationDraft,
     ).toEqual(draftB);
     expect(saveGoalDraft).not.toHaveBeenCalledWith(
+      sessionLease,
       draftB.id,
       draftABody,
       expect.any(Number),
@@ -720,6 +734,7 @@ describe("NewGoalPage", () => {
     fireEvent.blur(draftBEditor);
     await waitFor(() =>
       expect(saveGoalDraft).toHaveBeenLastCalledWith(
+        sessionLease,
         draftB.id,
         draftBBody,
         draftB.revision,
@@ -745,9 +760,16 @@ function renderPage(
     <QueryClientProvider client={cache}>
       <AutoSaveScopeProvider>
         {identityQuiesceControl ? <IdentityQuiesceControl /> : null}
-        <SessionContext.Provider value={session}>
+        <AuthenticatedSessionTestProvider
+          lease={sessionLease}
+          session={session}
+        >
           <MemoryRouter initialEntries={["/goals/new"]}>
-            <PostCommitCleanupBoundary>
+            <PostCommitCleanupBoundary
+              runSessionOperation={async (_expectedUserId, operation) =>
+                operation(() => true)
+              }
+            >
               <Routes>
                 <Route
                   path="/"
@@ -761,7 +783,7 @@ function renderPage(
               </Routes>
             </PostCommitCleanupBoundary>
           </MemoryRouter>
-        </SessionContext.Provider>
+        </AuthenticatedSessionTestProvider>
       </AutoSaveScopeProvider>
     </QueryClientProvider>,
   );

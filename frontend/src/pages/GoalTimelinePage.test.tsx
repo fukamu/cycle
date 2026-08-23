@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { SessionContext } from "../features/auth/sessionContext";
+import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
+import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import type {
   CyclePage,
   CycleSummary,
@@ -28,6 +29,8 @@ const session: Session = {
   },
   csrfToken: "csrf-token",
 };
+
+const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
 
 let notifyIntersection: IntersectionObserverCallback;
 
@@ -112,7 +115,17 @@ describe("GoalTimelinePage", () => {
     expect(event.querySelector(".timeline-event__marker")).toBeInTheDocument();
     expect(version.querySelector(".timeline-period__rail")).toBeInTheDocument();
     expect(screen.queryByText("GOAL V1")).not.toBeInTheDocument();
-    expect(listCycles).toHaveBeenCalledWith(goalId, undefined);
+    expect(getGoal).toHaveBeenCalledWith(
+      sessionLease,
+      goalId,
+      expect.any(AbortSignal),
+    );
+    expect(listCycles).toHaveBeenCalledWith(
+      sessionLease,
+      goalId,
+      undefined,
+      expect.any(AbortSignal),
+    );
   });
 
   it("marks the V1 period and creation event as current before any revision", async () => {
@@ -172,7 +185,13 @@ describe("GoalTimelinePage", () => {
     triggerIntersection();
     await screen.findByText("GOAL V2");
     await waitFor(() => expect(listCycles).toHaveBeenCalledTimes(2));
-    expect(listCycles).toHaveBeenNthCalledWith(2, goalId, "older-1");
+    expect(listCycles).toHaveBeenNthCalledWith(
+      2,
+      sessionLease,
+      goalId,
+      "older-1",
+      expect.any(AbortSignal),
+    );
     expect(
       container.querySelectorAll('[data-version-number="3"]'),
     ).toHaveLength(1);
@@ -183,7 +202,13 @@ describe("GoalTimelinePage", () => {
     triggerIntersection();
     await screen.findByRole("heading", { name: "Version 1の目標" });
     await waitFor(() => expect(listCycles).toHaveBeenCalledTimes(3));
-    expect(listCycles).toHaveBeenNthCalledWith(3, goalId, "older-2");
+    expect(listCycles).toHaveBeenNthCalledWith(
+      3,
+      sessionLease,
+      goalId,
+      "older-2",
+      expect.any(AbortSignal),
+    );
 
     const versions = [
       ...container.querySelectorAll<HTMLElement>("[data-version-number]"),
@@ -260,7 +285,7 @@ function renderTimeline() {
   });
   return render(
     <QueryClientProvider client={cache}>
-      <SessionContext.Provider value={session}>
+      <AuthenticatedSessionTestProvider lease={sessionLease} session={session}>
         <MemoryRouter initialEntries={[`/history/goals/${goalId}`]}>
           <Routes>
             <Route
@@ -269,7 +294,7 @@ function renderTimeline() {
             />
           </Routes>
         </MemoryRouter>
-      </SessionContext.Provider>
+      </AuthenticatedSessionTestProvider>
     </QueryClientProvider>,
   );
 }

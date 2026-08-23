@@ -2,7 +2,10 @@ import { useEffect, useRef } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
-import { useSession } from "../features/auth/sessionContext";
+import {
+  useAuthenticatedRequestLease,
+  useSession,
+} from "../features/auth/sessionContext";
 import {
   cacheGoals,
   userQueryKeys,
@@ -21,11 +24,13 @@ import {
 
 export function GoalHistoryPage() {
   const session = useSession();
+  const sessionLease = useAuthenticatedRequestLease();
   const userId = session.user.id;
   const cache = useQueryClient();
   const query = useInfiniteQuery({
     queryKey: userQueryKeys.goals(userId, "all"),
-    queryFn: ({ pageParam }) => listGoals("all", pageParam),
+    queryFn: ({ pageParam, signal }) =>
+      listGoals(sessionLease, "all", pageParam, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });

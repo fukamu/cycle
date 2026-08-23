@@ -8,6 +8,80 @@ import {
 } from "./browserDraftCache";
 
 describe("browser draft cache", () => {
+  it.each([
+    { transactionOrder: "put-before-clear", putAfterClear: false },
+    { transactionOrder: "clear-before-put", putAfterClear: true },
+  ])(
+    "does not resurrect a deleted account draft when transactions run $transactionOrder",
+    async ({ putAfterClear }) => {
+      const deletedUserId = putAfterClear
+        ? "00000000-0000-7000-8000-000000000011"
+        : "00000000-0000-7000-8000-000000000012";
+      const otherUserId = putAfterClear
+        ? "00000000-0000-7000-8000-000000000013"
+        : "00000000-0000-7000-8000-000000000014";
+      const deletedDraft = {
+        userId: deletedUserId,
+        goalId: "deleted-goal",
+        subjectKey: "cycle:deleted-cycle:plan",
+        body: "content owned by the deleted account",
+        baseRevision: 0,
+        updatedAt: new Date().toISOString(),
+      } as const;
+      const otherDraft = {
+        userId: otherUserId,
+        goalId: "other-goal",
+        subjectKey: "cycle:other-cycle:plan",
+        body: "content owned by another account",
+        baseRevision: 1,
+        updatedAt: new Date().toISOString(),
+      } as const;
+
+      await putBrowserDraft(otherDraft);
+      if (!putAfterClear) await putBrowserDraft(deletedDraft);
+      await clearUserDrafts(deletedUserId);
+      if (putAfterClear) await putBrowserDraft(deletedDraft);
+
+      expect(
+        await getBrowserDraft(deletedUserId, deletedDraft.subjectKey),
+      ).toBeNull();
+      expect(await getBrowserDraft(otherUserId, otherDraft.subjectKey)).toEqual(
+        otherDraft,
+      );
+    },
+  );
+
+  it("stores account-deletion privacy records without raw identity or draft content", async () => {
+    const deletedUserId = "00000000-0000-7000-8000-000000000015";
+    const deletedBody = "private deleted account body marker";
+    await putBrowserDraft({
+      userId: deletedUserId,
+      goalId: "privacy-goal",
+      subjectKey: "cycle:privacy-cycle:plan",
+      body: deletedBody,
+      baseRevision: 0,
+      updatedAt: new Date().toISOString(),
+    });
+
+    await clearUserDrafts(deletedUserId);
+
+    const privacyRecords = await readAccountDeletionPrivacyRecords();
+    expect(privacyRecords.tombstones.length).toBeGreaterThan(0);
+    for (const tombstone of privacyRecords.tombstones) {
+      expect(Object.keys(tombstone)).toEqual(["digest"]);
+      expect(tombstone.digest).toMatch(/^[0-9a-f]{64}$/u);
+    }
+    expect(privacyRecords.metadata).toEqual([
+      {
+        key: "account-deletion-salt-v1",
+        value: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      },
+    ]);
+    const serialized = JSON.stringify(privacyRecords);
+    expect(serialized).not.toContain(deletedUserId);
+    expect(serialized).not.toContain(deletedBody);
+  });
+
   it("isolates records by user and subject key", async () => {
     await putBrowserDraft({
       userId: "u1",
@@ -281,3 +355,43 @@ describe("browser draft cache", () => {
     }
   });
 });
+
+function readAccountDeletionPrivacyRecords(): Promise<{
+  readonly tombstones: readonly Record<string, unknown>[];
+  readonly metadata: readonly Record<string, unknown>[];
+}> {
+  return new Promise((resolve, reject) => {
+    const openRequest = indexedDB.open("fukamu-cycle-browser-drafts-v2", 2);
+    openRequest.onerror = () => reject(openRequest.error);
+    openRequest.onsuccess = () => {
+      const database = openRequest.result;
+      const transaction = database.transaction([
+        "account-deletion-tombstones",
+        "metadata",
+      ]);
+      const tombstonesRequest = transaction
+        .objectStore("account-deletion-tombstones")
+        .getAll();
+      const metadataRequest = transaction.objectStore("metadata").getAll();
+      const closeAndReject = () => {
+        database.close();
+        reject(transaction.error);
+      };
+      transaction.oncomplete = () => {
+        database.close();
+        resolve({
+          tombstones: tombstonesRequest.result as readonly Record<
+            string,
+            unknown
+          >[],
+          metadata: metadataRequest.result as readonly Record<
+            string,
+            unknown
+          >[],
+        });
+      };
+      transaction.onerror = closeAndReject;
+      transaction.onabort = closeAndReject;
+    };
+  });
+}

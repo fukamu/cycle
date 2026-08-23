@@ -2,31 +2,47 @@ import { useCallback, useState } from "react";
 
 import { GoogleIdentityButton } from "../features/auth/GoogleIdentityButton";
 import { useDeleteCurrentAccount } from "../features/auth/accountDeletionContext";
-import { useReplaceSession, useSession } from "../features/auth/sessionContext";
+import {
+  useAccountSwitchNotice,
+  useAnnounceAccountSwitch,
+} from "../features/auth/sessionTransitionNoticeContext";
+import {
+  useRunSessionTransition,
+  useSession,
+} from "../features/auth/sessionContext";
 import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
 import { loginGoogle, upgradeGoogle } from "../shared/api/account";
 import { APIError } from "../shared/api/client";
+import {
+  toErrorPresentation,
+  type ErrorPresentation,
+} from "../shared/api/errorPresentation";
 
 type SettingsConfirmation =
   | { readonly kind: "google-login"; readonly credential: string }
   | { readonly kind: "delete-account" };
 
+const accountSwitchMessage = "既存のFUKAMU Cycleアカウントへ切り替えました。";
+
 export function SettingsPage() {
   const session = useSession();
-  const replaceSession = useReplaceSession();
+  const runSessionTransition = useRunSessionTransition();
   const deleteCurrentAccount = useDeleteCurrentAccount();
+  const announceAccountSwitch = useAnnounceAccountSwitch();
+  const accountSwitchNotice = useAccountSwitchNotice(session.user.id);
   const [pending, setPending] = useState(false);
   const [confirmation, setConfirmation] = useState<SettingsConfirmation>();
   const [message, setMessage] = useState<string>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<ErrorPresentation>();
 
   const connect = useCallback(
     async (credential: string) => {
       setPending(true);
       setError(undefined);
       try {
-        const upgraded = await upgradeGoogle(credential, session.csrfToken);
-        await replaceSession(upgraded);
+        await runSessionTransition(session.user.id, (currentSession, lease) =>
+          upgradeGoogle(lease, credential, currentSession.csrfToken),
+        );
         setMessage("Google Accountを連携しました。");
       } catch (cause) {
         if (
@@ -36,23 +52,31 @@ export function SettingsPage() {
           setConfirmation({ kind: "google-login", credential });
           return;
         }
-        setError(errorMessage(cause, "Google Accountを連携できませんでした。"));
+        setError(toErrorPresentation(cause));
       } finally {
         setPending(false);
       }
     },
-    [replaceSession, session.csrfToken],
+    [runSessionTransition, session.user.id],
   );
 
   async function loginExistingGoogle(credential: string) {
     setPending(true);
     setError(undefined);
     try {
-      const loggedIn = await loginGoogle(credential, session.csrfToken);
-      await replaceSession(loggedIn);
-      setMessage("既存のFUKAMU Cycleアカウントへ切り替えました。");
+      const { previousSession, session: loggedIn } = await runSessionTransition(
+        session.user.id,
+        (currentSession, lease) =>
+          loginGoogle(lease, credential, currentSession.csrfToken),
+      );
+      const previousUserId = previousSession.user.id;
+      if (loggedIn.user.id === previousUserId) {
+        setMessage("Google Accountを連携しました。");
+        return;
+      }
+      announceAccountSwitch(previousUserId, loggedIn.user.id);
     } catch (cause) {
-      setError(errorMessage(cause, "Googleログインに失敗しました。"));
+      setError(toErrorPresentation(cause));
     } finally {
       setPending(false);
     }
@@ -64,7 +88,7 @@ export function SettingsPage() {
     try {
       await deleteCurrentAccount();
     } catch (cause) {
-      setError(errorMessage(cause, "アカウントを削除できませんでした。"));
+      setError(toErrorPresentation(cause));
       setPending(false);
     }
   }
@@ -75,15 +99,20 @@ export function SettingsPage() {
         <p className="eyebrow">ACCOUNT</p>
         <h1>設定</h1>
       </header>
-      {message && (
+      {(message || accountSwitchNotice) && (
         <p className="settings-message" role="status">
-          {message}
+          {accountSwitchNotice ? accountSwitchMessage : message}
         </p>
       )}
       {error && (
-        <p className="inline-error" role="alert">
-          {error}
-        </p>
+        <div className="inline-error" role="alert">
+          <p>{error.message}</p>
+          {error.requestId !== undefined && (
+            <p>
+              問い合わせID: <code>{error.requestId}</code>
+            </p>
+          )}
+        </div>
       )}
       <section className="settings-card">
         <div className="settings-field">
@@ -153,10 +182,4 @@ export function SettingsPage() {
       )}
     </main>
   );
-}
-
-function errorMessage(cause: unknown, fallback: string): string {
-  return cause instanceof APIError
-    ? `${cause.message}（${cause.code}）`
-    : fallback;
 }

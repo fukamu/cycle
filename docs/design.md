@@ -2157,6 +2157,7 @@ Base path: `/api/v1`
 - Authentication: `__Host-fukamu_cycle_session` Secure HttpOnly Cookie
 - Unsafe method (`POST/PATCH/PUT/DELETE`)は`X-CSRF-Token`必須。ただしanonymous bootstrapはSession前のためOrigin検証 + Turnstile + rate limitで保護する。
 - 全Responseに`X-Request-ID`を付与する。
+- `/api/v1`の全Responseに`Cache-Control: no-store`を付与し、Browser HTTP cacheから認証済みResponseを再利用しない。
 - FrontendはResponseを`unknown`としてZodでparseする。
 - BackendはJSON unknown fieldを原則拒否する。
 - 通常Request body上限64 KiB。Google token endpoint 16 KiB。
@@ -2165,14 +2166,29 @@ Base path: `/api/v1`
 - Cursorはopaque base64url + HMAC署名。
 - Idempotent commandは`operationId` bodyまたは`Idempotency-Key` headerを必須とする。
 
+Auth=SessionのRequest / Response identityは次の共通Contractに従う。
+
+- Session認証成功後のResponseは、downstream handlerの成功、4xx / 5xx、`204`を問わず`X-Fukamu-Authenticated-User-ID`へrequestを認証したsource Userのcanonical UUID v7を設定する。Session認証に失敗した`401`と、認証を行わないanonymous bootstrap / public endpointにはこのHeaderを設定しない。
+- 新しいFrontend bundleのprotected transportはleaseのexpected Userをcanonical UUID v7 `X-Fukamu-Expected-User-ID`として必ず送る。Authoritative session discoveryの`GET /session`、anonymous bootstrap、public endpointには送らない。
+- BackendはCookie認証直後、CSRF、path/body parse、handler、Use Caseより前にExpected User Headerを検証する。Header欠落は既に開かれた旧Frontend bundleとのrolling compatibilityのためだけに受理する。存在する場合は単一のtrim不要なcanonical UUID v7でなければ`400 VALIDATION_ERROR`、認証したUserと異なればdownstreamを呼ばず`409 SESSION_IDENTITY_CHANGED`とする。いずれの認証成功ResponseもActual User Headerを維持する。
+- Frontendのprotected transportはdispatch前にexpected User IDとABA-safeなsession generation leaseをcaptureし、fetch完了直後とbody parse後にleaseがcurrentであることを確認する。Response Headerがexpected Userと一致するまでpayloadをDTO、TanStack Query cache、Feature stateへ渡さない。
+- Headerが別UserならHTTP statusやError bodyよりidentity driftを優先し、旧UIを同期的にhidden / inert化してleaseを失効させ、未保存Draftを保持してからauthoritativeな`GET /session`へ収束する。Headerが欠落またはcanonical UUID v7でない認証済みResponseはfail-closedとし、payloadを公開せず明示reloadを要求する。
+- 認証middlewareへ到達できないexact `401 SESSION_MISSING` / `401 SESSION_EXPIRED`だけはHeader欠落を許し、FrontendはDraftを保持したsession recoveryへ進む。status / codeが一致しないResponseへこの例外を広げない。
+- Session recoveryの優先度は`SESSION_IDENTITY_UNVERIFIED` > `SESSION_IDENTITY_DRIFT` > `SESSION_MISSING` / `SESSION_EXPIRED` > `CSRF_INVALID`とする。上位事象はUI fenceとlease失効を同期反映してから下位attemptをabortしgenerationを進める。同順位以下の通知は重複recoveryを開始せず、UNVERIFIED後はreload-only latchとする。
+- Sessionがまだ確定していないtabでidentity変更またはAccount Delete advisoryを受信した場合、Userを推測してpublishせず、initial discovery、anonymous bootstrap、Cookie writer lock待機をabortしてreloadする。
+- `GET /session`の成功ResponseではHeader User IDとbody `user.id`が一致しなければならない。`POST /auth/google/login`ではHeaderは切替元source User、成功bodyは切替先target Userでよい。Frontendはsource leaseでResponseを検証した後にだけidentity transitionをpublishする。
+- Same-origin Cookieはtab間で共有される。Cross-tab通知は旧leaseを早期停止するadvisoryとして利用できるが、欠落・遅延し得るためResponse Header検証の代替にしない。User ID、Session / CSRF token、本文をlogやtelemetryへ追加しない。
+
 すべてのEndpointには、個別節へ重複記載していなくても次の共通Error Contractを適用する。
 
 | Condition | HTTP / Code | Applicability |
 |---|---|---|
+| Expected User Headerが空、不正、重複 | `400 VALIDATION_ERROR` | Headerを送った`Auth=Session` Endpoint |
+| JSON decode、型、unknown field、共通形式不正 | `400 VALIDATION_ERROR` | Request body / path / queryを持つEndpoint。ただし、より具体的なCodeが定義されている場合はそちらを優先 |
 | Session Cookieなし | `401 SESSION_MISSING` | `Auth=Session`の全Endpoint |
 | Session期限切れまたはrevoke済み | `401 SESSION_EXPIRED` | `Auth=Session`の全Endpoint |
 | CSRF tokenまたはOrigin不正 | `403 CSRF_INVALID` | Sessionを必要とするunsafe method |
-| JSON decode、型、unknown field、共通形式不正 | `400 VALIDATION_ERROR` | Request body / path / queryを持つEndpoint。ただし、より具体的なCodeが定義されている場合はそちらを優先 |
+| Expected Userと認証済みUserが不一致 | `409 SESSION_IDENTITY_CHANGED` | Headerを送った`Auth=Session` Endpoint。CSRF / handlerより優先 |
 | 予期しない内部失敗 | `500 INTERNAL_ERROR` | 専用の安定Error Codeへ安全に分類できない場合 |
 
 §21〜§25の`Errors`は、上記に加わるUse Case固有Errorを中心に列挙する。認証・CSRF・一般Validation・予期しない内部失敗を個別節で省略しても、そのErrorが発生しないという意味ではない。
@@ -3594,6 +3610,8 @@ Transaction:
 
 Response: `204 No Content`。
 
+Frontendのcommit後処理、cross-tab通知、Browser Draft削除は§27.4、§41.10、§41.11に従う。
+
 Errors:
 
 - `400 ACCOUNT_DELETE_CONFIRMATION_REQUIRED`
@@ -3632,6 +3650,7 @@ Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除す�
 | 404 | `CYCLE_NOT_FOUND` | owner/Goal mismatchも同じ |
 | 404 | `AI_SUGGESTION_NOT_FOUND` | generation/target mismatch含む |
 | 404 | `GOOGLE_ACCOUNT_NOT_LINKED` | current User維持 |
+| 409 | `SESSION_IDENTITY_CHANGED` | payloadを利用せずauthoritative sessionへ収束 |
 | 409 | `GOAL_ACTIVE_LIMIT_EXCEEDED` | 上限2件のいずれかを達成/終了/削除するよう案内 |
 | 409 | `GOAL_CREATION_DRAFT_ALREADY_EXISTS` | 既存Draftへ移動 |
 | 409 | `GOAL_DRAFT_TYPE_MISMATCH` | 正しい画面へreload |
@@ -3720,7 +3739,19 @@ Anonymous bootstrapはSession作成前のため、Origin + Turnstile + rate limi
 
 Google Upgrade / Login成功時はSession tokenとCSRF tokenを必ずrotateし、更新前Sessionをrevokeする。
 
-## 27.4 Google Identity
+## 27.4 Same-origin Session Cookie writer coordination
+
+同一originのtabはSession Cookieを共有するため、Cookieを書き換え得るanonymous bootstrap、Google Upgrade / Login、Account Deleteを固定名`fukamu-session-cookie-writer-v1`のorigin-wide exclusive Web Lockで直列化する。
+
+- Request dispatch前にlockを取得し、取得後にcaptured ownership / generationを再確認する。待機中のAbortSignalはlock requestへ伝播する。
+- Web Locks APIが存在しない、壊れている、またはcallbackを実行せず完了するBrowserではCookie変更Requestをdispatchせずfail-closedにする。Web Locksは本Applicationの必須Browser capabilityとする。
+- Anonymous bootstrapはlock取得後のownership確認からResponse検証までlockを保持する。
+- Google Upgrade / Loginはsource identity確認からtarget sessionのadvisory・cache publication完了までlockを保持する。
+- Account Deleteは`204`と最初のversioned deletion advisory publishまでlockを保持する。時間のかかるBrowser Draft cleanupは他tabのsession recoveryを妨げないようlock解放後に行う。
+
+Web Lockは同一origin内の協調境界であり、BackendのExpected User guard、Response identity Header、CSRF、transactionを置換しない。
+
+## 27.5 Google Identity
 
 - Google Identity Servicesを使用する。
 - ID tokenはBackendで署名、`aud`、`iss`、`exp`を検証する。
@@ -3730,7 +3761,7 @@ Google Upgrade / Login成功時はSession tokenとCSRF tokenを必ずrotateし�
 - Google tokenをApplication Sessionとして使わない。
 - Google Account Upgrade成功後もApplication User IDを変えない。
 
-## 27.5 Authorization
+## 27.6 Authorization
 
 認証と認可を分離する。
 
@@ -3857,7 +3888,8 @@ Rules:
 - Goal Creation Draft abandon / Goal start successで該当Creation recordを削除する。
 - Goal Review Continue / Reviewからのachieved・ended成功で該当Review recordを削除する。後者は未保存のlocal変更も意図的に破棄する。
 - Goal Delete successで該当Goal records削除。
-- Account Delete successでUser records全削除。
+- Account Delete successでは§41.10、§41.11に従いUser recordsを全削除し、late Browser writeによる復活をdurable tombstoneで防ぐ。
+- Browser Draftのputは常に同じUserのAccount Delete tombstoneを同一transaction内で確認し、存在すればwriteしない。
 - User切替時に切替前UserのDraftを切替後Userへ自動送信しない。
 - TTL 24h。起動時cleanup。
 - `localStorage`へGoal/P/D/C/A本文を保存しない。
@@ -5234,6 +5266,16 @@ Quota window内AIUsageEventだけは本文なし・Goal ID redactedで保持す�
 
 User row hard deleteとFK cascadeで、Goal、Draft、Version、Cycle、AI content、AI Usage、AuthIdentity、Sessionを削除する。個人を特定しないaggregate monthly budget / metricsは保持可能。
 
+Serverの`204`をcommit境界とし、Frontendは次の順序を守る。
+
+1. Cookie writer lock内で`204`を検証し、削除User IDだけを持つversioned same-origin deletion advisoryを直ちにpublishする。
+2. lockを解放し、sender UIをterminal cleanup表示へ固定したままBrowser Draftをtombstone化・削除する。Server DELETEをcleanup retryで再送しない。
+3. cleanup成功後にconfirmation advisoryをpublishしてreloadする。cleanup失敗時は同じlocal cleanupだけを明示retryする。
+
+同じdeleted Userを表示する受信tabは通知callback内でUIを同期的にhidden / inert化してleaseを失効し、autosaveを`preserveDrafts: false`でquiesceしてからtombstone化・削除し、成功後にreloadする。別Userの通知は無視する。Confirmationが最初のcleanup中に届いた場合は1件へcoalesceし、そのattemptが失敗した直後にlocal cleanupを一度retryする。Session未確定tabは§20.1のunbound abortへ進む。
+
+BroadcastChannelはbest-effortの早期停止手段で、durable tombstoneとAPI identity bindingが正本である。Raw User IDはsame-originの一時messageだけに使用し、advisoryやprivacy metadataとして永続化せず、log / telemetryへ出さない。
+
 Backupは通常Retention経過で失効させ、削除済みUserを通常運用環境へ個別復元しない。Production前にrestore windowを運用ポリシーとして確定する。
 
 ## 41.11 Browser draft privacy
@@ -5243,6 +5285,10 @@ IndexedDBはXSSに対する暗号化境界ではない。
 - 未保存差分だけを保存する。
 - default TTL 24h。
 - Save成功・Draft resolve・Goal Delete・Account Delete成功時に削除する。
+- Account Deleteではoriginごとのcryptographically random 32-byte saltと`SHA-256(salt:userId)` digestだけをprivacy metadata / tombstoneへ保存し、raw User IDや本文を保存しない。
+- tombstone作成と対象User Draft削除を一つのread-write transaction、tombstone確認とDraft putを一つのread-write transactionにする。これによりclearより前後いずれのlate putも削除済みDraftを復活させない。
+- Salt、Web Crypto、metadata、transactionが利用不能または不正な場合はDraft write / deletion cleanupをfail-closedにする。
+- 24h TTLはDraft recordへ適用する。Account Delete tombstoneはsite dataが利用者またはBrowserにより削除されるまで維持する。
 - User切替時に別Userへ自動送信しない。
 - `localStorage`へGoal/P/D/C/A本文を保存しない。
 
@@ -5998,6 +6044,7 @@ Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpa
 | AS-16 | Session expires | Draftを先に削除しない |
 | AS-17 | dirty Review Draftからterminal success | IndexedDBのReview recordも削除 |
 | AS-18 | Creation Draft abandon success | IndexedDBのCreation recordを削除 |
+| AS-19 | Account DeleteとBrowser Draft putが前後・競合 | tombstoneと削除をatomicにし、削除User recordを復活させず別User recordは維持 |
 
 ## 48.8 Goal Review tests
 
@@ -6183,6 +6230,12 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 - Nested Cycleがpath Goalと不一致なら404。
 - CSRF missing/wrong、Origin mismatchをunsafe endpointで拒否。
 - Session expired時、Frontend draftを消さない。
+- Auth成功後のsafe / unsafe / handler error / `204`がsource User identity Headerと`no-store`を返し、auth失敗とanonymous bootstrapはUser identity Headerを返さない。
+- Expected User Headerの一致・欠落互換、不正・空・重複`400`、不一致`409`をsafe / unsafeで検証し、CSRF / handlerより先に拒否する。
+- Protected responseのUser identity不一致、Header欠落 / malformed、late ABA responseをFrontendがcache / UIへ公開せず、旧leaseを停止してDraft保持後にsessionを収束する。
+- Recovery priority、上位attemptによる下位abort、UNVERIFIED reload-only、Session未確定時advisoryによるdiscovery / bootstrap / lock待機abortを検証する。
+- Web Lockの排他、取得後ownership再確認、待機abort、API欠落・例外・callback未実行のfail-closed、各Cookie writerのlock保持範囲を検証する。
+- 同一Browser Contextの別tabがidentityを切り替えても、旧tabはExpected User preconditionの`409`を経て切替先payloadを旧User query keyへ保存せず、document reloadなしでauthoritative Userへ収束する。
 
 ## 48.18 Account Delete tests
 
@@ -6193,6 +6246,9 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 - aggregate monthly budget/anonymous metrics保持。
 - Transaction失敗でUser Data全維持。
 - 204後Cookie/IndexedDB clear。
+- Senderは`204`と最初のdeletion advisoryまでCookie writer lockを保持し、Browser cleanup retryでDELETEを再送しない。
+- 同じUserの別tabはadvisoryで同期停止し、confirmation先着とcleanup失敗をcoalesceしてlocal cleanupだけをretryする。別UserとSession未確定tabの分岐も検証する。
+- Tombstone/metadataへraw User ID・本文を残さず、salt不正やWeb Crypto / transaction failureをfail-closedにする。
 
 ## 48.19 Typography / i18n readiness tests
 

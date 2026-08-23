@@ -23,20 +23,22 @@ import (
 )
 
 const (
-	contractOrigin        = "https://cycle.example.test"
-	contractRequestID     = "0198c20b-7b95-7000-8000-000000000001"
-	contractSessionID     = "10000000-0000-7000-8000-000000000001"
-	contractUserID        = "20000000-0000-7000-8000-000000000001"
-	contractOtherUserID   = "20000000-0000-7000-8000-000000000002"
-	contractDraftID       = "30000000-0000-7000-8000-000000000001"
-	contractReviewDraftID = "31000000-0000-7000-8000-000000000001"
-	contractGoalID        = "40000000-0000-7000-8000-000000000001"
-	contractCycleID       = "50000000-0000-7000-8000-000000000001"
-	contractGenerationID  = "60000000-0000-7000-8000-000000000001"
-	contractOperationID   = "70000000-0000-7000-8000-000000000001"
-	contractSessionToken  = "opaque-session-token"
-	contractCSRFToken     = "opaque-csrf-token"
-	contractCookieName    = "__Host-fukamu_cycle_session"
+	contractOrigin               = "https://cycle.example.test"
+	contractRequestID            = "0198c20b-7b95-7000-8000-000000000001"
+	contractSessionID            = "10000000-0000-7000-8000-000000000001"
+	contractUserID               = "20000000-0000-7000-8000-000000000001"
+	contractOtherUserID          = "20000000-0000-7000-8000-000000000002"
+	contractDraftID              = "30000000-0000-7000-8000-000000000001"
+	contractReviewDraftID        = "31000000-0000-7000-8000-000000000001"
+	contractGoalID               = "40000000-0000-7000-8000-000000000001"
+	contractCycleID              = "50000000-0000-7000-8000-000000000001"
+	contractGenerationID         = "60000000-0000-7000-8000-000000000001"
+	contractOperationID          = "70000000-0000-7000-8000-000000000001"
+	contractSessionToken         = "opaque-session-token"
+	contractCSRFToken            = "opaque-csrf-token"
+	contractCookieName           = "__Host-fukamu_cycle_session"
+	contractUserIDHeader         = "X-Fukamu-Authenticated-User-ID"
+	contractExpectedUserIDHeader = "X-Fukamu-Expected-User-ID"
 )
 
 type contractSessionStub struct {
@@ -298,6 +300,108 @@ func TestUnsafeEndpointMatrixRequiresOriginAndCSRF(t *testing.T) {
 		if safeVerifyCalls != 0 {
 			t.Fatalf("VerifyCSRF calls = %d", safeVerifyCalls)
 		}
+	})
+}
+
+func TestExpectedAuthenticatedUserGuard(t *testing.T) {
+	t.Run("mismatch rejects before CSRF and unsafe use case", func(t *testing.T) {
+		verifyCalls := 0
+		createCalls := 0
+		sessions := authenticatedContractSessions()
+		sessions.verifyCSRF = func(appsession.AuthenticatedSession, string) error {
+			verifyCalls++
+			return nil
+		}
+		spaces := &contractWorkspaceStub{createDraft: func(context.Context, string, string) (workspace.DraftView, error) {
+			createCalls++
+			return workspace.DraftView{}, nil
+		}}
+		router := contractRouter(sessions, spaces, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodPost, "/api/v1/goal-drafts", `{}`, func(request *http.Request) {
+			addContractAuthentication(request)
+			request.Header.Set(contractExpectedUserIDHeader, contractOtherUserID)
+		})
+		if verifyCalls != 0 || createCalls != 0 {
+			t.Fatalf("downstream calls after identity mismatch = CSRF %d, create %d", verifyCalls, createCalls)
+		}
+		assertContractError(t, response, http.StatusConflict, "SESSION_IDENTITY_CHANGED", nil)
+		assertAuthenticatedUserHeader(t, response, contractUserID)
+	})
+
+	for _, malformed := range []string{"", "not-a-user-id", "2000000A-0000-7000-8000-000000000001", contractUserID + "," + contractUserID} {
+		t.Run("malformed "+malformed, func(t *testing.T) {
+			homeCalls := 0
+			spaces := &contractWorkspaceStub{home: func(context.Context, string) (workspace.HomeView, error) {
+				homeCalls++
+				return workspace.HomeView{}, nil
+			}}
+			router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+			response := serveContract(router, http.MethodGet, "/api/v1/home", "", func(request *http.Request) {
+				request.AddCookie(contractSessionCookie())
+				request.Header[http.CanonicalHeaderKey(contractExpectedUserIDHeader)] = []string{malformed}
+			})
+			if homeCalls != 0 {
+				t.Fatalf("Home calls after malformed expected user header = %d", homeCalls)
+			}
+			assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
+			assertAuthenticatedUserHeader(t, response, contractUserID)
+		})
+	}
+
+	for _, test := range []struct {
+		name      string
+		configure func(*http.Request)
+	}{
+		{name: "absent header preserves rolling compatibility"},
+		{name: "matching header reaches the use case", configure: func(request *http.Request) {
+			request.Header.Set(contractExpectedUserIDHeader, contractUserID)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			verifyCalls := 0
+			createCalls := 0
+			sessions := authenticatedContractSessions()
+			sessions.verifyCSRF = func(appsession.AuthenticatedSession, string) error {
+				verifyCalls++
+				return nil
+			}
+			spaces := &contractWorkspaceStub{createDraft: func(_ context.Context, userID, body string) (workspace.DraftView, error) {
+				createCalls++
+				if userID != contractUserID || body != "kept" {
+					t.Fatalf("CreateDraft input = %q/%q", userID, body)
+				}
+				return workspace.DraftView{}, nil
+			}}
+			router := contractRouter(sessions, spaces, &contractAccountStub{}, nil)
+			response := serveContract(router, http.MethodPost, "/api/v1/goal-drafts", `{"initialBody":"kept"}`, func(request *http.Request) {
+				addContractAuthentication(request)
+				if test.configure != nil {
+					test.configure(request)
+				}
+			})
+			if response.Code != http.StatusCreated || verifyCalls != 1 || createCalls != 1 {
+				t.Fatalf("response/downstream calls = %d/CSRF %d/create %d: %s", response.Code, verifyCalls, createCalls, response.Body.String())
+			}
+			assertAuthenticatedUserHeader(t, response, contractUserID)
+		})
+	}
+
+	t.Run("duplicate header values are malformed", func(t *testing.T) {
+		homeCalls := 0
+		spaces := &contractWorkspaceStub{home: func(context.Context, string) (workspace.HomeView, error) {
+			homeCalls++
+			return workspace.HomeView{}, nil
+		}}
+		router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodGet, "/api/v1/home", "", func(request *http.Request) {
+			request.AddCookie(contractSessionCookie())
+			request.Header[http.CanonicalHeaderKey(contractExpectedUserIDHeader)] = []string{contractUserID, contractUserID}
+		})
+		if homeCalls != 0 {
+			t.Fatalf("Home calls after duplicate expected user header = %d", homeCalls)
+		}
+		assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
+		assertAuthenticatedUserHeader(t, response, contractUserID)
 	})
 }
 
@@ -651,6 +755,157 @@ func TestSessionAndAccountCookieContract(t *testing.T) {
 	})
 }
 
+func TestAuthenticatedUserResponseHeaderContract(t *testing.T) {
+	t.Run("safe success identifies the authenticated user", func(t *testing.T) {
+		spaces := &contractWorkspaceStub{home: func(_ context.Context, userID string) (workspace.HomeView, error) {
+			if userID != contractUserID {
+				t.Fatalf("Home user = %q", userID)
+			}
+			return workspace.HomeView{ProgressingGoals: []workspace.GoalView{}}, nil
+		}}
+		router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodGet, "/api/v1/home", "", func(request *http.Request) {
+			request.AddCookie(contractSessionCookie())
+		})
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		assertAuthenticatedUserHeader(t, response, contractUserID)
+	})
+
+	t.Run("authenticated handler error retains the source user", func(t *testing.T) {
+		spaces := &contractWorkspaceStub{getGoal: func(context.Context, string, string) (workspace.GoalView, error) {
+			return workspace.GoalView{}, errors.New("storage unavailable")
+		}}
+		router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodGet, "/api/v1/goals/"+contractGoalID, "", func(request *http.Request) {
+			request.AddCookie(contractSessionCookie())
+		})
+		assertContractError(t, response, http.StatusInternalServerError, "INTERNAL_ERROR", nil)
+		assertAuthenticatedUserHeader(t, response, contractUserID)
+	})
+
+	t.Run("CSRF rejection retains the source user", func(t *testing.T) {
+		router := contractRouter(authenticatedContractSessions(), &contractWorkspaceStub{}, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodPost, "/api/v1/goal-drafts", "{}", func(request *http.Request) {
+			request.AddCookie(contractSessionCookie())
+			request.Header.Set("Origin", contractOrigin)
+		})
+		assertContractError(t, response, http.StatusForbidden, "CSRF_INVALID", nil)
+		assertAuthenticatedUserHeader(t, response, contractUserID)
+	})
+
+	t.Run("session refresh identifies the authenticated user", func(t *testing.T) {
+		sessions := authenticatedContractSessions()
+		sessions.refresh = func(context.Context, string) (appsession.View, error) {
+			return appsession.View{
+				UserID:    contractUserID,
+				CSRFToken: "rotated-csrf",
+			}, nil
+		}
+		router := contractRouter(sessions, &contractWorkspaceStub{}, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodGet, "/api/v1/session", "", func(request *http.Request) {
+			request.AddCookie(contractSessionCookie())
+		})
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		assertAuthenticatedUserHeader(t, response, contractUserID)
+	})
+
+	t.Run("Google login identifies source user while returning target user", func(t *testing.T) {
+		accounts := &contractAccountStub{login: func(context.Context, string, string) (account.View, error) {
+			return account.View{
+				UserID:          contractOtherUserID,
+				GoogleConnected: true,
+				SessionToken:    "login-session",
+				CSRFToken:       "login-csrf",
+			}, nil
+		}}
+		router := contractRouter(authenticatedContractSessions(), &contractWorkspaceStub{}, accounts, nil)
+		response := serveContract(router, http.MethodPost, "/api/v1/auth/google/login", `{"idToken":"google-token"}`, addContractAuthentication)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		assertAuthenticatedUserHeader(t, response, contractUserID)
+		var body contractSessionResponse
+		decodeContractJSON(t, response, &body)
+		if body.User.ID != contractOtherUserID {
+			t.Fatalf("login response user = %q", body.User.ID)
+		}
+	})
+
+	t.Run("account delete identifies the deleted source user", func(t *testing.T) {
+		accounts := &contractAccountStub{delete: func(context.Context, user.ID, bool) error {
+			return nil
+		}}
+		router := contractRouter(authenticatedContractSessions(), &contractWorkspaceStub{}, accounts, nil)
+		response := serveContract(router, http.MethodDelete, "/api/v1/account", `{"confirmed":true}`, addContractAuthentication)
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		assertAuthenticatedUserHeader(t, response, contractUserID)
+	})
+
+	t.Run("missing authentication does not invent a user", func(t *testing.T) {
+		sessions := &contractSessionStub{
+			authenticate: func(context.Context, string) (appsession.AuthenticatedSession, error) {
+				panic("Authenticate must not run without a cookie")
+			},
+		}
+		router := contractRouter(sessions, &contractWorkspaceStub{}, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodGet, "/api/v1/home", "", nil)
+		assertContractError(t, response, http.StatusUnauthorized, "SESSION_MISSING", nil)
+		assertNoAuthenticatedUserHeader(t, response)
+		assertNoStore(t, response)
+	})
+
+	t.Run("anonymous bootstrap does not claim an authenticated source user", func(t *testing.T) {
+		sessions := &contractSessionStub{
+			createAnonymous: func(context.Context, appsession.CreateAnonymousInput) (appsession.View, error) {
+				return appsession.View{
+					UserID:       contractUserID,
+					CSRFToken:    contractCSRFToken,
+					SessionToken: contractSessionToken,
+				}, nil
+			},
+		}
+		router := contractRouter(sessions, &contractWorkspaceStub{}, nil, nil)
+		response := serveContract(router, http.MethodPost, "/api/v1/session/anonymous",
+			`{"bootstrapId":"`+contractOperationID+`","turnstileToken":"turnstile-token"}`,
+			func(request *http.Request) { request.Header.Set("Origin", contractOrigin) })
+		if response.Code != http.StatusCreated {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		assertNoAuthenticatedUserHeader(t, response)
+		assertNoStore(t, response)
+	})
+
+	t.Run("unmatched API response is not cacheable", func(t *testing.T) {
+		router := contractRouter(authenticatedContractSessions(), &contractWorkspaceStub{}, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodGet, "/api/v1/not-a-route", "", nil)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		assertNoAuthenticatedUserHeader(t, response)
+		assertNoStore(t, response)
+	})
+
+	t.Run("health does not claim an authenticated source user", func(t *testing.T) {
+		router := contractRouter(authenticatedContractSessions(), &contractWorkspaceStub{}, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodGet, "/healthz", "", func(request *http.Request) {
+			request.AddCookie(contractSessionCookie())
+		})
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		assertNoAuthenticatedUserHeader(t, response)
+		if got := response.Header().Get("Cache-Control"); got != "" {
+			t.Fatalf("health Cache-Control = %q, want empty", got)
+		}
+	})
+}
+
 type contractErrorEnvelope struct {
 	Error struct {
 		Code      string         `json:"code"`
@@ -735,6 +990,28 @@ func assertContractError(t *testing.T, response *httptest.ResponseRecorder, stat
 	}
 	if !reflect.DeepEqual(envelope.Error.Details, details) {
 		t.Fatalf("details = %#v, want %#v", envelope.Error.Details, details)
+	}
+}
+
+func assertAuthenticatedUserHeader(t *testing.T, response *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	if got := response.Header().Get(contractUserIDHeader); got != want {
+		t.Fatalf("%s = %q, want %q", contractUserIDHeader, got, want)
+	}
+	assertNoStore(t, response)
+}
+
+func assertNoAuthenticatedUserHeader(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if got := response.Header().Get(contractUserIDHeader); got != "" {
+		t.Fatalf("%s = %q, want empty", contractUserIDHeader, got)
+	}
+}
+
+func assertNoStore(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want %q", got, "no-store")
 	}
 }
 

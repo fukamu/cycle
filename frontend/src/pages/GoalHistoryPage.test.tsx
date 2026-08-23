@@ -3,7 +3,8 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
-import { SessionContext } from "../features/auth/sessionContext";
+import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
+import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import type { Goal, Session } from "../shared/api/schemas";
 import { listGoals } from "../shared/api/workspace";
 import { GoalHistoryPage } from "./GoalHistoryPage";
@@ -20,6 +21,8 @@ const session: Session = {
   },
   csrfToken: "csrf-token",
 };
+
+const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
 
 let notifyIntersection: IntersectionObserverCallback;
 
@@ -80,7 +83,13 @@ describe("GoalHistoryPage pagination recovery", () => {
 
     expect(await screen.findByText("次の目標")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(listGoals).toHaveBeenNthCalledWith(3, "all", "next");
+    expect(listGoals).toHaveBeenNthCalledWith(
+      3,
+      sessionLease,
+      "all",
+      "next",
+      expect.any(AbortSignal),
+    );
   });
 });
 
@@ -90,11 +99,11 @@ function renderHistory() {
   });
   render(
     <QueryClientProvider client={cache}>
-      <SessionContext.Provider value={session}>
+      <AuthenticatedSessionTestProvider lease={sessionLease} session={session}>
         <MemoryRouter>
           <GoalHistoryPage />
         </MemoryRouter>
-      </SessionContext.Provider>
+      </AuthenticatedSessionTestProvider>
     </QueryClientProvider>,
   );
 }
