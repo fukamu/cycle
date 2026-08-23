@@ -72,6 +72,10 @@ type GoalDraftTx interface {
 	DeleteCreationDraftCAS(context.Context, string, string, int64) (int64, error)
 
 	LockDraftGenerations(context.Context, string, string) ([]DraftGenerationState, error)
+	LockDraftUsages(context.Context, string, []string) ([]DraftUsageState, error)
+	RedactDraftUsagesCAS(context.Context, string, []string) (int64, error)
+	DeleteExpiredFinalizedDraftUsagesCAS(context.Context, string, []string, time.Time) (int64, error)
+	DeleteDraftGenerationsCAS(context.Context, string, string, []string) (int64, error)
 
 	FindStartReplay(context.Context, string, string) (*StartReplayState, error)
 	CountProgressingGoals(context.Context, string) (int, error)
@@ -134,6 +138,12 @@ type GoalDraftUseCaseSettings struct {
 type DraftGenerationState struct {
 	ID     string
 	Status string
+}
+
+type DraftUsageState struct {
+	OperationID              string
+	QuotaRetainUntil         time.Time
+	ProviderUsageFinalizedAt *time.Time
 }
 
 type StartReplayState struct {

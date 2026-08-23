@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -14,6 +15,11 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	retentionDown, err := os.ReadFile(filepath.Join(directory, "000002_ai_usage_retention_margin.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, retentionDown)
 	down, err := os.ReadFile(filepath.Join(directory, "000001_fukamu_cycle_baseline.down.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -25,12 +31,13 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 1 {
-		t.Fatalf("applied migrations = %v, want 1", result.Applied)
+	if len(result.Applied) != 2 {
+		t.Fatalf("applied migrations = %v, want 2", result.Applied)
 	}
-	migration := result.Applied[0]
-	if migration.Version != 1 || migration.Direction != "up" || migration.File != "000001_fukamu_cycle_baseline.up.sql" {
-		t.Fatalf("applied migration = %+v", migration)
+	baseline, retention := result.Applied[0], result.Applied[1]
+	if baseline.Version != 1 || baseline.Direction != "up" || baseline.File != "000001_fukamu_cycle_baseline.up.sql" ||
+		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" {
+		t.Fatalf("applied migrations = %+v", result.Applied)
 	}
 	result, err = Migrate(databaseURL, directory)
 	if err != nil {
@@ -42,7 +49,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 1 || users != 0 {
+	if version != 2 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
@@ -58,6 +65,86 @@ VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000
 	if err == nil {
 		t.Fatal("oversize goal draft unexpectedly succeeded")
 	}
+}
+
+func TestAIUsageRetentionMigrationBackfillsAndClampsOldWriters(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	directory := filepath.Join("..", "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(directory, "000002_ai_usage_retention_margin.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile(filepath.Join(directory, "000002_ai_usage_retention_margin.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := true
+	t.Cleanup(func() {
+		if !installed {
+			executeMigrationScript(t, pool, up)
+		}
+	})
+	executeMigrationScript(t, pool, down)
+	installed = false
+
+	ctx := context.Background()
+	acceptedAt := time.Date(2026, time.August, 24, 0, 0, 0, 0, time.UTC)
+	const userID = "10000000-0000-7000-8000-000000000002"
+	if _, err = pool.Exec(ctx, `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, acceptedAt); err != nil {
+		t.Fatal(err)
+	}
+	insertUsage := func(operationID string, retainUntil time.Time) {
+		t.Helper()
+		if _, insertErr := pool.Exec(ctx, `INSERT INTO ai_usage_events
+(operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
+VALUES($1,$2,'goal_refine','accepted','fake','test','goal-v2',$3,$4)`,
+			operationID, userID, acceptedAt, retainUntil); insertErr != nil {
+			t.Fatal(insertErr)
+		}
+	}
+	readDeadline := func(operationID string) time.Time {
+		t.Helper()
+		var deadline time.Time
+		if queryErr := pool.QueryRow(ctx, `SELECT quota_retain_until FROM ai_usage_events WHERE operation_id=$1`, operationID).Scan(&deadline); queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		return deadline
+	}
+	const legacyID = "30000000-0000-7000-8000-000000000011"
+	insertUsage(legacyID, acceptedAt.Add(24*time.Hour))
+
+	executeMigrationScript(t, pool, up)
+	installed = true
+	wantDeadline := acceptedAt.Add(24*time.Hour + 15*time.Minute)
+	if got := readDeadline(legacyID); !got.Equal(wantDeadline) {
+		t.Fatalf("backfilled deadline = %s, want %s", got, wantDeadline)
+	}
+
+	const oldWriterID = "30000000-0000-7000-8000-000000000012"
+	insertUsage(oldWriterID, acceptedAt.Add(24*time.Hour))
+	if got := readDeadline(oldWriterID); !got.Equal(wantDeadline) {
+		t.Fatalf("old-writer deadline = %s, want trigger normalization %s", got, wantDeadline)
+	}
+	const longerID = "30000000-0000-7000-8000-000000000013"
+	insertUsage(longerID, acceptedAt.Add(26*time.Hour))
+	if got := readDeadline(longerID); !got.Equal(wantDeadline) {
+		t.Fatalf("longer deadline = %s, want trigger normalization %s", got, wantDeadline)
+	}
+
+	executeMigrationScript(t, pool, down)
+	installed = false
+	if got := readDeadline(oldWriterID); !got.Equal(wantDeadline) {
+		t.Fatalf("down changed retained data to %s, want %s", got, wantDeadline)
+	}
+	const afterDownID = "30000000-0000-7000-8000-000000000014"
+	wantLegacy := acceptedAt.Add(24 * time.Hour)
+	insertUsage(afterDownID, wantLegacy)
+	if got := readDeadline(afterDownID); !got.Equal(wantLegacy) {
+		t.Fatalf("down left clamp active: deadline = %s, want %s", got, wantLegacy)
+	}
+	executeMigrationScript(t, pool, up)
+	installed = true
 }
 
 func assertUUIDv7Constraints(t *testing.T, pool *pgxpool.Pool) {

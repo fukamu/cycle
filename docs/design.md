@@ -461,7 +461,7 @@ flowchart TD
 13. Goal Reviewからterminalへ遷移する場合、Draft変更をVersion化せず、Draftと紐づくGoal Refine contentを削除する。User quota判定用の本文を含まないUsage EventだけはRetention ruleに従って維持する。
 14. Completed / Canceled Cycleは個別更新・削除・再Open不可。
 15. Goal Aggregate Deleteのみ、配下のImmutable履歴を一括削除できる。
-16. Goal Delete後もQuota window内のUser AI Usageは残り、Quotaは復活しない。
+16. Goal Delete後も、物理保持期限`quotaRetainUntil`まではUser AI Usageを本文なしで残し、Quotaを復活させない。期限到達後もProvider usage未確定ならsettlement完了まで保持する。
 17. AI Contextへ他GoalのCycleを混入させない。
 18. Goal Refine / Action Generate / Action Refineを同じUser rolling quotaへ合算する。
 19. Provider内部retryはUser quotaを増やさないが、実Costへ加算する。
@@ -1019,7 +1019,7 @@ stateDiagram-v2
 3. Goalのcurrent versionを変更しない。
 4. 次Cycleを作らない。
 5. 破棄Draft本文を別の履歴recordとして保持しない。
-6. Review Draftに紐づくGoal RefineのAIGeneration contentも削除し、対応するAIUsageEventを`contentDeleted=true`としてQuota window中だけ本文なしで維持する。
+6. Review Draftに紐づくGoal RefineのAIGeneration contentも削除する。対応するAIUsageEventは§15.8の物理保持期限とProvider usage settlement ruleに従い、必要な期間だけ`contentDeleted=true`として本文なしで維持する。
 
 Frontend confirmationは、Draftに変更がある場合に次を明示する。
 
@@ -1264,16 +1264,20 @@ Quota判定とUser単位利用分析の最小record。AIGeneration contentとは
 | outputTokens | int64 | No | final usage |
 | estimatedCostUsd | decimal | No | final cost |
 | providerUsageFinalizedAt | Instant | No | Provider attemptsのUsage/Costを集計済みであることを示す。CASにより二重計上を防ぐ |
-| quotaRetainUntil | Instant | Yes | acceptedAt + rolling window + safety margin |
+| quotaRetainUntil | Instant | Yes | `acceptedAt + 24時間 + 15分`。24時間はQuota集計窓、15分は物理削除だけを遅らせる固定safety margin |
 | contentDeleted | bool | Yes | Goal/Draft content削除済みを示す |
 
 Content deletion時:
 
-- Creation Draft abandonまたはGoal Review terminalでは、対応するAIGenerationを削除し、AIUsageEventを`contentDeleted=true`へ更新する。Goalが存在するReview terminalでは`goalId`を維持してよい。これらの操作はrunning Goal Refineを拒否するため、通常は`providerUsageFinalizedAt`が設定済みである。
-- Goal Deleteで`acceptedAt`がQuota window内なら、`goalId=NULL`、`contentDeleted=true`として保持する。Provider call中のDeleteでは`providerUsageFinalizedAt`を未設定のまま残し、遅延結果をcontent-freeなUsage/Costへ一度だけsettleできる。
-- Quota window外で、他の運用Retention理由がなければ即時削除する。
-- Goal/Cycle/AI本文は保持しない。
+- Quota count windowは`acceptedAt`から24時間であり、15分のsafety marginをQuota判定へ加えない。物理削除の最早時刻だけを`quotaRetainUntil`とする。
+- `now < quotaRetainUntil`なら、`contentDeleted=true`として本文なしのAIUsageEventを保持する。Goal Deleteでは`goalId=NULL`へredactする。
+- `now >= quotaRetainUntil`かつ`providerUsageFinalizedAt IS NOT NULL`なら、他の運用Retention理由がないAIUsageEventを同じTransactionで削除する。
+- `providerUsageFinalizedAt IS NULL`なら期限到達後も削除せず、遅延結果をcontent-freeなUsage/Costへ一度だけsettleする。Late settlement TransactionではUsage/Costだけを確定し、その時点ですでに期限到達済みのrecordは次回の期限cleanupで削除する。
+- 別のdurableなno-in-flight証明を導入するまでは、Generationがterminalまたは削除済みであることだけを削除根拠にしない。
+- Creation Draft abandonまたはGoal Review terminalでは、対応するAIGenerationを削除する。保持対象のAIUsageEventは`contentDeleted=true`へ更新し、Goalが存在するReview terminalでは`goalId`を維持してよい。
+- Goal/Cycle/Draft/Prompt/AI source・output本文は保持しない。
 - User quotaは`goalId`の有無に関係なくUser単位でcountする。
+- Account Deleteは個人単位recordを全削除するため、この物理保持期限の例外とする。
 
 ## 15.9 AuthIdentity / Session / AnonymousBootstrap
 
@@ -1666,7 +1670,7 @@ CREATE TABLE ai_usage_events (
     CHECK (input_tokens IS NULL OR input_tokens >= 0),
     CHECK (output_tokens IS NULL OR output_tokens >= 0),
     CHECK (estimated_cost_usd IS NULL OR estimated_cost_usd >= 0),
-    CHECK (quota_retain_until >= accepted_at)
+    CHECK (quota_retain_until - accepted_at = INTERVAL '24 hours 15 minutes')
 );
 CREATE INDEX idx_ai_usage_user_rolling
     ON ai_usage_events(user_id, accepted_at DESC);
@@ -1720,7 +1724,7 @@ DB constraintだけでは完全に表現できない次のInvariantはApplicatio
 - Review Draftの`review_cycle_id`は同一GoalのCompleted Cycleで、`base_goal_version_id`はReview開始時のCurrent Versionである。
 - Creation DraftをTargetとするGoal Refineは`goal_id/goal_version_id`がnone、Review DraftをTargetとするGoal RefineはDraftと同じ`goal_id/base_goal_version_id`を持つ。
 - AIGeneration `context_cycle_ids`はすべて同一User・同一Goalに属する。
-- Provider call開始をacceptedした各AIGenerationには、同じlogical operation IDのAIUsageEventがexactly 1件存在する。Goal/Draft Delete後はAIGeneration contentだけが削除され得る。
+- Provider call開始をacceptedするTransactionでは、各AIGenerationと同じlogical operation IDのAIUsageEventをexactly 1件insertする。以後はlifecycleを分離し、Goal/Draft content deletionでAIGenerationだけが先に削除され得る一方、`quotaRetainUntil`到達後かつProvider usage確定済みの期限cleanupでAIUsageEventだけが先に削除され得る。
 - `AIUsageEvent.goal_id`が非NULLなら、そのGoalは同じ`user_id`に属する。Goal Delete時は`goal_id=NULL`へ更新する。
 - AIUsageEventとAIGenerationは同一logical operation IDを使うが、Goal Delete lifecycleのためFKで密結合しない。
 - 通常のAI terminal処理では`AIUsageEvent.provider_usage_finalized_at`を必ず設定する。例外は、Goal Deleteがin-flight Provider callを先に削除し、遅延結果のcontent-free settlementを待つ期間だけである。
@@ -2060,7 +2064,7 @@ sequenceDiagram
 3. Goal `FOR UPDATE`。
 4. Review Draft `FOR UPDATE`。
 5. expectedGoalRevision / Goal status / AI idleを検証する。Review Draft revisionは比較しない。ただしDraft本文がCurrent Versionと異なる場合は`confirmDiscardReviewDraft=true`を要求する。
-6. Review Draftに紐づくGoal Refine AIGeneration contentを削除し、対応するAIUsageEventを`contentDeleted=true`へ更新してQuota判定用に本文なしで維持する。
+6. Review Draftに紐づくGoal Refine AIGeneration contentを削除し、対応するAIUsageEventを§15.8の物理保持期限とProvider usage settlement ruleに従ってredact保持または削除する。
 7. Review Draftを削除。Draft本文はVersion化しない。
 8. Goalをterminalへ更新。
 9. commit。
@@ -2079,8 +2083,9 @@ Transaction:
 4. 配下Review Draft、Cycle、running AIGenerationをそれぞれUUID昇順でlockし、Generationの後に対象`ai_budget_monthly`を月昇順でlockする。
 5. running AIのreservationはDBの`NUMERIC`として月ごとに合算する。`budget_reserved_cost_usd > 0`の月は同額を`reserved_cost_usd`から一度だけ減算し、Generation側reservationを0へする。Generationは`failed / goal_deleted`へterminal化し、AIUsageEventは`failed`・`content_deleted=true`へ更新する。Provider callがin-flightなら`provider_usage_finalized_at`は未設定のまま残す。Budget、各Generation、各running UsageのCASはexactly one rowを要求し、0-rowならdelete・receiptを含むTransaction全体をrollbackする。
 6. Goalに紐づくAIUsageEvent:
-   - Quota window内: `goal_id=NULL`, `content_deleted=true`。
-   - window外: Provider usageがsettle済み、またはin-flight callが存在しないことを確認してdelete。
+   - `now < quota_retain_until`: `goal_id=NULL`, `content_deleted=true`として保持。
+   - `now >= quota_retain_until`かつ`provider_usage_finalized_at IS NOT NULL`: delete。
+   - `provider_usage_finalized_at IS NULL`: `goal_id=NULL`, `content_deleted=true`として保持し、late settlementを許可する。将来別のdurableなno-in-flight証明を導入するまではdeleteしない。
 7. Goalをdelete。FK cascadeでVersions / Drafts / Cycles / AIGeneration contentを削除。
 8. GoalDeleteReceiptをinsert。
 9. commit。
@@ -2097,7 +2102,7 @@ Concurrent operation:
 - Deleteが先にcommit: 後続save / AI / transitionは404。
 - Transitionが先にcommit: Deleteは新状態を含むAggregate全体を削除するか、expectedGoalRevision不一致なら409で再確認を求める。
 - Goal Deleteはrunning AIより優先し、遅延provider responseでGoalを再作成しない。
-- Delete後の遅延Provider結果は、残っているAIUsageEventを`operation_id`でlockし、`provider_usage_finalized_at IS NULL`の場合だけToken/Costを保存して月次`actual_cost_usd`へ一度加算する。ReservationはDelete Transactionですでに解放済みであるため、このlate pathでは**減算しない**。CASが成立しない再実行はno-opとし、二重Cost計上を防ぐ。
+- Delete後の遅延Provider結果は、残っているAIUsageEventを`operation_id`でlockし、`provider_usage_finalized_at IS NULL`の場合だけToken/Costを保存して月次`actual_cost_usd`へ一度加算する。ReservationはDelete Transactionですでに解放済みであるため、このlate pathでは**減算しない**。CASが成立しない再実行はno-opとし、二重Cost計上を防ぐ。Late path自体はUsageを削除せず、確定後に§38.2のcleanup対象へ移す。
 
 ## 18.8 Concurrency matrix
 
@@ -2542,12 +2547,14 @@ RETURNING revision;
 
 Transaction:
 
-1. User、Creation Draft、Draftに紐づくAIGenerationをこの順でlockする。複数GenerationはUUID昇順。
+1. User、Creation Draft、Draftに紐づくAIGeneration、対応するAIUsageEventをこの順でlockする。複数rowは各IDのUUID昇順。
 2. lockしたGenerationのいずれかがrunningなら`AI_OPERATION_IN_PROGRESS`。UIは処理完了または失敗後に再試行。
-3. Draftに紐づくGoal Refine AIGeneration contentを削除。
-4. 対応するAIUsageEventを`contentDeleted=true`へ更新し、User quota recordとして保持する。
-5. Draftを削除。
-6. Usage更新数、Generation削除数、Draft削除数をlock済みrow数と照合し、0-rowまたは不足ならTransaction全体をrollbackする。
+3. AIUsageEventを§15.8に従ってpartitionする。`now < quotaRetainUntil`またはProvider usage未確定なら保持し、期限到達済みかつ確定済みなら削除対象とする。
+4. 保持対象のAIUsageEventを`goalId=NULL`, `contentDeleted=true`へ更新する。
+5. 削除対象のAIUsageEventを削除する。
+6. Draftに紐づくGoal Refine AIGeneration contentを削除する。
+7. Draftを削除する。
+8. Usage lock・更新・削除数、Generation削除数、Draft削除数をそれぞれのlock済みrow数と照合し、0-rowまたは不足ならTransaction全体をrollbackする。期限cleanupによりUsageだけが先に削除済みの場合を許容し、Usage数とGeneration数の一致は要求しない。
 
 Response: `204 No Content`。
 
@@ -4928,6 +4935,8 @@ WHERE user_id = $1
 
 `retryAt`を計算できる場合は最古のwindow内Eventの失効時刻をError detailsへ返す。
 
+15分のsafety marginはQuota countと`retryAt`を延長しない。AIUsageEventの物理削除だけを`acceptedAt + 24時間15分`まで遅らせる。
+
 ## 38.2 Usage data minimization
 
 Quota判定に必要な最小情報は`AIUsageEvent`へ保持する。Goal Delete後:
@@ -4936,7 +4945,7 @@ Quota判定に必要な最小情報は`AIUsageEvent`へ保持する。Goal Delet
 - `content_deleted=true`
 - operation type / status / acceptedAt / token / costは保持可
 - Goal、Cycle、Prompt本文、AI outputは保持しない
-- `quota_retain_until`経過後、運営上の集計Retentionが不要ならcleanup対象
+- `quota_retain_until`到達後かつ`provider_usage_finalized_at IS NOT NULL`で、他の運用Retention理由がなければcleanup対象。未確定recordは期限を問わずskipする
 
 User単位Quota判定にGoal本文やAI outputを使用しない。
 
@@ -4977,7 +4986,7 @@ else:
     no-op  # retryによる二重settlementを防止
 ```
 
-Goal DeleteがGenerationを先に削除したlate pathでは、content-freeなAIUsageEventだけをlockする。`providerUsageFinalizedAt IS NULL`ならToken/Costと`actualCost`を一度だけ更新し、Delete時に解放済みのreservationは触らない。Account DeleteではAIUsageEvent自体を削除し、Delete Transactionでreservationを`unattributedCost`へ保守的に移すため、late resultはbudgetへ再計上しない。
+Goal DeleteがGenerationを先に削除したlate pathでは、content-freeなAIUsageEventだけをlockする。`providerUsageFinalizedAt IS NULL`ならToken/Costと`actualCost`を一度だけ更新し、Delete時に解放済みのreservationは触らない。このlate pathはUsageを削除せず、確定後に§38.2のcleanup対象へ移す。Account DeleteではAIUsageEvent自体を削除し、Delete Transactionでreservationを`unattributedCost`へ保守的に移すため、late resultはbudgetへ再計上しない。
 
 Provider failureでもusageが返ったattemptはactual costへ加算する。Reservationはconcurrent requestによるbudget overshootを防ぐための上限確保であり、実Costではない。`providerUsageFinalizedAt`は、成功/失敗のHTTP response retryやdetached cleanup retryが同一Costを二重加算しないためのsettlement CASである。
 
@@ -5293,7 +5302,7 @@ Goal Aggregate DeleteはContent deletion Use Caseであり、次を同一Transac
 - Goal / Cycleに紐づくAIGeneration content
 - Goal本文を含むその他のApplication data
 
-Quota window内AIUsageEventだけは本文なし・Goal ID redactedで保持する。Delete後のlate AI responseはGoal/Cycle/Draftを再作成せず破棄する。
+物理保持期限`quotaRetainUntil`前のAIUsageEvent、および期限到達後もProvider usage未確定のAIUsageEventは、本文なし・Goal ID redactedで保持する。Delete後のlate AI responseはGoal/Cycle/Draftを再作成せず、Usage/Costだけを一度settleする。
 
 ## 41.10 Account Delete
 
@@ -6153,8 +6162,8 @@ Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpa
 | AI-GR-12 | timeout | Draft維持 |
 | AI-GR-13 | same Draft double AI | second rejected |
 | AI-GR-14 | same idempotency replay | no duplicate logical operation |
-| AI-GR-15 | Goal Review termination after refine | Version unchanged、Draft/related AI content discarded、Usage quota retained |
-| AI-GR-16 | initial Draft abandon | Generation content削除、Usage quota維持 |
+| AI-GR-15 | Goal Review termination after refine | Version unchanged、Draft/related AI content discarded、Usageはdeadline/settlement ruleどおり保持または削除 |
+| AI-GR-16 | initial Draft abandon | Generation content削除。deadline直前はredact保持、deadline同時刻以後のfinalized Usageは削除、unfinalized Usageは保持 |
 | AI-GR-17 | displayed suggestion後の再Refine失敗 | 既存suggestionを維持し、再取得失敗を通知 |
 
 ## 48.12 Goal Refine quality rule tests
@@ -6228,6 +6237,7 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 | Q-16 | Goal Delete後のlate provider result | reservation再減算なし、actual costはCASで一度だけ計上 |
 | Q-17 | Account Delete中のrunning AI | reservationをunattributed costへ一度だけ移し、late resultは再計上しない |
 | Q-18 | Progressing Goal 2件で一方のquotaを消費後、他方からAI実行 | Goal別に増枠せずUser rolling quotaで拒否 |
+| Q-19 | accepted AI operation | Quota countは24時間、`quotaRetainUntil`はacceptedAtから24時間15分 |
 
 ## 48.16 Goal Delete tests
 
@@ -6239,8 +6249,9 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 | GD-04 | ended Goal delete | entire Aggregate削除 |
 | GD-05 | another Goal exists | unaffected |
 | GD-06 | Completed/Canceled children | cascadeで削除、orphanなし |
-| GD-07 | quota-window Usage | redacted/minimal維持 |
-| GD-08 | old Usage outside retention | delete可 |
+| GD-07 | Usage just before `quotaRetainUntil` | redacted/minimal維持 |
+| GD-08 | finalized Usage at/after `quotaRetainUntil` | 同じTransactionでdelete |
+| GD-08a | unfinalized Usage at/after `quotaRetainUntil` | redacted/minimal維持し、late settlementを許可 |
 | GD-09 | running AI | cancel、reservationを一度だけrelease、Usageはcontent-freeで維持 |
 | GD-10 | late AI response | Aggregate再作成なし、reservation再減算なし、Cost CAS一回 |
 | GD-11 | transaction failure | Aggregate全体維持 |
@@ -6775,7 +6786,7 @@ AIコーディングエージェントと実装者は、次のInvariantを実装
 12. `achieved` / `ended` GoalはTerminalであり、再Openしない。
 13. Completed / Canceled Cycleは編集、単体削除、再Openを許可しない。
 14. Goal Aggregate Deleteは履歴編集ではなく、Goal配下Content全体を削除する明示的Data Deletion Use Caseとして扱う。
-15. Goal Delete後もQuota Window内の最小AI Usage Eventを保持し、User Rolling Quotaを復活させない。
+15. Goal Delete後も`quotaRetainUntil`前またはProvider usage未確定の最小AI Usage Eventを保持し、User Rolling Quotaを復活させない。
 16. Goal RefineはSuggestionを別表示し、明示的なAdopt成功時だけDraftへ反映する。
 17. Goal Draft revisionが変わったStale Suggestionを採用しない。
 18. AI Contextへ他GoalのCycleまたは本文を混入させない。

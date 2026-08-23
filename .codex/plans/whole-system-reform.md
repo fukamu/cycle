@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M14 Goal draft/start use cases（7 command移行済み、Creation Draft AbandonはRetention判断待ち）
+- 状態: IN_PROGRESS / M14 Goal draft/start use cases（全8 command移行と15分Retention修正のB/E完了、commit前必須gate準備中）
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -71,8 +71,6 @@
 | Browser Draft recovery telemetry transport | Product/Security owner、M23 instrumentation前 | Backendで観測可能なmetricは進めるが、新しいbrowser telemetry endpoint/header/exporterを推測で追加しない |
 | Terraform R2 credential topology | Operations owner、M27 workflow変更前 | Snapshot helperとlocal isolated testは進めるが、secret配置、Plan/Apply権限、live R2 drillを変更・実行しない |
 | React Hook Formを削除する設計変更 | Product/Architecture owner、M29 dependency削除前 | chi等の独立更新は進めるが、RHFと該当SoTは維持 |
-| Goal Delete / Creation Draft Abandon時のQuota window外AI Usageに別のRetention理由があるか | Product/Security owner、M14 Abandon移行前（M15着手前） | 現行SoTの「Quota window外かつProvider usage settledまたはno in-flight確認後の即時削除」と実装の全件redacted保持が不一致。M14 AbandonとM15 Deleteを停止する。M14の保持判断に依存しない7 commandは独立commit可能だが、Abandon未移行の間はM14未完了とし、M15以降へ進まない |
-| AIUsageEvent `quotaRetainUntil`のsafety margin期間 | Product/Security owner、M24 retention cleanup前 | 現行metadataはacceptedAt + rolling 24時間（追加safety marginなし）であり、24時間をsafety margin決定とみなさない。値決定までは既存の全件保持を一時維持し、M24の期限cleanup実装・有効化・境界testを停止 |
 | Closed Beta終了日 | Product owner | `off` deploy、連続168時間、owner承認までcode/config/runbookを維持 |
 
 ## 7. Current behavior contract
@@ -403,7 +401,7 @@ Frontendはroute pageがAPI orchestration、state machine、autosave、IndexedDB
 | M21 | Cycle/AI stable SQLがsqlc経由。Unused query削除。Schema変更時だけ`000002+` pairがgreen |
 | M22 | Local/test in-memory exporterとOTLP/HTTP exporterが実span/metricを送信し、shutdownをflush |
 | M23 | Required metrics/correlationがcall siteから観測でき、本文/secret/raw identityがattributeにない |
-| M24 | goal-start limiterと期限cleanupがowner/retention契約を守り、dry-runとintegration testがgreen |
+| M24 | goal-start limiterと期限cleanupがowner/retention契約を守る。Dry-runが無変更で件数を返し、期限前・exact期限・確定/未確定、late settlement前後、重複callback/cleanupのintegration testがgreen |
 | M25 | Security/config/docs gateがCIで再現可能に失敗・成功し、tool versionが固定 |
 | M26 | Deploy後critical journeyがunique anonymous accountを作成し、Goal/Cycle/Review後にaccountを削除 |
 | M27 | Apply前snapshot失敗時にapply停止。Live stateを書き換えずisolated keyへのrestore drillが成功 |
@@ -482,7 +480,7 @@ TEST_DATABASE_URL='<explicit disposable *_test database>' ./scripts/check-before
 | M21 | B、Q、empty DB up、disposable DB down/up、E、C |
 | M22 | B、in-memory OTLP receiver integration、A、C。Staging deploy前にendpoint secret確認 |
 | M23 | B、metric/span export assertions、PII allowlist/log scan、A、C |
-| M24 | B、cleanup dry-run/integration、E、C |
+| M24 | B、cleanup dry-run、期限境界・late settlement・冪等性・lock/revalidation integration、E、C |
 | M25 | A、D、S、I、negative fixture tests、C |
 | M26 | A、I、`./scripts/check-staging-critical.sh`、C |
 | M27 | I、isolated R2 backend key restore drill、checksum comparison、C |
@@ -551,6 +549,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 24. Decision log
 
+- 2026-08-24: Product/Security owner判断として、Goal Delete / Creation Draft Abandon時のAIUsageEventにQuota以外のRetention理由を設けず、物理削除safety marginを15分とする。`quotaRetainUntil`はwriter入力にかかわらず`acceptedAt + 24時間15分`へ正規化し、Quota countと`retryAt`は24時間のまま延長しない。Content deletion Transactionでは期限到達済みかつProvider usage確定済みを削除し、未確定は保持してlate Usage/Costをexactly onceでsettleする。Late settlementで後からcleanup対象になったrowはそのTransactionで削除せずM24の次回冪等runで削除する。Migration-first中の旧Application値も新規`000002` triggerで正規化し、全既存row backfillとequality CHECKを同じmigrationで保証する。これによりM14/M15とM24のRetention停止gateを解除する。
 - 2026-08-24: M14 concurrency監査で、同月・共有IPの別User間に、expired recoveryのAIGeneration→Budget→rateとfresh reservationのrate→Budgetが循環するdeadlockを検出した。Goal Refine / Action両variantの決定的実DBtestは修正前treeで各3反復すべてSQLSTATE `40P01`を再現した。物理lock順をexpired/fresh共通のBudget→User/Session/IP rateへ統一し、業務判定とstable rejection errorの優先順はquota→rate→budget、Budget判定/reserveはrate後のまま維持する。§18.1 / §31.1 / §32.5をこの分離へ明確化し、schema、API wire、baseline migrationは変更しない。この修正前のM14 target / B / full Eはsupersededとし、最終証跡へ採用しない。
 - 2026-08-24: 同じIdempotency-Keyの期限切れAction GenerationをFrontendが再送しても、初回replay判定が常に`AI_OPERATION_IN_PROGRESS`を返し、運用cleanupも未実装のため永久に回復しないP1を検出した。Terminal resultと異hashのerror precedenceを維持し、typed in-progressかつlease切れの場合だけUser→Goal→Cycle→AIGeneration→Budgetで回復し、同Transactionのcommit成功後に`lease_expired` terminal errorを返す。Quota/rate、Provider call、新Generation/Usageは消費しない。§32.9へsame-key recovery契約を明記し、この修正前のroot target / B結果もsupersededとする。
 - 2026-08-22: 実装開始時のHEADは基準commit `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`とtreeまで完全一致し、tracked/staged driftはなかった。未追跡の本ExecPlanだけをuser所有の入力として保持した。
@@ -559,11 +558,11 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: M23の`draft_recovery_total`はbrowser IndexedDB内だけで発生し、現行Backendへ安全に通知するcontractがないと判明した。元計画のmetric追加をそのまま実装せず、本文・identityを送らないtransportをownerが決めるまでこのmetricの新規境界だけを停止する。影響はM23の当該metricで、他のserver-side metric/PII allowlist testは継続する。
 - 2026-08-22: M27の「Apply EnvironmentだけがR2 credentialを保持」と、現行SoT/運用文書の「Plan/Applyがrepository secretを使い、Environmentはsecret storeにしない」が矛盾すると判明した。Credential topologyを推測で変更せず、owner判断まではsnapshot helper/local isolated testだけを行う。影響はworkflow secret配置とlive drillで、追加検証はPlan/Apply両方の最小権限matrixとfailure-before-apply testとする。
 - 2026-08-22: M29のReact Hook Form削除は現行`docs/design.md`の明示的technology selectionと矛盾すると判明した。単一textareaでは依存削除により複雑性を減らせるという元計画の根拠は維持するが、ownerの設計変更承認まではRHFとSoTを削除しない。影響はM29のRHF sliceだけで、chi更新等は独立して進める。承認時はcontrolled editorのbehavior test、bundle、dependency zero-referenceを追加検証する。
-- 2026-08-23: Retention監査で、Goal DeleteとCreation Draft Abandonが全`AIUsageEvent`をredacted保持する現実装と、Quota window外はProvider usage settledまたはno in-flight確認後に即時削除するSoTが不一致と判明した。Data retentionの既存仕様違反を現行挙動の移植で固定せず、別の運用Retention理由の有無をProduct/Security ownerが判断するまでM14 AbandonとM15 Delete orchestrationを停止する。既存SoTへ実装を合わせる判断ならwindow内retain/window外deleteをApplication use caseのRED/GREENへ含め、全件保持を恒久化する判断なら理由・期限・cleanup契約を先にSoTへ整合させる。M14の保持判断に依存しない7 commandは独立commit境界とするが、Abandon未移行の間はM14未完了とし、M15以降へ進まない。
+- 2026-08-23: Retention監査で、Goal DeleteとCreation Draft Abandonが全`AIUsageEvent`をredacted保持する現実装と、Quota window外はProvider usage settledまたはno in-flight確認後に即時削除するSoTが不一致と判明した。Data retentionの既存仕様違反を現行挙動の移植で固定せず、別の運用Retention理由の有無をProduct/Security ownerが判断するまでM14 AbandonとM15 Delete orchestrationを停止する。既存SoTへ実装を合わせる判断ならwindow内retain/window外deleteをApplication use caseのRED/GREENへ含め、全件保持を恒久化する判断なら理由・期限・cleanup契約を先にSoTへ整合させる。M14の保持判断に依存しない7 commandは独立commit境界とするが、Abandon未移行の間はM14未完了とし、M15以降へ進まない。 この停止は上記owner判断で解除済み。
 - 2026-08-24: M14のGoal draft/start/refine/adoptは、Applicationがtyped Unit of Work callback、Domain遷移、lock順、idempotency、quota/rate/budget、exact affected-row invariantを所有し、Postgres adapterはTransaction wrapper、SQL、row mapping、lock/CAS primitiveだけを所有する。HomeとStart/Refineは同じ`EntitlementPolicy` instanceを共有し、現行production設定を`StaticEntitlementPolicy`へ注入する。Free policyはSoTどおり進行Goal上限2を固定し、paid policyの3件をfakeで検証可能にする。Token/output entitlementをAI request構築へ適用する作業はM18のtyped AI portへ明示的に引き継ぐ。
 - 2026-08-24: M14監査で、現schemaの`ai_generations.input_hash`がidempotency request identityを保存しており、SoT §37.7のcanonical provider input（model/prompt/context/data）hashと意味が衝突していることを確認した。Baseline migrationは編集せず、M18でtyped canonical provider input/hash builderを導入し、M21で新規`000002+` expand migrationとして`idempotency_request_hash`を追加・既存値をbackfillした後、`input_hash`をcanonical provider input専用へ切り替える。M14では既存idempotency/wire/storage挙動を維持する。
 - 2026-08-24: Goal Refineの最大予約額がAction用output上限で過大計算されていたため、同じ価格式をoperation別output token上限へ分離した。Postgres Action use caseにはAction上限、Application Goal Refine use caseにはGoal Refine上限の予約額だけを注入し、差をcomposition-root unit testで固定する。
-- 2026-08-24: M14監査で、SoT §15.8の`quotaRetainUntil = acceptedAt + rolling window + safety margin`に対して、実装のacceptedAt + 24時間はrolling windowだけであり、追加safety marginの期間がどの仕様・設定にも存在しないことを確認した。現在は自動cleanupがなく全件保持されるため早期削除は発生しない。24時間をsafety margin決定とみなさず、Product/Security ownerが期間を決めるまで既存metadataを維持し、M24のretention cleanup RED/GREENと境界testを停止する。
+- 2026-08-24: M14監査で、SoT §15.8の`quotaRetainUntil = acceptedAt + rolling window + safety margin`に対して、実装のacceptedAt + 24時間はrolling windowだけであり、追加safety marginの期間がどの仕様・設定にも存在しないことを確認した。現在は自動cleanupがなく全件保持されるため早期削除は発生しない。24時間をsafety margin決定とみなさず、Product/Security ownerが期間を決めるまで既存metadataを維持し、M24のretention cleanup RED/GREENと境界testを停止する。 この停止は15分のowner判断とexact期限migrationにより解除済み。
 - 2026-08-22: M2ではglobalな`["session"]`だけをidentity非依存のまま維持し、全server stateとcreate-draft mutationを`["user", userId]`配下へ移した。異User置換は直列化し、実行時のcurrent sessionを再読してold-user query cancel/remove、mutation cache clear、新session publishの順に行う。同一Userではsessionだけを更新し、query/mutation/browser draft/editor stateを維持する。IndexedDB draftは既存のUser ID分離を維持し、切替元recordを削除しない。影響はFrontend cache keyとaccount transitionだけで、API wire shapeとserver dataは不変。Component ordering、parallel replace、factory/cross-user cache、same-tab no-reload E2Eを追加検証した。
 - 2026-08-22: `MutationCache.clear()`は実行中requestをabortせず、detached Cycle saveも切替と競合し得ることを再監査で確認した。M2ではcapture済みold User prefix/IndexedDB key、keyed remount、serverのsession-bound CSRF/ownershipによりnew User data contaminationを防止する。Request abort、identity lease、late navigation抑止、one-shot account transition noticeはM8/M9のautosave/app-shell責務として追加検証する。これはM2のdata-isolation acceptanceを弱めず、影響は切替後に拒否される旧requestとUX副作用の停止強化に限る。
 - 2026-08-22: 新しいsame-tab Google collision E2Eはpublic client IDがないbundleではtest fakeを描画できず、`scripts/check.sh --e2e`だけの設定では直接buildするGitHub E2E jobが不一致になると判明した。Production/deploy設定は変更せず、CI E2E buildだけに同じdummy public IDを与えた。影響はtest bundleだけで、workflow syntax、target/full Playwright、full gateを追加検証した。
@@ -602,9 +601,10 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-24: Owner判断を受け、Creation Draft `AbandonDraft`をApplication `GoalDraftUseCases`のtyped Unit of Workへ移行した。User→Draft→Generation→UsageのUUID順lock、running拒否、期限前またはUsage未確定のredact保持、exact期限以後かつ確定済みの物理削除、Generation/Draft CAS、cleanup済みUsage欠落許容をApplicationで所有し、旧Postgres orchestrationを削除した。15分marginをGoal Refine/Action両writerへ共有し、新規`000002` migrationで短すぎる値と長すぎる値をexact期限へ正規化する。Application unit、fresh PostgreSQL 18.6のmigration/Abandon/late settlement/Action期限を3反復、独立監査のApplication 20反復と実DB各3反復が成功し、production P0/P1はない。最終candidate treeのBとfresh disposable PostgreSQL 18.6によるEも成功し、Frontend 51 files / 436 tests、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18を確認した。残るM14 validationはplan-inclusive staged treeのCだけである。
 - 2026-08-24: Budget→rate修正後の決定的lock-order testはGoal Refine / Actionを合計40/40、Action期限切れsame-key回復と既存terminal/different-hash replayはrootで20反復、独立監査環境でsame-key 20/20とreplay/lock-order各3反復が成功した。Cycle revisionが進んだ後も回復をcommitし、Generation=`failed/lease_expired`、Usage=`failed`、reservation解放、rate/new Generation/new Usageなし、同じterminal failureの再replayを検証する。Composition root、Application workspace、PostgreSQL package全体もfocused suiteで成功し、独立code/SQL/docs監査に残るP0/P1はない。最後のoptional replay assertと文書変更を含むfresh BはBackend全package、PostgreSQL integration、sqlc compile/generateまで成功した。別のfresh DBによるEはFrontend 51 files / 436 tests、production build 229 modules、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18まで成功した。両DB containerは停止・削除済みで、Cは未実行である。
 - 2026-08-24: 修正前のM14 full EはFrontend 51 files / 436 tests、Backend、Cloudflare 60 tests、Playwright 18/18まで一度成功したが、後続監査で上記deadlockとAction replay liveness P1を検出したため最終証跡として採用しない。最終candidate treeのB / Eは別々のfresh disposable PostgreSQL 18.6で再成功した。次に全変更をstageして別のfresh DBでCを最初から実行し、成功後はindex/working treeを変えずcommitする。
-- 2026-08-24: M14のRetention判断に依存しない7 command（CreateDraft、SaveDraft、SaveReview、StartGoal、BeginGoalRefine、FinishGoalRefine、AdoptGoalSuggestion）をApplication `GoalDraftUseCases`へ移行した。Applicationがtyped Unit of Work、Domain遷移、lock順、idempotency、quota/rate/budget、exact affected-row invariantを所有し、PostgresはTransaction、SQL、row mapping、lock/CAS primitiveだけを提供する。旧Postgres high-level command receiverとtest-only compatibility facadeを除去し、architecture guardと実DBのcommit/rollback testを追加した。Creation Draft `AbandonDraft`はRetention Open Decisionのため現行Store/Postgres pathに残る。このsliceは独立commit境界とするがM14 acceptanceは未達であり、M14完了扱いせずM15以降へ進まない。
+- 2026-08-24: M14のRetention判断に依存しない7 command（CreateDraft、SaveDraft、SaveReview、StartGoal、BeginGoalRefine、FinishGoalRefine、AdoptGoalSuggestion）をApplication `GoalDraftUseCases`へ移行した。Applicationがtyped Unit of Work、Domain遷移、lock順、idempotency、quota/rate/budget、exact affected-row invariantを所有し、PostgresはTransaction、SQL、row mapping、lock/CAS primitiveだけを提供する。旧Postgres high-level command receiverとtest-only compatibility facadeを除去し、architecture guardと実DBのcommit/rollback testを追加した。Creation Draft `AbandonDraft`はRetention Open Decisionのため現行Store/Postgres pathに残る。このsliceは独立commit境界とするがM14 acceptanceは未達であり、M14完了扱いせずM15以降へ進まない。 この中間状態は後続のAbandon移行sliceで解消済み。
 - 2026-08-24: Userからcommit権限を得たため、M0〜M13で各時点の必須Cを通過して保存されていた14個のcumulative Git tree objectをmilestone境界として直列化し、基準`fe2c82a`から14 commitを作成した。Branch `codex/whole-system-reform-plan`のHEADはM13 `9c01966`、HEAD treeとindexは検証済み`c2354fa52ba70dc0c3453e7c6f8027749a9a9c25`で一致し、作業ツリーにはM14差分だけが残る。既存履歴の書換え、force push、pushは行っていない。
 - 2026-08-23: M13完了。Fresh disposable PostgreSQL 18.6でcommit前必須gateを最初から実行し、staged candidate tree `a4686a6125d4bc79a2c5c77a6edc8ab836acccb2`、Actionlint、CI reuse resolver、全scope、Frontend 51 files / 436 tests、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18、migration version 1・dirty=false、開始・終了tree一致まで成功した。Commitしていない。本entryとM14再開位置でindexを変更するため、再stage後に別のfresh DBでplan-inclusive final treeのCを最初から再実行してからM14へ進む。
 - 2026-08-23: M13独立監査で、同月の複数AI reservationをGo `float64`で合算すると正当なDB `NUMERIC`（例: `0.1 × 3 = 0.30000000`）より大きいparameterとなりAccount Deleteを恒久rollbackさせるP1と、Account DeleteがUser lockを先に取得した場合にlate Anonymous resumeが同じbootstrapからcandidate Userを再作成するP1を検出した。さらにexpired recoveryとGoal Delete callbackの最初の競合testが意図した経路へ到達しないfalse-greenを検出した。先行のtarget GREEN / B結果はsupersededとし、DB側exact NUMERIC月集約、既存bootstrap世代のnon-resurrection、真のinterleaving、Account Delete late callbackをRED/GREEN化してから全gateを再実行する。Schema/baseline migration/sqlc/API wireは変更しない。
@@ -680,7 +680,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M14の保持判断に依存しない7 commandと監査修正を含む最終candidate treeはfresh B / E成功済みである。次に全変更をstageし、unstaged/untrackedがないことを確認してから別のfresh disposable PostgreSQL 18.6でCを最初から実行する。成功後はindex/working treeを変えず独立commitする。Commit後はRetention Open Decisionのowner判断を待つ。Creation Draft Abandonは現行Store/Postgres pathに残り、M14は未完了である。判断後にAbandonのRED/GREENとM14全体のB・Goal draft/refine/start API tests・E・Cを再実行してM14を完了する。それまではM15以降へ進まない。M24 retention cleanupは別途safety margin期間決定まで停止する。
+- 現在の再開位置: M14の全8 command移行と15分Retention修正はtarget、独立監査、B、fresh disposable PostgreSQL 18.6によるEまで成功済みである。次に全M14変更をstageし、別のfresh `*_test` DBでplan-inclusive staged treeのCを最初から実行する。C成功後はindex/working treeを変えずM14を独立commitし、M15 Goal history/delete use casesへ進む。M24ではlate settlement前後を含む期限cleanup command/dry-runを実装する。
 
 ## 26. Final definition of done
 

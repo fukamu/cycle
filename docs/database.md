@@ -8,7 +8,8 @@
 - Migration runner: `backend/cmd/migrate`（`golang-migrate`）
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
-- 現在のbaseline schema: `000001_fukamu_cycle_baseline.up.sql`。未リリース・空DB・既存環境互換不要という明示承認に基づき、初期Schemaの80/200文字制約とUUID v7制約を直接含む1 migrationへrebaseline済みです。
+- Baseline schema: `000001_fukamu_cycle_baseline.up.sql`。未リリース・空DB・既存環境互換不要という明示承認に基づき、初期Schemaの80/200文字制約とUUID v7制約を直接含む1 migrationへrebaseline済みであり、今後編集しません。
+- 現在のschema head: `000002_ai_usage_retention_margin.up.sql`。AI Usage期限を受理時刻の24時間15分後へ正規化し、migration-first切替中の旧Applicationによる24時間値もtriggerで同じ期限へ補正します。
 
 Migration runnerは `DATABASE_URL` と、任意の `MIGRATIONS_DIR`（default `migrations`）だけを読み、未適用のup migrationを順番に適用します。適用履歴はDBの `schema_migrations` で管理されます。
 

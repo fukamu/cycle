@@ -143,6 +143,75 @@ WHERE user_id=$1 AND source_goal_draft_id=$2 ORDER BY id FOR UPDATE`, mustUUID(u
 	return items, rows.Err()
 }
 
+func (transaction *workspaceGoalDraftTx) LockDraftUsages(
+	ctx context.Context,
+	userID string,
+	operationIDs []string,
+) ([]workspace.DraftUsageState, error) {
+	if len(operationIDs) == 0 {
+		return []workspace.DraftUsageState{}, nil
+	}
+	rows, err := transaction.tx.Query(ctx, `SELECT operation_id,quota_retain_until,provider_usage_finalized_at
+FROM ai_usage_events WHERE user_id=$1 AND operation_id=ANY($2::text[]::uuid[])
+ORDER BY operation_id FOR UPDATE`, mustUUID(userID), operationIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []workspace.DraftUsageState{}
+	for rows.Next() {
+		var item workspace.DraftUsageState
+		if err = rows.Scan(&item.OperationID, &item.QuotaRetainUntil, &item.ProviderUsageFinalizedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (transaction *workspaceGoalDraftTx) RedactDraftUsagesCAS(
+	ctx context.Context,
+	userID string,
+	operationIDs []string,
+) (int64, error) {
+	command, err := transaction.tx.Exec(ctx, `UPDATE ai_usage_events SET goal_id=NULL,content_deleted=true
+WHERE user_id=$1 AND operation_id=ANY($2::text[]::uuid[])`, mustUUID(userID), operationIDs)
+	if err != nil {
+		return 0, err
+	}
+	return command.RowsAffected(), nil
+}
+
+func (transaction *workspaceGoalDraftTx) DeleteExpiredFinalizedDraftUsagesCAS(
+	ctx context.Context,
+	userID string,
+	operationIDs []string,
+	now time.Time,
+) (int64, error) {
+	command, err := transaction.tx.Exec(ctx, `DELETE FROM ai_usage_events
+WHERE user_id=$1 AND operation_id=ANY($2::text[]::uuid[])
+  AND quota_retain_until<=$3 AND provider_usage_finalized_at IS NOT NULL`, mustUUID(userID), operationIDs, now)
+	if err != nil {
+		return 0, err
+	}
+	return command.RowsAffected(), nil
+}
+
+func (transaction *workspaceGoalDraftTx) DeleteDraftGenerationsCAS(
+	ctx context.Context,
+	userID string,
+	draftID string,
+	generationIDs []string,
+) (int64, error) {
+	command, err := transaction.tx.Exec(ctx, `DELETE FROM ai_generations
+WHERE user_id=$1 AND source_goal_draft_id=$2 AND id=ANY($3::text[]::uuid[]) AND status<>'running'`,
+		mustUUID(userID), mustUUID(draftID), generationIDs)
+	if err != nil {
+		return 0, err
+	}
+	return command.RowsAffected(), nil
+}
+
 func (transaction *workspaceGoalDraftTx) FindStartReplay(
 	ctx context.Context,
 	userID string,

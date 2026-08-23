@@ -95,7 +95,7 @@ func (service *Service) SaveDraft(ctx context.Context, userID, draftID, body str
 }
 
 func (service *Service) AbandonDraft(ctx context.Context, userID, draftID string) error {
-	return resourceNotFound(service.store.AbandonDraft(ctx, userID, draftID, service.clock.Now().UTC()), ErrGoalDraftNotFound)
+	return resourceNotFound(service.goalDraft.AbandonDraft(ctx, userID, draftID), ErrGoalDraftNotFound)
 }
 
 func (service *Service) StartGoal(ctx context.Context, userID, draftID, operationID string, expectedDraftRevision int64) (StartGoalResult, error) {

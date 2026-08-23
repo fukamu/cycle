@@ -79,6 +79,16 @@ func executeGoalDraftSaveUseCase(
 	return newGoalDraftIntegrationUseCases(store, now, 0).SaveDraft(ctx, userID, draftID, body, expectedRevision)
 }
 
+func executeGoalDraftAbandonUseCase(
+	store *WorkspaceStore,
+	ctx context.Context,
+	userID string,
+	draftID string,
+	now time.Time,
+) error {
+	return newGoalDraftIntegrationUseCases(store, now, 0).AbandonDraft(ctx, userID, draftID)
+}
+
 func executeGoalReviewSaveUseCase(
 	store *WorkspaceStore,
 	ctx context.Context,

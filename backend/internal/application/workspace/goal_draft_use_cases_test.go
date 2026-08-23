@@ -78,23 +78,30 @@ type goalDraftFakeTx struct {
 	fail     map[string]error
 	affected map[string]int64
 
-	openDraft    *goal.Draft
-	draft        goal.Draft
-	target       GoalTargetState
-	startReplay  *StartReplayState
-	refineReplay *GoalRefineReplayState
-	generations  []DraftGenerationState
-	progressing  int
-	goalView     GoalView
-	cycleView    CycleView
+	openDraft                 *goal.Draft
+	draft                     goal.Draft
+	target                    GoalTargetState
+	startReplay               *StartReplayState
+	refineReplay              *GoalRefineReplayState
+	generations               []DraftGenerationState
+	usages                    []DraftUsageState
+	lockedDraftUsageIDs       []string
+	redactedDraftUsageIDs     []string
+	deletedDraftUsageIDs      []string
+	deletedDraftGenerationIDs []string
+	draftUsageDeletionCutoff  time.Time
+	progressing               int
+	goalView                  GoalView
+	cycleView                 CycleView
 
-	expired    []ExpiredGeneration
-	monthly    []MonthlyReservation
-	running    bool
-	usageCount int
-	rateCounts map[string]int
-	contexts   []AIContextCycle
-	budget     AIBudgetState
+	expired              []ExpiredGeneration
+	monthly              []MonthlyReservation
+	running              bool
+	usageCount           int
+	rollingAcceptedAfter time.Time
+	rateCounts           map[string]int
+	contexts             []AIContextCycle
+	budget               AIBudgetState
 
 	generationLocator *AIGenerationLocator
 	settlementState   GoalRefineSettlementState
@@ -162,6 +169,30 @@ func (tx *goalDraftFakeTx) LockDraftGenerations(context.Context, string, string)
 		return nil, err
 	}
 	return tx.generations, nil
+}
+
+func (tx *goalDraftFakeTx) LockDraftUsages(_ context.Context, _ string, operationIDs []string) ([]DraftUsageState, error) {
+	tx.lockedDraftUsageIDs = append([]string(nil), operationIDs...)
+	if err := tx.record("lock_draft_usages"); err != nil {
+		return nil, err
+	}
+	return tx.usages, nil
+}
+
+func (tx *goalDraftFakeTx) RedactDraftUsagesCAS(_ context.Context, _ string, operationIDs []string) (int64, error) {
+	tx.redactedDraftUsageIDs = append([]string(nil), operationIDs...)
+	return tx.mutation("redact_draft_usages")
+}
+
+func (tx *goalDraftFakeTx) DeleteExpiredFinalizedDraftUsagesCAS(_ context.Context, _ string, operationIDs []string, now time.Time) (int64, error) {
+	tx.deletedDraftUsageIDs = append([]string(nil), operationIDs...)
+	tx.draftUsageDeletionCutoff = now
+	return tx.mutation("delete_expired_draft_usages")
+}
+
+func (tx *goalDraftFakeTx) DeleteDraftGenerationsCAS(_ context.Context, _, _ string, generationIDs []string) (int64, error) {
+	tx.deletedDraftGenerationIDs = append([]string(nil), generationIDs...)
+	return tx.mutation("delete_draft_generations")
 }
 
 func (tx *goalDraftFakeTx) FindStartReplay(context.Context, string, string) (*StartReplayState, error) {
@@ -276,7 +307,8 @@ func (tx *goalDraftFakeTx) HasRunningDraftGeneration(context.Context, string) (b
 	return tx.running, nil
 }
 
-func (tx *goalDraftFakeTx) CountRollingUsage(context.Context, string, time.Time) (int, error) {
+func (tx *goalDraftFakeTx) CountRollingUsage(_ context.Context, _ string, acceptedAfter time.Time) (int, error) {
+	tx.rollingAcceptedAfter = acceptedAfter
 	if err := tx.record("count_rolling_usage"); err != nil {
 		return 0, err
 	}
@@ -441,6 +473,158 @@ func TestGoalDraftUseCasesCreateNormalizesAndLocksUserFirst(t *testing.T) {
 	}
 }
 
+func TestGoalDraftUseCasesAbandonPartitionsUsageAtRetentionDeadline(t *testing.T) {
+	const (
+		generationA = "30000000-0000-7000-8000-000000000001"
+		generationB = "30000000-0000-7000-8000-000000000002"
+		generationC = "30000000-0000-7000-8000-000000000003"
+	)
+	finalizedAt := goalDraftTestNow.Add(-time.Minute)
+	tx := &goalDraftFakeTx{
+		draft: creationDraft("破棄する目標", 4),
+		generations: []DraftGenerationState{
+			{ID: generationA, Status: aiStatusSucceeded},
+			{ID: generationB, Status: aiStatusFailed},
+			{ID: generationC, Status: aiStatusFailed},
+		},
+		usages: []DraftUsageState{
+			{OperationID: generationA, QuotaRetainUntil: goalDraftTestNow.Add(time.Nanosecond), ProviderUsageFinalizedAt: &finalizedAt},
+			{OperationID: generationB, QuotaRetainUntil: goalDraftTestNow, ProviderUsageFinalizedAt: &finalizedAt},
+			{OperationID: generationC, QuotaRetainUntil: goalDraftTestNow.Add(-time.Hour)},
+		},
+		affected: map[string]int64{
+			"redact_draft_usages": 2, "delete_expired_draft_usages": 1, "delete_draft_generations": 3,
+		},
+	}
+	useCases, uow := newGoalDraftTestUseCases(tx)
+	if err := useCases.AbandonDraft(context.Background(), goalDraftTestUserID, goalDraftTestDraftID); err != nil {
+		t.Fatal(err)
+	}
+	wantTrace := []string{
+		"lock_user", "lock_draft", "lock_draft_generations", "lock_draft_usages",
+		"redact_draft_usages", "delete_expired_draft_usages", "delete_draft_generations", "delete_creation_draft",
+	}
+	if !reflect.DeepEqual(tx.trace, wantTrace) || uow.committed != 1 || uow.rolledBack != 0 {
+		t.Fatalf("trace/transaction = %v / %#v", tx.trace, uow)
+	}
+	if !reflect.DeepEqual(tx.redactedDraftUsageIDs, []string{generationA, generationC}) ||
+		!reflect.DeepEqual(tx.deletedDraftUsageIDs, []string{generationB}) ||
+		!reflect.DeepEqual(tx.deletedDraftGenerationIDs, []string{generationA, generationB, generationC}) ||
+		!tx.draftUsageDeletionCutoff.Equal(goalDraftTestNow) {
+		t.Fatalf("usage/generation partition = redact %v, delete %v, generations %v, cutoff %s",
+			tx.redactedDraftUsageIDs, tx.deletedDraftUsageIDs, tx.deletedDraftGenerationIDs, tx.draftUsageDeletionCutoff)
+	}
+}
+
+func TestGoalDraftUseCasesAbandonAllowsAlreadyCleanedFinalizedUsage(t *testing.T) {
+	tx := &goalDraftFakeTx{
+		draft:       creationDraft("期限後に破棄する目標", 1),
+		generations: []DraftGenerationState{{ID: goalDraftTestGenerationID, Status: aiStatusSucceeded}},
+	}
+	useCases, uow := newGoalDraftTestUseCases(tx)
+	if err := useCases.AbandonDraft(context.Background(), goalDraftTestUserID, goalDraftTestDraftID); err != nil {
+		t.Fatal(err)
+	}
+	wantTrace := []string{"lock_user", "lock_draft", "lock_draft_generations", "lock_draft_usages", "delete_draft_generations", "delete_creation_draft"}
+	if !reflect.DeepEqual(tx.trace, wantTrace) || uow.committed != 1 {
+		t.Fatalf("trace/transaction = %v / %#v", tx.trace, uow)
+	}
+}
+
+func TestGoalDraftUseCasesAbandonRejectsWrongTypeAndRunningAIWithoutMutation(t *testing.T) {
+	t.Run("review Draft is hidden", func(t *testing.T) {
+		tx := &goalDraftFakeTx{draft: reviewDraft("Review", 0)}
+		useCases, uow := newGoalDraftTestUseCases(tx)
+		err := useCases.AbandonDraft(context.Background(), goalDraftTestUserID, goalDraftTestDraftID)
+		if !errors.Is(err, ErrNotFound) || uow.rolledBack != 1 {
+			t.Fatalf("error/transaction = %v / %#v", err, uow)
+		}
+		if !reflect.DeepEqual(tx.trace, []string{"lock_user", "lock_draft"}) {
+			t.Fatalf("trace = %v", tx.trace)
+		}
+	})
+	t.Run("running Refine wins", func(t *testing.T) {
+		tx := &goalDraftFakeTx{
+			draft:       creationDraft("実行中", 0),
+			generations: []DraftGenerationState{{ID: goalDraftTestGenerationID, Status: aiStatusRunning}},
+		}
+		useCases, uow := newGoalDraftTestUseCases(tx)
+		err := useCases.AbandonDraft(context.Background(), goalDraftTestUserID, goalDraftTestDraftID)
+		if !errors.Is(err, ErrAIInProgress) || uow.rolledBack != 1 {
+			t.Fatalf("error/transaction = %v / %#v", err, uow)
+		}
+		if !reflect.DeepEqual(tx.trace, []string{"lock_user", "lock_draft", "lock_draft_generations"}) {
+			t.Fatalf("trace = %v", tx.trace)
+		}
+	})
+}
+
+func TestGoalDraftUseCasesAbandonRequiresEveryMutationCAS(t *testing.T) {
+	const (
+		generationA = "30000000-0000-7000-8000-000000000001"
+		generationB = "30000000-0000-7000-8000-000000000002"
+	)
+	finalizedAt := goalDraftTestNow.Add(-time.Minute)
+	for _, mutation := range []string{
+		"redact_draft_usages", "delete_expired_draft_usages", "delete_draft_generations", "delete_creation_draft",
+	} {
+		t.Run(mutation, func(t *testing.T) {
+			affected := map[string]int64{
+				"redact_draft_usages": 1, "delete_expired_draft_usages": 1,
+				"delete_draft_generations": 2, "delete_creation_draft": 1,
+			}
+			affected[mutation] = 0
+			tx := &goalDraftFakeTx{
+				draft: creationDraft("CASを検証", 2),
+				generations: []DraftGenerationState{
+					{ID: generationA, Status: aiStatusSucceeded},
+					{ID: generationB, Status: aiStatusFailed},
+				},
+				usages: []DraftUsageState{
+					{OperationID: generationA, QuotaRetainUntil: goalDraftTestNow.Add(time.Minute), ProviderUsageFinalizedAt: &finalizedAt},
+					{OperationID: generationB, QuotaRetainUntil: goalDraftTestNow, ProviderUsageFinalizedAt: &finalizedAt},
+				},
+				affected: affected,
+			}
+			useCases, uow := newGoalDraftTestUseCases(tx)
+			err := useCases.AbandonDraft(context.Background(), goalDraftTestUserID, goalDraftTestDraftID)
+			if !errors.Is(err, ErrGoalDraftPersistenceInvariant) || uow.rolledBack != 1 || uow.committed != 0 {
+				t.Fatalf("error/transaction = %v / %#v", err, uow)
+			}
+		})
+	}
+}
+
+func TestGoalDraftUseCasesAbandonRejectsUnorderedOrForeignUsageLocks(t *testing.T) {
+	const (
+		generationA = "30000000-0000-7000-8000-000000000001"
+		generationB = "30000000-0000-7000-8000-000000000002"
+	)
+	for name, usages := range map[string][]DraftUsageState{
+		"unordered": {
+			{OperationID: generationB, QuotaRetainUntil: goalDraftTestNow},
+			{OperationID: generationA, QuotaRetainUntil: goalDraftTestNow},
+		},
+		"foreign": {{OperationID: goalDraftTestOperationID, QuotaRetainUntil: goalDraftTestNow}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tx := &goalDraftFakeTx{
+				draft: creationDraft("lock検証", 0),
+				generations: []DraftGenerationState{
+					{ID: generationA, Status: aiStatusSucceeded},
+					{ID: generationB, Status: aiStatusSucceeded},
+				},
+				usages: usages,
+			}
+			useCases, uow := newGoalDraftTestUseCases(tx)
+			err := useCases.AbandonDraft(context.Background(), goalDraftTestUserID, goalDraftTestDraftID)
+			if !errors.Is(err, ErrGoalDraftPersistenceInvariant) || uow.rolledBack != 1 {
+				t.Fatalf("error/transaction = %v / %#v", err, uow)
+			}
+		})
+	}
+}
+
 func TestGoalDraftUseCasesSaveReviewPreservesLeaseAndMissingDraftPrecedence(t *testing.T) {
 	tx := &goalDraftFakeTx{
 		target: GoalTargetState{Status: goal.StatusGoalReview, Revision: 4},
@@ -574,7 +758,9 @@ func TestGoalDraftUseCasesBeginRefineOwnsQuotaRateBudgetAndPersistence(t *testin
 	}
 	if snapshot.GenerationID != goalDraftTestGenerationID ||
 		tx.generationRecord.ReservedCostUSD != "0.10000000" ||
-		tx.usageRecord.Operation != goalRefineOperation {
+		tx.usageRecord.Operation != goalRefineOperation ||
+		!tx.rollingAcceptedAfter.Equal(goalDraftTestNow.Add(-24*time.Hour)) ||
+		!tx.usageRecord.QuotaRetainUntil.Equal(goalDraftTestNow.Add(24*time.Hour+15*time.Minute)) {
 		t.Fatalf("snapshot/generation/usage = %#v / %#v / %#v", snapshot, tx.generationRecord, tx.usageRecord)
 	}
 	want := []string{

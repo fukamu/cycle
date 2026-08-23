@@ -10,11 +10,11 @@ import (
 	"testing"
 )
 
-// AbandonDraft remains on the unchanged Store path until the quota-retention decision recorded in the ExecPlan is resolved.
 var goalDraftHighLevelCommands = []string{
 	"CreateDraft",
 	"SaveDraft",
 	"SaveReview",
+	"AbandonDraft",
 	"StartGoal",
 	"BeginGoalRefine",
 	"FinishGoalRefine",
@@ -177,6 +177,7 @@ func assertGoalDraftEntrypointsUseUnitOfWork(t *testing.T, application parsedGoP
 		"CreateDraft":         1,
 		"SaveDraft":           1,
 		"SaveReview":          1,
+		"AbandonDraft":        1,
 		"StartGoal":           1,
 		"RefineGoal":          2,
 		"AdoptGoalSuggestion": 1,

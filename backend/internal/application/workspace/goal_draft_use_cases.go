@@ -25,7 +25,6 @@ const (
 	aiStatusFailed        = "failed"
 	aiStatusAccepted      = "accepted"
 	goalRefineContextSize = 10
-	aiRollingWindow       = 24 * time.Hour
 	aiRateBucketLifetime  = 2 * time.Minute
 )
 
@@ -152,6 +151,76 @@ func (useCases *GoalDraftUseCases) SaveReview(ctx context.Context, userID, goalI
 		return nil
 	})
 	return view, err
+}
+
+func (useCases *GoalDraftUseCases) AbandonDraft(ctx context.Context, userID, draftID string) error {
+	now := useCases.clock.Now().UTC()
+	return useCases.uow.WithinGoalDraftTransaction(ctx, func(tx GoalDraftTx) error {
+		if err := tx.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		draft, err := tx.LockDraftByID(ctx, userID, draftID)
+		if err != nil {
+			return err
+		}
+		if draft.Type != goal.DraftCreation {
+			return ErrNotFound
+		}
+		generations, err := tx.LockDraftGenerations(ctx, userID, draftID)
+		if err != nil {
+			return err
+		}
+		if err = requireGenerationOrder(generations); err != nil {
+			return err
+		}
+		generationIDs := make([]string, len(generations))
+		for index, generation := range generations {
+			if generation.Status == aiStatusRunning {
+				return ErrAIInProgress
+			}
+			generationIDs[index] = generation.ID
+		}
+		usages, err := tx.LockDraftUsages(ctx, userID, generationIDs)
+		if err != nil {
+			return err
+		}
+		retainedUsageIDs, expiredUsageIDs, err := partitionDraftUsages(generationIDs, usages, now)
+		if err != nil {
+			return err
+		}
+		if len(retainedUsageIDs) > 0 {
+			rows, redactErr := tx.RedactDraftUsagesCAS(ctx, userID, retainedUsageIDs)
+			if redactErr != nil {
+				return redactErr
+			}
+			if redactErr = requireRows("redact abandoned Draft usage", rows, int64(len(retainedUsageIDs))); redactErr != nil {
+				return redactErr
+			}
+		}
+		if len(expiredUsageIDs) > 0 {
+			rows, deleteErr := tx.DeleteExpiredFinalizedDraftUsagesCAS(ctx, userID, expiredUsageIDs, now)
+			if deleteErr != nil {
+				return deleteErr
+			}
+			if deleteErr = requireRows("delete expired abandoned Draft usage", rows, int64(len(expiredUsageIDs))); deleteErr != nil {
+				return deleteErr
+			}
+		}
+		if len(generationIDs) > 0 {
+			rows, deleteErr := tx.DeleteDraftGenerationsCAS(ctx, userID, draftID, generationIDs)
+			if deleteErr != nil {
+				return deleteErr
+			}
+			if deleteErr = requireRows("delete abandoned Draft generations", rows, int64(len(generationIDs))); deleteErr != nil {
+				return deleteErr
+			}
+		}
+		rows, err := tx.DeleteCreationDraftCAS(ctx, userID, draftID, draft.Revision)
+		if err != nil {
+			return err
+		}
+		return requireRows("delete abandoned Draft", rows, 1)
+	})
 }
 
 func (useCases *GoalDraftUseCases) StartGoal(ctx context.Context, userID, draftID, operationID string, expectedDraftRevision int64) (result StartGoalResult, err error) {
@@ -377,7 +446,7 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 		if limitErr != nil {
 			return limitErr
 		}
-		usageCount, usageErr := tx.CountRollingUsage(ctx, input.UserID, input.Now.Add(-aiRollingWindow))
+		usageCount, usageErr := tx.CountRollingUsage(ctx, input.UserID, input.Now.Add(-AIRollingWindow))
 		if usageErr != nil {
 			return usageErr
 		}
@@ -429,7 +498,7 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 			OperationID: input.GenerationID, UserID: input.UserID, GoalID: goalID,
 			Operation: goalRefineOperation, Provider: useCases.settings.Provider, Model: useCases.settings.Model,
 			PromptVersion: useCases.settings.GoalPromptVersion, AcceptedAt: input.Now,
-			QuotaRetainUntil: input.Now.Add(aiRollingWindow),
+			QuotaRetainUntil: AIUsageQuotaRetainUntil(input.Now),
 		})
 		if reserveErr != nil {
 			return reserveErr
@@ -983,6 +1052,41 @@ func aiContextCycleIDs(cycles []AIContextCycle) []string {
 		ids[index] = cycles[index].ID
 	}
 	return ids
+}
+
+func partitionDraftUsages(generationIDs []string, usages []DraftUsageState, now time.Time) ([]string, []string, error) {
+	known := make(map[string]struct{}, len(generationIDs))
+	for _, generationID := range generationIDs {
+		known[generationID] = struct{}{}
+	}
+	usageIDs := make([]string, len(usages))
+	seen := make(map[string]struct{}, len(usages))
+	for index, usage := range usages {
+		if _, ok := known[usage.OperationID]; !ok {
+			return nil, nil, invariantError("Draft usage does not belong to a locked generation")
+		}
+		if _, duplicate := seen[usage.OperationID]; duplicate {
+			return nil, nil, invariantError("Draft usage lock returned a duplicate operation")
+		}
+		if usage.QuotaRetainUntil.IsZero() {
+			return nil, nil, invariantError("Draft usage retention deadline is missing")
+		}
+		seen[usage.OperationID] = struct{}{}
+		usageIDs[index] = usage.OperationID
+	}
+	if !slices.IsSorted(usageIDs) {
+		return nil, nil, invariantError("Draft usages are not locked in UUID order")
+	}
+	retained := make([]string, 0, len(usages))
+	expired := make([]string, 0, len(usages))
+	for _, usage := range usages {
+		if now.Before(usage.QuotaRetainUntil) || usage.ProviderUsageFinalizedAt == nil {
+			retained = append(retained, usage.OperationID)
+			continue
+		}
+		expired = append(expired, usage.OperationID)
+	}
+	return retained, expired, nil
 }
 
 func requireRows(operation string, actual, expected int64) error {

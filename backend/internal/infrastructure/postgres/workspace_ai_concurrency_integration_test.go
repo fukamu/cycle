@@ -1309,7 +1309,7 @@ func TestAbandonDraftSerializesWithConcurrentGoalRefine(t *testing.T) {
 	abandonCalls := make(chan error, 1)
 	abandonCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyAbandon)
 	go func() {
-		abandonCalls <- store.AbandonDraft(abandonCtx, userID, draftID, now.Add(2*time.Minute))
+		abandonCalls <- executeGoalDraftAbandonUseCase(store, abandonCtx, userID, draftID, now.Add(2*time.Minute))
 	}()
 
 	var abandonPID uint32
@@ -1449,7 +1449,7 @@ func TestGoalRefineCommitWinsBeforeAbandonAndPreservesRunningReservation(t *test
 	abandonCalls := make(chan error, 1)
 	abandonCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyBlockedAbandon)
 	go func() {
-		abandonCalls <- store.AbandonDraft(abandonCtx, userID, draftID, now.Add(2*time.Minute))
+		abandonCalls <- executeGoalDraftAbandonUseCase(store, abandonCtx, userID, draftID, now.Add(2*time.Minute))
 	}()
 
 	var abandonPID uint32

@@ -157,7 +157,7 @@ func (store *WorkspaceStore) reserveAI(ctx context.Context, tx pgx.Tx, userID, g
 		return workspace.ErrAIInProgress
 	}
 	var usageCount int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM ai_usage_events WHERE user_id=$1 AND accepted_at>$2`, mustUUID(userID), now.Add(-24*time.Hour)).Scan(&usageCount); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM ai_usage_events WHERE user_id=$1 AND accepted_at>$2`, mustUUID(userID), now.Add(-workspace.AIRollingWindow)).Scan(&usageCount); err != nil {
 		return err
 	}
 	if usageCount >= store.settings.RollingLimit {
@@ -220,7 +220,7 @@ VALUES($1,$2,$3,'running',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
 	_, err = tx.Exec(ctx, `INSERT INTO ai_usage_events
 (operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
 VALUES($1,$2,$3,$4,'accepted',$5,$6,$7,$8,$9)`, mustUUID(generationID), mustUUID(userID), goalArg,
-		operation, store.settings.Provider, store.settings.Model, promptVersion, now, now.Add(24*time.Hour))
+		operation, store.settings.Provider, store.settings.Model, promptVersion, now, workspace.AIUsageQuotaRetainUntil(now))
 	return err
 }
 
