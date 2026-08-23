@@ -9,7 +9,7 @@
 - Go 1.26.6
 - PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24`）
 - sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.26.6によるfallbackも利用可能）
-- Docker（PostgreSQLの簡易起動とCloudflare Container imageのbuildに使う場合）
+- Docker EngineとDocker Buildx（PostgreSQLの簡易起動、Cloudflare Container imageのbuild、InfrastructureのDocker build context監査に必要）
 - Chromium（E2Eを実行する場合）
 - Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
 - `curl`、`jq`、`openssl`、`realpath`、`sha256sum`、`base64`、`sed`、`awk`、`find`、`sort`、`mktemp`
@@ -126,7 +126,7 @@ go run ./cmd/server
 ./scripts/check.sh
 ```
 
-実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate build、Bash syntax/ShellCheck 0.11.0/shfmt 3.13.1/script test、Dockerローカル実機Composeの構文確認、Terraformのformat/init/validate、Wrangler config/typecheck/dry-runです。`TEST_DATABASE_URL` が未設定ならBackend integration testはskipされます。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
+実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate build、Bash syntax/ShellCheck 0.11.0/shfmt 3.13.1/script test、Dockerローカル実機Composeの構文確認、Docker build context監査、Terraformのformat/init/validate、Wrangler config/typecheck/dry-runです。`TEST_DATABASE_URL` が未設定ならBackend integration testはskipされます。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
 
 Frontend、Backend、Infrastructureだけを確認できます。
 
@@ -135,6 +135,14 @@ Frontend、Backend、Infrastructureだけを確認できます。
 ./scripts/check.sh --scope backend
 ./scripts/check.sh --scope infrastructure
 ```
+
+Docker build context監査だけを単独で実行する場合は、次を使います。
+
+```bash
+./scripts/check-docker-context.sh
+```
+
+この監査は一時directoryへ合成したbenign canaryをDocker Buildxでbuildし、環境file、依存directory、credential file、Terraform artifactがcontextへ入らないことを確認します。Repository内の実secret fileやその内容は読みません。
 
 Backend integration testには、消去してよい専用DBだけを指定してください。テストはschema内のapplication tableをdown/up migrationで作り直します。開発DBやproduction DBを指定してはいけません。
 

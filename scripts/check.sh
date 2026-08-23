@@ -113,6 +113,7 @@ if [[ "${run_infrastructure}" == "true" ]]; then
   require_command pnpm
   require_command docker
   require_local_docker_context >/dev/null
+  "${script_dir}/check-docker-context.sh"
   "${script_dir}/check-shell.sh"
 
   docker compose --file "${repo_root}/compose.local.yaml" config --quiet

@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M3 Docker context isolation
+- 状態: IN_PROGRESS / M4 Config/admission parity
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -555,6 +555,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: M2ではglobalな`["session"]`だけをidentity非依存のまま維持し、全server stateとcreate-draft mutationを`["user", userId]`配下へ移した。異User置換は直列化し、実行時のcurrent sessionを再読してold-user query cancel/remove、mutation cache clear、新session publishの順に行う。同一Userではsessionだけを更新し、query/mutation/browser draft/editor stateを維持する。IndexedDB draftは既存のUser ID分離を維持し、切替元recordを削除しない。影響はFrontend cache keyとaccount transitionだけで、API wire shapeとserver dataは不変。Component ordering、parallel replace、factory/cross-user cache、same-tab no-reload E2Eを追加検証した。
 - 2026-08-22: `MutationCache.clear()`は実行中requestをabortせず、detached Cycle saveも切替と競合し得ることを再監査で確認した。M2ではcapture済みold User prefix/IndexedDB key、keyed remount、serverのsession-bound CSRF/ownershipによりnew User data contaminationを防止する。Request abort、identity lease、late navigation抑止、one-shot account transition noticeはM8/M9のautosave/app-shell責務として追加検証する。これはM2のdata-isolation acceptanceを弱めず、影響は切替後に拒否される旧requestとUX副作用の停止強化に限る。
 - 2026-08-22: 新しいsame-tab Google collision E2Eはpublic client IDがないbundleではtest fakeを描画できず、`scripts/check.sh --e2e`だけの設定では直接buildするGitHub E2E jobが不一致になると判明した。Production/deploy設定は変更せず、CI E2E buildだけに同じdummy public IDを与えた。影響はtest bundleだけで、workflow syntax、target/full Playwright、full gateを追加検証した。
+- 2026-08-22: M3ではDocker contextへ送らないsecret-bearing artifactを、Repositoryで使用するpath class（`.env*`、`.dev.vars*`、credential/key形式、Worker secret file、Terraform state/input、dependency/tool output）として定義した。検証は実secretを探索・読取せず、固定のbenign synthetic canaryをroot/nested pathへ作って`Dockerfile`と`Dockerfile.local`のignore precedenceをBuildKitで確認する。任意名fileや内容検査、将来のnamed/remote contextまで保証するものではなく、新context追加時は同じmilestone guardを拡張する。影響はDocker build input、Infrastructure check、CIだけで、runtime configとimage内容は不変。
 - 2026-08-22: Free/MVPの進行Goal上限を2件に確定。
 - 2026-08-22: Homeは`GoalView/currentWork`共用に確定。
 - 2026-08-22: Goal Refine fieldを`suggestion`へ統一。
@@ -567,6 +568,9 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-22: M3完了。Aは固定tool環境で約153秒、standalone context inspectionとIは約21秒で成功した。最初のcommit前必須gateは約298秒で全scope、Playwright 14/14、migration version 1・dirty=false、candidate tree `bb8ff3b1d0d208a4334f6c921f50689cde85f876`の開始・終了一致を確認した。本entryと再開位置更新でtreeを変更したため、完全stage後にgateを最初から再実行する。Commit権限はないためcommitしない。
+- 2026-08-22: M3の変更前REDでは、synthetic `COPY .` imageからroot/cloudflare `node_modules`、`.env.local`、`.dev.vars`、credential/key、Worker secret、Wrangler output、Terraform state/input等をpathだけで検出した。Recursive `.dockerignore` ruleへ収束後、両Dockerfile contextで全canaryが不在かつallowed markerが存在するGREENを確認。実`Dockerfile`/`Dockerfile.local`もbuildし、最終filesystemとimage historyに禁止Repository artifact名がないことを確認した。検証専用containerとimage tagは削除済み。Infrastructure scopeとCIへguardを接続し、Buildx前提と単独実行方法をdevelopment正本へ追記した。
+- 2026-08-22: M2のExecPlan追記後にcommit前必須gateを約204秒で再実行し、最終staged tree `2ec4b599d2a5edbb10aa2d0019907dcf398fd207`の開始・終了一致、全scope、Playwright 14/14を確認した。M2完了後のindex内容変更はなく、commit権限がないためcommitしていない。
 - 2026-08-22: M2完了。変更前REDは異User置換後もquery/mutationが各1件残りeditor入力も旧Userのまま、same-tab/no-reload Google login後もfresh Home cacheが切替元Goalを表示することを再現した。GREENではidentity transitionを直列化し、全query/cache helper/page caller/invalidationをcaptured User IDへscopeし、User ID変更時だけapp subtreeをremountした。同一User upgradeはcache objectと入力を保持し、切替元browser draftはUser ID分離したまま保存する。Productionの旧unscoped query keyはzero。Target Vitestは9 files / 36 tests、same-tab test 1/1、contract characterization 6/6が成功した。
 - 2026-08-22: M2 Frontend gateは固定tool環境で約64秒、28 files / 81 tests、format、lint、strict typecheck、production buildが成功。Fresh disposable PostgreSQL 18.6上のfull E2E gateは約227秒でFrontend 28/81、Backend/sqlc、shell/Compose/Terraform、Cloudflare 8 tests、Wrangler dry-run/Container build、Playwright 14/14が成功し、migration version 1・dirty=false、generated drift zeroを確認した。
 - 2026-08-22: M2の最初のcommit前必須gateは約181秒で成功。Actionlint、全scope、Playwright 14/14、candidate tree `10a9b8ce8d0871af8ec5dc808a2c73b7c1548ae8`の開始・終了一致を確認した。本entry追加でtreeを変更したため、完全stage後にgateを最初から再実行する。
@@ -580,7 +584,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M3。Synthetic secret canaryでDocker build contextを検査し、`.env.local`、全`node_modules`、secret-bearing file classをcontext/imageから除外する。
+- 現在の再開位置: M4。Backend config、`.env.example`、environment文書、Worker handoff、deploy validationとClosed Beta admission入力を機械的parity testで固定してから、重複validationを単一契約へ収束する。
 
 ## 26. Final definition of done
 
