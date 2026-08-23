@@ -1,8 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { SessionContext } from "../features/auth/sessionContext";
+import { userQueryKeys } from "../features/goal-collection/goalCache";
 import type {
   Cycle,
   Goal,
@@ -10,8 +17,10 @@ import type {
   Home,
   Session,
 } from "../shared/api/schemas";
+import { APIError } from "../shared/api/client";
 import {
   adoptGoalDraft,
+  getGoalDraft,
   getHome,
   refineGoalDraft,
   saveGoalDraft,
@@ -28,6 +37,7 @@ vi.mock("../shared/api/workspace", () => ({
   adoptGoalDraft: vi.fn(),
   createGoalDraft: vi.fn(),
   discardGoalDraft: vi.fn(),
+  getGoalDraft: vi.fn(),
   getHome: vi.fn(),
   refineGoalDraft: vi.fn(),
   saveGoalDraft: vi.fn(),
@@ -109,6 +119,8 @@ describe("NewGoalPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getHome).mockResolvedValue(home);
+    vi.mocked(getGoalDraft).mockResolvedValue({ draft });
+    vi.mocked(saveGoalDraft).mockResolvedValue({ draft });
     vi.mocked(getBrowserDraft).mockResolvedValue(null);
     vi.mocked(putBrowserDraft).mockResolvedValue(undefined);
     vi.mocked(deleteBrowserDraft).mockResolvedValue(undefined);
@@ -197,12 +209,180 @@ describe("NewGoalPage", () => {
       secondOptions,
     );
   });
+
+  it("preserves a local draft on the exact revision conflict and reapplies it against the latest revision", async () => {
+    const localBody = "この端末で変更した目標";
+    const nextLocalBody = "競合解消後にもう一度変更した目標";
+    const latestDraft: GoalDraft = {
+      ...draft,
+      body: "別の端末で変更された目標",
+      revision: 1,
+      updatedAt: "2026-08-20T00:03:00.000Z",
+    };
+    vi.mocked(saveGoalDraft)
+      .mockRejectedValueOnce(
+        new APIError(
+          409,
+          "GOAL_DRAFT_REVISION_CONFLICT",
+          "conflict",
+          "request-1",
+        ),
+      )
+      .mockResolvedValueOnce({
+        draft: { ...latestDraft, body: localBody, revision: 2 },
+      })
+      .mockResolvedValueOnce({
+        draft: { ...latestDraft, body: nextLocalBody, revision: 3 },
+      });
+    vi.mocked(getGoalDraft)
+      .mockRejectedValueOnce(new TypeError("network"))
+      .mockResolvedValueOnce({ draft: latestDraft });
+
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "あなたの目標",
+    });
+    fireEvent.change(editor, { target: { value: localBody } });
+    fireEvent.blur(editor);
+
+    const retry = await screen.findByRole("button", { name: "再試行" });
+    expect(editor).toHaveValue(localBody);
+    expect(editor).toHaveAttribute("readonly");
+    expect(getGoalDraft).toHaveBeenCalledTimes(1);
+    expect(getGoalDraft).toHaveBeenCalledWith(draft.id);
+
+    fireEvent.click(retry);
+    expect(
+      await screen.findByText("別の更新が見つかりました"),
+    ).toBeInTheDocument();
+    expect(editor).toHaveValue(localBody);
+    expect(getGoalDraft).toHaveBeenCalledTimes(2);
+    expect(putBrowserDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: localBody,
+        baseRevision: draft.revision,
+      }),
+    );
+    expect(
+      screen.getByRole("button", { name: "この端末の入力を復元" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "サーバーの内容を使用" }),
+    ).toBeInTheDocument();
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "この端末の入力を復元" }),
+    );
+    await waitFor(() =>
+      expect(saveGoalDraft).toHaveBeenLastCalledWith(
+        draft.id,
+        localBody,
+        latestDraft.revision,
+        session.csrfToken,
+      ),
+    );
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    expect(editor).not.toHaveAttribute("readonly");
+
+    fireEvent.change(editor, { target: { value: nextLocalBody } });
+    fireEvent.blur(editor);
+    await waitFor(() =>
+      expect(saveGoalDraft).toHaveBeenLastCalledWith(
+        draft.id,
+        nextLocalBody,
+        2,
+        session.csrfToken,
+      ),
+    );
+  });
+
+  it("isolates an in-flight creation draft save when the draft identity changes", async () => {
+    let resolveDraftA!: (value: { draft: GoalDraft }) => void;
+    const draftASave = new Promise<{ draft: GoalDraft }>((resolve) => {
+      resolveDraftA = resolve;
+    });
+    const draftB: GoalDraft = {
+      ...draft,
+      id: "20000000-0000-7000-8000-000000000002",
+      body: "新しい下書きB",
+      updatedAt: "2026-08-20T00:04:00.000Z",
+    };
+    const draftABody = "下書きAの未完了入力";
+    const draftBBody = "下書きBでの入力";
+    vi.mocked(saveGoalDraft)
+      .mockImplementationOnce(() => draftASave)
+      .mockResolvedValueOnce({
+        draft: { ...draftB, body: draftBBody, revision: 1 },
+      });
+    const cache = createCache();
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", {
+      name: "あなたの目標",
+    });
+
+    fireEvent.change(editor, { target: { value: draftABody } });
+    fireEvent.blur(editor);
+    await waitFor(() =>
+      expect(saveGoalDraft).toHaveBeenCalledWith(
+        draft.id,
+        draftABody,
+        draft.revision,
+        session.csrfToken,
+      ),
+    );
+
+    act(() => {
+      cache.setQueryData<Home>(userQueryKeys.home(session.user.id), {
+        ...home,
+        creationDraft: draftB,
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "あなたの目標" })).toHaveValue(
+        draftB.body,
+      ),
+    );
+    const draftBEditor = screen.getByRole("textbox", { name: "あなたの目標" });
+
+    await act(async () => {
+      resolveDraftA({
+        draft: { ...draft, body: draftABody, revision: 1 },
+      });
+    });
+
+    expect(draftBEditor).toHaveValue(draftB.body);
+    expect(
+      cache.getQueryData<Home>(userQueryKeys.home(session.user.id))
+        ?.creationDraft,
+    ).toEqual(draftB);
+    expect(saveGoalDraft).not.toHaveBeenCalledWith(
+      draftB.id,
+      draftABody,
+      expect.any(Number),
+      session.csrfToken,
+    );
+
+    fireEvent.change(draftBEditor, { target: { value: draftBBody } });
+    fireEvent.blur(draftBEditor);
+    await waitFor(() =>
+      expect(saveGoalDraft).toHaveBeenLastCalledWith(
+        draftB.id,
+        draftBBody,
+        draftB.revision,
+        session.csrfToken,
+      ),
+    );
+  });
 });
 
-function renderPage() {
-  const cache = new QueryClient({
+function createCache() {
+  return new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+}
+
+function renderPage(cache = createCache()) {
   return render(
     <QueryClientProvider client={cache}>
       <SessionContext.Provider value={session}>

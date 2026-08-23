@@ -69,20 +69,49 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const save = useCallback(
     async (body: string, revision: number) => {
       const saved = (
-        await saveReview(goal.id, body, revision, session.csrfToken)
+        await saveReview(
+          goal.id,
+          reviewDraft.id,
+          body,
+          revision,
+          session.csrfToken,
+        )
       ).reviewDraft;
-      cacheReviewDraft(cache, userId, goal.id, saved);
+      const current = cache.getQueryData<GoalReview>(
+        userQueryKeys.review(userId, goal.id),
+      )?.reviewDraft;
+      if (current?.id === saved.id && current.revision <= saved.revision)
+        cacheReviewDraft(cache, userId, goal.id, saved);
       return saved;
     },
-    [cache, goal.id, session.csrfToken, userId],
+    [cache, goal.id, reviewDraft.id, session.csrfToken, userId],
+  );
+  const loadLatest = useCallback(async () => {
+    return (await getReview(goal.id)).reviewDraft;
+  }, [goal.id]);
+  const acceptLatest = useCallback(
+    (latest: GoalReview["reviewDraft"]): GoalReview["reviewDraft"] | null => {
+      if (latest.id !== reviewDraft.id) return null;
+      const current = cache.getQueryData<GoalReview>(
+        userQueryKeys.review(userId, goal.id),
+      )?.reviewDraft;
+      if (!current || current.id !== reviewDraft.id) return null;
+      if (current.revision > latest.revision) return current;
+      cacheReviewDraft(cache, userId, goal.id, latest);
+      return latest;
+    },
+    [cache, goal.id, reviewDraft.id, userId],
   );
   const editor = useDraftAutoSave({
     userId,
     goalId: goal.id,
-    subjectKey: `goal-review:${goal.id}`,
+    subjectKey: `goal-review:${goal.id}:${reviewDraft.id}`,
     initialBody: reviewDraft.body,
     initialRevision: reviewDraft.revision,
     save,
+    revisionConflictCode: "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+    loadLatest,
+    acceptLatest,
   });
   const count = Array.from(editor.body).length;
   const changed =
@@ -224,6 +253,9 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     }
   }
   const valid = editor.body.trim().length > 0 && count <= 80;
+  const conflictPending = editor.revisionConflictActive;
+  const conflictRetryBlocked =
+    editor.resolvingConflict || Boolean(editor.recoveryConflict);
   return (
     <main className="page review-page">
       <header className="goal-context">
@@ -252,20 +284,25 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             onDiscard={editor.discardRecovery}
           />
         )}
+        {editor.resolvingConflict && (
+          <p className="draft-notice" role="status" aria-live="polite">
+            別の更新を確認しています…
+          </p>
+        )}
         {editor.browserCacheFailed && <DraftCacheWarning />}
         <label htmlFor="review-goal">次のサイクルで目指す目標</label>
         <textarea
           id="review-goal"
           value={editor.body}
           maxLength={80}
-          readOnly={Boolean(editor.recoveryConflict)}
+          readOnly={conflictPending}
           onChange={(event) => editor.setBody(event.target.value)}
           onBlur={editor.flush}
         />
         <div className="editor-meta">
           <SaveBadge
             state={editor.state}
-            retry={editor.recoveryConflict ? undefined : editor.retry}
+            retry={conflictRetryBlocked ? undefined : editor.retry}
           />
           <span>{count} / 80</span>
         </div>

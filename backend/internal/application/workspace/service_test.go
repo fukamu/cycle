@@ -216,3 +216,45 @@ func TestActionReplayPreservesOriginalContextChanged(t *testing.T) {
 		t.Fatalf("provider calls on replay = %d", len(provider.inputs))
 	}
 }
+
+type saveReviewLeaseStore struct {
+	Store
+	userID                string
+	goalID                string
+	expectedReviewDraftID string
+	body                  string
+	expectedRevision      int64
+	now                   time.Time
+}
+
+func (store *saveReviewLeaseStore) SaveReview(_ context.Context, userID, goalID, expectedReviewDraftID, body string, expectedRevision int64, now time.Time) (DraftView, error) {
+	store.userID = userID
+	store.goalID = goalID
+	store.expectedReviewDraftID = expectedReviewDraftID
+	store.body = body
+	store.expectedRevision = expectedRevision
+	store.now = now
+	return DraftView{ID: expectedReviewDraftID, Body: body, Revision: expectedRevision + 1}, nil
+}
+
+func TestSaveReviewForwardsExpectedDraftGeneration(t *testing.T) {
+	store := &saveReviewLeaseStore{}
+	service := NewService(store, nil, replayTestClock{}, nil, Settings{})
+	const (
+		userID        = "10000000-0000-7000-8000-000000000001"
+		goalID        = "20000000-0000-7000-8000-000000000001"
+		reviewDraftID = "30000000-0000-7000-8000-000000000001"
+	)
+
+	view, err := service.SaveReview(context.Background(), userID, goalID, reviewDraftID, "local body", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.userID != userID || store.goalID != goalID || store.expectedReviewDraftID != reviewDraftID ||
+		store.body != "local body" || store.expectedRevision != 4 || !store.now.Equal(replayTestClock{}.Now()) {
+		t.Fatalf("SaveReview store input = %#v", store)
+	}
+	if view.ID != reviewDraftID || view.Body != "local body" || view.Revision != 5 {
+		t.Fatalf("SaveReview view = %#v", view)
+	}
+}

@@ -200,7 +200,7 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 		{"start goal", http.MethodPost, "/api/v1/goal-drafts/" + fixtures[1].draftID + "/start", fmt.Sprintf(`{"operationId":%q,"expectedDraftRevision":0}`, newOperation()), "", "GOAL_DRAFT_NOT_FOUND"},
 		{"get goal", http.MethodGet, "/api/v1/goals/" + fixtures[0].goalID, "", "", "GOAL_NOT_FOUND"},
 		{"get review", http.MethodGet, "/api/v1/goals/" + fixtures[0].goalID + "/review", "", "", "GOAL_NOT_FOUND"},
-		{"save review", http.MethodPatch, "/api/v1/goals/" + fixtures[0].goalID + "/review", `{"body":"外部更新","expectedRevision":0}`, "", "GOAL_NOT_FOUND"},
+		{"save review", http.MethodPatch, "/api/v1/goals/" + fixtures[0].goalID + "/review", fmt.Sprintf(`{"body":"外部更新","expectedReviewDraftId":%q,"expectedRevision":0}`, fixtures[1].draftID), "", "GOAL_NOT_FOUND"},
 		{"refine review", http.MethodPost, "/api/v1/goals/" + fixtures[0].goalID + "/review/refinements", `{"expectedDraftRevision":0,"expectedGoalRevision":0}`, newOperation(), "GOAL_NOT_FOUND"},
 		{"adopt review", http.MethodPost, "/api/v1/goals/" + fixtures[0].goalID + "/review/refinements/" + generationID + "/adopt", `{"expectedDraftRevision":0,"expectedGoalRevision":0}`, "", "GOAL_NOT_FOUND"},
 		{"continue review", http.MethodPost, "/api/v1/goals/" + fixtures[0].goalID + "/review/continue", fmt.Sprintf(`{"operationId":%q,"expectedGoalRevision":0,"expectedDraftRevision":0}`, newOperation()), "", "GOAL_NOT_FOUND"},

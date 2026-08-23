@@ -35,7 +35,7 @@ type WorkspaceService interface {
 	ListGoals(context.Context, string, string, string, int) (workspace.GoalPage, error)
 	GetGoal(context.Context, string, string) (workspace.GoalView, error)
 	GetReview(context.Context, string, string) (workspace.ReviewView, error)
-	SaveReview(context.Context, string, string, string, int64) (workspace.DraftView, error)
+	SaveReview(context.Context, string, string, string, string, int64) (workspace.DraftView, error)
 	ContinueReview(context.Context, string, string, string, int64, int64) (workspace.ContinueReviewResult, error)
 	Terminate(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error)
 	DeleteGoal(context.Context, string, string, bool, int64, string) error

@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M5 Command idempotency/replay
+- 状態: IN_PROGRESS / M6 Revision conflict recovery
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -560,6 +560,8 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-23: M4ではBackend configへcanonical origin、PostgreSQL scheme/host/database名、finite number、int32/duration overflowの検証を追加した。Deployはmanifest由来のtrimmed presenceと共有Closed Beta parserを先に実行し、次にDB・providerへ接続しない`configcheck`でproduction config、embedded prompt、tokenizerをmigration前に検査する。失敗出力はkey/codeまたは固定messageだけで、secret/input値を出さない。これは未決の運用値を追加せず、既存runtimeが要求するshapeをdeploy前へ一致させる変更である。
 - 2026-08-23: M5のlogical Commandはページ内のcommand種別ごとにcallerがcanonical scalar fieldのfingerprintとUUID v7を同期所有する。成功、request変更、またはstable API error後に利用者が再実行を選ぶまでは同じIDを保持し、response喪失、不正response、`AI_OPERATION_IN_PROGRESS`では同じID/requestを再送する。Body/Headerの既存wire位置は変えず、late responseが後続operationをclearしないcaptured-ID guardを置く。
 - 2026-08-23: M5 replayはSoTのstrict `CurrentWork` unionをFrontend DTOでも共有し、Start/Continueは返却された過去Cycleでなくcanonical Goal route、Completeは`currentWorkspace`のActive Cycle/Goal Review/terminal routeへ収束する。Completeは元Cycleのbrowser draftだけを削除し、後続Cycleのrecovery dataを消さない。Backend AI replayは保存済み`context_changed`とoriginal request revisionを返し、provider、generation、usageを再実行しない。Schema migration、route、wire extensionは不要と判断した。
+- 2026-08-23: M6の409 recoveryはstable codeをstatusとexact比較し、Local/old-base IndexedDBを先に保持してからpure GETを行う。取得結果はcapture済みUser・Draft/Cycle世代・refresh leaseを再確認し、Goal revisionとCycle terminal/content revisionを単調採用する。失敗snapshotとServer本文が同じなら最新revisionへ自動収束して新しいLocal編集だけを再送し、差分があればLocal再適用かServer採用を明示選択する。Workspaceが後続stateへ進んだ場合は旧PATCH/Retryを停止し、copyable read-only Localとcanonical routeを残す。Backendはstate/AI/text guard後、同一resource・同一本文のstale saveだけをno-opとする。Route、Response、stable error、schema/migrationは変更しない。
+- 2026-08-23: M6監査で、Review Draftを世代ごとにrevision 0から作る一方、`PATCH /goals/{goalId}/review`がDraft IDを持たないため、Review Aのlate RequestがReview Bを上書きでき、SoTのlate overwrite禁止を現wireでは保証不能と判明した。M0の非互換wire禁止判断をこのprivate SPA contractだけ改訂し、userが明示許可した未公開Frontend/Backend contract変更としてrequired UUID v7 `expectedReviewDraftId`を追加する。Goal→exact Review Draftを同一Transactionでlockし、field欠落/invalid UUIDは400、validだがcurrentでない旧世代/foreign/不存在IDは既存409へfail-closedする。Route/Response/error codeは維持し、Frontend wire test、required-field HTTP test、cross-user 404、実DBのA→B ABA/same-body regressionを追加した。
 - 2026-08-22: Free/MVPの進行Goal上限を2件に確定。
 - 2026-08-22: Homeは`GoalView/currentWork`共用に確定。
 - 2026-08-22: Goal Refine fieldを`suggestion`へ統一。
@@ -572,7 +574,12 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-23: M6 full E gateはfresh empty PostgreSQL 18.6で成功した。Frontend 29 files / 125 tests、production build、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 15/15、migration version 1・dirty=falseを確認した。検証用local DBは停止・削除済み。次に最終treeをstageしてCを実行する。
+- 2026-08-23: M6 target検証はFrontend 5 files / 60 tests、typecheck/lint、全Frontend F 29/125、Backend domain/application/HTTPと実PostgreSQL全packageで成功した。Creation/Review/Cycleのactual HTTP exact 409、永続body/revision/timestamp不変、Review A→Bの旧ID same/different-body拒否、cross-user 404、Cycleのlate cache・workspace移動・unmount保全・command失敗後GET-only復旧を固定した。
+- 2026-08-23: M6変更前REDでは、Creation/Review/Cycleの同一本文stale saveがすべてrevision conflictとなり、Frontendは対象409後も最新Server revisionを取得せずgeneric保存失敗から復旧できなかった。GREENでは共通Goal autosave recoveryとCycleのper-frame recoveryを実装し、同値自動収束、差分時の明示選択、Local/IndexedDB保持、latest revision再送、exact code以外の409非介入を固定した。独立監査でReview Draft browser key混同、Review世代ABA、late cache rollback、terminal自己link、moved unmount削除、command failure後stuckを検出し、identity leaseとdeterministic component/DB regressionで解消した。
+- 2026-08-23: M6検証の最初のFrontend targetは新API contract fixtureの`draftType`欠落だけで59/60となり、最初のBackend full targetはM1 cross-user matrixの旧Review PATCH fixtureがrequired Draft IDを持たず400となった。実装assertionを変更せずfixtureを実contractへ更新し、Frontend target/F、Backend全package、fresh full Eをすべて最初から再実行して成功した。
 - 2026-08-23: M4の最終commit前必須gateはfresh disposable DBとstaged candidate tree `8395716fad9042861e8234b5df1b90916586ade6`で成功した。全scope、Frontend 28 files / 81 tests、Backend PostgreSQL integration、Cloudflare 60 tests、Playwright 14/14、migration version 1・dirty=false、開始・終了tree一致を確認。Commit権限がないためcommitしていない。
+- 2026-08-23: M5の最終commit前必須gateはfresh disposable PostgreSQL 18.6とstaged candidate tree `e69c42d261e69cdfa92ce07fc67462ee4dc24702`で成功した。Frontend 29 files / 102 tests、Backend PostgreSQL integration、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 15/15、migration version 1・dirty=false、開始・終了tree一致を確認。Commit権限がないためcommitしていない。
 - 2026-08-23: M5の変更前REDでは全9 idempotent APIがattemptごとにoperation IDを内部生成し、post-commit response loss後のretryが別IDになった。Complete replayは後続workspaceを無視して過去Reviewへ遷移し、Goal全browser draftを削除した。Backend Goal/Action replayは保存済み`context_changed=true`をfalseで返し、Goal source revisionを後続stateから取得した。GREENではcaller-owned operation lifecycle、strict replay DTO/canonical navigation、元Cycle限定cleanup、保存済みAI metadataを実装し、same-key/different-hash、provider追加call 0、generation/usage各1を固定した。
 - 2026-08-23: M5 target検証はFrontend 29 files / 102 tests、Backend全package/sqlc/build、実PostgreSQL replay integration、真の`route.fetch()`後browser response-loss E2E 1/1で成功した。Response-loss journeyは同じoperation/bodyでfirst commit `200`、後続Continue `200`、stale replay `200`となり、Cycle 1 completed、Cycle 2 active、Review Draft 0へ収束した。最初のGREEN試行はtest自身の`GET /session`がCSRFをrotateしてretryだけ`403`になったため、UIのfirst request tokenをout-of-band Continueへ再利用してtest setupを修正し、assertionは変更していない。
 - 2026-08-23: M5 full E gateはfresh empty PostgreSQL 18.6で成功した。Frontend 29 files / 102 tests、Backend PostgreSQL integration、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 15/15、migration version 1・dirty=false、sqlc drift zeroを確認。次に全変更をstageしてcommit前必須gateを実行する。
@@ -597,7 +604,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M5 commit前必須gate。全変更をstageし、fresh disposable DBでcandidate treeの開始・終了一致、全scope、Playwright 15 scenarios、migration状態を確認する。成功後はindexを変更せずM6へ進み、次のExecPlan更新でM5 final candidate treeを記録する。
+- 現在の再開位置: M6 Revision conflict recoveryの最終C。RED/GREEN、target Frontend/Backend、fresh disposable DBのfull E、Decision/Progress更新まで完了した。全変更をstageしてcandidate treeを固定し、別のfresh disposable PostgreSQLで`./scripts/check-before-commit.sh`を実行する。成功後はindex/working treeを変更せずM6完了treeを記録し、M7 Text/version semanticsへ進む。
 
 ## 26. Final definition of done
 

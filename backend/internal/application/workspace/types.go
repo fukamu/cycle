@@ -411,7 +411,7 @@ type Store interface {
 	ListGoals(context.Context, string, string, string, int) (GoalPage, error)
 	GetGoal(context.Context, string, string) (GoalView, error)
 	GetReview(context.Context, string, string) (ReviewView, error)
-	SaveReview(context.Context, string, string, string, int64, time.Time) (DraftView, error)
+	SaveReview(context.Context, string, string, string, string, int64, time.Time) (DraftView, error)
 	ContinueReview(context.Context, ContinueReviewInput) (ContinueReviewResult, error)
 	Terminate(context.Context, TerminateInput) (TerminateResult, error)
 	DeleteGoal(context.Context, string, string, bool, int64, string, string, time.Time) error

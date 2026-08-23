@@ -112,15 +112,15 @@ func NewDraft(id, userID, body string, now time.Time) (Draft, error) {
 }
 
 func SaveDraft(current Draft, body string, expectedRevision int64, now time.Time) (Draft, bool, error) {
-	if current.Revision != expectedRevision {
-		return Draft{}, false, ErrStateConflict
-	}
 	body, err := NormalizeText(body, true)
 	if err != nil {
 		return Draft{}, false, err
 	}
 	if current.Body == body {
 		return current, true, nil
+	}
+	if current.Revision != expectedRevision {
+		return Draft{}, false, ErrStateConflict
 	}
 	current.Body = body
 	current.Revision++

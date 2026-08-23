@@ -103,8 +103,8 @@ func (service *Service) GetReview(ctx context.Context, userID, goalID string) (R
 	return view, resourceNotFound(err, ErrGoalNotFound)
 }
 
-func (service *Service) SaveReview(ctx context.Context, userID, goalID, body string, expectedRevision int64) (DraftView, error) {
-	view, err := service.store.SaveReview(ctx, userID, goalID, body, expectedRevision, service.clock.Now().UTC())
+func (service *Service) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID, body string, expectedRevision int64) (DraftView, error) {
+	view, err := service.store.SaveReview(ctx, userID, goalID, expectedReviewDraftID, body, expectedRevision, service.clock.Now().UTC())
 	return view, resourceNotFound(err, ErrGoalNotFound)
 }
 

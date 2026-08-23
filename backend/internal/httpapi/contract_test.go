@@ -17,24 +17,26 @@ import (
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
 	"github.com/fukamu/cycle/backend/internal/httpapi"
 )
 
 const (
-	contractOrigin       = "https://cycle.example.test"
-	contractRequestID    = "0198c20b-7b95-7000-8000-000000000001"
-	contractSessionID    = "10000000-0000-7000-8000-000000000001"
-	contractUserID       = "20000000-0000-7000-8000-000000000001"
-	contractOtherUserID  = "20000000-0000-7000-8000-000000000002"
-	contractDraftID      = "30000000-0000-7000-8000-000000000001"
-	contractGoalID       = "40000000-0000-7000-8000-000000000001"
-	contractCycleID      = "50000000-0000-7000-8000-000000000001"
-	contractGenerationID = "60000000-0000-7000-8000-000000000001"
-	contractOperationID  = "70000000-0000-7000-8000-000000000001"
-	contractSessionToken = "opaque-session-token"
-	contractCSRFToken    = "opaque-csrf-token"
-	contractCookieName   = "__Host-fukamu_cycle_session"
+	contractOrigin        = "https://cycle.example.test"
+	contractRequestID     = "0198c20b-7b95-7000-8000-000000000001"
+	contractSessionID     = "10000000-0000-7000-8000-000000000001"
+	contractUserID        = "20000000-0000-7000-8000-000000000001"
+	contractOtherUserID   = "20000000-0000-7000-8000-000000000002"
+	contractDraftID       = "30000000-0000-7000-8000-000000000001"
+	contractReviewDraftID = "31000000-0000-7000-8000-000000000001"
+	contractGoalID        = "40000000-0000-7000-8000-000000000001"
+	contractCycleID       = "50000000-0000-7000-8000-000000000001"
+	contractGenerationID  = "60000000-0000-7000-8000-000000000001"
+	contractOperationID   = "70000000-0000-7000-8000-000000000001"
+	contractSessionToken  = "opaque-session-token"
+	contractCSRFToken     = "opaque-csrf-token"
+	contractCookieName    = "__Host-fukamu_cycle_session"
 )
 
 type contractSessionStub struct {
@@ -78,6 +80,8 @@ type contractWorkspaceStub struct {
 	createDraft func(context.Context, string, string) (workspace.DraftView, error)
 	saveDraft   func(context.Context, string, string, string, int64) (workspace.DraftView, error)
 	getGoal     func(context.Context, string, string) (workspace.GoalView, error)
+	saveReview  func(context.Context, string, string, string, string, int64) (workspace.DraftView, error)
+	saveFrame   func(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
 	refineGoal  func(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
 }
 
@@ -107,6 +111,20 @@ func (stub *contractWorkspaceStub) GetGoal(ctx context.Context, userID, goalID s
 		panic("unexpected GetGoal call")
 	}
 	return stub.getGoal(ctx, userID, goalID)
+}
+
+func (stub *contractWorkspaceStub) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID, body string, revision int64) (workspace.DraftView, error) {
+	if stub.saveReview == nil {
+		panic("unexpected SaveReview call")
+	}
+	return stub.saveReview(ctx, userID, goalID, expectedReviewDraftID, body, revision)
+}
+
+func (stub *contractWorkspaceStub) SaveFrame(ctx context.Context, input workspace.SaveFrameInput) (workspace.SaveFrameResult, error) {
+	if stub.saveFrame == nil {
+		panic("unexpected SaveFrame call")
+	}
+	return stub.saveFrame(ctx, input)
 }
 
 func (stub *contractWorkspaceStub) RefineGoal(ctx context.Context, input workspace.GoalRefineInput) (workspace.AIResponse, error) {
@@ -485,6 +503,67 @@ func TestRecoveryDetailsAndFailuresExposeNoSensitiveCause(t *testing.T) {
 		if strings.Contains(combined, bodySentinel) || strings.Contains(combined, errorSentinel) {
 			t.Fatalf("body or cause leaked: %s", combined)
 		}
+	})
+}
+
+func TestAutosaveRevisionConflictsHaveStableHTTPContract(t *testing.T) {
+	t.Run("creation draft", func(t *testing.T) {
+		spaces := &contractWorkspaceStub{saveDraft: func(_ context.Context, userID, draftID, body string, revision int64) (workspace.DraftView, error) {
+			if userID != contractUserID || draftID != contractDraftID || body != "local goal" || revision != 3 {
+				t.Fatalf("SaveDraft input = %q/%q/%q/%d", userID, draftID, body, revision)
+			}
+			return workspace.DraftView{}, workspace.ErrDraftRevisionConflict
+		}}
+		router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodPatch, "/api/v1/goal-drafts/"+contractDraftID,
+			`{"body":"local goal","expectedRevision":3}`, addContractAuthentication)
+		assertContractError(t, response, http.StatusConflict, "GOAL_DRAFT_REVISION_CONFLICT", nil)
+	})
+
+	t.Run("goal review draft", func(t *testing.T) {
+		spaces := &contractWorkspaceStub{saveReview: func(_ context.Context, userID, goalID, expectedReviewDraftID, body string, revision int64) (workspace.DraftView, error) {
+			if userID != contractUserID || goalID != contractGoalID || expectedReviewDraftID != contractReviewDraftID ||
+				body != "local review goal" || revision != 5 {
+				t.Fatalf("SaveReview input = %q/%q/%q/%q/%d", userID, goalID, expectedReviewDraftID, body, revision)
+			}
+			return workspace.DraftView{}, workspace.ErrReviewRevisionConflict
+		}}
+		router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodPatch, "/api/v1/goals/"+contractGoalID+"/review",
+			`{"body":"local review goal","expectedReviewDraftId":"`+contractReviewDraftID+`","expectedRevision":5}`, addContractAuthentication)
+		assertContractError(t, response, http.StatusConflict, "GOAL_REVIEW_DRAFT_REVISION_CONFLICT", nil)
+	})
+
+	t.Run("goal review draft lease is a required UUIDv7", func(t *testing.T) {
+		router := contractRouter(authenticatedContractSessions(), &contractWorkspaceStub{}, &contractAccountStub{}, nil)
+		for _, test := range []struct {
+			name string
+			body string
+		}{
+			{name: "missing", body: `{"body":"local review goal","expectedRevision":5}`},
+			{name: "invalid", body: `{"body":"local review goal","expectedReviewDraftId":"not-a-uuid","expectedRevision":5}`},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				response := serveContract(router, http.MethodPatch, "/api/v1/goals/"+contractGoalID+"/review",
+					test.body, addContractAuthentication)
+				assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
+			})
+		}
+	})
+
+	t.Run("cycle frame", func(t *testing.T) {
+		spaces := &contractWorkspaceStub{saveFrame: func(_ context.Context, input workspace.SaveFrameInput) (workspace.SaveFrameResult, error) {
+			if input.UserID != contractUserID || input.GoalID != contractGoalID || input.CycleID != contractCycleID ||
+				input.Frame != cycle.FramePlan || input.Content != "local plan" || input.ExpectedFrameRevision != 7 {
+				t.Fatalf("SaveFrame input = %#v", input)
+			}
+			return workspace.SaveFrameResult{}, cycle.ErrRevisionConflict
+		}}
+		router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+		response := serveContract(router, http.MethodPatch,
+			"/api/v1/goals/"+contractGoalID+"/cycles/"+contractCycleID+"/frames/plan",
+			`{"content":"local plan","expectedFrameRevision":7}`, addContractAuthentication)
+		assertContractError(t, response, http.StatusConflict, "CYCLE_REVISION_CONFLICT", nil)
 	})
 }
 

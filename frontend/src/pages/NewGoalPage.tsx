@@ -16,6 +16,7 @@ import {
   adoptGoalDraft,
   createGoalDraft,
   discardGoalDraft,
+  getGoalDraft,
   getHome,
   refineGoalDraft,
   saveGoalDraft,
@@ -75,7 +76,13 @@ export function NewGoalPage() {
         </div>
       </main>
     );
-  return <GoalDraftEditor draft={query.data.creationDraft} home={query.data} />;
+  return (
+    <GoalDraftEditor
+      key={query.data.creationDraft.id}
+      draft={query.data.creationDraft}
+      home={query.data}
+    />
+  );
 }
 
 function GoalDraftEditor({
@@ -100,10 +107,30 @@ function GoalDraftEditor({
       const saved = (
         await saveGoalDraft(draft.id, body, revision, session.csrfToken)
       ).draft;
-      cacheCreationDraft(cache, userId, saved);
+      const current = cache.getQueryData<Home>(
+        userQueryKeys.home(userId),
+      )?.creationDraft;
+      if (current?.id === saved.id && current.revision <= saved.revision)
+        cacheCreationDraft(cache, userId, saved);
       return saved;
     },
     [cache, draft.id, session.csrfToken, userId],
+  );
+  const loadLatest = useCallback(async () => {
+    return (await getGoalDraft(draft.id)).draft;
+  }, [draft.id]);
+  const acceptLatest = useCallback(
+    (latest: GoalDraft): GoalDraft | null => {
+      if (latest.id !== draft.id) return null;
+      const current = cache.getQueryData<Home>(
+        userQueryKeys.home(userId),
+      )?.creationDraft;
+      if (!current || current.id !== draft.id) return null;
+      if (current.revision > latest.revision) return current;
+      cacheCreationDraft(cache, userId, latest);
+      return latest;
+    },
+    [cache, draft.id, userId],
   );
   const editor = useDraftAutoSave({
     userId,
@@ -112,6 +139,9 @@ function GoalDraftEditor({
     initialBody: draft.body,
     initialRevision: draft.revision,
     save,
+    revisionConflictCode: "GOAL_DRAFT_REVISION_CONFLICT",
+    loadLatest,
+    acceptLatest,
   });
   const count = Array.from(editor.body).length;
   const valid = editor.body.trim().length > 0 && count <= 80;
@@ -211,6 +241,9 @@ function GoalDraftEditor({
     refinement.state.kind !== "running" &&
     home.canStartProgressingGoal &&
     !pending;
+  const conflictPending = editor.revisionConflictActive;
+  const conflictRetryBlocked =
+    editor.resolvingConflict || Boolean(editor.recoveryConflict);
   return (
     <main className="page editor-page">
       <header className="page-heading">
@@ -225,6 +258,11 @@ function GoalDraftEditor({
             onDiscard={editor.discardRecovery}
           />
         )}
+        {editor.resolvingConflict && (
+          <p className="draft-notice" role="status" aria-live="polite">
+            別の更新を確認しています…
+          </p>
+        )}
         {editor.browserCacheFailed && <DraftCacheWarning />}
         <label htmlFor="goal-body">あなたの目標</label>
         <textarea
@@ -233,14 +271,14 @@ function GoalDraftEditor({
           value={editor.body}
           maxLength={80}
           placeholder={goalCopy.placeholder}
-          readOnly={Boolean(editor.recoveryConflict)}
+          readOnly={conflictPending}
           onChange={(event) => editor.setBody(event.target.value)}
           onBlur={editor.flush}
         />
         <div className="editor-meta">
           <SaveBadge
             state={editor.state}
-            retry={editor.recoveryConflict ? undefined : editor.retry}
+            retry={conflictRetryBlocked ? undefined : editor.retry}
           />
           <span className={count > 80 ? "counter counter--error" : "counter"}>
             {count} / 80

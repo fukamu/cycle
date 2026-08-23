@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -9,6 +10,7 @@ import {
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { SessionContext } from "../features/auth/sessionContext";
+import { userQueryKeys } from "../features/goal-collection/goalCache";
 import type {
   Cycle,
   Goal,
@@ -16,6 +18,7 @@ import type {
   GoalReview,
   Session,
 } from "../shared/api/schemas";
+import { APIError } from "../shared/api/client";
 import {
   continueReview,
   getReview,
@@ -23,6 +26,7 @@ import {
   terminateGoal,
 } from "../shared/api/workspace";
 import {
+  type BrowserDraft,
   deleteBrowserDraft,
   getBrowserDraft,
   putBrowserDraft,
@@ -97,6 +101,30 @@ const triggerCycle: Cycle = {
 };
 
 const review: GoalReview = { goal, reviewDraft, triggerCycle };
+
+const replacementReviewDraft: GoalDraft = {
+  ...reviewDraft,
+  id: "40000000-0000-7000-8000-000000000005",
+  body: "新しいレビュー下書きB",
+  updatedAt: "2026-08-20T00:05:00.000Z",
+};
+
+const replacementGoal: Goal = {
+  ...goal,
+  revision: goal.revision + 1,
+  currentWork: {
+    kind: "goal_review",
+    reviewDraftId: replacementReviewDraft.id,
+    triggerCycleId: triggerCycle.id,
+    triggerCycleSequenceNumber: triggerCycle.sequenceNumber,
+  },
+};
+
+const replacementReview: GoalReview = {
+  goal: replacementGoal,
+  reviewDraft: replacementReviewDraft,
+  triggerCycle,
+};
 
 const replayedCycle: Cycle = {
   ...triggerCycle,
@@ -247,12 +275,221 @@ describe("GoalReviewPage", () => {
       secondOptions,
     );
   });
+
+  it("preserves a local review on the exact revision conflict and adopts the latest server draft only by choice", async () => {
+    const localBody = "この端末で見直した目標";
+    const nextBody = "競合解消後の見直し";
+    const latestDraft: GoalDraft = {
+      ...reviewDraft,
+      body: "別の端末で見直された目標",
+      revision: 1,
+      updatedAt: "2026-08-20T00:03:00.000Z",
+    };
+    vi.mocked(getReview)
+      .mockResolvedValueOnce(review)
+      .mockResolvedValueOnce({ ...review, reviewDraft: latestDraft });
+    vi.mocked(saveReview)
+      .mockRejectedValueOnce(
+        new APIError(
+          409,
+          "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+          "conflict",
+          "request-2",
+        ),
+      )
+      .mockResolvedValueOnce({
+        reviewDraft: { ...latestDraft, body: nextBody, revision: 2 },
+      });
+
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.change(editor, { target: { value: localBody } });
+    fireEvent.blur(editor);
+
+    expect(
+      await screen.findByText("別の更新が見つかりました"),
+    ).toBeInTheDocument();
+    expect(editor).toHaveValue(localBody);
+    expect(getReview).toHaveBeenCalledTimes(2);
+    expect(putBrowserDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: localBody,
+        baseRevision: reviewDraft.revision,
+      }),
+    );
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "サーバーの内容を使用" }),
+    );
+    await waitFor(() => expect(editor).toHaveValue(latestDraft.body));
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(screen.getByText("保存済み")).toBeInTheDocument();
+    expect(editor).not.toHaveAttribute("readonly");
+
+    fireEvent.change(editor, { target: { value: nextBody } });
+    fireEvent.blur(editor);
+
+    await waitFor(() =>
+      expect(saveReview).toHaveBeenLastCalledWith(
+        goal.id,
+        reviewDraft.id,
+        nextBody,
+        latestDraft.revision,
+        session.csrfToken,
+      ),
+    );
+  });
+
+  it("isolates a cached and in-flight review when its draft identity changes", async () => {
+    let resolveReviewA!: (value: { reviewDraft: GoalDraft }) => void;
+    const reviewASave = new Promise<{ reviewDraft: GoalDraft }>((resolve) => {
+      resolveReviewA = resolve;
+    });
+    const browserDrafts = new Map<string, BrowserDraft>();
+    vi.mocked(getBrowserDraft).mockImplementation(
+      async (_userId, subjectKey) => browserDrafts.get(subjectKey) ?? null,
+    );
+    vi.mocked(putBrowserDraft).mockImplementation(async (record) => {
+      browserDrafts.set(record.subjectKey, record);
+    });
+    vi.mocked(deleteBrowserDraft).mockImplementation(
+      async (_userId, subjectKey) => {
+        browserDrafts.delete(subjectKey);
+      },
+    );
+    const reviewABody = "レビューAの未完了入力";
+    const reviewBBody = "レビューBでの入力";
+    vi.mocked(saveReview)
+      .mockImplementationOnce(() => reviewASave)
+      .mockResolvedValueOnce({
+        reviewDraft: {
+          ...replacementReviewDraft,
+          body: reviewBBody,
+          revision: 1,
+        },
+      });
+    const cache = createCache();
+    renderPage(cache);
+    const editorA = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.change(editorA, { target: { value: reviewABody } });
+    fireEvent.blur(editorA);
+    await waitFor(() =>
+      expect(saveReview).toHaveBeenCalledWith(
+        goal.id,
+        reviewDraft.id,
+        reviewABody,
+        reviewDraft.revision,
+        session.csrfToken,
+      ),
+    );
+    await waitFor(() => expect(putBrowserDraft).toHaveBeenCalled());
+
+    act(() => {
+      cache.setQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+        replacementReview,
+      );
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", {
+          name: "次のサイクルで目指す目標",
+        }),
+      ).toHaveValue(replacementReviewDraft.body),
+    );
+    const editorB = screen.getByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    expect(getBrowserDraft).toHaveBeenCalledWith(
+      session.user.id,
+      `goal-review:${goal.id}:${reviewDraft.id}`,
+    );
+    expect(getBrowserDraft).toHaveBeenCalledWith(
+      session.user.id,
+      `goal-review:${goal.id}:${replacementReviewDraft.id}`,
+    );
+
+    await act(async () => {
+      resolveReviewA({
+        reviewDraft: { ...reviewDraft, body: reviewABody, revision: 1 },
+      });
+    });
+
+    expect(editorB).toHaveValue(replacementReviewDraft.body);
+    expect(
+      cache.getQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+      )?.reviewDraft,
+    ).toEqual(replacementReviewDraft);
+
+    fireEvent.blur(editorB);
+    await act(async () => undefined);
+    expect(saveReview).toHaveBeenCalledOnce();
+
+    fireEvent.change(editorB, { target: { value: reviewBBody } });
+    fireEvent.blur(editorB);
+    await waitFor(() =>
+      expect(saveReview).toHaveBeenLastCalledWith(
+        goal.id,
+        replacementReviewDraft.id,
+        reviewBBody,
+        replacementReviewDraft.revision,
+        session.csrfToken,
+      ),
+    );
+  });
+
+  it("rejects a conflict refresh that returns another review draft identity", async () => {
+    const localBody = "レビューAの競合入力";
+    vi.mocked(getReview)
+      .mockResolvedValueOnce(review)
+      .mockResolvedValueOnce(replacementReview);
+    vi.mocked(saveReview).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+        "conflict",
+        "request-wrong-review",
+      ),
+    );
+    const cache = createCache();
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.change(editor, { target: { value: localBody } });
+    fireEvent.blur(editor);
+
+    await waitFor(() => expect(getReview).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("保存失敗")).toBeInTheDocument();
+    expect(editor).toHaveValue(localBody);
+    expect(editor).toHaveAttribute("readonly");
+    expect(
+      screen.queryByText("別の更新が見つかりました"),
+    ).not.toBeInTheDocument();
+    expect(
+      cache.getQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+      )?.reviewDraft,
+    ).toEqual(reviewDraft);
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+  });
 });
 
-function renderPage() {
-  const cache = new QueryClient({
+function createCache() {
+  return new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+}
+
+function renderPage(cache = createCache()) {
   return render(
     <QueryClientProvider client={cache}>
       <SessionContext.Provider value={session}>

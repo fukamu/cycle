@@ -146,6 +146,7 @@ export const getReview = (goalId: string) =>
   requestJSON(`/api/v1/goals/${goalId}/review`, reviewSchema);
 export const saveReview = (
   goalId: string,
+  expectedReviewDraftId: string,
   body: string,
   expectedRevision: number,
   csrfToken: string,
@@ -153,7 +154,7 @@ export const saveReview = (
   requestJSON(`/api/v1/goals/${goalId}/review`, reviewDraftEnvelope, {
     method: "PATCH",
     csrfToken,
-    body: { body, expectedRevision },
+    body: { body, expectedReviewDraftId, expectedRevision },
   });
 export const refineReview = (
   goalId: string,

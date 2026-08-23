@@ -152,23 +152,55 @@ func (store *WorkspaceStore) SaveDraft(ctx context.Context, userID, draftID, bod
 	return store.saveDraft(ctx, userID, draftID, "creation", body, expectedRevision, now, workspace.ErrDraftRevisionConflict)
 }
 
-func (store *WorkspaceStore) SaveReview(ctx context.Context, userID, goalID, body string, expectedRevision int64, now time.Time) (workspace.DraftView, error) {
-	view, err := store.GetGoal(ctx, userID, goalID)
+func (store *WorkspaceStore) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID, body string, expectedRevision int64, now time.Time) (workspace.DraftView, error) {
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return workspace.DraftView{}, err
 	}
-	if view.Status != goal.StatusGoalReview {
+	defer rollback(ctx, tx)
+
+	var status goal.Status
+	err = tx.QueryRow(ctx, `SELECT status FROM goals WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(goalID), mustUUID(userID)).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspace.DraftView{}, workspace.ErrNotFound
+	}
+	if err != nil {
+		return workspace.DraftView{}, err
+	}
+	if status != goal.StatusGoalReview {
 		return workspace.DraftView{}, workspace.ErrGoalReviewNotActive
 	}
-	var draftID string
-	err = store.pool.QueryRow(ctx, `SELECT id FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND draft_type='review'`, mustUUID(userID), mustUUID(goalID)).Scan(&draftID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return workspace.DraftView{}, workspace.ErrGoalReviewInvariant
+
+	current, err := scanDraft(tx.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
+FROM goal_drafts WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND draft_type='review' FOR UPDATE`,
+		mustUUID(expectedReviewDraftID), mustUUID(userID), mustUUID(goalID)))
+	if errors.Is(err, workspace.ErrNotFound) {
+		return workspace.DraftView{}, workspace.ErrReviewRevisionConflict
 	}
 	if err != nil {
 		return workspace.DraftView{}, err
 	}
-	return store.saveDraft(ctx, userID, draftID, "review", body, expectedRevision, now, workspace.ErrReviewRevisionConflict)
+
+	normalized, err := goal.NormalizeText(body, true)
+	if err != nil {
+		return workspace.DraftView{}, err
+	}
+	if current.Body != normalized {
+		if current.Revision != expectedRevision {
+			return workspace.DraftView{}, workspace.ErrReviewRevisionConflict
+		}
+		current.Body = normalized
+		current.Revision++
+		current.UpdatedAt = now
+		if _, err = tx.Exec(ctx, `UPDATE goal_drafts SET body=$2,revision=$3,updated_at=$4 WHERE id=$1`,
+			mustUUID(expectedReviewDraftID), normalized, current.Revision, now); err != nil {
+			return workspace.DraftView{}, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return workspace.DraftView{}, err
+	}
+	return current, nil
 }
 
 func (store *WorkspaceStore) saveDraft(ctx context.Context, userID, draftID, draftType, body string, expectedRevision int64, now time.Time, conflict error) (workspace.DraftView, error) {
@@ -186,10 +218,10 @@ FROM goal_drafts WHERE id=$1 AND user_id=$2 AND draft_type=$3 FOR UPDATE`, mustU
 	if err != nil {
 		return workspace.DraftView{}, err
 	}
-	if current.Revision != expectedRevision {
-		return workspace.DraftView{}, conflict
-	}
 	if current.Body != normalized {
+		if current.Revision != expectedRevision {
+			return workspace.DraftView{}, conflict
+		}
 		current.Body = normalized
 		current.Revision++
 		current.UpdatedAt = now

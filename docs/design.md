@@ -2943,6 +2943,7 @@ Request:
 ```json
 {
   "body": "平日は18時までに主要業務を終えたい",
+  "expectedReviewDraftId": "draft-uuid",
   "expectedRevision": 0
 }
 ```
@@ -2950,6 +2951,8 @@ Request:
 Validation:
 
 - body required string、0..80 chars、NUL禁止。
+- `expectedReviewDraftId`はrequired UUID v7で、現在openなReview Draft IDと一致する。
+- Goalと指定Review Draftを同一Transaction内でlockし、owner / path Goal / `draftType=review`を検証する。
 - `expectedRevision >= 0`。
 - Goal status=`goal_review`。
 - no-op bodyはrevisionを増やさない。
@@ -2970,13 +2973,14 @@ Response `200`:
 
 Errors:
 
+- `400 VALIDATION_ERROR`
 - `400 GOAL_TEXT_TOO_LONG`
 - `404 GOAL_NOT_FOUND`
 - `409 GOAL_REVIEW_NOT_ACTIVE`
 - `409 GOAL_REVIEW_DRAFT_REVISION_CONFLICT`
 - `500 GOAL_REVIEW_DRAFT_SAVE_FAILED`
 
-Idempotency / ordering: `expectedRevision` CASで古い保存を拒否する。同一本文のretryはno-opとして現在revisionを返し、late Requestが新しいDraftを上書きしない。
+Idempotency / ordering: `expectedReviewDraftId`をReview世代lease、`expectedRevision`をそのDraft内のCASとして古い保存を拒否する。同じDraft ID・同一本文のretryだけをno-opとして現在revisionで返す。別世代のlate Requestは本文が同一でも`GOAL_REVIEW_DRAFT_REVISION_CONFLICT`とし、新しいDraftを上書きせずrevisionも開示しない。
 
 ## 23.7 `POST /api/v1/goals/{goalId}/review/refinements`
 
@@ -4204,7 +4208,7 @@ SQLを1巨大Repository methodへ隠しすぎず、Transaction object内のtyped
 | Goal Draft save | old save overwrites new | revision CAS | stale write rejected |
 | Start Goal parallel | Progressing Goal上限突破 | User row lock + Policy count | concurrent requestsでもlimit内 |
 | Start Goal partial | Goalだけ/Cycleだけ | DB Transaction + deferred FK | Goal+Version1+Cycle1 or none |
-| Goal Review save | old draft overwrite | revision CAS | latest save preserved |
+| Goal Review save | old saveまたは旧Review世代のlate saveが現Draftを上書き | exact ReviewDraftID lease + revision CAS | current generationのlatest saveだけを反映 |
 | Cycle Frame save | old same-frame overwrite | queue + frame revision CAS | stale same-frame write rejected |
 | Different Frame saves | needless conflict | per-frame revision | independent changes可能 |
 | Cycle Complete double tap | duplicate Review Draft | Cycle/Goal row locks + operationId + unique sourceCycle | one transition |
@@ -5101,9 +5105,11 @@ Revision conflictではServer本文でLocal本文を自動上書きしない。
 
 1. Local draftを維持する。
 2. Server revisionとstateを再取得する。
-3. 同一端末のstale responseならqueueが再試行する。
-4. 別端末変更の可能性がある場合は「別の更新が見つかりました」と表示する。
-5. 高度なMerge UIはMVP対象外。UserがLocal案をcopyできる状態を維持する。
+3. Refetch結果は同じUser / Draft / Cycle世代だけが受理し、cacheより古いrevisionやterminal stateを巻き戻さない。
+4. Server本文が失敗したsave snapshotと同じなら最新revisionへ自動収束し、その間の新しいLocal編集だけを再送する。
+5. Server本文とLocal本文が異なる場合は「別の更新が見つかりました」と表示し、Local案を最新revisionへ再適用するかServer案を採用するまで自動送信しない。
+6. Goal workspaceが後続stateへ進んでいた場合は旧workspaceへの保存とRetryを停止し、Local案をcopy可能なread-only表示と現在workspaceへの導線を維持する。
+7. 高度なMerge UIはMVP対象外。
 
 ## 40.6 Unexpected error
 
@@ -6010,6 +6016,7 @@ Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpa
 | GR-11 | direct next Cycle endpoint bypass | endpointなし / `GOAL_REVIEW_REQUIRED` |
 | GR-12 | Review refine running | continue rejected |
 | GR-13 | continue response loss後に作成Cycleが後続stateへ進みsame opId retry | next Cycleを重複作成せずcurrent workspace |
+| GR-14 | Review A削除後にReview Bがopenとなり、A IDのlate saveが到着 | revisionが同値・本文が同一でもconflict、Review B不変 |
 
 ## 48.9 Goal termination tests
 

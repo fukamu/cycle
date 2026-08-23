@@ -11,9 +11,11 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { SessionContext } from "../features/auth/sessionContext";
 import { userQueryKeys } from "../features/goal-collection/goalCache";
+import { APIError } from "../shared/api/client";
 import type { Cycle, Goal, Session } from "../shared/api/schemas";
 import {
   completeCycle,
+  deleteGoal,
   getCycle,
   getGoal,
   refineAction,
@@ -269,6 +271,751 @@ describe("GoalWorkspacePage", () => {
     );
   });
 
+  it("rebases a runtime cycle conflict only after the user chooses the local frame", async () => {
+    const latestCycle: Cycle = {
+      ...cycle,
+      plan: "別の端末で保存された計画",
+      contentRevision: 1,
+      frameRevisions: { ...cycle.frameRevisions, plan: 1 },
+    };
+    vi.mocked(getCycle)
+      .mockResolvedValueOnce({ cycle })
+      .mockResolvedValueOnce({ cycle: latestCycle });
+    vi.mocked(saveCycleFrame)
+      .mockRejectedValueOnce(cycleRevisionConflict())
+      .mockResolvedValueOnce({
+        cycleId: cycle.id,
+        frame: "plan",
+        content: "この端末の計画",
+        frameRevision: 2,
+        contentRevision: 2,
+        savedAt: "2026-08-20T00:02:00.000Z",
+      });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: "この端末の計画" } });
+
+    expect(
+      await screen.findByText("別の更新が見つかりました"),
+    ).toBeInTheDocument();
+    expect(editor).toHaveValue("この端末の計画");
+    expect(editor).toHaveAttribute("readonly");
+    expect(getGoal).toHaveBeenCalledTimes(2);
+    expect(getCycle).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(putBrowserDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subjectKey: `cycle:${cycle.id}:plan`,
+          body: "この端末の計画",
+          baseRevision: 0,
+        }),
+      ),
+    );
+
+    window.dispatchEvent(new Event("online"));
+    fireEvent.blur(editor);
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    expect(deleteBrowserDraft).not.toHaveBeenCalledWith(
+      session.user.id,
+      `cycle:${cycle.id}:plan`,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "この端末の入力を復元" }),
+    );
+    expect(editor).not.toHaveAttribute("readonly");
+
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledTimes(2));
+    expect(saveCycleFrame).toHaveBeenLastCalledWith(
+      goal.id,
+      cycle.id,
+      "plan",
+      "この端末の計画",
+      1,
+      session.csrfToken,
+    );
+  });
+
+  it("adopts the refreshed server frame and preserves an unrelated dirty frame", async () => {
+    const latestCycle: Cycle = {
+      ...cycle,
+      plan: "別の端末で保存された計画",
+      contentRevision: 1,
+      frameRevisions: { ...cycle.frameRevisions, plan: 1 },
+    };
+    vi.mocked(getCycle)
+      .mockResolvedValueOnce({ cycle })
+      .mockResolvedValueOnce({ cycle: latestCycle });
+    vi.mocked(saveCycleFrame)
+      .mockRejectedValueOnce(cycleRevisionConflict())
+      .mockResolvedValueOnce({
+        cycleId: cycle.id,
+        frame: "do",
+        content: "この端末の実行",
+        frameRevision: 1,
+        contentRevision: 2,
+        savedAt: "2026-08-20T00:02:00.000Z",
+      });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const planEditor = await screen.findByRole("textbox", {
+      name: "P — Plan",
+    });
+    fireEvent.change(planEditor, { target: { value: "この端末の計画" } });
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    const doEditor = screen.getByRole("textbox", { name: "D — Do" });
+    fireEvent.change(doEditor, { target: { value: "この端末の実行" } });
+
+    await screen.findByText("保存失敗");
+    fireEvent.click(screen.getByRole("tab", { name: /P\s*Plan/ }));
+    expect(
+      await screen.findByText("別の更新が見つかりました"),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "サーバーの内容を使用" }),
+    );
+
+    expect(planEditor).toHaveValue("別の端末で保存された計画");
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    expect(doEditor).toHaveValue("この端末の実行");
+    await waitFor(() =>
+      expect(saveCycleFrame).toHaveBeenCalledWith(
+        goal.id,
+        cycle.id,
+        "do",
+        "この端末の実行",
+        0,
+        session.csrfToken,
+      ),
+    );
+  });
+
+  it("auto-converges when the refreshed server frame matches the failed snapshot", async () => {
+    const latestCycle: Cycle = {
+      ...cycle,
+      plan: "応答だけ失われた計画",
+      contentRevision: 1,
+      frameRevisions: { ...cycle.frameRevisions, plan: 1 },
+    };
+    vi.mocked(getCycle)
+      .mockResolvedValueOnce({ cycle })
+      .mockResolvedValueOnce({ cycle: latestCycle });
+    vi.mocked(saveCycleFrame).mockRejectedValueOnce(cycleRevisionConflict());
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: "応答だけ失われた計画" } });
+
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    expect(editor).toHaveValue("応答だけ失われた計画");
+    expect(
+      screen.queryByText("別の更新が見つかりました"),
+    ).not.toBeInTheDocument();
+    expect(getGoal).toHaveBeenCalledTimes(2);
+    expect(getCycle).toHaveBeenCalledTimes(2);
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    await waitFor(() =>
+      expect(deleteBrowserDraft).toHaveBeenCalledWith(
+        session.user.id,
+        `cycle:${cycle.id}:plan`,
+      ),
+    );
+  });
+
+  it("saves a newer same-frame edit at the refreshed revision after response-loss convergence", async () => {
+    let resolveRefresh!: (value: { cycle: Cycle }) => void;
+    const refresh = new Promise<{ cycle: Cycle }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const failedSnapshot = "応答を失った計画";
+    const newerBody = "refresh中に追加した計画";
+    const latestCycle: Cycle = {
+      ...cycle,
+      plan: failedSnapshot,
+      contentRevision: 1,
+      frameRevisions: { ...cycle.frameRevisions, plan: 1 },
+    };
+    vi.mocked(getCycle)
+      .mockResolvedValueOnce({ cycle })
+      .mockImplementationOnce(() => refresh);
+    vi.mocked(saveCycleFrame)
+      .mockRejectedValueOnce(cycleRevisionConflict())
+      .mockResolvedValueOnce({
+        cycleId: cycle.id,
+        frame: "plan",
+        content: newerBody,
+        frameRevision: 2,
+        contentRevision: 2,
+        savedAt: "2026-08-20T00:03:00.000Z",
+      });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: failedSnapshot } });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(getCycle).toHaveBeenCalledTimes(2));
+
+    fireEvent.change(editor, { target: { value: newerBody } });
+    await act(async () => resolveRefresh({ cycle: latestCycle }));
+
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledTimes(2));
+    expect(saveCycleFrame).toHaveBeenNthCalledWith(
+      2,
+      goal.id,
+      cycle.id,
+      "plan",
+      newerBody,
+      latestCycle.frameRevisions.plan,
+      session.csrfToken,
+    );
+    expect(editor).toHaveValue(newerBody);
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+  });
+
+  it("does not run cycle refresh recovery for an unrelated 409 code", async () => {
+    vi.mocked(saveCycleFrame).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+        "different resource conflict",
+        "60000000-0000-7000-8000-000000000002",
+      ),
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: "競合した計画" } });
+    fireEvent.blur(editor);
+
+    expect(await screen.findByText("保存失敗")).toBeInTheDocument();
+    expect(getGoal).toHaveBeenCalledOnce();
+    expect(getCycle).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByText("別の更新が見つかりました"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("retries a failed refresh without resending the stale frame or losing local input after the workspace moves", async () => {
+    const movedGoal: Goal = {
+      ...goal,
+      revision: goal.revision + 1,
+      currentWork: {
+        kind: "active_cycle",
+        cycleId: currentCycleId,
+        cycleSequenceNumber: 2,
+      },
+      nextCycleSequenceNumber: 3,
+      cycleCount: 2,
+    };
+    const movedCycle: Cycle = {
+      ...cycle,
+      id: currentCycleId,
+      sequenceNumber: 2,
+      plan: "現在のサイクルの計画",
+    };
+    vi.mocked(getGoal)
+      .mockReset()
+      .mockResolvedValueOnce({ goal })
+      .mockRejectedValueOnce(new TypeError("refresh failed"))
+      .mockResolvedValueOnce({ goal: movedGoal });
+    vi.mocked(getCycle)
+      .mockReset()
+      .mockResolvedValueOnce({ cycle })
+      .mockResolvedValueOnce({ cycle: movedCycle });
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockRejectedValueOnce(cycleRevisionConflict());
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: "移動前のこの端末の計画" } });
+
+    expect(
+      await screen.findByText(
+        "最新の内容を取得できませんでした。入力は保持されています。再試行してください。",
+      ),
+    ).toBeInTheDocument();
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    expect(getGoal).toHaveBeenCalledTimes(2);
+    await act(async () => undefined);
+    vi.mocked(putBrowserDraft).mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "再試行" }));
+
+    expect(
+      await screen.findByText("現在の作業状態が更新されました"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("この端末の入力は保持されています。"),
+    ).toBeInTheDocument();
+    expect(getGoal).toHaveBeenCalledTimes(3);
+    expect(getCycle).toHaveBeenLastCalledWith(goal.id, currentCycleId);
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    expect(editor).toHaveValue("移動前のこの端末の計画");
+    const canonicalLink = screen.getByRole("link", {
+      name: "現在の作業へ移動",
+    });
+    expect(canonicalLink).toHaveAttribute(
+      "href",
+      `/goals/${goal.id}/cycles/${currentCycleId}`,
+    );
+    expect(editor).toHaveAttribute("readonly");
+    await waitFor(() =>
+      expect(putBrowserDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subjectKey: `cycle:${cycle.id}:plan`,
+          body: "移動前のこの端末の計画",
+          baseRevision: 0,
+        }),
+      ),
+    );
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+
+    window.dispatchEvent(new Event("online"));
+    await act(() => new Promise((resolve) => window.setTimeout(resolve, 50)));
+    expect(getGoal).toHaveBeenCalledTimes(3);
+    expect(getCycle).toHaveBeenCalledTimes(2);
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      label: "completed cycle to goal review",
+      terminalCycle: {
+        ...cycle,
+        status: "completed",
+        completedAt: "2026-08-20T00:06:00.000Z",
+      },
+      canonicalGoal: {
+        ...goal,
+        status: "goal_review",
+        revision: goal.revision + 1,
+        currentWork: {
+          kind: "goal_review",
+          reviewDraftId,
+          triggerCycleId: cycle.id,
+          triggerCycleSequenceNumber: cycle.sequenceNumber,
+        },
+      },
+      expectedHref: `/goals/${goal.id}/review`,
+    },
+    {
+      label: "canceled cycle to terminal history",
+      terminalCycle: {
+        ...cycle,
+        status: "canceled",
+        canceledAt: "2026-08-20T00:06:00.000Z",
+        cancellationReason: "goal_ended",
+      },
+      canonicalGoal: {
+        ...goal,
+        status: "ended",
+        revision: goal.revision + 1,
+        currentWork: null,
+        terminalAt: "2026-08-20T00:06:00.000Z",
+      },
+      expectedHref: `/history/goals/${goal.id}`,
+    },
+  ] satisfies ReadonlyArray<{
+    readonly label: string;
+    readonly terminalCycle: Cycle;
+    readonly canonicalGoal: Goal;
+    readonly expectedHref: string;
+  }>)(
+    "rechecks canonical Goal after $label and never links back to the stale workspace",
+    async ({ terminalCycle, canonicalGoal, expectedHref }) => {
+      const localBody = "terminal確認中も保持する計画";
+      vi.mocked(getGoal)
+        .mockReset()
+        .mockResolvedValueOnce({ goal })
+        .mockResolvedValueOnce({ goal })
+        .mockResolvedValueOnce({ goal: canonicalGoal });
+      vi.mocked(getCycle)
+        .mockReset()
+        .mockResolvedValueOnce({ cycle })
+        .mockResolvedValueOnce({ cycle: terminalCycle });
+      vi.mocked(saveCycleFrame)
+        .mockReset()
+        .mockRejectedValueOnce(cycleRevisionConflict());
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      renderPage(cache);
+
+      const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+      fireEvent.change(editor, { target: { value: localBody } });
+      fireEvent.blur(editor);
+
+      expect(
+        await screen.findByText("現在の作業状態が更新されました"),
+      ).toBeInTheDocument();
+      expect(getGoal).toHaveBeenCalledTimes(3);
+      expect(getCycle).toHaveBeenCalledTimes(2);
+      expect(editor).toHaveValue(localBody);
+      expect(editor).toHaveAttribute("readonly");
+      expect(
+        screen.queryByRole("button", { name: "再試行" }),
+      ).not.toBeInTheDocument();
+
+      const canonicalLink = screen.getByRole("link", {
+        name: "現在の作業へ移動",
+      });
+      expect(canonicalLink).toHaveAttribute("href", expectedHref);
+      expect(canonicalLink).not.toHaveAttribute(
+        "href",
+        `/goals/${goal.id}/cycles/${cycle.id}`,
+      );
+
+      fireEvent.blur(editor);
+      window.dispatchEvent(new Event("online"));
+      await act(() => new Promise((resolve) => window.setTimeout(resolve, 50)));
+      expect(getGoal).toHaveBeenCalledTimes(3);
+      expect(getCycle).toHaveBeenCalledTimes(2);
+      expect(saveCycleFrame).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    {
+      label: "completed cache to goal review",
+      cachedTerminalCycle: {
+        ...cycle,
+        status: "completed",
+        completedAt: "2026-08-20T00:06:30.000Z",
+      },
+      confirmedGoal: {
+        ...goal,
+        status: "goal_review",
+        revision: goal.revision + 1,
+        currentWork: {
+          kind: "goal_review",
+          reviewDraftId,
+          triggerCycleId: cycle.id,
+          triggerCycleSequenceNumber: cycle.sequenceNumber,
+        },
+      },
+      expectedHref: `/goals/${goal.id}/review`,
+    },
+    {
+      label: "canceled cache to terminal history",
+      cachedTerminalCycle: {
+        ...cycle,
+        status: "canceled",
+        canceledAt: "2026-08-20T00:06:30.000Z",
+        cancellationReason: "goal_ended",
+      },
+      confirmedGoal: {
+        ...goal,
+        status: "ended",
+        revision: goal.revision + 1,
+        currentWork: null,
+        terminalAt: "2026-08-20T00:06:30.000Z",
+      },
+      expectedHref: `/history/goals/${goal.id}`,
+    },
+  ] satisfies ReadonlyArray<{
+    readonly label: string;
+    readonly cachedTerminalCycle: Cycle;
+    readonly confirmedGoal: Goal;
+    readonly expectedHref: string;
+  }>)(
+    "rechecks canonical Goal when raw active Cycle loses to a $label",
+    async ({ cachedTerminalCycle, confirmedGoal, expectedHref }) => {
+      let resolveRawCycle!: (value: { cycle: Cycle }) => void;
+      const rawCycle = new Promise<{ cycle: Cycle }>((resolve) => {
+        resolveRawCycle = resolve;
+      });
+      const localBody = "cache先行terminalでも保持する計画";
+      vi.mocked(getGoal)
+        .mockReset()
+        .mockResolvedValueOnce({ goal })
+        .mockResolvedValueOnce({ goal })
+        .mockResolvedValueOnce({ goal: confirmedGoal });
+      vi.mocked(getCycle)
+        .mockReset()
+        .mockResolvedValueOnce({ cycle })
+        .mockImplementationOnce(() => rawCycle);
+      vi.mocked(saveCycleFrame)
+        .mockReset()
+        .mockRejectedValueOnce(cycleRevisionConflict());
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      renderPage(cache);
+
+      const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+      fireEvent.change(editor, { target: { value: localBody } });
+      fireEvent.blur(editor);
+      await waitFor(() => expect(getCycle).toHaveBeenCalledTimes(2));
+
+      act(() => {
+        cache.setQueryData(
+          userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+          { cycle: cachedTerminalCycle },
+        );
+      });
+      await act(async () => resolveRawCycle({ cycle }));
+
+      expect(
+        await screen.findByText("現在の作業状態が更新されました"),
+      ).toBeInTheDocument();
+      expect(getGoal).toHaveBeenCalledTimes(3);
+      expect(getCycle).toHaveBeenCalledTimes(2);
+      expect(
+        cache.getQueryData<{ cycle: Cycle }>(
+          userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+        )?.cycle,
+      ).toEqual(cachedTerminalCycle);
+      expect(editor).toHaveValue(localBody);
+      expect(editor).toHaveAttribute("readonly");
+
+      const canonicalLink = screen.getByRole("link", {
+        name: "現在の作業へ移動",
+      });
+      expect(canonicalLink).toHaveAttribute("href", expectedHref);
+      expect(canonicalLink).not.toHaveAttribute(
+        "href",
+        `/goals/${goal.id}/cycles/${cycle.id}`,
+      );
+      expect(
+        screen.queryByRole("button", { name: "再試行" }),
+      ).not.toBeInTheDocument();
+
+      window.dispatchEvent(new Event("online"));
+      await act(() => new Promise((resolve) => window.setTimeout(resolve, 50)));
+      expect(getGoal).toHaveBeenCalledTimes(3);
+      expect(getCycle).toHaveBeenCalledTimes(2);
+      expect(saveCycleFrame).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps the restored baseline in browser recovery after moved-link unmount", async () => {
+    let rejectPatch!: (reason: unknown) => void;
+    const inFlightPatch = new Promise<
+      Awaited<ReturnType<typeof saveCycleFrame>>
+    >((_resolve, reject) => {
+      rejectPatch = reject;
+    });
+    const terminalCycle: Cycle = {
+      ...cycle,
+      status: "completed",
+      completedAt: "2026-08-20T00:07:00.000Z",
+      plan: "server Y",
+      contentRevision: 1,
+      frameRevisions: { ...cycle.frameRevisions, plan: 1 },
+    };
+    const reviewGoal: Goal = {
+      ...goal,
+      status: "goal_review",
+      revision: goal.revision + 1,
+      currentWork: {
+        kind: "goal_review",
+        reviewDraftId,
+        triggerCycleId: cycle.id,
+        triggerCycleSequenceNumber: cycle.sequenceNumber,
+      },
+    };
+    const browserDrafts = new Map<
+      string,
+      Parameters<typeof putBrowserDraft>[0]
+    >();
+    vi.mocked(getBrowserDraft).mockImplementation(
+      async (_userId, subjectKey) => browserDrafts.get(subjectKey) ?? null,
+    );
+    vi.mocked(putBrowserDraft).mockImplementation(async (record) => {
+      browserDrafts.set(record.subjectKey, record);
+    });
+    vi.mocked(deleteBrowserDraft).mockImplementation(
+      async (_userId, subjectKey) => {
+        browserDrafts.delete(subjectKey);
+      },
+    );
+    vi.mocked(getGoal)
+      .mockReset()
+      .mockResolvedValueOnce({ goal })
+      .mockResolvedValueOnce({ goal })
+      .mockResolvedValueOnce({ goal: reviewGoal });
+    vi.mocked(getCycle)
+      .mockReset()
+      .mockResolvedValueOnce({ cycle })
+      .mockResolvedValueOnce({ cycle: terminalCycle });
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockImplementationOnce(() => inFlightPatch);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: "in-flight X" } });
+    fireEvent.blur(editor);
+    await waitFor(() =>
+      expect(saveCycleFrame).toHaveBeenCalledWith(
+        goal.id,
+        cycle.id,
+        "plan",
+        "in-flight X",
+        0,
+        session.csrfToken,
+      ),
+    );
+
+    fireEvent.change(editor, { target: { value: cycle.plan } });
+    await act(async () => {
+      rejectPatch(cycleRevisionConflict());
+    });
+
+    const movedLink = await screen.findByRole("link", {
+      name: "現在の作業へ移動",
+    });
+    const planDraftKey = `cycle:${cycle.id}:plan`;
+    await waitFor(() =>
+      expect(browserDrafts.get(planDraftKey)).toEqual(
+        expect.objectContaining({
+          body: cycle.plan,
+          baseRevision: 0,
+        }),
+      ),
+    );
+
+    fireEvent.click(movedLink);
+    expect(await screen.findByText("現在の目標レビュー")).toBeInTheDocument();
+    await act(async () => undefined);
+
+    expect(browserDrafts.get(planDraftKey)).toEqual(
+      expect.objectContaining({
+        body: cycle.plan,
+        baseRevision: 0,
+      }),
+    );
+    expect(deleteBrowserDraft).not.toHaveBeenCalledWith(
+      session.user.id,
+      planDraftKey,
+    );
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+  });
+
+  it("resumes GET-only conflict recovery after a rejected delete command", async () => {
+    let resolveStaleCycle!: (value: { cycle: Cycle }) => void;
+    const staleCycle = new Promise<{ cycle: Cycle }>((resolve) => {
+      resolveStaleCycle = resolve;
+    });
+    const localBody = "削除command中も保持する計画";
+    const latestCycle: Cycle = {
+      ...cycle,
+      plan: "別端末の計画",
+      contentRevision: 1,
+      frameRevisions: { ...cycle.frameRevisions, plan: 1 },
+    };
+    const browserDrafts = new Map<
+      string,
+      Parameters<typeof putBrowserDraft>[0]
+    >();
+    vi.mocked(getBrowserDraft).mockImplementation(
+      async (_userId, subjectKey) => browserDrafts.get(subjectKey) ?? null,
+    );
+    vi.mocked(putBrowserDraft).mockImplementation(async (record) => {
+      browserDrafts.set(record.subjectKey, record);
+    });
+    vi.mocked(deleteBrowserDraft).mockImplementation(
+      async (_userId, subjectKey) => {
+        browserDrafts.delete(subjectKey);
+      },
+    );
+    vi.mocked(getGoal).mockReset().mockResolvedValue({ goal });
+    vi.mocked(getCycle)
+      .mockReset()
+      .mockResolvedValueOnce({ cycle })
+      .mockImplementationOnce(() => staleCycle)
+      .mockRejectedValueOnce(new TypeError("resume refresh failed"))
+      .mockResolvedValueOnce({ cycle: latestCycle });
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockRejectedValueOnce(cycleRevisionConflict());
+    vi.mocked(deleteGoal)
+      .mockReset()
+      .mockRejectedValueOnce(new Error("delete rejected"));
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: localBody } });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(getCycle).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByText("目標の操作"));
+    fireEvent.click(screen.getByRole("button", { name: "目標を削除" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "目標を削除" }));
+
+    await waitFor(() => expect(deleteGoal).toHaveBeenCalledOnce());
+    await waitFor(() => expect(getCycle).toHaveBeenCalledTimes(3));
+    expect(
+      await screen.findByText(
+        "最新の内容を取得できませんでした。入力は保持されています。再試行してください。",
+      ),
+    ).toBeInTheDocument();
+
+    await act(async () => resolveStaleCycle({ cycle }));
+
+    expect(editor).toHaveValue(localBody);
+    expect(screen.getByText("保存失敗")).toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "再試行" });
+    const planDraftKey = `cycle:${cycle.id}:plan`;
+    await waitFor(() =>
+      expect(browserDrafts.get(planDraftKey)).toEqual(
+        expect.objectContaining({
+          body: localBody,
+          baseRevision: 0,
+        }),
+      ),
+    );
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+
+    fireEvent.click(retry);
+
+    expect(
+      await screen.findByText("別の更新が見つかりました"),
+    ).toBeInTheDocument();
+    expect(getGoal).toHaveBeenCalledTimes(4);
+    expect(getCycle).toHaveBeenCalledTimes(4);
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    expect(editor).toHaveValue(localBody);
+    expect(editor).toHaveAttribute("readonly");
+    expect(browserDrafts.get(planDraftKey)).toEqual(
+      expect.objectContaining({
+        body: localBody,
+        baseRevision: 0,
+      }),
+    );
+    expect(deleteBrowserDraft).not.toHaveBeenCalledWith(
+      session.user.id,
+      planDraftKey,
+    );
+  });
+
   it("moves between frame tabs with the WAI-ARIA keyboard controls", async () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -462,5 +1209,14 @@ function renderPage(cache: QueryClient) {
         </MemoryRouter>
       </SessionContext.Provider>
     </QueryClientProvider>,
+  );
+}
+
+function cycleRevisionConflict() {
+  return new APIError(
+    409,
+    "CYCLE_REVISION_CONFLICT",
+    "cycle revision conflict",
+    "60000000-0000-7000-8000-000000000001",
   );
 }

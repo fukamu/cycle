@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 
+import { APIError } from "../api/client";
 import {
   deleteBrowserDraft,
   getBrowserDraft,
@@ -15,10 +16,12 @@ vi.mock("../drafts/browserDraftCache", () => ({
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function input(
@@ -26,6 +29,7 @@ function input(
     body: string,
     revision: number,
   ) => Promise<{ body: string; revision: number }>,
+  loadLatest = vi.fn().mockResolvedValue({ body: "", revision: 0 }),
 ) {
   return {
     userId: "user-1",
@@ -34,6 +38,8 @@ function input(
     initialBody: "",
     initialRevision: 0,
     save,
+    revisionConflictCode: "GOAL_REVIEW_DRAFT_REVISION_CONFLICT" as const,
+    loadLatest,
   };
 }
 
@@ -190,6 +196,176 @@ describe("useDraftAutoSave", () => {
     act(() => result.current.restoreRecovery());
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(save).toHaveBeenCalledWith("local recovery", 5);
+  });
+
+  it("converges to the latest revision without overwriting when a conflicted snapshot is already on the server", async () => {
+    vi.useFakeTimers();
+    const conflict = new APIError(
+      409,
+      "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+      "conflict",
+      "request-1",
+    );
+    const save = vi.fn().mockRejectedValue(conflict);
+    const loadLatest = vi
+      .fn()
+      .mockResolvedValue({ body: "already saved", revision: 7 });
+    const { result } = renderHook(() =>
+      useDraftAutoSave(input(save, loadLatest)),
+    );
+
+    act(() => result.current.setBody("already saved"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    await act(async () => undefined);
+
+    expect(loadLatest).toHaveBeenCalledOnce();
+    expect(result.current.body).toBe("already saved");
+    expect(result.current.revision).toBe(7);
+    expect(result.current.state).toBe("saved");
+    expect(result.current.recoveryConflict).toBeNull();
+
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(save).toHaveBeenCalledOnce();
+  });
+
+  it("does not enter revision recovery for an unrelated 409 code", async () => {
+    vi.useFakeTimers();
+    const unrelatedConflict = new APIError(
+      409,
+      "GOAL_DRAFT_REVISION_CONFLICT",
+      "different resource conflict",
+      "request-unrelated",
+    );
+    const save = vi.fn().mockRejectedValue(unrelatedConflict);
+    const loadLatest = vi.fn().mockResolvedValue({
+      body: "other device",
+      revision: 7,
+    });
+    const { result } = renderHook(() =>
+      useDraftAutoSave(input(save, loadLatest)),
+    );
+
+    act(() => result.current.setBody("local edit"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    await act(async () => undefined);
+
+    expect(result.current.state).toBe("failed");
+    expect(result.current.revisionConflictActive).toBe(false);
+    expect(result.current.recoveryConflict).toBeNull();
+    expect(loadLatest).not.toHaveBeenCalled();
+
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(save).toHaveBeenCalledOnce();
+    expect(loadLatest).not.toHaveBeenCalled();
+  });
+
+  it("keeps a newer edit and saves it from the refreshed revision after same-snapshot convergence", async () => {
+    vi.useFakeTimers();
+    const first = deferred<{ body: string; revision: number }>();
+    const conflict = new APIError(
+      409,
+      "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+      "conflict",
+      "request-1",
+    );
+    const save = vi
+      .fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce({ body: "newer edit", revision: 8 });
+    const loadLatest = vi
+      .fn()
+      .mockResolvedValue({ body: "submitted snapshot", revision: 7 });
+    const { result } = renderHook(() =>
+      useDraftAutoSave(input(save, loadLatest)),
+    );
+
+    act(() => result.current.setBody("submitted snapshot"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    act(() => result.current.setBody("newer edit"));
+    await act(async () => first.reject(conflict));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(loadLatest).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenNthCalledWith(2, "newer edit", 7);
+    expect(result.current.body).toBe("newer edit");
+    expect(result.current.revision).toBe(8);
+    expect(result.current.state).toBe("saved");
+  });
+
+  it("retries the latest fetch instead of resending a stale save when conflict recovery fetch fails", async () => {
+    vi.useFakeTimers();
+    const conflict = new APIError(
+      409,
+      "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+      "conflict",
+      "request-1",
+    );
+    const save = vi.fn().mockRejectedValue(conflict);
+    const loadLatest = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("network"))
+      .mockResolvedValueOnce({ body: "other device", revision: 7 });
+    const { result } = renderHook(() =>
+      useDraftAutoSave(input(save, loadLatest)),
+    );
+
+    act(() => result.current.setBody("local edit"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    await act(async () => undefined);
+
+    expect(result.current.revisionConflictActive).toBe(true);
+    expect(result.current.resolvingConflict).toBe(false);
+    expect(result.current.recoveryConflict).toBeNull();
+    expect(save).toHaveBeenCalledOnce();
+
+    act(() => result.current.retry());
+    await act(async () => undefined);
+
+    expect(loadLatest).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenCalledOnce();
+    expect(result.current.recoveryConflict?.body).toBe("local edit");
+  });
+
+  it("keeps a conflicted local edit and rebases it only after explicit recovery", async () => {
+    vi.useFakeTimers();
+    const conflict = new APIError(
+      409,
+      "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+      "conflict",
+      "request-1",
+    );
+    const save = vi
+      .fn()
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce({ body: "local edit", revision: 8 });
+    const loadLatest = vi
+      .fn()
+      .mockResolvedValue({ body: "other device", revision: 7 });
+    const { result } = renderHook(() =>
+      useDraftAutoSave(input(save, loadLatest)),
+    );
+
+    act(() => result.current.setBody("local edit"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    await act(async () => undefined);
+
+    expect(loadLatest).toHaveBeenCalledOnce();
+    expect(result.current.body).toBe("local edit");
+    expect(result.current.revision).toBe(7);
+    expect(result.current.recoveryConflict?.body).toBe("local edit");
+    expect(putBrowserDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "local edit", baseRevision: 0 }),
+    );
+    await act(async () => undefined);
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(save).toHaveBeenCalledOnce();
+
+    act(() => result.current.restoreRecovery());
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(save).toHaveBeenNthCalledWith(2, "local edit", 7);
+    expect(result.current.state).toBe("saved");
   });
 
   it("enqueues a dirty save immediately on blur", async () => {

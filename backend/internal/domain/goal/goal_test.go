@@ -34,6 +34,23 @@ func TestGoalTextLimitUsesCodePoints(t *testing.T) {
 	}
 }
 
+func TestSaveDraftTreatsSameBodyWithStaleRevisionAsNoOp(t *testing.T) {
+	draft, err := NewDraft("draft", "user", "保存済み目標", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft.Revision = 2
+	draft.UpdatedAt = now.Add(time.Minute)
+
+	saved, noOp, err := SaveDraft(draft, draft.Body, 1, now.Add(2*time.Minute))
+	if err != nil || !noOp || saved != draft {
+		t.Fatalf("stale same-body save = %#v, noOp = %t, error = %v", saved, noOp, err)
+	}
+	if _, _, err = SaveDraft(draft, "異なる目標", 1, now.Add(2*time.Minute)); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale different-body save error = %v, want %v", err, ErrStateConflict)
+	}
+}
+
 func TestReviewSameBodyKeepsVersionAndCreatesNextCycle(t *testing.T) {
 	current, version, draft := reviewFixture(t, "目標\r\n本文")
 	draft.Body = "目標\n本文"

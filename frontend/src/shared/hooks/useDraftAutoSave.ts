@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 
+import { APIError } from "../api/client";
 import {
   type BrowserDraft,
   deleteBrowserDraft,
@@ -17,7 +18,16 @@ import {
 
 export type SimpleSaveState = "dirty" | "saving" | "saved" | "failed";
 
-type Input = {
+export type SimpleDraftRevisionConflictCode =
+  | "GOAL_DRAFT_REVISION_CONFLICT"
+  | "GOAL_REVIEW_DRAFT_REVISION_CONFLICT";
+
+type DraftSnapshot = {
+  readonly body: string;
+  readonly revision: number;
+};
+
+type Input<TSnapshot extends DraftSnapshot> = {
   readonly userId: string;
   readonly goalId: string | null;
   readonly subjectKey: string;
@@ -27,11 +37,25 @@ type Input = {
     body: string,
     revision: number,
   ) => Promise<{ readonly body: string; readonly revision: number }>;
+  readonly revisionConflictCode: SimpleDraftRevisionConflictCode;
+  readonly loadLatest: () => Promise<TSnapshot>;
+  readonly acceptLatest?: (latest: TSnapshot) => TSnapshot | null;
 };
 
-export function useDraftAutoSave(input: Input) {
-  const { goalId, initialBody, initialRevision, save, subjectKey, userId } =
-    input;
+export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
+  input: Input<TSnapshot>,
+) {
+  const {
+    acceptLatest,
+    goalId,
+    initialBody,
+    initialRevision,
+    loadLatest,
+    revisionConflictCode,
+    save,
+    subjectKey,
+    userId,
+  } = input;
   const { control, reset, setValue } = useForm<{ body: string }>({
     defaultValues: { body: initialBody },
   });
@@ -41,6 +65,8 @@ export function useDraftAutoSave(input: Input) {
   const [recoveryConflict, setRecoveryConflict] = useState<BrowserDraft | null>(
     null,
   );
+  const [revisionConflictActive, setRevisionConflictActive] = useState(false);
+  const [resolvingConflict, setResolvingConflict] = useState(false);
   const [browserCacheFailed, setBrowserCacheFailed] = useState(false);
 
   const bodyRef = useRef(initialBody);
@@ -48,12 +74,20 @@ export function useDraftAutoSave(input: Input) {
   const savedBodyRef = useRef(initialBody);
   const saveRef = useRef(save);
   saveRef.current = save;
+  const loadLatestRef = useRef(loadLatest);
+  loadLatestRef.current = loadLatest;
+  const acceptLatestRef = useRef(acceptLatest);
+  acceptLatestRef.current = acceptLatest;
   const inFlightRef = useRef(false);
   const pausedRef = useRef(false);
   const disposedRef = useRef(false);
   const discardedRef = useRef(false);
   const mountedRef = useRef(true);
   const conflictRef = useRef(false);
+  const conflictSnapshotRef = useRef<
+    { readonly body: string; readonly baseRevision: number } | undefined
+  >(undefined);
+  const conflictRefreshInFlightRef = useRef(false);
   const hasEditedRef = useRef(false);
   const editVersionRef = useRef(0);
   const retryCountRef = useRef(0);
@@ -153,6 +187,74 @@ export function useDraftAutoSave(input: Input) {
     }, browserDraftDebounceMs);
   }, [clearBrowserTimer, persistCurrentDraft]);
 
+  const resolveRevisionConflict = useCallback(async () => {
+    const conflict = conflictSnapshotRef.current;
+    if (!conflict || conflictRefreshInFlightRef.current) return;
+    conflictRefreshInFlightRef.current = true;
+    if (mountedRef.current) setResolvingConflict(true);
+    try {
+      const loaded = await loadLatestRef.current();
+      if (conflictSnapshotRef.current !== conflict || disposedRef.current)
+        return;
+      const latest = acceptLatestRef.current
+        ? acceptLatestRef.current(loaded)
+        : loaded;
+      if (!latest) return;
+      if (conflictSnapshotRef.current !== conflict || disposedRef.current)
+        return;
+
+      revisionRef.current = latest.revision;
+      savedBodyRef.current = latest.body;
+      retryCountRef.current = 0;
+      if (mountedRef.current) setRevision(latest.revision);
+
+      if (conflict.body === latest.body) {
+        conflictRef.current = false;
+        conflictSnapshotRef.current = undefined;
+        if (mountedRef.current) setRevisionConflictActive(false);
+        if (mountedRef.current) setRecoveryConflict(null);
+        clearBrowserTimer();
+        if (bodyRef.current === latest.body) {
+          bodyRef.current = latest.body;
+          if (mountedRef.current) reset({ body: latest.body });
+          updateState("saved");
+          void deleteCachedDraft();
+        } else {
+          updateState("dirty");
+          void cacheDraft(bodyRef.current, latest.revision);
+          scheduleSave(0);
+        }
+        return;
+      }
+
+      const localDraft: BrowserDraft = {
+        userId,
+        goalId,
+        subjectKey,
+        body: bodyRef.current,
+        baseRevision: conflict.baseRevision,
+        updatedAt: new Date().toISOString(),
+      };
+      if (mountedRef.current) setRecoveryConflict(localDraft);
+      updateState("failed");
+    } catch {
+      if (conflictSnapshotRef.current === conflict) updateState("failed");
+    } finally {
+      conflictRefreshInFlightRef.current = false;
+      if (mountedRef.current) setResolvingConflict(false);
+    }
+  }, [
+    cacheDraft,
+    clearBrowserTimer,
+    deleteCachedDraft,
+    goalId,
+    reset,
+    scheduleSave,
+    subjectKey,
+    updateState,
+    userId,
+  ]);
+
   const saveDetached = useCallback(
     (snapshot: string, baseRevision: number) => {
       void saveRef
@@ -233,6 +335,25 @@ export function useDraftAutoSave(input: Input) {
       return;
     }
 
+    if (
+      failure instanceof APIError &&
+      failure.status === 409 &&
+      failure.code === revisionConflictCode &&
+      !disposedRef.current &&
+      !pausedRef.current
+    ) {
+      clearSaveTimer();
+      clearBrowserTimer();
+      conflictRef.current = true;
+      conflictSnapshotRef.current = { body: snapshot, baseRevision };
+      setRevisionConflictActive(true);
+      retryCountRef.current = 0;
+      updateState("failed");
+      void cacheDraft(bodyRef.current, baseRevision);
+      void resolveRevisionConflict();
+      return;
+    }
+
     if (disposedRef.current || pausedRef.current || conflictRef.current) return;
     void persistCurrentDraft();
     if (editVersionRef.current !== snapshotEditVersion) {
@@ -255,12 +376,15 @@ export function useDraftAutoSave(input: Input) {
   }, [
     cacheDraft,
     clearBrowserTimer,
+    clearSaveTimer,
     deleteCachedDraft,
     persistCurrentDraft,
     reset,
+    resolveRevisionConflict,
     saveDetached,
     scheduleSave,
     updateState,
+    revisionConflictCode,
   ]);
   runSaveRef.current = runSave;
 
@@ -271,6 +395,7 @@ export function useDraftAutoSave(input: Input) {
         if (canceled || hasEditedRef.current || !draft) return;
         if (draft.baseRevision !== revisionRef.current) {
           conflictRef.current = true;
+          setRevisionConflictActive(true);
           bodyRef.current = draft.body;
           setValue("body", draft.body);
           setRecoveryConflict(draft);
@@ -358,8 +483,11 @@ export function useDraftAutoSave(input: Input) {
       clearSaveTimer();
       clearBrowserTimer();
       conflictRef.current = false;
+      conflictSnapshotRef.current = undefined;
+      setRevisionConflictActive(false);
       discardedRef.current = false;
       setRecoveryConflict(null);
+      setResolvingConflict(false);
       bodyRef.current = nextBody;
       revisionRef.current = nextRevision;
       savedBodyRef.current = nextBody;
@@ -394,22 +522,32 @@ export function useDraftAutoSave(input: Input) {
     clearSaveTimer();
     clearBrowserTimer();
     conflictRef.current = false;
+    conflictSnapshotRef.current = undefined;
+    setRevisionConflictActive(false);
     setRecoveryConflict(null);
+    setResolvingConflict(false);
     await deleteCachedDraft();
   }, [clearBrowserTimer, clearSaveTimer, deleteCachedDraft]);
 
   const retry = useCallback(() => {
-    if (conflictRef.current || pausedRef.current) return;
+    if (pausedRef.current) return;
+    if (conflictRef.current) {
+      if (!recoveryConflict) void resolveRevisionConflict();
+      return;
+    }
     retryCountRef.current = 0;
     updateState("dirty");
     scheduleSave(0);
-  }, [scheduleSave, updateState]);
+  }, [recoveryConflict, resolveRevisionConflict, scheduleSave, updateState]);
 
   const restoreRecovery = useCallback(() => {
     const draft = recoveryConflict;
     if (!draft) return;
     conflictRef.current = false;
+    conflictSnapshotRef.current = undefined;
+    setRevisionConflictActive(false);
     setRecoveryConflict(null);
+    setResolvingConflict(false);
     hasEditedRef.current = true;
     editVersionRef.current += 1;
     retryCountRef.current = 0;
@@ -423,7 +561,10 @@ export function useDraftAutoSave(input: Input) {
   const discardRecovery = useCallback(() => {
     if (!recoveryConflict) return;
     conflictRef.current = false;
+    conflictSnapshotRef.current = undefined;
+    setRevisionConflictActive(false);
     setRecoveryConflict(null);
+    setResolvingConflict(false);
     bodyRef.current = savedBodyRef.current;
     editVersionRef.current += 1;
     reset({ body: savedBodyRef.current });
@@ -443,6 +584,8 @@ export function useDraftAutoSave(input: Input) {
     resume,
     discard,
     recoveryConflict,
+    revisionConflictActive,
+    resolvingConflict,
     restoreRecovery,
     discardRecovery,
     browserCacheFailed,

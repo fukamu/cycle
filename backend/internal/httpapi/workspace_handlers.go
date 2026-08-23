@@ -19,6 +19,11 @@ type saveDraftRequest struct {
 	Body             string `json:"body"`
 	ExpectedRevision int64  `json:"expectedRevision" validate:"gte=0"`
 }
+type saveReviewRequest struct {
+	Body                  string `json:"body"`
+	ExpectedReviewDraftID string `json:"expectedReviewDraftId" validate:"required,uuid_v7"`
+	ExpectedRevision      int64  `json:"expectedRevision" validate:"gte=0"`
+}
 type startGoalRequest struct {
 	OperationID           string `json:"operationId" validate:"required,uuid_v7"`
 	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
@@ -238,12 +243,12 @@ func (server *api) getGoalReview(writer http.ResponseWriter, request *http.Reque
 }
 
 func (server *api) saveGoalReview(writer http.ResponseWriter, request *http.Request) {
-	var input saveDraftRequest
+	var input saveReviewRequest
 	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	view, err := server.dependencies.Workspace.SaveReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.Body, input.ExpectedRevision)
+	view, err := server.dependencies.Workspace.SaveReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.ExpectedReviewDraftID, input.Body, input.ExpectedRevision)
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalReviewDraftSaveFailed), nil)
 		return

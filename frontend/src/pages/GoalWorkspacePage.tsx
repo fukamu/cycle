@@ -6,7 +6,7 @@ import {
   useState,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
 import {
@@ -14,6 +14,7 @@ import {
   cacheReview,
   userQueryKeys,
 } from "../features/goal-collection/goalCache";
+import { APIError } from "../shared/api/client";
 import type { CurrentWork, Cycle, Frame, Goal } from "../shared/api/schemas";
 import {
   completeCycle,
@@ -60,6 +61,29 @@ import {
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
 type Values = Record<Frame, string>;
 type SaveState = "dirty" | "saving" | "saved" | "failed";
+type CycleRevisionConflict = {
+  readonly failedSnapshot: string;
+  readonly baseRevision: number;
+};
+type MovedWorkspace = {
+  readonly currentWorkspace: CurrentWork | null;
+};
+
+function preferGoal(current: Goal | undefined, incoming: Goal): Goal {
+  return current && current.revision >= incoming.revision ? current : incoming;
+}
+
+function preferCycle(current: Cycle | undefined, incoming: Cycle): Cycle {
+  if (!current) return incoming;
+  const currentTerminal = current.status !== "active";
+  const incomingTerminal = incoming.status !== "active";
+  if (currentTerminal !== incomingTerminal)
+    return currentTerminal ? current : incoming;
+  if (currentTerminal && current.status !== incoming.status) return current;
+  return current.contentRevision >= incoming.contentRevision
+    ? current
+    : incoming;
+}
 
 function replayWorkspacePath(
   goalId: string,
@@ -70,6 +94,14 @@ function replayWorkspacePath(
   if (currentWorkspace?.kind === "goal_review")
     return `/goals/${goalId}/review`;
   return `/history/goals/${goalId}`;
+}
+
+function isCycleRevisionConflict(error: unknown): error is APIError {
+  return (
+    error instanceof APIError &&
+    error.status === 409 &&
+    error.code === "CYCLE_REVISION_CONFLICT"
+  );
 }
 
 type WorkspaceConfirmation =
@@ -152,6 +184,9 @@ function CycleWorkspace({
   const [recoveryConflicts, setRecoveryConflicts] = useState<
     ReadonlyMap<Frame, BrowserDraft>
   >(new Map());
+  const [movedWorkspace, setMovedWorkspace] = useState<
+    MovedWorkspace | undefined
+  >();
   const [browserCacheFailed, setBrowserCacheFailed] = useState(false);
   const [aiState, setAIState] = useState<"idle" | "generating" | "refining">(
     "idle",
@@ -161,6 +196,12 @@ function CycleWorkspace({
   const [error, setError] = useState<string>();
   const pending = useRef(new Map<Frame, string>());
   const conflictsRef = useRef(new Map<Frame, BrowserDraft>());
+  const movedWorkspaceRef = useRef<MovedWorkspace | undefined>(undefined);
+  const cycleRevisionRefreshEpochRef = useRef(0);
+  const cycleRevisionRefreshInFlightRef = useRef(new Map<Frame, object>());
+  const cycleRevisionConflictsRef = useRef(
+    new Map<Frame, CycleRevisionConflict>(),
+  );
   const saveInFlightRef = useRef(false);
   const savesPausedRef = useRef(false);
   const disposedRef = useRef(false);
@@ -268,7 +309,9 @@ function CycleWorkspace({
   const hasSavablePending = useCallback(
     () =>
       Array.from(pending.current.keys()).some(
-        (frame) => !conflictsRef.current.has(frame),
+        (frame) =>
+          !conflictsRef.current.has(frame) &&
+          !cycleRevisionConflictsRef.current.has(frame),
       ),
     [],
   );
@@ -308,10 +351,288 @@ function CycleWorkspace({
     | readonly [Frame, string]
     | undefined => {
     for (const entry of pending.current) {
-      if (!conflictsRef.current.has(entry[0])) return entry;
+      if (
+        !conflictsRef.current.has(entry[0]) &&
+        !cycleRevisionConflictsRef.current.has(entry[0])
+      )
+        return entry;
     }
     return undefined;
   }, []);
+
+  const recoverCycleRevisionConflict = useCallback(
+    async (
+      frame: Frame,
+      failedSnapshot: string,
+      baseRevision: number,
+    ): Promise<void> => {
+      if (
+        disposedRef.current ||
+        movedWorkspaceRef.current ||
+        cycleRevisionRefreshInFlightRef.current.has(frame)
+      )
+        return;
+      const refreshToken = {};
+      cycleRevisionRefreshInFlightRef.current.set(frame, refreshToken);
+
+      const conflict = cycleRevisionConflictsRef.current.get(frame) ?? {
+        failedSnapshot,
+        baseRevision,
+      };
+      cycleRevisionConflictsRef.current.set(frame, conflict);
+      const refreshEpoch = ++cycleRevisionRefreshEpochRef.current;
+      const isCurrentRefresh = () =>
+        !disposedRef.current &&
+        movedWorkspaceRef.current === undefined &&
+        cycleRevisionRefreshEpochRef.current === refreshEpoch &&
+        cycleRevisionConflictsRef.current.get(frame) === conflict;
+      const localBeforeRefresh = valuesRef.current[frame];
+      pending.current.set(frame, localBeforeRefresh);
+      clearBrowserTimer(frame);
+
+      try {
+        await cacheFrameDraft(frame, localBeforeRefresh, conflict.baseRevision);
+        if (!isCurrentRefresh()) return;
+        if (mountedRef.current) setError(undefined);
+
+        let latestGoal = await getGoal(goal.id);
+        if (!isCurrentRefresh()) return;
+        const cachedGoal = cache.getQueryData<{ readonly goal: Goal }>(
+          userQueryKeys.goal(userId, goal.id),
+        );
+        const goalBeforeCycle = preferGoal(cachedGoal?.goal, latestGoal.goal);
+        const currentWork = goalBeforeCycle.currentWork;
+        const currentCycleId =
+          currentWork?.kind === "active_cycle" ? currentWork.cycleId : cycle.id;
+        const latestCycle = await getCycle(goal.id, currentCycleId);
+        if (!isCurrentRefresh()) return;
+        const cachedCycleBeforeConfirmation = cache.getQueryData<{
+          readonly cycle: Cycle;
+        }>(userQueryKeys.cycle(userId, goal.id, latestCycle.cycle.id));
+        const cycleBeforeGoalConfirmation = preferCycle(
+          cachedCycleBeforeConfirmation?.cycle,
+          latestCycle.cycle,
+        );
+        if (
+          cycleBeforeGoalConfirmation.status !== "active" &&
+          currentWork?.kind === "active_cycle" &&
+          currentWork.cycleId === cycleBeforeGoalConfirmation.id
+        ) {
+          const confirmedGoal = await getGoal(goal.id);
+          if (!isCurrentRefresh()) return;
+          latestGoal = {
+            goal: preferGoal(latestGoal.goal, confirmedGoal.goal),
+          };
+        }
+
+        if (!isCurrentRefresh()) return;
+
+        let canonicalGoal = latestGoal.goal;
+        cache.setQueryData<{ readonly goal: Goal }>(
+          userQueryKeys.goal(userId, goal.id),
+          (current) => {
+            canonicalGoal = preferGoal(current?.goal, canonicalGoal);
+            return current?.goal === canonicalGoal
+              ? current
+              : { goal: canonicalGoal };
+          },
+        );
+        let canonicalCycle = cycleBeforeGoalConfirmation;
+        cache.setQueryData<{ readonly cycle: Cycle }>(
+          userQueryKeys.cycle(userId, goal.id, latestCycle.cycle.id),
+          (current) => {
+            canonicalCycle = preferCycle(current?.cycle, canonicalCycle);
+            return current?.cycle === canonicalCycle
+              ? current
+              : { cycle: canonicalCycle };
+          },
+        );
+
+        const canonicalWorkspace = canonicalGoal.currentWork;
+        if (
+          canonicalGoal.status !== "active_cycle" ||
+          canonicalWorkspace?.kind !== "active_cycle" ||
+          canonicalWorkspace.cycleId !== cycle.id ||
+          canonicalCycle.id !== cycle.id ||
+          canonicalCycle.status !== "active"
+        ) {
+          const nextMovedWorkspace: MovedWorkspace = {
+            currentWorkspace: canonicalWorkspace,
+          };
+          const runtimeConflicts = new Map(cycleRevisionConflictsRef.current);
+          movedWorkspaceRef.current = nextMovedWorkspace;
+          savesPausedRef.current = true;
+          clearSaveTimer();
+          retryCountRef.current = 0;
+          cycleRevisionRefreshEpochRef.current += 1;
+          for (const candidate of frames) {
+            clearBrowserTimer(candidate);
+            const explicitConflict = conflictsRef.current.get(candidate);
+            const runtimeConflict = runtimeConflicts.get(candidate);
+            if (
+              pending.current.has(candidate) ||
+              valuesRef.current[candidate] !==
+                savedValuesRef.current[candidate] ||
+              explicitConflict ||
+              runtimeConflict
+            )
+              void cacheFrameDraft(
+                candidate,
+                valuesRef.current[candidate],
+                explicitConflict?.baseRevision ??
+                  runtimeConflict?.baseRevision ??
+                  revisions.current[candidate],
+              );
+          }
+          cacheDisabledRef.current = true;
+          cycleRevisionConflictsRef.current.clear();
+          if (mountedRef.current) {
+            setMovedWorkspace(nextMovedWorkspace);
+            setError(undefined);
+          }
+          updateSaveState("failed");
+          return;
+        }
+
+        const serverCycle = canonicalCycle;
+        const previousValues = valuesRef.current;
+        const previousSaved = savedValuesRef.current;
+        const previousRevisions = { ...revisions.current };
+        let nextValues = { ...previousValues };
+        const nextSaved = { ...previousSaved };
+        const nextConflicts = new Map(conflictsRef.current);
+
+        for (const candidate of frames) {
+          const serverBody = serverCycle[candidate];
+          const localBody = previousValues[candidate];
+          const serverRevision = serverCycle.frameRevisions[candidate];
+          const runtimeConflict =
+            cycleRevisionConflictsRef.current.get(candidate);
+          const existingConflict = nextConflicts.get(candidate);
+          const hadLocalChange =
+            pending.current.has(candidate) ||
+            localBody !== previousSaved[candidate] ||
+            existingConflict !== undefined;
+
+          revisions.current[candidate] = serverRevision;
+          nextSaved[candidate] = serverBody;
+
+          if (runtimeConflict) {
+            cycleRevisionConflictsRef.current.delete(candidate);
+            if (
+              serverBody === runtimeConflict.failedSnapshot ||
+              localBody === serverBody
+            ) {
+              nextConflicts.delete(candidate);
+              if (localBody === serverBody) {
+                pending.current.delete(candidate);
+                nextValues = { ...nextValues, [candidate]: serverBody };
+                void deleteFrameDraft(candidate);
+              } else {
+                pending.current.set(candidate, localBody);
+                void cacheFrameDraft(candidate, localBody, serverRevision);
+              }
+            } else {
+              const draft: BrowserDraft = {
+                userId,
+                goalId: goal.id,
+                subjectKey: `cycle:${cycle.id}:${candidate}`,
+                body: localBody,
+                baseRevision: runtimeConflict.baseRevision,
+                updatedAt: new Date().toISOString(),
+              };
+              nextConflicts.set(candidate, draft);
+              pending.current.set(candidate, localBody);
+              void cacheFrameDraft(
+                candidate,
+                localBody,
+                runtimeConflict.baseRevision,
+              );
+            }
+            continue;
+          }
+
+          if (existingConflict) continue;
+          if (!hadLocalChange) {
+            pending.current.delete(candidate);
+            nextValues = { ...nextValues, [candidate]: serverBody };
+            void deleteFrameDraft(candidate);
+          } else if (serverBody !== previousSaved[candidate]) {
+            const draft: BrowserDraft = {
+              userId,
+              goalId: goal.id,
+              subjectKey: `cycle:${cycle.id}:${candidate}`,
+              body: localBody,
+              baseRevision: previousRevisions[candidate],
+              updatedAt: new Date().toISOString(),
+            };
+            nextConflicts.set(candidate, draft);
+            pending.current.set(candidate, localBody);
+            void cacheFrameDraft(
+              candidate,
+              localBody,
+              previousRevisions[candidate],
+            );
+          } else if (localBody === serverBody) {
+            pending.current.delete(candidate);
+            void deleteFrameDraft(candidate);
+          } else {
+            pending.current.set(candidate, localBody);
+            void cacheFrameDraft(candidate, localBody, serverRevision);
+          }
+        }
+
+        valuesRef.current = nextValues;
+        savedValuesRef.current = nextSaved;
+        contentRevision.current = Math.max(
+          contentRevision.current,
+          serverCycle.contentRevision,
+        );
+        conflictsRef.current = nextConflicts;
+        retryCountRef.current = 0;
+        if (mountedRef.current) {
+          setValues(nextValues);
+          setRecoveryConflicts(new Map(nextConflicts));
+          setError(undefined);
+        }
+        if (nextConflicts.size || cycleRevisionConflictsRef.current.size)
+          updateSaveState("failed");
+        else if (hasSavablePending()) {
+          updateSaveState("dirty");
+          schedulePump(0);
+        } else updateSaveState("saved");
+      } catch {
+        if (!isCurrentRefresh()) return;
+        await cacheFrameDraft(
+          frame,
+          valuesRef.current[frame],
+          conflict.baseRevision,
+        );
+        if (!isCurrentRefresh()) return;
+        if (mountedRef.current)
+          setError(
+            "最新の内容を取得できませんでした。入力は保持されています。再試行してください。",
+          );
+        updateSaveState("failed");
+      } finally {
+        if (cycleRevisionRefreshInFlightRef.current.get(frame) === refreshToken)
+          cycleRevisionRefreshInFlightRef.current.delete(frame);
+      }
+    },
+    [
+      cache,
+      cacheFrameDraft,
+      clearBrowserTimer,
+      clearSaveTimer,
+      cycle.id,
+      deleteFrameDraft,
+      goal.id,
+      hasSavablePending,
+      schedulePump,
+      updateSaveState,
+      userId,
+    ],
+  );
 
   const drainDetached = useCallback(async () => {
     if (!editable || savesPausedRef.current || cacheDisabledRef.current) return;
@@ -378,24 +699,30 @@ function CycleWorkspace({
       return;
     const entry = firstPendingEntry();
     if (!editable || !entry) {
-      updateSaveState(conflictsRef.current.size ? "failed" : "saved");
+      updateSaveState(
+        conflictsRef.current.size || cycleRevisionConflictsRef.current.size
+          ? "failed"
+          : "saved",
+      );
       return;
     }
     const [frame, body] = entry;
     const snapshotInputVersion = inputVersionRef.current;
     const snapshotFrameVersion = frameEditVersionsRef.current[frame];
+    const snapshotRevision = revisions.current[frame];
     pending.current.delete(frame);
     saveInFlightRef.current = true;
     updateSaveState("saving");
     let result: Awaited<ReturnType<typeof saveCycleFrame>> | undefined;
     let failure: unknown;
+    let cycleConflictHandled = false;
     try {
       result = await saveCycleFrame(
         goal.id,
         cycle.id,
         frame,
         body,
-        revisions.current[frame],
+        snapshotRevision,
         session.csrfToken,
       );
       revisions.current[frame] = Math.max(
@@ -426,6 +753,10 @@ function CycleWorkspace({
     } catch (cause) {
       if (!pending.current.has(frame)) pending.current.set(frame, body);
       failure = cause;
+      if (isCycleRevisionConflict(cause)) {
+        await recoverCycleRevisionConflict(frame, body, snapshotRevision);
+        cycleConflictHandled = true;
+      }
     } finally {
       saveInFlightRef.current = false;
     }
@@ -435,10 +766,16 @@ function CycleWorkspace({
       else if (hasSavablePending()) {
         updateSaveState("dirty");
         schedulePump(0);
-      } else updateSaveState(conflictsRef.current.size ? "failed" : "saved");
+      } else
+        updateSaveState(
+          conflictsRef.current.size || cycleRevisionConflictsRef.current.size
+            ? "failed"
+            : "saved",
+        );
       return;
     }
 
+    if (cycleConflictHandled) return;
     if (disposedRef.current || savesPausedRef.current) return;
     void persistFrameDraft(frame);
     if (inputVersionRef.current !== snapshotInputVersion) {
@@ -468,6 +805,7 @@ function CycleWorkspace({
     goal.id,
     hasSavablePending,
     persistFrameDraft,
+    recoverCycleRevisionConflict,
     schedulePump,
     session.csrfToken,
     updateSaveState,
@@ -536,14 +874,29 @@ function CycleWorkspace({
 
   useEffect(() => {
     const handleOnline = () => {
-      if (savesPausedRef.current || !hasSavablePending()) return;
+      if (savesPausedRef.current) return;
       retryCountRef.current = 0;
+      if (cycleRevisionConflictsRef.current.size) {
+        for (const [frame, conflict] of cycleRevisionConflictsRef.current)
+          void recoverCycleRevisionConflict(
+            frame,
+            conflict.failedSnapshot,
+            conflict.baseRevision,
+          );
+        return;
+      }
+      if (!hasSavablePending()) return;
       updateSaveState("dirty");
       schedulePump(0);
     };
     window.addEventListener("online", handleOnline);
     return () => window.removeEventListener("online", handleOnline);
-  }, [hasSavablePending, schedulePump, updateSaveState]);
+  }, [
+    hasSavablePending,
+    recoverCycleRevisionConflict,
+    schedulePump,
+    updateSaveState,
+  ]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -552,6 +905,7 @@ function CycleWorkspace({
     return () => {
       mountedRef.current = false;
       disposedRef.current = true;
+      cycleRevisionRefreshEpochRef.current += 1;
       clearSaveTimer();
       for (const frame of frames) {
         clearBrowserTimer(frame);
@@ -569,7 +923,7 @@ function CycleWorkspace({
 
   function change(frame: Frame, value: string) {
     if (Array.from(value).length > 200) return;
-    if (conflictsRef.current.has(frame)) return;
+    if (movedWorkspaceRef.current || conflictsRef.current.has(frame)) return;
     editedFramesRef.current.add(frame);
     inputVersionRef.current += 1;
     frameEditVersionsRef.current[frame] += 1;
@@ -581,7 +935,7 @@ function CycleWorkspace({
     else pending.current.set(frame, value);
     if (!saveInFlightRef.current)
       setSaveState(
-        conflictsRef.current.size
+        conflictsRef.current.size || cycleRevisionConflictsRef.current.size
           ? "failed"
           : pending.current.size
             ? "dirty"
@@ -592,7 +946,12 @@ function CycleWorkspace({
   }
 
   function flush(frame: Frame) {
-    if (conflictsRef.current.has(frame) || savesPausedRef.current) return;
+    if (
+      movedWorkspaceRef.current ||
+      conflictsRef.current.has(frame) ||
+      savesPausedRef.current
+    )
+      return;
     clearBrowserTimer(frame);
     void persistFrameDraft(frame);
     clearSaveTimer();
@@ -623,13 +982,28 @@ function CycleWorkspace({
   }
 
   function retrySave() {
-    if (conflictsRef.current.size || savesPausedRef.current) return;
+    if (
+      movedWorkspaceRef.current ||
+      savesPausedRef.current ||
+      conflictsRef.current.size
+    )
+      return;
     retryCountRef.current = 0;
+    if (cycleRevisionConflictsRef.current.size) {
+      for (const [frame, conflict] of cycleRevisionConflictsRef.current)
+        void recoverCycleRevisionConflict(
+          frame,
+          conflict.failedSnapshot,
+          conflict.baseRevision,
+        );
+      return;
+    }
     setSaveState("dirty");
     schedulePump(0);
   }
 
   function restoreRecovery(frame: Frame) {
+    if (movedWorkspaceRef.current) return;
     const draft = conflictsRef.current.get(frame);
     if (!draft) return;
     const nextConflicts = new Map(conflictsRef.current);
@@ -648,12 +1022,17 @@ function CycleWorkspace({
       void cacheFrameDraft(frame, draft.body, revisions.current[frame]);
     }
     setSaveState(
-      nextConflicts.size ? "failed" : pending.current.size ? "dirty" : "saved",
+      nextConflicts.size || cycleRevisionConflictsRef.current.size
+        ? "failed"
+        : pending.current.size
+          ? "dirty"
+          : "saved",
     );
     schedulePump(0);
   }
 
   function discardRecovery(frame: Frame) {
+    if (movedWorkspaceRef.current) return;
     if (!conflictsRef.current.has(frame)) return;
     const nextConflicts = new Map(conflictsRef.current);
     nextConflicts.delete(frame);
@@ -668,30 +1047,53 @@ function CycleWorkspace({
     setValues(valuesRef.current);
     void deleteFrameDraft(frame);
     setSaveState(
-      nextConflicts.size ? "failed" : pending.current.size ? "dirty" : "saved",
+      nextConflicts.size || cycleRevisionConflictsRef.current.size
+        ? "failed"
+        : pending.current.size
+          ? "dirty"
+          : "saved",
     );
     if (hasSavablePending()) schedulePump(0);
   }
 
   function pauseSaves() {
     savesPausedRef.current = true;
+    cycleRevisionRefreshEpochRef.current += 1;
     clearSaveTimer();
+    cycleRevisionRefreshInFlightRef.current.clear();
   }
 
   function resumeSaves() {
+    if (movedWorkspaceRef.current) return;
     savesPausedRef.current = false;
     cacheDisabledRef.current = false;
     retryCountRef.current = 0;
+    if (cycleRevisionConflictsRef.current.size) {
+      setSaveState("failed");
+      for (const [frame, conflict] of cycleRevisionConflictsRef.current)
+        void recoverCycleRevisionConflict(
+          frame,
+          conflict.failedSnapshot,
+          conflict.baseRevision,
+        );
+      return;
+    }
+    if (conflictsRef.current.size) {
+      setSaveState("failed");
+      return;
+    }
     if (hasSavablePending()) {
       setSaveState("dirty");
       schedulePump(0);
-    }
+    } else setSaveState("saved");
   }
 
   async function finalizeDraftCache(scope: "cycle" | "goal") {
     cacheDisabledRef.current = true;
+    cycleRevisionRefreshEpochRef.current += 1;
     pending.current.clear();
     conflictsRef.current.clear();
+    cycleRevisionConflictsRef.current.clear();
     for (const frame of frames) clearBrowserTimer(frame);
     if (scope === "goal") {
       await clearGoalDraftCache();
@@ -731,7 +1133,11 @@ function CycleWorkspace({
     clearBrowserTimer("action");
     void deleteFrameDraft("action");
     setSaveState(
-      nextConflicts.size ? "failed" : pending.current.size ? "dirty" : "saved",
+      nextConflicts.size || cycleRevisionConflictsRef.current.size
+        ? "failed"
+        : pending.current.size
+          ? "dirty"
+          : "saved",
     );
   }
   const allPDC = [values.plan, values.do, values.check].every((value) =>
@@ -944,6 +1350,7 @@ function CycleWorkspace({
   }
   const copy = frameCopy[selected];
   const selectedConflict = recoveryConflicts.get(selected);
+  const workspaceMoved = movedWorkspace !== undefined;
   const end = cycle.completedAt ?? cycle.canceledAt;
   return (
     <main className="page editor-page">
@@ -985,11 +1392,31 @@ function CycleWorkspace({
         role="tabpanel"
         aria-labelledby={`tab-${selected}`}
       >
-        {selectedConflict && (
+        {!workspaceMoved && selectedConflict && (
           <DraftRecoveryNotice
             onRestore={() => restoreRecovery(selected)}
             onDiscard={() => discardRecovery(selected)}
           />
+        )}
+        {movedWorkspace && (
+          <div className="draft-notice draft-notice--conflict" role="alert">
+            <div>
+              <strong>現在の作業状態が更新されました</strong>
+              <p>この端末の入力は保持されています。</p>
+            </div>
+            <div className="button-row">
+              <Link
+                className="button button--primary"
+                replace
+                to={replayWorkspacePath(
+                  goal.id,
+                  movedWorkspace.currentWorkspace,
+                )}
+              >
+                現在の作業へ移動
+              </Link>
+            </div>
+          </div>
         )}
         {browserCacheFailed && <DraftCacheWarning />}
         <div className="frame-title">
@@ -1006,6 +1433,7 @@ function CycleWorkspace({
           aria-label={`${copy.label} — ${copy.name}`}
           aria-describedby="cycle-frame-guide"
           aria-readonly={
+            workspaceMoved ||
             !editable ||
             Boolean(selectedConflict) ||
             (selected === "action" && aiState !== "idle")
@@ -1014,6 +1442,7 @@ function CycleWorkspace({
           maxLength={200}
           placeholder={copy.placeholder}
           readOnly={
+            workspaceMoved ||
             !editable ||
             Boolean(selectedConflict) ||
             (selected === "action" && aiState !== "idle")
@@ -1022,7 +1451,7 @@ function CycleWorkspace({
           onBlur={() => flush(selected)}
         />
         <div className="editor-meta">
-          {editable ? (
+          {editable && !workspaceMoved ? (
             <SaveBadge
               state={saveState}
               retry={recoveryConflicts.size ? undefined : retrySave}
@@ -1032,7 +1461,7 @@ function CycleWorkspace({
           )}
           <span>{Array.from(values[selected]).length} / 200</span>
         </div>
-        {editable && selected === "action" && (
+        {editable && !workspaceMoved && selected === "action" && (
           <div className="action-controls">
             <button
               className="button button--secondary"
@@ -1068,7 +1497,7 @@ function CycleWorkspace({
           </p>
         )}
       </section>
-      {editable && (
+      {editable && !workspaceMoved && (
         <details className="goal-actions">
           <summary>目標の操作</summary>
           <div className="button-row">

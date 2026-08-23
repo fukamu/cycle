@@ -9,12 +9,14 @@ import {
   refineAction,
   refineGoalDraft,
   refineReview,
+  saveReview,
   saveCycleFrame,
   startGoal,
   terminateGoal,
 } from "./workspace";
 
 const goalId = "00000000-0000-7000-8000-000000000001";
+const reviewDraftId = "00000000-0000-7000-8000-000000000004";
 const cycleId = "00000000-0000-7000-8000-000000000002";
 const suppliedOperationId = "00000000-0000-7000-8000-000000000003";
 const commandOptions = {
@@ -138,6 +140,33 @@ describe("goal-scoped workspace API", () => {
     await listCycles(goalId, "opaque+cursor/=");
     expect(fetchMock.mock.calls[0]?.[0]).toContain(
       "cursor=opaque%2Bcursor%2F%3D",
+    );
+  });
+
+  it("leases a review save to the expected draft generation", async () => {
+    const response = {
+      reviewDraft: {
+        id: reviewDraftId,
+        goalId,
+        draftType: "review",
+        body: "見直した目標",
+        revision: 1,
+        updatedAt: "2026-08-19T00:00:00Z",
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveReview(goalId, reviewDraftId, "見直した目標", 0, "csrf");
+
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        body: "見直した目標",
+        expectedReviewDraftId: reviewDraftId,
+        expectedRevision: 0,
+      }),
     );
   });
 

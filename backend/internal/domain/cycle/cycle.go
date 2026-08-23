@@ -129,15 +129,18 @@ func SaveFrame(current PDCACycle, frame Frame, content string, expectedRevision 
 	if aiRunning && frame == FrameAction {
 		return SaveFrameResult{}, ErrAIOperationRunning
 	}
+	if _, err := ParseFrame(string(frame)); err != nil {
+		return SaveFrameResult{}, err
+	}
 	content, err := NormalizeAndValidateText(content)
 	if err != nil {
 		return SaveFrameResult{}, err
 	}
-	if current.FrameRevision(frame) != expectedRevision {
-		return SaveFrameResult{}, ErrRevisionConflict
-	}
 	if current.FrameContent(frame) == content {
 		return SaveFrameResult{Cycle: current, Frame: frame, Content: content, NoOp: true, SavedAt: current.UpdatedAt}, nil
+	}
+	if current.FrameRevision(frame) != expectedRevision {
+		return SaveFrameResult{}, ErrRevisionConflict
 	}
 	current.Revisions.Content++
 	switch frame {
