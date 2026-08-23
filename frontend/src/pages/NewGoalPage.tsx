@@ -30,6 +30,10 @@ import {
 } from "../shared/components/AsyncState";
 import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
 import { goalCopy } from "../shared/copy/ja";
+import {
+  commandFingerprint,
+  useCommandOperation,
+} from "../shared/hooks/useCommandOperation";
 import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
 
 export function NewGoalPage() {
@@ -86,6 +90,8 @@ function GoalDraftEditor({
   const navigate = useNavigate();
   const cache = useQueryClient();
   const refinement = useGoalRefinement();
+  const refineOperation = useCommandOperation();
+  const startOperation = useCommandOperation();
   const [pending, setPending] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [error, setError] = useState<string>();
@@ -112,8 +118,19 @@ function GoalDraftEditor({
 
   async function requestRefine() {
     setError(undefined);
+    const expectedDraftRevision = editor.revision;
     await refinement.request(editor.body, () =>
-      refineGoalDraft(draft.id, editor.revision, session.csrfToken),
+      refineOperation.invoke(
+        commandFingerprint("goal_draft_refine", {
+          draftId: draft.id,
+          expectedDraftRevision,
+        }),
+        (operationId) =>
+          refineGoalDraft(draft.id, expectedDraftRevision, {
+            operationId,
+            csrfToken: session.csrfToken,
+          }),
+      ),
     );
   }
   async function adopt() {
@@ -141,10 +158,17 @@ function GoalDraftEditor({
     setError(undefined);
     editor.pause();
     try {
-      const result = await startGoal(
-        draft.id,
-        editor.revision,
-        session.csrfToken,
+      const expectedDraftRevision = editor.revision;
+      const result = await startOperation.invoke(
+        commandFingerprint("goal_start", {
+          draftId: draft.id,
+          expectedDraftRevision,
+        }),
+        (operationId) =>
+          startGoal(draft.id, expectedDraftRevision, {
+            operationId,
+            csrfToken: session.csrfToken,
+          }),
       );
       await editor.discard();
       await cache.invalidateQueries({
@@ -152,7 +176,7 @@ function GoalDraftEditor({
         refetchType: "none",
       });
       cacheCycle(cache, userId, result.goal, result.cycle);
-      navigate(`/goals/${result.goal.id}/cycles/${result.cycle.id}`, {
+      navigate(`/goals/${result.goal.id}`, {
         replace: true,
       });
     } catch {

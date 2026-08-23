@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
@@ -132,5 +133,86 @@ func TestGoalRefineResponseIncludesZeroSourceDraftRevision(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), `"sourceDraftRevision":0`) {
 		t.Fatalf("zero source revision was omitted from response: %s", encoded)
+	}
+}
+
+type replayOnlyStore struct {
+	Store
+	goalSnapshot   AISnapshot
+	actionSnapshot AISnapshot
+}
+
+func (store *replayOnlyStore) BeginGoalRefine(context.Context, GoalRefineInput, AIContextSelector) (AISnapshot, error) {
+	return store.goalSnapshot, nil
+}
+
+func (store *replayOnlyStore) BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error) {
+	return store.actionSnapshot, nil
+}
+
+type replayTestClock struct{}
+
+func (replayTestClock) Now() time.Time {
+	return time.Date(2026, time.August, 23, 0, 0, 0, 0, time.UTC)
+}
+
+type replayTestIDs struct{}
+
+func (replayTestIDs) NewID() (string, error) {
+	return "10000000-0000-7000-8000-000000000001", nil
+}
+
+func TestGoalRefineReplayPreservesOriginalResponseMetadata(t *testing.T) {
+	output := "改善した目標"
+	expectedGoalRevision := int64(7)
+	store := &replayOnlyStore{goalSnapshot: AISnapshot{
+		GenerationID:           "20000000-0000-7000-8000-000000000001",
+		TargetRevision:         4,
+		SourceGoalRevision:     99,
+		ReplayedOutput:         &output,
+		ReplayedContextChanged: true,
+	}}
+	provider := &scriptedProvider{}
+	service := NewService(store, provider, replayTestClock{}, replayTestIDs{}, Settings{})
+
+	response, err := service.RefineGoal(context.Background(), GoalRefineInput{
+		ExpectedGoalRevision: &expectedGoalRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GenerationID != store.goalSnapshot.GenerationID || response.Suggestion != output ||
+		response.SourceDraftRevision == nil || *response.SourceDraftRevision != 4 ||
+		response.SourceGoalRevision != expectedGoalRevision || !response.ContextChanged || !response.Replayed {
+		t.Fatalf("goal replay response = %#v", response)
+	}
+	if len(provider.inputs) != 0 {
+		t.Fatalf("provider calls on replay = %d", len(provider.inputs))
+	}
+}
+
+func TestActionReplayPreservesOriginalContextChanged(t *testing.T) {
+	output := "次の行動"
+	store := &replayOnlyStore{actionSnapshot: AISnapshot{
+		GenerationID:            "30000000-0000-7000-8000-000000000001",
+		ReplayedOutput:          &output,
+		ReplayedContextChanged:  true,
+		ReplayedContentRevision: 9,
+		ReplayedActionRevision:  3,
+	}}
+	provider := &scriptedProvider{}
+	service := NewService(store, provider, replayTestClock{}, replayTestIDs{}, Settings{})
+
+	response, err := service.RunActionAI(context.Background(), ActionAIInput{Operation: "action_refine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GenerationID != store.actionSnapshot.GenerationID || response.Action != output ||
+		response.ContentRevision != 9 || response.ActionRevision != 3 ||
+		!response.ContextChanged || !response.Replayed {
+		t.Fatalf("action replay response = %#v", response)
+	}
+	if len(provider.inputs) != 0 {
+		t.Fatalf("provider calls on replay = %d", len(provider.inputs))
 	}
 }

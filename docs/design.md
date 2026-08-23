@@ -2251,12 +2251,15 @@ Idempotencyは**同じCommandの副作用を二重適用しないこと**を保�
   "currentGoalState": "active_cycle",
   "currentWorkspace": {
     "kind": "active_cycle",
-    "cycleId": "next-cycle-uuid"
+    "cycleId": "next-cycle-uuid",
+    "cycleSequenceNumber": 2
   }
 }
 ```
 
 Frontendは`replayed=true`を受けたら、Response内の`currentWorkspace`または`GET /goals/{goalId}`を使って現在画面へ収束する。過去のReview Draftを再作成してはならない。
+
+Frontendは初回送信前にcanonical requestとoperation ID / Idempotency-Keyを同じlogical Commandとして所有し、成功するか、利用者が明示的に破棄するか、request内容を変更するまで保持する。Response喪失や`AI_OPERATION_IN_PROGRESS`後の再送では同じIDとrequestを使う。
 
 - Goal Aggregateが後から明示削除された場合、Delete以外の古いCommand retryは`404`になり得る。削除を覆してresourceを復元しない。
 - Goal Delete自体はDelete Receiptが有効な間、同じkey/hashへ`204`を返す。

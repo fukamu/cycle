@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { newUUIDv7 } from "../src/shared/id/uuid";
-import { expectAPIError, getSession } from "./support/api";
+import { expectAPIError, getSession, requestFromPage } from "./support/api";
 import {
   completeCurrentCycle,
   createAndCompleteGoal,
@@ -129,6 +129,159 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     .getByRole("button", { name: "目標を削除" })
     .click();
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
+});
+
+test("cycle completion reuses its operation after committed response loss and converges to the current workspace", async ({
+  page,
+}) => {
+  await createProgressingGoal(page, "応答喪失後も一度だけ完了する目標");
+  const workspaceRoute = new URL(page.url()).pathname.match(
+    /^\/goals\/([^/]+)\/cycles\/([^/]+)$/,
+  );
+  expect(workspaceRoute).not.toBeNull();
+  const [, goalId, cycleId] = workspaceRoute!;
+
+  await saveFrame(page, "P — Plan", "応答喪失を再現する計画", "D");
+  await saveFrame(page, "D — Do", "Backendまで完了requestを届けた", "C");
+  await saveFrame(page, "C — Check", "browser responseだけ失った", "A");
+  await saveFrame(page, "A — Action", "同じcommandとして再試行する", "A");
+
+  type CompletionRequest = {
+    readonly operationId: string;
+    readonly expectedGoalRevision: number;
+    readonly expectedContentRevision: number;
+  };
+  const completionRequests: CompletionRequest[] = [];
+  let firstCommitStatus: number | undefined;
+  let firstRequestCSRFToken: string | undefined;
+  let markSecondRequestSeen!: () => void;
+  const secondRequestSeen = new Promise<void>((resolve) => {
+    markSecondRequestSeen = resolve;
+  });
+  await page.route(
+    `**/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
+    async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      completionRequests.push(
+        route.request().postDataJSON() as CompletionRequest,
+      );
+      if (completionRequests.length === 1) {
+        firstRequestCSRFToken = route.request().headers()["x-csrf-token"];
+        const committedResponse = await route.fetch();
+        firstCommitStatus = committedResponse.status();
+        await committedResponse.dispose();
+        await route.abort("connectionfailed");
+        return;
+      }
+      if (completionRequests.length === 2) markSecondRequestSeen();
+      await route.continue();
+    },
+  );
+
+  await page.getByRole("button", { name: "サイクルを完了" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "サイクルを完了" })
+    .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "サイクルを完了できませんでした",
+  );
+  expect(firstCommitStatus).toBe(200);
+  expect(completionRequests).toHaveLength(1);
+  expect(firstRequestCSRFToken).toBeTruthy();
+
+  const reviewResult = await requestFromPage(page, {
+    path: `/api/v1/goals/${goalId}/review`,
+  });
+  expect(reviewResult.status).toBe(200);
+  const review = reviewResult.payload as {
+    readonly goal: { readonly revision: number };
+    readonly reviewDraft: { readonly revision: number };
+  };
+  const continueResult = await requestFromPage(page, {
+    path: `/api/v1/goals/${goalId}/review/continue`,
+    method: "POST",
+    csrfToken: firstRequestCSRFToken,
+    body: {
+      operationId: newUUIDv7(),
+      expectedGoalRevision: review.goal.revision,
+      expectedDraftRevision: review.reviewDraft.revision,
+    },
+  });
+  expect(continueResult.status).toBe(200);
+  const continued = continueResult.payload as {
+    readonly cycle: {
+      readonly id: string;
+      readonly sequenceNumber: number;
+      readonly status: string;
+    };
+  };
+  expect(continued.cycle).toMatchObject({
+    sequenceNumber: 2,
+    status: "active",
+  });
+
+  await page.getByRole("button", { name: "サイクルを完了" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "サイクルを完了" })
+    .click();
+  await secondRequestSeen;
+  expect(completionRequests).toHaveLength(2);
+  expect(completionRequests[1].operationId).toBe(
+    completionRequests[0].operationId,
+  );
+  expect(completionRequests[1]).toEqual(completionRequests[0]);
+
+  await expect(page).toHaveURL(`/goals/${goalId}/cycles/${continued.cycle.id}`);
+  await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
+
+  const goalResult = await requestFromPage(page, {
+    path: `/api/v1/goals/${goalId}`,
+  });
+  expect(goalResult).toMatchObject({
+    status: 200,
+    payload: {
+      goal: {
+        id: goalId,
+        status: "active_cycle",
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: continued.cycle.id,
+          cycleSequenceNumber: 2,
+        },
+      },
+    },
+  });
+  const cyclesResult = await requestFromPage(page, {
+    path: `/api/v1/goals/${goalId}/cycles?limit=20`,
+  });
+  expect(cyclesResult.status).toBe(200);
+  const cycles = cyclesResult.payload as {
+    readonly items: ReadonlyArray<{
+      readonly id: string;
+      readonly sequenceNumber: number;
+      readonly status: string;
+    }>;
+  };
+  expect(cycles.items).toHaveLength(2);
+  expect(cycles.items).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: cycleId,
+        sequenceNumber: 1,
+        status: "completed",
+      }),
+      expect.objectContaining({
+        id: continued.cycle.id,
+        sequenceNumber: 2,
+        status: "active",
+      }),
+    ]),
+  );
 });
 
 test("a failed autosave keeps the browser draft and retry persists it", async ({

@@ -66,10 +66,16 @@ export function HomePage() {
           </div>
         )}
         {home.progressingGoals.map((goal) => {
+          const activeWork =
+            goal.currentWork?.kind === "active_cycle"
+              ? goal.currentWork
+              : undefined;
           const target =
             goal.status === "goal_review"
               ? `/goals/${goal.id}/review`
-              : `/goals/${goal.id}/cycles/${goal.currentWork?.cycleId ?? ""}`;
+              : activeWork
+                ? `/goals/${goal.id}/cycles/${activeWork.cycleId}`
+                : `/goals/${goal.id}`;
           return (
             <Link className="goal-card" key={goal.id} to={target}>
               <span className="goal-card__kicker">あなたの目標</span>
@@ -78,7 +84,7 @@ export function HomePage() {
                 <span>{statusLabel[goal.status]}</span>
                 <span>
                   {goal.status === "active_cycle"
-                    ? `Cycle ${goal.currentWork?.cycleSequenceNumber ?? ""}`
+                    ? `Cycle ${activeWork?.cycleSequenceNumber ?? ""}`
                     : "前回Cycleを振り返って目標を確認してください"}
                 </span>
               </div>

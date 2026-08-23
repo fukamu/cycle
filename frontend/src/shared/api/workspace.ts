@@ -1,11 +1,11 @@
 import { z } from "zod";
 
-import { newUUIDv7 } from "../id/uuid";
 import { requestJSON } from "./client";
 import {
   aiResponseSchema,
   cyclePageSchema,
   cycleSchema,
+  currentWorkSchema,
   draftSchema,
   goalRefineResponseSchema,
   goalPageSchema,
@@ -50,9 +50,7 @@ const commandReplayEnvelope = z.object({
     "achieved",
     "ended",
   ]),
-  currentWorkspace: z
-    .object({ kind: z.string(), cycleId: z.string().uuid().optional() })
-    .nullable(),
+  currentWorkspace: currentWorkSchema.nullable(),
 });
 const continueEnvelope = z.object({
   goal: goalSchema,
@@ -66,7 +64,10 @@ const terminateEnvelope = z.object({
   replayed: z.boolean().optional(),
 });
 
-export const operationId = () => newUUIDv7();
+export type CommandRequestOptions = {
+  readonly operationId: string;
+  readonly csrfToken: string;
+};
 
 export const getHome = () => requestJSON("/api/v1/home", homeSchema);
 export const createGoalDraft = (initialBody: string, csrfToken: string) =>
@@ -96,15 +97,15 @@ export const discardGoalDraft = (draftId: string, csrfToken: string) =>
 export const refineGoalDraft = (
   draftId: string,
   expectedDraftRevision: number,
-  csrfToken: string,
+  options: CommandRequestOptions,
 ) =>
   requestJSON(
     `/api/v1/goal-drafts/${draftId}/refinements`,
     goalRefineResponseSchema,
     {
       method: "POST",
-      csrfToken,
-      idempotencyKey: operationId(),
+      csrfToken: options.csrfToken,
+      idempotencyKey: options.operationId,
       body: { expectedDraftRevision },
     },
   );
@@ -126,12 +127,12 @@ export const adoptGoalDraft = (
 export const startGoal = (
   draftId: string,
   expectedDraftRevision: number,
-  csrfToken: string,
+  options: CommandRequestOptions,
 ) =>
   requestJSON(`/api/v1/goal-drafts/${draftId}/start`, startEnvelope, {
     method: "POST",
-    csrfToken,
-    body: { operationId: operationId(), expectedDraftRevision },
+    csrfToken: options.csrfToken,
+    body: { operationId: options.operationId, expectedDraftRevision },
   });
 
 export const listGoals = (scope = "all", cursor?: string) => {
@@ -158,15 +159,15 @@ export const refineReview = (
   goalId: string,
   expectedDraftRevision: number,
   expectedGoalRevision: number,
-  csrfToken: string,
+  options: CommandRequestOptions,
 ) =>
   requestJSON(
     `/api/v1/goals/${goalId}/review/refinements`,
     goalRefineResponseSchema,
     {
       method: "POST",
-      csrfToken,
-      idempotencyKey: operationId(),
+      csrfToken: options.csrfToken,
+      idempotencyKey: options.operationId,
       body: { expectedDraftRevision, expectedGoalRevision },
     },
   );
@@ -190,13 +191,13 @@ export const continueReview = (
   goalId: string,
   expectedGoalRevision: number,
   expectedDraftRevision: number,
-  csrfToken: string,
+  options: CommandRequestOptions,
 ) =>
   requestJSON(`/api/v1/goals/${goalId}/review/continue`, continueEnvelope, {
     method: "POST",
-    csrfToken,
+    csrfToken: options.csrfToken,
     body: {
-      operationId: operationId(),
+      operationId: options.operationId,
       expectedGoalRevision,
       expectedDraftRevision,
     },
@@ -206,14 +207,14 @@ export const terminateGoal = (
   outcome: "achieved" | "ended",
   expectedGoalRevision: number,
   expectedState: "active_cycle" | "goal_review",
-  csrfToken: string,
+  options: CommandRequestOptions,
   active?: { id: string; revision: number },
 ) =>
   requestJSON(`/api/v1/goals/${goalId}/termination`, terminateEnvelope, {
     method: "POST",
-    csrfToken,
+    csrfToken: options.csrfToken,
     body: {
-      operationId: operationId(),
+      operationId: options.operationId,
       outcome,
       expectedGoalRevision,
       expectedState,
@@ -225,12 +226,12 @@ export const terminateGoal = (
 export const deleteGoal = (
   goalId: string,
   expectedGoalRevision: number,
-  csrfToken: string,
+  options: CommandRequestOptions,
 ) =>
   requestJSON(`/api/v1/goals/${goalId}`, z.undefined(), {
     method: "DELETE",
-    csrfToken,
-    idempotencyKey: operationId(),
+    csrfToken: options.csrfToken,
+    idempotencyKey: options.operationId,
     body: { confirmed: true, expectedGoalRevision },
   });
 
@@ -266,15 +267,15 @@ export const generateAction = (
   cycleId: string,
   expectedContentRevision: number,
   confirmReplace: boolean,
-  csrfToken: string,
+  options: CommandRequestOptions,
 ) =>
   requestJSON(
     `/api/v1/goals/${goalId}/cycles/${cycleId}/actions/generate`,
     aiResponseSchema,
     {
       method: "POST",
-      csrfToken,
-      idempotencyKey: operationId(),
+      csrfToken: options.csrfToken,
+      idempotencyKey: options.operationId,
       body: { expectedContentRevision, confirmReplace },
     },
   );
@@ -282,15 +283,15 @@ export const refineAction = (
   goalId: string,
   cycleId: string,
   expectedContentRevision: number,
-  csrfToken: string,
+  options: CommandRequestOptions,
 ) =>
   requestJSON(
     `/api/v1/goals/${goalId}/cycles/${cycleId}/actions/refine`,
     aiResponseSchema,
     {
       method: "POST",
-      csrfToken,
-      idempotencyKey: operationId(),
+      csrfToken: options.csrfToken,
+      idempotencyKey: options.operationId,
       body: { expectedContentRevision },
     },
   );
@@ -299,16 +300,16 @@ export const completeCycle = (
   cycleId: string,
   expectedGoalRevision: number,
   expectedContentRevision: number,
-  csrfToken: string,
+  options: CommandRequestOptions,
 ) =>
   requestJSON(
     `/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
     z.union([completeEnvelope, commandReplayEnvelope]),
     {
       method: "POST",
-      csrfToken,
+      csrfToken: options.csrfToken,
       body: {
-        operationId: operationId(),
+        operationId: options.operationId,
         expectedGoalRevision,
         expectedContentRevision,
       },

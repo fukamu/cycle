@@ -29,6 +29,10 @@ import {
 } from "../shared/components/AsyncState";
 import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
 import { frameCopy } from "../shared/copy/ja";
+import {
+  commandFingerprint,
+  useCommandOperation,
+} from "../shared/hooks/useCommandOperation";
 import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
 
 export function GoalReviewPage() {
@@ -55,6 +59,10 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const navigate = useNavigate();
   const cache = useQueryClient();
   const refinement = useGoalRefinement();
+  const refineOperation = useCommandOperation();
+  const continueOperation = useCommandOperation();
+  const terminateOperation = useCommandOperation();
+  const deleteOperation = useCommandOperation();
   const [pending, setPending] = useState(false);
   const [confirmation, setConfirmation] = useState<ReviewConfirmation>();
   const [error, setError] = useState<string>();
@@ -83,8 +91,21 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
 
   async function requestRefine() {
     setError(undefined);
+    const expectedDraftRevision = editor.revision;
+    const expectedGoalRevision = goal.revision;
     await refinement.request(editor.body, () =>
-      refineReview(goal.id, editor.revision, goal.revision, session.csrfToken),
+      refineOperation.invoke(
+        commandFingerprint("goal_review_refine", {
+          goalId: goal.id,
+          expectedDraftRevision,
+          expectedGoalRevision,
+        }),
+        (operationId) =>
+          refineReview(goal.id, expectedDraftRevision, expectedGoalRevision, {
+            operationId,
+            csrfToken: session.csrfToken,
+          }),
+      ),
     );
   }
   async function adopt() {
@@ -112,11 +133,19 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     setError(undefined);
     editor.pause();
     try {
-      const result = await continueReview(
-        goal.id,
-        goal.revision,
-        editor.revision,
-        session.csrfToken,
+      const expectedGoalRevision = goal.revision;
+      const expectedDraftRevision = editor.revision;
+      const result = await continueOperation.invoke(
+        commandFingerprint("goal_review_continue", {
+          goalId: goal.id,
+          expectedDraftRevision,
+          expectedGoalRevision,
+        }),
+        (operationId) =>
+          continueReview(goal.id, expectedGoalRevision, expectedDraftRevision, {
+            operationId,
+            csrfToken: session.csrfToken,
+          }),
       );
       await editor.discard();
       await cache.invalidateQueries({
@@ -124,7 +153,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         refetchType: "none",
       });
       cacheCycle(cache, userId, result.goal, result.cycle);
-      navigate(`/goals/${goal.id}/cycles/${result.cycle.id}`, {
+      navigate(`/goals/${goal.id}`, {
         replace: true,
       });
     } catch {
@@ -141,12 +170,18 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     setError(undefined);
     editor.pause();
     try {
-      await terminateGoal(
-        goal.id,
-        outcome,
-        goal.revision,
-        "goal_review",
-        session.csrfToken,
+      await terminateOperation.invoke(
+        commandFingerprint("goal_terminate", {
+          goalId: goal.id,
+          outcome,
+          expectedGoalRevision: goal.revision,
+          expectedState: "goal_review",
+        }),
+        (operationId) =>
+          terminateGoal(goal.id, outcome, goal.revision, "goal_review", {
+            operationId,
+            csrfToken: session.csrfToken,
+          }),
       );
       await editor.discard();
       await cache.invalidateQueries({
@@ -165,7 +200,17 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     setError(undefined);
     editor.pause();
     try {
-      await deleteGoal(goal.id, goal.revision, session.csrfToken);
+      await deleteOperation.invoke(
+        commandFingerprint("goal_delete", {
+          goalId: goal.id,
+          expectedGoalRevision: goal.revision,
+        }),
+        (operationId) =>
+          deleteGoal(goal.id, goal.revision, {
+            operationId,
+            csrfToken: session.csrfToken,
+          }),
+      );
       await editor.discard();
       await cache.invalidateQueries({
         queryKey: userQueryKeys.root(userId),

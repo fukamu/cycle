@@ -449,9 +449,15 @@ VALUES($1,$2,'creation','目標本文',$3,$3)`, draftID, userID, now); err != ni
 	}
 	if _, err = pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,goal_id,goal_version_id,cycle_id,target_revision,idempotency_key,input_hash,
-output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,applied_at,started_at,finished_at)
-VALUES($1,$2,'action_generate','succeeded',$3,$4,$5,0,$6,$7,'次の行動','fake','test','action-generate-v1',$8,0,1,$9,$9,$9)`,
+output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,context_changed,applied_at,started_at,finished_at)
+VALUES($1,$2,'action_generate','succeeded',$3,$4,$5,0,$6,$7,'次の行動','fake','test','action-generate-v1',$8,0,1,true,$9,$9,$9)`,
 		generationID, userID, goalID, versionID, cycleID, idempotencyKey, hashActionAIRequest(actionInput), now.Format("2006-01-02"), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(context.Background(), `INSERT INTO ai_usage_events
+(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
+VALUES($1,$2,$3,'action_generate','succeeded','fake','test','action-generate-v1',$4,$4,$5)`,
+		generationID, userID, goalID, now, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = pool.Exec(context.Background(), `UPDATE pdca_cycles SET action='次の行動',content_revision=1,
@@ -459,13 +465,24 @@ action_revision=1,action_last_ai_applied_content_revision=1 WHERE id=$1`, cycleI
 		t.Fatal(err)
 	}
 	actionReplay, err := store.BeginActionAI(context.Background(), actionInput, nil)
-	if err != nil || actionReplay.ReplayedOutput == nil || *actionReplay.ReplayedOutput != "次の行動" || actionReplay.ReplayedContentRevision != 1 {
+	if err != nil || actionReplay.ReplayedOutput == nil || *actionReplay.ReplayedOutput != "次の行動" ||
+		!actionReplay.ReplayedContextChanged || actionReplay.ReplayedContentRevision != 1 {
 		t.Fatalf("action replay = %#v, error = %v", actionReplay, err)
 	}
 	differentRequest := actionInput
 	differentRequest.ConfirmReplace = true
 	if _, err = store.BeginActionAI(context.Background(), differentRequest, nil); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
 		t.Fatalf("action replay with different request error = %v", err)
+	}
+	var actionGenerationCount, actionUsageCount int64
+	if err = pool.QueryRow(context.Background(), `SELECT
+(SELECT count(*) FROM ai_generations WHERE user_id=$1 AND operation_type='action_generate' AND idempotency_key=$2),
+(SELECT count(*) FROM ai_usage_events WHERE user_id=$1 AND operation_type='action_generate')`,
+		userID, idempotencyKey).Scan(&actionGenerationCount, &actionUsageCount); err != nil {
+		t.Fatal(err)
+	}
+	if actionGenerationCount != 1 || actionUsageCount != 1 {
+		t.Fatalf("action replay counts generation/usage = %d/%d", actionGenerationCount, actionUsageCount)
 	}
 
 	if _, err = pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',
@@ -521,18 +538,39 @@ VALUES($1,$2,'creation','元の目標',$3,$3)`, draftID, userID, now); err != ni
 	}
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
-output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,started_at,finished_at)
-VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,$5,'元の目標','改善した目標','fake','test','goal-refine-v1',$6,0,1,$7,$7)`,
+output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,context_changed,started_at,finished_at)
+VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,$5,'元の目標','改善した目標','fake','test','goal-refine-v1',$6,0,1,true,$7,$7)`,
 		generationID, userID, draftID, idempotencyKey, hashGoalRefineRequest(refineInput), now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_usage_events
+(operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
+VALUES($1,$2,'goal_refine','succeeded','fake','test','goal-refine-v1',$3,$3,$4)`,
+		generationID, userID, now, now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.SaveDraft(context.Background(), userID, draftID, "利用者が後から編集", 0, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	replayed, err := store.BeginGoalRefine(context.Background(), refineInput, nil)
-	if err != nil || replayed.ReplayedOutput == nil || *replayed.ReplayedOutput != "改善した目標" {
+	if err != nil || replayed.ReplayedOutput == nil || *replayed.ReplayedOutput != "改善した目標" || !replayed.ReplayedContextChanged {
 		t.Fatalf("goal refine replay = %#v, error = %v", replayed, err)
+	}
+	differentRequest := refineInput
+	differentRequest.ExpectedDraftRevision = 1
+	if _, err = store.BeginGoalRefine(context.Background(), differentRequest, nil); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
+		t.Fatalf("goal refine replay with different request error = %v", err)
+	}
+	var goalGenerationCount, goalUsageCount int64
+	if err = pool.QueryRow(context.Background(), `SELECT
+(SELECT count(*) FROM ai_generations WHERE user_id=$1 AND operation_type='goal_refine' AND idempotency_key=$2),
+(SELECT count(*) FROM ai_usage_events WHERE user_id=$1 AND operation_type='goal_refine')`,
+		userID, idempotencyKey).Scan(&goalGenerationCount, &goalUsageCount); err != nil {
+		t.Fatal(err)
+	}
+	if goalGenerationCount != 1 || goalUsageCount != 1 {
+		t.Fatalf("goal refine replay counts generation/usage = %d/%d", goalGenerationCount, goalUsageCount)
 	}
 }
 

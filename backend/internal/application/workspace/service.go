@@ -201,9 +201,14 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	}
 	if snapshot.ReplayedOutput != nil {
 		sourceDraftRevision := snapshot.TargetRevision
+		sourceGoalRevision := int64(0)
+		if input.ExpectedGoalRevision != nil {
+			sourceGoalRevision = *input.ExpectedGoalRevision
+		}
 		return AIResponse{
 			GenerationID: snapshot.GenerationID, SourceDraftRevision: &sourceDraftRevision,
-			SourceGoalRevision: snapshot.SourceGoalRevision, Suggestion: *snapshot.ReplayedOutput, Replayed: true,
+			SourceGoalRevision: sourceGoalRevision, Suggestion: *snapshot.ReplayedOutput,
+			ContextChanged: snapshot.ReplayedContextChanged, Replayed: true,
 		}, nil
 	}
 	startedAt := service.clock.Now()
@@ -243,7 +248,7 @@ func (service *Service) RunActionAI(ctx context.Context, input ActionAIInput) (A
 		return AIResponse{
 			GenerationID: snapshot.GenerationID, Action: *snapshot.ReplayedOutput,
 			ContentRevision: snapshot.ReplayedContentRevision, ActionRevision: snapshot.ReplayedActionRevision,
-			Replayed: true,
+			ContextChanged: snapshot.ReplayedContextChanged, Replayed: true,
 		}, nil
 	}
 	startedAt := service.clock.Now()

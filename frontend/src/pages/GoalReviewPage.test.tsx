@@ -16,7 +16,12 @@ import type {
   GoalReview,
   Session,
 } from "../shared/api/schemas";
-import { getReview, saveReview, terminateGoal } from "../shared/api/workspace";
+import {
+  continueReview,
+  getReview,
+  saveReview,
+  terminateGoal,
+} from "../shared/api/workspace";
 import {
   deleteBrowserDraft,
   getBrowserDraft,
@@ -93,6 +98,41 @@ const triggerCycle: Cycle = {
 
 const review: GoalReview = { goal, reviewDraft, triggerCycle };
 
+const replayedCycle: Cycle = {
+  ...triggerCycle,
+  id: "40000000-0000-7000-8000-000000000003",
+  sequenceNumber: 2,
+  status: "active",
+  goalVersion: {
+    ...goal.currentVersion,
+    id: "30000000-0000-7000-8000-000000000002",
+    versionNumber: 2,
+  },
+  startedAt: "2026-08-20T00:02:00.000Z",
+  completedAt: null,
+  plan: "",
+  do: "",
+  check: "",
+  action: "",
+  contentRevision: 0,
+  frameRevisions: { plan: 0, do: 0, check: 0, action: 0 },
+};
+
+const currentCycleId = "40000000-0000-7000-8000-000000000004";
+const continuedGoal: Goal = {
+  ...goal,
+  status: "active_cycle",
+  revision: goal.revision + 1,
+  currentVersion: replayedCycle.goalVersion,
+  currentWork: {
+    kind: "active_cycle",
+    cycleId: currentCycleId,
+    cycleSequenceNumber: 3,
+  },
+  nextCycleSequenceNumber: 4,
+  cycleCount: 3,
+};
+
 const session: Session = {
   user: {
     id: "10000000-0000-7000-8000-000000000001",
@@ -110,6 +150,12 @@ describe("GoalReviewPage", () => {
     vi.mocked(putBrowserDraft).mockResolvedValue(undefined);
     vi.mocked(deleteBrowserDraft).mockResolvedValue(undefined);
     vi.mocked(saveReview).mockResolvedValue({ reviewDraft });
+    vi.mocked(continueReview).mockResolvedValue({
+      goal: continuedGoal,
+      versionCreated: false,
+      cycle: replayedCycle,
+      replayed: true,
+    });
     vi.mocked(terminateGoal).mockResolvedValue({
       goal: {
         ...goal,
@@ -153,8 +199,52 @@ describe("GoalReviewPage", () => {
         "ended",
         goal.revision,
         "goal_review",
-        session.csrfToken,
+        {
+          operationId: expect.any(String),
+          csrfToken: session.csrfToken,
+        },
       ),
+    );
+  });
+
+  it("retries an ambiguous Continue response with the same operation and resolves the canonical workspace", async () => {
+    vi.mocked(continueReview)
+      .mockRejectedValueOnce(new TypeError("response lost"))
+      .mockResolvedValueOnce({
+        goal: continuedGoal,
+        versionCreated: false,
+        cycle: replayedCycle,
+        replayed: true,
+      });
+    renderPage();
+    const continueButton = await screen.findByRole("button", {
+      name: "この目標で次のサイクルへ",
+    });
+
+    fireEvent.click(continueButton);
+
+    expect(
+      await screen.findByText(
+        "次のサイクルを開始できませんでした。保存状態を確認してください。",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(continueButton);
+
+    expect(await screen.findByText("現在のワークスペース")).toBeInTheDocument();
+    expect(continueReview).toHaveBeenCalledTimes(2);
+    const firstOptions = vi.mocked(continueReview).mock.calls[0]?.[3];
+    const secondOptions = vi.mocked(continueReview).mock.calls[1]?.[3];
+    expect(firstOptions).toEqual({
+      operationId: expect.any(String),
+      csrfToken: session.csrfToken,
+    });
+    expect(secondOptions?.operationId).toBe(firstOptions?.operationId);
+    expect(continueReview).toHaveBeenLastCalledWith(
+      goal.id,
+      goal.revision,
+      reviewDraft.revision,
+      secondOptions,
     );
   });
 });
@@ -170,6 +260,10 @@ function renderPage() {
           <Routes>
             <Route path="/" element={<p>ホーム</p>} />
             <Route path="/goals/:goalId/review" element={<GoalReviewPage />} />
+            <Route
+              path="/goals/:goalId"
+              element={<p>現在のワークスペース</p>}
+            />
           </Routes>
         </MemoryRouter>
       </SessionContext.Provider>

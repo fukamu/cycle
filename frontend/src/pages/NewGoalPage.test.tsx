@@ -3,12 +3,19 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { SessionContext } from "../features/auth/sessionContext";
-import type { GoalDraft, Home, Session } from "../shared/api/schemas";
+import type {
+  Cycle,
+  Goal,
+  GoalDraft,
+  Home,
+  Session,
+} from "../shared/api/schemas";
 import {
   adoptGoalDraft,
   getHome,
   refineGoalDraft,
   saveGoalDraft,
+  startGoal,
 } from "../shared/api/workspace";
 import {
   deleteBrowserDraft,
@@ -58,6 +65,46 @@ const session: Session = {
   csrfToken: "csrf-token",
 };
 
+const startedCycle: Cycle = {
+  id: "40000000-0000-7000-8000-000000000001",
+  goalId: "50000000-0000-7000-8000-000000000001",
+  sequenceNumber: 1,
+  status: "active",
+  goalVersion: {
+    id: "30000000-0000-7000-8000-000000000002",
+    versionNumber: 1,
+    body: draft.body,
+    createdAt: "2026-08-20T00:02:00.000Z",
+  },
+  startedAt: "2026-08-20T00:02:00.000Z",
+  completedAt: null,
+  canceledAt: null,
+  cancellationReason: null,
+  plan: "",
+  do: "",
+  check: "",
+  action: "",
+  contentRevision: 0,
+  frameRevisions: { plan: 0, do: 0, check: 0, action: 0 },
+};
+
+const replayedCurrentCycleId = "40000000-0000-7000-8000-000000000002";
+const startedGoal: Goal = {
+  id: startedCycle.goalId ?? "",
+  status: "active_cycle",
+  revision: 1,
+  currentVersion: startedCycle.goalVersion,
+  currentWork: {
+    kind: "active_cycle",
+    cycleId: replayedCurrentCycleId,
+    cycleSequenceNumber: 2,
+  },
+  nextCycleSequenceNumber: 3,
+  cycleCount: 2,
+  createdAt: "2026-08-20T00:02:00.000Z",
+  terminalAt: null,
+};
+
 describe("NewGoalPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -78,6 +125,11 @@ describe("NewGoalPage", () => {
         revision: 1,
         updatedAt: "2026-08-20T00:01:00.000Z",
       },
+    });
+    vi.mocked(startGoal).mockResolvedValue({
+      goal: startedGoal,
+      cycle: startedCycle,
+      replayed: true,
     });
   });
 
@@ -106,6 +158,45 @@ describe("NewGoalPage", () => {
     );
     await waitFor(() => expect(editor).toHaveValue("整理された目標"));
   });
+
+  it("retries an ambiguous Start response with the same operation and resolves the canonical workspace", async () => {
+    vi.mocked(startGoal)
+      .mockRejectedValueOnce(new TypeError("response lost"))
+      .mockResolvedValueOnce({
+        goal: startedGoal,
+        cycle: startedCycle,
+        replayed: true,
+      });
+    renderPage();
+    const startButton = await screen.findByRole("button", {
+      name: "この目標で始める",
+    });
+
+    fireEvent.click(startButton);
+
+    expect(
+      await screen.findByText(
+        "目標を開始できませんでした。保存状態と進行中の目標を確認してください。",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(startButton);
+
+    expect(await screen.findByText("現在のワークスペース")).toBeInTheDocument();
+    expect(startGoal).toHaveBeenCalledTimes(2);
+    const firstOptions = vi.mocked(startGoal).mock.calls[0]?.[2];
+    const secondOptions = vi.mocked(startGoal).mock.calls[1]?.[2];
+    expect(firstOptions).toEqual({
+      operationId: expect.any(String),
+      csrfToken: session.csrfToken,
+    });
+    expect(secondOptions?.operationId).toBe(firstOptions?.operationId);
+    expect(startGoal).toHaveBeenLastCalledWith(
+      draft.id,
+      draft.revision,
+      secondOptions,
+    );
+  });
 });
 
 function renderPage() {
@@ -118,6 +209,10 @@ function renderPage() {
         <MemoryRouter initialEntries={["/goals/new"]}>
           <Routes>
             <Route path="/goals/new" element={<NewGoalPage />} />
+            <Route
+              path="/goals/:goalId"
+              element={<p>現在のワークスペース</p>}
+            />
           </Routes>
         </MemoryRouter>
       </SessionContext.Provider>

@@ -14,7 +14,7 @@ import {
   cacheReview,
   userQueryKeys,
 } from "../features/goal-collection/goalCache";
-import type { Cycle, Frame, Goal } from "../shared/api/schemas";
+import type { CurrentWork, Cycle, Frame, Goal } from "../shared/api/schemas";
 import {
   completeCycle,
   deleteGoal,
@@ -49,6 +49,10 @@ import {
   maxAutoSaveRetries,
 } from "../shared/hooks/autoSavePolicy";
 import {
+  commandFingerprint,
+  useCommandOperation,
+} from "../shared/hooks/useCommandOperation";
+import {
   formatActivePeriod,
   formatCompletedPeriod,
 } from "../shared/date/format";
@@ -56,6 +60,18 @@ import {
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
 type Values = Record<Frame, string>;
 type SaveState = "dirty" | "saving" | "saved" | "failed";
+
+function replayWorkspacePath(
+  goalId: string,
+  currentWorkspace: CurrentWork | null,
+): string {
+  if (currentWorkspace?.kind === "active_cycle")
+    return `/goals/${goalId}/cycles/${currentWorkspace.cycleId}`;
+  if (currentWorkspace?.kind === "goal_review")
+    return `/goals/${goalId}/review`;
+  return `/history/goals/${goalId}`;
+}
+
 type WorkspaceConfirmation =
   | { readonly kind: "replace-action" }
   | { readonly kind: "complete-cycle" }
@@ -84,7 +100,10 @@ export function GoalWorkspacePage() {
   if (!cycleId) {
     if (goal.status === "goal_review")
       return <Navigate to={`/goals/${goal.id}/review`} replace />;
-    if (goal.status === "active_cycle" && goal.currentWork?.cycleId)
+    if (
+      goal.status === "active_cycle" &&
+      goal.currentWork?.kind === "active_cycle"
+    )
       return (
         <Navigate
           to={`/goals/${goal.id}/cycles/${goal.currentWork.cycleId}`}
@@ -117,6 +136,11 @@ function CycleWorkspace({
   const navigate = useNavigate();
   const cache = useQueryClient();
   const cycle = initial;
+  const generateOperation = useCommandOperation();
+  const refineOperation = useCommandOperation();
+  const completeOperation = useCommandOperation();
+  const terminateOperation = useCommandOperation();
+  const deleteOperation = useCommandOperation();
   const [values, setValues] = useState<Values>({
     plan: initial.plan,
     do: initial.do,
@@ -664,12 +688,16 @@ function CycleWorkspace({
     }
   }
 
-  async function finalizeDraftCache() {
+  async function finalizeDraftCache(scope: "cycle" | "goal") {
     cacheDisabledRef.current = true;
     pending.current.clear();
     conflictsRef.current.clear();
     for (const frame of frames) clearBrowserTimer(frame);
-    await clearGoalDraftCache();
+    if (scope === "goal") {
+      await clearGoalDraftCache();
+      return;
+    }
+    for (const frame of frames) await deleteFrameDraft(frame);
   }
 
   function applyAI(
@@ -730,20 +758,39 @@ function CycleWorkspace({
     setAIState(kind);
     setError(undefined);
     try {
+      const expectedContentRevision = contentRevision.current;
       const result =
         kind === "generating"
-          ? await generateAction(
-              goal.id,
-              cycle.id,
-              contentRevision.current,
-              confirmReplace,
-              session.csrfToken,
+          ? await generateOperation.invoke(
+              commandFingerprint("action_generate", {
+                goalId: goal.id,
+                cycleId: cycle.id,
+                expectedContentRevision,
+                confirmReplace,
+              }),
+              (operationId) =>
+                generateAction(
+                  goal.id,
+                  cycle.id,
+                  expectedContentRevision,
+                  confirmReplace,
+                  {
+                    operationId,
+                    csrfToken: session.csrfToken,
+                  },
+                ),
             )
-          : await refineAction(
-              goal.id,
-              cycle.id,
-              contentRevision.current,
-              session.csrfToken,
+          : await refineOperation.invoke(
+              commandFingerprint("action_refine", {
+                goalId: goal.id,
+                cycleId: cycle.id,
+                expectedContentRevision,
+              }),
+              (operationId) =>
+                refineAction(goal.id, cycle.id, expectedContentRevision, {
+                  operationId,
+                  csrfToken: session.csrfToken,
+                }),
             );
       if (
         result.action === undefined ||
@@ -775,12 +822,26 @@ function CycleWorkspace({
     setError(undefined);
     pauseSaves();
     try {
-      const result = await completeCycle(
-        goal.id,
-        cycle.id,
-        goal.revision,
-        contentRevision.current,
-        session.csrfToken,
+      const expectedGoalRevision = goal.revision;
+      const expectedContentRevision = contentRevision.current;
+      const result = await completeOperation.invoke(
+        commandFingerprint("cycle_complete", {
+          goalId: goal.id,
+          cycleId: cycle.id,
+          expectedContentRevision,
+          expectedGoalRevision,
+        }),
+        (operationId) =>
+          completeCycle(
+            goal.id,
+            cycle.id,
+            expectedGoalRevision,
+            expectedContentRevision,
+            {
+              operationId,
+              csrfToken: session.csrfToken,
+            },
+          ),
       );
       await cache.invalidateQueries({
         queryKey: userQueryKeys.root(userId),
@@ -792,9 +853,20 @@ function CycleWorkspace({
           reviewDraft: result.reviewDraft,
           triggerCycle: result.completedCycle,
         });
+        await finalizeDraftCache("cycle");
+        navigate(`/goals/${goal.id}/review`, { replace: true });
+        return;
       }
-      await finalizeDraftCache();
-      navigate(`/goals/${goal.id}/review`, { replace: true });
+      await finalizeDraftCache("cycle");
+      await cache
+        .refetchQueries({
+          queryKey: userQueryKeys.goal(userId, goal.id),
+          exact: true,
+        })
+        .catch(() => undefined);
+      navigate(replayWorkspacePath(goal.id, result.currentWorkspace), {
+        replace: true,
+      });
     } catch {
       resumeSaves();
       setError("サイクルを完了できませんでした。入力内容を確認してください。");
@@ -807,15 +879,30 @@ function CycleWorkspace({
     setError(undefined);
     pauseSaves();
     try {
-      await terminateGoal(
-        goal.id,
-        outcome,
-        goal.revision,
-        "active_cycle",
-        session.csrfToken,
-        { id: cycle.id, revision: contentRevision.current },
+      const expectedContentRevision = contentRevision.current;
+      await terminateOperation.invoke(
+        commandFingerprint("goal_terminate", {
+          goalId: goal.id,
+          outcome,
+          expectedGoalRevision: goal.revision,
+          expectedState: "active_cycle",
+          activeCycleId: cycle.id,
+          expectedCycleContentRevision: expectedContentRevision,
+        }),
+        (operationId) =>
+          terminateGoal(
+            goal.id,
+            outcome,
+            goal.revision,
+            "active_cycle",
+            {
+              operationId,
+              csrfToken: session.csrfToken,
+            },
+            { id: cycle.id, revision: expectedContentRevision },
+          ),
       );
-      await finalizeDraftCache();
+      await finalizeDraftCache("goal");
       await cache.invalidateQueries({
         queryKey: userQueryKeys.root(userId),
         refetchType: "none",
@@ -832,8 +919,18 @@ function CycleWorkspace({
     setError(undefined);
     pauseSaves();
     try {
-      await deleteGoal(goal.id, goal.revision, session.csrfToken);
-      await finalizeDraftCache();
+      await deleteOperation.invoke(
+        commandFingerprint("goal_delete", {
+          goalId: goal.id,
+          expectedGoalRevision: goal.revision,
+        }),
+        (operationId) =>
+          deleteGoal(goal.id, goal.revision, {
+            operationId,
+            csrfToken: session.csrfToken,
+          }),
+      );
+      await finalizeDraftCache("goal");
       await cache.invalidateQueries({
         queryKey: userQueryKeys.root(userId),
         refetchType: "none",

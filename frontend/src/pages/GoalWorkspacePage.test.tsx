@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -12,6 +13,7 @@ import { SessionContext } from "../features/auth/sessionContext";
 import { userQueryKeys } from "../features/goal-collection/goalCache";
 import type { Cycle, Goal, Session } from "../shared/api/schemas";
 import {
+  completeCycle,
   getCycle,
   getGoal,
   refineAction,
@@ -81,6 +83,49 @@ const cycle: Cycle = {
   contentRevision: 0,
   frameRevisions: { plan: 0, do: 0, check: 0, action: 0 },
 };
+
+const completableCycle: Cycle = {
+  ...cycle,
+  plan: "計画",
+  do: "実行",
+  check: "評価",
+  action: "改善",
+  contentRevision: 4,
+  frameRevisions: { plan: 1, do: 1, check: 1, action: 1 },
+};
+
+const currentCycleId = "40000000-0000-7000-8000-000000000002";
+const reviewDraftId = "50000000-0000-7000-8000-000000000001";
+const activeCycleReplay = {
+  replayed: true,
+  operation: "complete_cycle",
+  resourceIds: { goalId: goal.id, cycleId: cycle.id },
+  currentGoalState: "active_cycle",
+  currentWorkspace: {
+    kind: "active_cycle",
+    cycleId: currentCycleId,
+    cycleSequenceNumber: 2,
+  },
+} as const;
+const goalReviewReplay = {
+  replayed: true,
+  operation: "complete_cycle",
+  resourceIds: { goalId: goal.id, cycleId: cycle.id },
+  currentGoalState: "goal_review",
+  currentWorkspace: {
+    kind: "goal_review",
+    reviewDraftId,
+    triggerCycleId: cycle.id,
+    triggerCycleSequenceNumber: 1,
+  },
+} as const;
+const terminalReplay = {
+  replayed: true,
+  operation: "complete_cycle",
+  resourceIds: { goalId: goal.id, cycleId: cycle.id },
+  currentGoalState: "ended",
+  currentWorkspace: null,
+} as const;
 
 const session: Session = {
   user: {
@@ -286,20 +331,132 @@ describe("GoalWorkspacePage", () => {
       goal.id,
       readyCycle.id,
       readyCycle.contentRevision,
-      session.csrfToken,
+      {
+        operationId: expect.any(String),
+        csrfToken: session.csrfToken,
+      },
     );
   });
+
+  it.each([
+    {
+      label: "the current active cycle",
+      response: activeCycleReplay,
+      destination: "現在のサイクル",
+    },
+    {
+      label: "the current goal review",
+      response: goalReviewReplay,
+      destination: "現在の目標レビュー",
+    },
+    {
+      label: "terminal goal history",
+      response: terminalReplay,
+      destination: "現在の目標履歴",
+    },
+  ])(
+    "routes a Complete replay to $label",
+    async ({ response, destination }) => {
+      vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+      vi.mocked(completeCycle).mockResolvedValue(response);
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      renderPage(cache);
+
+      await confirmCycleCompletion();
+
+      expect(await screen.findByText(destination)).toBeInTheDocument();
+      expect(completeCycle).toHaveBeenCalledWith(
+        goal.id,
+        cycle.id,
+        goal.revision,
+        completableCycle.contentRevision,
+        {
+          operationId: expect.any(String),
+          csrfToken: session.csrfToken,
+        },
+      );
+    },
+  );
+
+  it("reuses the Complete operation after response loss without clearing a later cycle draft", async () => {
+    const nextCycleDraftKey = `cycle:${currentCycleId}:plan`;
+    const browserDrafts = new Set([nextCycleDraftKey]);
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    vi.mocked(clearGoalDrafts).mockImplementation(async () => {
+      browserDrafts.clear();
+    });
+    vi.mocked(deleteBrowserDraft).mockImplementation(async (_userId, key) => {
+      browserDrafts.delete(key);
+    });
+    vi.mocked(completeCycle)
+      .mockRejectedValueOnce(new TypeError("response lost"))
+      .mockResolvedValueOnce(activeCycleReplay);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await confirmCycleCompletion();
+
+    expect(
+      await screen.findByText(
+        "サイクルを完了できませんでした。入力内容を確認してください。",
+      ),
+    ).toBeInTheDocument();
+
+    await confirmCycleCompletion();
+
+    expect(await screen.findByText("現在のサイクル")).toBeInTheDocument();
+    expect(completeCycle).toHaveBeenCalledTimes(2);
+    const firstOptions = vi.mocked(completeCycle).mock.calls[0]?.[4];
+    const secondOptions = vi.mocked(completeCycle).mock.calls[1]?.[4];
+    expect(secondOptions?.operationId).toBe(firstOptions?.operationId);
+    expect(clearGoalDrafts).not.toHaveBeenCalled();
+    expect(browserDrafts.has(nextCycleDraftKey)).toBe(true);
+    expect(
+      vi
+        .mocked(deleteBrowserDraft)
+        .mock.calls.every(
+          ([, key]) => !key.startsWith(`cycle:${currentCycleId}:`),
+        ),
+    ).toBe(true);
+  });
 });
+
+async function confirmCycleCompletion() {
+  fireEvent.click(await screen.findByRole("tab", { name: /A\s*Action/ }));
+  fireEvent.click(screen.getByRole("button", { name: "サイクルを完了" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "サイクルを完了" }),
+  );
+}
 
 function renderPage(cache: QueryClient) {
   return render(
     <QueryClientProvider client={cache}>
       <SessionContext.Provider value={session}>
-        <MemoryRouter initialEntries={[`/goals/${goal.id}/cycles/${cycle.id}`]}>
+        <MemoryRouter
+          initialEntries={[`/workspace/${goal.id}/cycles/${cycle.id}`]}
+        >
           <Routes>
             <Route
-              path="/goals/:goalId/cycles/:cycleId"
+              path="/workspace/:goalId/cycles/:cycleId"
               element={<GoalWorkspacePage />}
+            />
+            <Route
+              path="/goals/:goalId/cycles/:cycleId"
+              element={<p>現在のサイクル</p>}
+            />
+            <Route
+              path="/goals/:goalId/review"
+              element={<p>現在の目標レビュー</p>}
+            />
+            <Route
+              path="/history/goals/:goalId"
+              element={<p>現在の目標履歴</p>}
             />
           </Routes>
         </MemoryRouter>

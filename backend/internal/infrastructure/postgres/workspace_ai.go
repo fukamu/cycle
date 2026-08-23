@@ -279,14 +279,14 @@ VALUES($1,$2,$3,$4,'accepted',$5,$6,$7,$8,$9)`, mustUUID(generationID), mustUUID
 func existingGeneration(ctx context.Context, tx pgx.Tx, userID, operation, key, inputHash string) (*workspace.AISnapshot, error) {
 	var generationID, storedHash, status, failureCode string
 	var target int64
-	var sourceGoalRevision int64
+	var contextChanged bool
 	var output *string
 	err := tx.QueryRow(ctx, `SELECT generation.id,generation.input_hash,generation.status,generation.target_revision,
-generation.output,COALESCE(generation.failure_code,''),COALESCE(goal.revision,0)
-FROM ai_generations generation LEFT JOIN goals goal ON goal.id=generation.goal_id
+generation.output,COALESCE(generation.failure_code,''),generation.context_changed
+FROM ai_generations generation
 WHERE generation.user_id=$1 AND generation.operation_type=$2 AND generation.idempotency_key=$3`,
 		mustUUID(userID), operation, mustUUID(key)).Scan(
-		&generationID, &storedHash, &status, &target, &output, &failureCode, &sourceGoalRevision)
+		&generationID, &storedHash, &status, &target, &output, &failureCode, &contextChanged)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -306,8 +306,8 @@ WHERE generation.user_id=$1 AND generation.operation_type=$2 AND generation.idem
 		return nil, workspace.ErrAIInvalidResponse
 	}
 	return &workspace.AISnapshot{
-		GenerationID: generationID, Operation: operation, TargetRevision: target,
-		SourceGoalRevision: sourceGoalRevision, ReplayedOutput: output,
+		GenerationID: generationID, Operation: operation, TargetRevision: target, ReplayedOutput: output,
+		ReplayedContextChanged: contextChanged,
 	}, nil
 }
 
@@ -315,10 +315,11 @@ func existingActionGeneration(ctx context.Context, tx pgx.Tx, input workspace.Ac
 	var generationID, status, goalID, cycleID, storedHash, failureCode string
 	var target int64
 	var output *string
-	err := tx.QueryRow(ctx, `SELECT id,status,target_revision,output,COALESCE(failure_code,''),goal_id,cycle_id,input_hash
+	var contextChanged bool
+	err := tx.QueryRow(ctx, `SELECT id,status,target_revision,output,COALESCE(failure_code,''),goal_id,cycle_id,input_hash,context_changed
 FROM ai_generations WHERE user_id=$1 AND operation_type=$2 AND idempotency_key=$3`,
 		mustUUID(input.UserID), input.Operation, mustUUID(input.IdempotencyKey)).Scan(
-		&generationID, &status, &target, &output, &failureCode, &goalID, &cycleID, &storedHash)
+		&generationID, &status, &target, &output, &failureCode, &goalID, &cycleID, &storedHash, &contextChanged)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -349,7 +350,8 @@ WHERE id=$1 AND goal_id=$2 AND user_id=$3`, mustUUID(cycleID), mustUUID(input.Go
 	}
 	return &workspace.AISnapshot{
 		GenerationID: generationID, Operation: input.Operation, TargetRevision: target, ReplayedOutput: output,
-		ReplayedContentRevision: contentRevision, ReplayedActionRevision: actionRevision,
+		ReplayedContextChanged: contextChanged, ReplayedContentRevision: contentRevision,
+		ReplayedActionRevision: actionRevision,
 	}, nil
 }
 

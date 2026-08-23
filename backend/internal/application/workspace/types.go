@@ -328,6 +328,7 @@ type AISnapshot struct {
 	PastCycles              []AIContextCycle
 	CurrentTruncated        bool
 	ReplayedOutput          *string
+	ReplayedContextChanged  bool
 	ReplayedContentRevision int64
 	ReplayedActionRevision  int64
 }

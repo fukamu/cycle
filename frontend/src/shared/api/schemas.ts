@@ -73,14 +73,20 @@ export const cycleSchema = z.object({
 });
 export type Cycle = z.infer<typeof cycleSchema>;
 
-const currentWorkSchema = z.object({
-  kind: z.enum(["active_cycle", "goal_review"]),
-  cycleId: uuid.optional(),
-  cycleSequenceNumber: z.number().int().positive().optional(),
-  reviewDraftId: uuid.optional(),
-  triggerCycleId: uuid.optional(),
-  triggerCycleSequenceNumber: z.number().int().positive().optional(),
-});
+export const currentWorkSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("active_cycle"),
+    cycleId: uuid,
+    cycleSequenceNumber: z.number().int().positive(),
+  }),
+  z.object({
+    kind: z.literal("goal_review"),
+    reviewDraftId: uuid,
+    triggerCycleId: uuid,
+    triggerCycleSequenceNumber: z.number().int().positive(),
+  }),
+]);
+export type CurrentWork = z.infer<typeof currentWorkSchema>;
 
 export const goalSchema = z.object({
   id: uuid,
