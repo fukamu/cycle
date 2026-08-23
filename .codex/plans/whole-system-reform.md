@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M11 final commit gate
+- 状態: IN_PROGRESS / M12 final staged gate
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -593,6 +593,12 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-23: M12 productionとtarget validationを完了した。Complete/Terminateは明示`READ COMMITTED`とUser→Goal→Cycle/Draftのglobal lock orderを共有し、User配下operation receiptをlock待機後に再確認する。Complete replayはreceipt分類とpayload構築を分離し、target Goal `FOR UPDATE`後にGoal/Cycle/Draftをmaterializeするため、Review Continue/Terminateが複数statementの途中へ介在しない。Schema/baseline migration/sqlc生成物/API wireは不変である。
+- 2026-08-23: M12変更前REDではComplete対Terminateのdeadlock、同一User並行Completeの`GOAL_STATE_CONFLICT`、別Goal operation reuseのraw unique violation、Terminate別Goal reuseのraw unique violationを再現した。さらにComplete replayをGoal view読取後で停止するとContinueが先にcommitするnon-linearizable replayを決定的に再現した。User lock、post-lock receipt lookup、Goal-before-Cycle、Goal lock下replay構築へ収束後、構造・競合・replay contract 5 testがGREEN、20回反復も成功した。
+- 2026-08-23: M12 Bはsqlc compile/generate drift zero、gofmt、vet、全Backend package/PostgreSQL integration、3 binary buildまで成功した。Disposable PostgreSQL 18.6によるfull EはFrontend 51 files / 436 tests、production build 229 modules、Backend全package、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18、migration version 1・dirty=falseまで成功した。独立production/SoT/test監査にP0/P1はなく、次に全treeをstageしてfresh DBでCを実行する。
+- 2026-08-23: M12横断監査で、Review AI/BeginGoalRefine(review)のDraft→GoalとGoal→Draft commandの逆順をM13、Continue Reviewの同一User・別Goal `start_operation_id` reuseがraw unique violationになり得る既存riskをM17のREDとして追跡する。M12 acceptanceを弱めず各所有milestoneで解消する。
+- 2026-08-23: M11完了記録を含むplan-inclusive final treeのcommit前必須gateを別のfresh disposable PostgreSQL 18.6で最初から再実行し、staged tree `094176ec007988580d9bd2c68e5e7f65ccf7b190`、Frontend 51 files / 436 tests、全scope、Playwright 18/18、migration version 1・dirty=false、開始・終了tree一致まで成功した。検証DBは停止・削除済みで、indexを変更せずcommitしていない。M12はこの検証済みtreeから開始した。
+- 2026-08-23: M11完了。Fresh disposable PostgreSQL 18.6でcommit前必須gateを最初から実行し、staged candidate tree `43871d7746d98deaa1cdc315d3ee0151e4f35d50`、Actionlint、CI reuse resolver、全scope、Frontend 51 files / 436 tests、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 18/18、migration version 1・dirty=false、開始・終了tree一致まで成功した。検証DBは停止・削除済みでcommitしていない。本entryとM12再開位置でtreeを変更するため、再stage後に別のfresh DBでplan-inclusive final treeのCを最初から再実行する。
 - 2026-08-23: M10完了記録を含むplan-inclusive final treeのcommit前必須gateを別のfresh disposable PostgreSQL 18.6で最初から再実行し、staged tree `9a67fabc9b576ff5b57fd5fc4a4ac55363a9fddc`、Frontend 50 files / 413 tests、全scope、Playwright 18/18、開始・終了tree一致まで成功した。Migrationはversion 1・dirty=false、検証DBは停止・削除済みで、indexを変更せずcommitしていない。M11はこの検証済みtreeから開始した。
 - 2026-08-23: M11変更前REDではroute composition/public index/unique policy owner、重複intersection/retry、late Goal collectionによる新しいdetail cacheのrollback、Timeline retryの不要な再取得、Complete cleanup後のreplacement route publication、Cycle eligibilityとGoal preferenceの重複を再現した。GREENではCycleWorkspace/GoalHistory/GoalTimeline Feature、共有pagination owner、revision-monotonic Goal cache、private eligibility/timeline model、route-generation publication fenceへ収束した。
 - 2026-08-23: M11完了前の独立監査で、route-generation fenceがCycleだけに適用され、Creation/Reviewの5 taskが同一Userのreplacement routeへ旧cache/navigationを公開できるP1を検出した。Creation Start、Review Continue、全route-scoped taskの構造gateは修正前3 failures / 60 passesを再現し、8/8 taskへtokenを横展開後3 files / 63 tests、最終focused 10 files / 141 testsが成功した。再監査ではroute composition、pagination/cache/eligibility、DOM/API/query/order互換に残るP0/P1はなかった。
@@ -652,7 +658,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M11のRED/GREEN、F、対象E2E、full Eは完了。全変更と本記録を完全stageし、fresh disposable PostgreSQL 18.6でcommit前必須gateを最初から実行する。成功後にM11完了tree hashとM12再開位置を記録して再stageし、別のfresh DBでplan-inclusive final treeのgateを再実行する。Commitしない。
+- 現在の再開位置: M12 production、target反復、B、E、独立監査まで完了。全変更をstageし、別のfresh disposable PostgreSQL 18.6でCを最初から実行してmigration状態と開始・終了tree一致を確認する。成功後にM12完了とM13再開位置を記録し、plan-inclusive final treeを再stageしてCを再実行してからM13のconcurrency REDへ進む。Commitしない。
 
 ## 26. Final definition of done
 

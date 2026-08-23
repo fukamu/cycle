@@ -1929,7 +1929,7 @@ sequenceDiagram
 
     U->>F: Cycleを完了
     F->>B: complete(operationId, expected revisions)
-    B->>DB: BEGIN / Goal + Cycle FOR UPDATE
+    B->>DB: BEGIN READ COMMITTED / User + Goal + Cycle FOR UPDATE
     B->>DB: validate Active, P/D/C/A, AI idle
     B->>DB: Cycle active → completed
     B->>DB: INSERT Goal Review Draft from current Goal Version
@@ -1942,19 +1942,24 @@ sequenceDiagram
 Transaction:
 
 1. `BEGIN`。
-2. Goal row `FOR UPDATE`。
-3. Cycle row `FOR UPDATE`。
-4. owner、Goal status=`active_cycle`、Cycle status=`active`、expected revisions、P/D/C/A、AI idleを検証。
-5. Cycleを`completed`へ更新。
-6. 現Goal Version本文をcopyしてReview Draftをinsert。
-7. Goalを`goal_review`へ更新、revision+1。
-8. `COMMIT`。
+2. User row `FOR UPDATE`。
+3. Goal row `FOR UPDATE`。
+4. Cycle row `FOR UPDATE`。
+5. owner、Goal status=`active_cycle`、Cycle status=`active`、expected revisions、P/D/C/A、AI idleを検証。
+6. Cycleを`completed`へ更新。
+7. 現Goal Version本文をcopyしてReview Draftをinsert。
+8. Goalを`goal_review`へ更新、revision+1。
+9. `COMMIT`。
+
+Cycle `completion_operation_id`は`(user_id, completion_operation_id)`で一意である。同一UserのCompleteをUser `FOR UPDATE`で直列化し、初回receipt lookupの結果にかかわらずUser lock取得直後・Goal lock取得前に同じTransactionでもう一度lookupする。Transaction isolationは`READ COMMITTED`を明示し、待機したrequestが直前のwinnerのcommitを2回目のstatementで観測できるようにする。matching receiptのreplay payloadはtarget Goal `FOR UPDATE`の取得後にGoal / Cycle / Review Draftをmaterializeし、複数statementの途中へReview Continue / Terminateが介在して削除済みDraftを指す古いWorkspaceを返さない。これにより別Goalへ同じoperation IDを送った場合もraw unique violationではなく`IDEMPOTENCY_KEY_REUSED`へ収束する。
+
+また、Review Draftの`user_id` FKがinsert時に要求するUser reference lockをGoalより後へ遅延させないため、User lockを先行取得する。これによりTerminateともglobal lock orderを共有する。
 
 **次Cycleを作らない。**
 
 `completedAt`とReview Draft `createdAt`には同じServer timestampを使う。
 
-IdempotencyはCycle `completion_operation_id`で保証する。同じCommandのretryでReview Draftを重複作成しない。後続のReview Continue / terminalによってDraftが消えている場合は§20.4の現在Workspace Responseを返す。途中失敗時はCycle active、Goal active_cycle、Review Draftなしを維持する。
+IdempotencyはCycle `completion_operation_id`で保証する。同じCommandのretryでReview Draftを重複作成しない。同Key同hashならwinnerのresourceをreplayし、同KeyでGoal / Cycle / hashのいずれかが異なる場合は常に`IDEMPOTENCY_KEY_REUSED`。後続のReview Continue / terminalによってDraftが消えている場合は§20.4の現在Workspace Responseを返す。途中失敗時はCycle active、Goal active_cycle、Review Draftなしを維持する。
 
 ## 18.5 Goal Review → next Cycle
 
@@ -2014,7 +2019,7 @@ sequenceDiagram
 
     U->>F: Goalを達成 / 終了
     F->>B: terminate(operationId, outcome, expected state)
-    B->>DB: BEGIN / User + Goal FOR UPDATE
+    B->>DB: BEGIN READ COMMITTED / User + Goal FOR UPDATE
     alt Goal status = active_cycle
         B->>DB: Active Cycle FOR UPDATE
         B->>DB: Cycle active → canceled
@@ -2031,26 +2036,28 @@ sequenceDiagram
 ### active_cycleから
 
 1. User `FOR UPDATE`。
-2. Goal `FOR UPDATE`。
-3. Active Cycle `FOR UPDATE`。
-4. revisions / AI idleを検証。
-5. Cycleを`canceled`、reasonを`goal_achieved`または`goal_ended`。
-6. Goalを`achieved`または`ended`。
-7. 同じServer timestampを使用。
-8. commit。
+2. User配下の`terminal_operation_id` receiptを確認。同Key同hashならreplayし、Goalまたはhashが異なれば`IDEMPOTENCY_KEY_REUSED`。
+3. Goal `FOR UPDATE`。
+4. Active Cycle `FOR UPDATE`。
+5. revisions / AI idleを検証。
+6. Cycleを`canceled`、reasonを`goal_achieved`または`goal_ended`。
+7. Goalを`achieved`または`ended`。
+8. 同じServer timestampを使用。
+9. commit。
 
 ### goal_reviewから
 
 1. User `FOR UPDATE`。
-2. Goal `FOR UPDATE`。
-3. Review Draft `FOR UPDATE`。
-4. expectedGoalRevision / Goal status / AI idleを検証する。Review Draft revisionは比較しない。ただしDraft本文がCurrent Versionと異なる場合は`confirmDiscardReviewDraft=true`を要求する。
-5. Review Draftに紐づくGoal Refine AIGeneration contentを削除し、対応するAIUsageEventを`contentDeleted=true`へ更新してQuota判定用に本文なしで維持する。
-6. Review Draftを削除。Draft本文はVersion化しない。
-7. Goalをterminalへ更新。
-8. commit。
+2. User配下の`terminal_operation_id` receiptを確認。同Key同hashならreplayし、Goalまたはhashが異なれば`IDEMPOTENCY_KEY_REUSED`。
+3. Goal `FOR UPDATE`。
+4. Review Draft `FOR UPDATE`。
+5. expectedGoalRevision / Goal status / AI idleを検証する。Review Draft revisionは比較しない。ただしDraft本文がCurrent Versionと異なる場合は`confirmDiscardReviewDraft=true`を要求する。
+6. Review Draftに紐づくGoal Refine AIGeneration contentを削除し、対応するAIUsageEventを`contentDeleted=true`へ更新してQuota判定用に本文なしで維持する。
+7. Review Draftを削除。Draft本文はVersion化しない。
+8. Goalをterminalへ更新。
+9. commit。
 
-Terminal retryはGoal `terminal_operation_id`でidempotent。同Key同hashならterminal resultをreplayし、同じGoalへ別Keyでterminal commandを送った場合は`GOAL_ALREADY_TERMINAL`。同Keyでhashが異なる場合は`IDEMPOTENCY_KEY_REUSED`。
+Terminal retryはGoal `terminal_operation_id`でidempotent。`(user_id, terminal_operation_id)`が一意なので、User lock直後・target Goal lock前にUser配下全体からreceiptを確認する。同Key同hashならterminal resultをreplayし、同じGoalへ別Keyでterminal commandを送った場合は`GOAL_ALREADY_TERMINAL`。同KeyでGoalまたはhashが異なる場合は常に`IDEMPOTENCY_KEY_REUSED`。Transaction isolationは`READ COMMITTED`を明示する。
 
 ## 18.7 Goal Aggregate Delete
 
@@ -2099,7 +2106,7 @@ Concurrent operation:
 | Action AI double execution | duplicate paid call | running partial unique + idempotency | Cycleごとmax1 |
 | Action AI vs P/D/C edit | P/D/C loss | Aだけupdate | current P/D/C保持 |
 | Action AI vs A edit | User A loss | UI read-only + Backend reject | A競合なし |
-| Cycle completion double tap | duplicate Review Draft | cycle row lock + operationId + unique draft | one completion |
+| Cycle completion double tap | duplicate Review Draft | User→Goal→Cycle row locks + operationId + unique draft | one completion |
 | Review continue double tap | duplicate Version/Cycle | Goal row lock + startOperationId | one next Cycle |
 | Goal terminate vs new start | active limit inconsistency | User row lock | serial outcome |
 | Goal delete retry | 404 after response loss | delete receipt | same key returns success |
@@ -2231,7 +2238,7 @@ Auth=SessionのRequest / Response identityは次の共通Contractに従う。
 | GET | `/goals` | ListGoals | Session | owner only | safe / cursor |
 | GET | `/goals/{goalId}` | GetGoal | Session | owner | safe |
 | DELETE | `/goals/{goalId}` | DeleteGoalAggregate | Session | owner | Idempotency-Key + receipt |
-| POST | `/goals/{goalId}/termination` | TerminateGoal | Session | owner + progressing | operationId + User/Goal lock |
+| POST | `/goals/{goalId}/termination` | TerminateGoal | Session | owner + progressing | operationId + User→Goal→Draft/Cycle row locks |
 | GET | `/goals/{goalId}/review` | GetGoalReview | Session | owner + goal_review | safe |
 | PATCH | `/goals/{goalId}/review` | SaveGoalReviewDraft | Session | owner + goal_review | draft revision CAS |
 | POST | `/goals/{goalId}/review/refinements` | RefineGoalReviewDraft | Session | owner + goal_review | Idempotency-Key + running unique |
@@ -2242,7 +2249,7 @@ Auth=SessionのRequest / Response identityは次の共通Contractに従う。
 | PATCH | `/goals/{goalId}/cycles/{cycleId}/frames/{frame}` | SaveFrame | Session | owner + Active | frame revision CAS |
 | POST | `/goals/{goalId}/cycles/{cycleId}/actions/generate` | GenerateAction | Session | owner + Active | Idempotency-Key + running unique |
 | POST | `/goals/{goalId}/cycles/{cycleId}/actions/refine` | RefineAction | Session | owner + Active | Idempotency-Key + running unique |
-| POST | `/goals/{goalId}/cycles/{cycleId}/complete` | CompleteCycle | Session | owner + Active | operationId + Cycle/Goal lock |
+| POST | `/goals/{goalId}/cycles/{cycleId}/complete` | CompleteCycle | Session | owner + Active | operationId + User→Goal→Cycle row locks |
 | POST | `/auth/google/upgrade` | UpgradeAnonymousWithGoogle | Session | current User | subject unique + Tx |
 | POST | `/auth/google/login` | LoginExistingGoogleUser | Session | verified linked User | session rotation |
 | DELETE | `/account` | DeleteAccount | Session | current User | atomic hard delete |
@@ -4243,8 +4250,8 @@ SQLを1巨大Repository methodへ隠しすぎず、Transaction object内のtyped
 | Goal Review save | old saveまたは旧Review世代のlate saveが現Draftを上書き | exact ReviewDraftID lease + revision CAS | current generationのlatest saveだけを反映 |
 | Cycle Frame save | old same-frame overwrite | queue + frame revision CAS | stale same-frame write rejected |
 | Different Frame saves | needless conflict | per-frame revision | independent changes可能 |
-| Cycle Complete double tap | duplicate Review Draft | Cycle/Goal row locks + operationId + unique sourceCycle | one transition |
-| Complete vs Goal end | inconsistent completed/canceled | Goal lock order | one command wins、other conflict/replay |
+| Cycle Complete double tap | duplicate Review Draft | User→Goal→Cycle row locks + operationId + unique sourceCycle | one transition |
+| Complete vs Goal end | inconsistent completed/canceled | shared User→Goal→Cycle lock order | one command wins、other conflict/replay |
 | Review Continue double tap | duplicate Version/Cycle | Goal/Draft lock + startOperationId | one next Cycle |
 | Review Continue vs terminal | Cycle created after terminal | Goal row lock | one transition only |
 | Goal end vs new Goal create | transient limit error/race | User row lock first | progressing count serialized |

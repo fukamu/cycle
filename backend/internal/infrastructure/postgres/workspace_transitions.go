@@ -179,51 +179,130 @@ updated_at=$4 WHERE id=$1`, column, revisionColumn, revisionColumn)
 	return result, err
 }
 
+type lockedGoalState struct {
+	status   goal.Status
+	revision int64
+}
+
+func loadGoalForUpdate(ctx context.Context, tx pgx.Tx, userID, goalID string) (lockedGoalState, error) {
+	var current lockedGoalState
+	err := tx.QueryRow(ctx, `SELECT status,revision FROM goals
+WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(goalID), mustUUID(userID)).Scan(
+		&current.status,
+		&current.revision,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return lockedGoalState{}, workspace.ErrNotFound
+	}
+	if err != nil {
+		return lockedGoalState{}, err
+	}
+	return current, nil
+}
+
+type completeCycleReplayReceipt struct {
+	goalID  string
+	cycleID string
+}
+
+func loadCompleteCycleReplayReceipt(ctx context.Context, tx pgx.Tx, input workspace.CompleteCycleInput) (receipt completeCycleReplayReceipt, found bool, err error) {
+	var replayGoalID, replayCycleID, replayHash string
+	err = tx.QueryRow(ctx, `SELECT goal_id,id,completion_request_hash FROM pdca_cycles
+WHERE user_id=$1 AND completion_operation_id=$2`, mustUUID(input.UserID), mustUUID(input.OperationID)).Scan(&replayGoalID, &replayCycleID, &replayHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return receipt, false, nil
+	}
+	if err != nil {
+		return receipt, false, err
+	}
+	if replayGoalID != input.GoalID || replayCycleID != input.CycleID || replayHash != input.RequestHash {
+		return receipt, true, workspace.ErrIdempotencyKeyReused
+	}
+	return completeCycleReplayReceipt{goalID: replayGoalID, cycleID: replayCycleID}, true, nil
+}
+
+func buildCompleteCycleReplay(ctx context.Context, tx pgx.Tx, input workspace.CompleteCycleInput, receipt completeCycleReplayReceipt) (result workspace.CompleteCycleResult, err error) {
+	result.Goal, err = getGoalView(ctx, tx, input.UserID, receipt.goalID)
+	if err != nil {
+		return result, err
+	}
+	result.CompletedCycle, err = getCycleView(ctx, tx, input.UserID, receipt.goalID, receipt.cycleID)
+	if err != nil {
+		return result, err
+	}
+	result.ReviewDraft, err = scanDraft(tx.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
+FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND review_cycle_id=$3 AND draft_type='review'`, mustUUID(input.UserID), mustUUID(receipt.goalID), mustUUID(receipt.cycleID)))
+	if err != nil {
+		if errors.Is(err, workspace.ErrNotFound) {
+			result.Replay = &workspace.CommandReplayResponse{
+				Replayed: true, Operation: "complete_cycle",
+				ResourceIDs:      workspace.CommandReplayResourceIDs{GoalID: receipt.goalID, CycleID: receipt.cycleID},
+				CurrentGoalState: result.Goal.Status, CurrentWorkspace: result.Goal.CurrentWork,
+			}
+			return result, nil
+		}
+		return result, err
+	}
+	result.Replayed = true
+	return result, nil
+}
+
+func loadTerminateReplay(ctx context.Context, tx pgx.Tx, input workspace.TerminateInput) (result workspace.TerminateResult, found bool, err error) {
+	var replayGoalID, replayHash string
+	err = tx.QueryRow(ctx, `SELECT id,terminal_request_hash FROM goals
+WHERE user_id=$1 AND terminal_operation_id=$2`, mustUUID(input.UserID), mustUUID(input.OperationID)).Scan(&replayGoalID, &replayHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return result, false, nil
+	}
+	if err != nil {
+		return result, false, err
+	}
+	if replayGoalID != input.GoalID || replayHash != input.RequestHash {
+		return result, true, workspace.ErrIdempotencyKeyReused
+	}
+	result.Goal, err = getGoalView(ctx, tx, input.UserID, replayGoalID)
+	if err != nil {
+		return result, true, err
+	}
+	result.Replayed = true
+	return result, true, nil
+}
+
 func (store *WorkspaceStore) CompleteCycle(ctx context.Context, input workspace.CompleteCycleInput) (result workspace.CompleteCycleResult, err error) {
-	tx, err := store.pool.Begin(ctx)
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return result, err
 	}
 	defer rollback(ctx, tx)
-	var replayGoalID, replayCycleID, replayHash string
-	err = tx.QueryRow(ctx, `SELECT goal_id,id,completion_request_hash FROM pdca_cycles
-WHERE user_id=$1 AND completion_operation_id=$2`, mustUUID(input.UserID), mustUUID(input.OperationID)).Scan(&replayGoalID, &replayCycleID, &replayHash)
-	if err == nil {
-		if replayGoalID != input.GoalID || replayCycleID != input.CycleID || replayHash != input.RequestHash {
-			return result, workspace.ErrIdempotencyKeyReused
-		}
-		result.Goal, err = getGoalView(ctx, tx, input.UserID, replayGoalID)
-		if err != nil {
-			return result, err
-		}
-		result.CompletedCycle, err = getCycleView(ctx, tx, input.UserID, replayGoalID, replayCycleID)
-		if err != nil {
-			return result, err
-		}
-		result.ReviewDraft, err = scanDraft(tx.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
-FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND review_cycle_id=$3 AND draft_type='review'`, mustUUID(input.UserID), mustUUID(replayGoalID), mustUUID(replayCycleID)))
-		if err != nil {
-			if errors.Is(err, workspace.ErrNotFound) {
-				result.Replay = &workspace.CommandReplayResponse{
-					Replayed: true, Operation: "complete_cycle",
-					ResourceIDs:      workspace.CommandReplayResourceIDs{GoalID: replayGoalID, CycleID: replayCycleID},
-					CurrentGoalState: result.Goal.Status, CurrentWorkspace: result.Goal.CurrentWork,
-				}
-				return result, tx.Commit(ctx)
-			}
-			return result, err
-		}
-		result.Replayed = true
-		return result, tx.Commit(ctx)
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if _, _, err = loadCompleteCycleReplayReceipt(ctx, tx, input); err != nil {
 		return result, err
+	}
+	if err = lockUser(ctx, tx, user.ID(input.UserID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return result, workspace.ErrNotFound
+		}
+		return result, err
+	}
+	receipt, replayed, err := loadCompleteCycleReplayReceipt(ctx, tx, input)
+	if err != nil {
+		return result, err
+	}
+	lockedGoal, err := loadGoalForUpdate(ctx, tx, input.UserID, input.GoalID)
+	if err != nil {
+		return result, err
+	}
+	if replayed {
+		result, err = buildCompleteCycleReplay(ctx, tx, input, receipt)
+		if err != nil {
+			return result, err
+		}
+		return result, tx.Commit(ctx)
 	}
 	goalView, err := getGoalView(ctx, tx, input.UserID, input.GoalID)
 	if err != nil {
 		return result, err
 	}
-	if goalView.Status != goal.StatusActiveCycle || goalView.Revision != input.ExpectedGoalRevision {
+	if lockedGoal.status != goal.StatusActiveCycle || lockedGoal.revision != input.ExpectedGoalRevision {
 		return result, workspace.ErrGoalStateConflict
 	}
 	current, err := loadCycleForUpdate(ctx, tx, input.UserID, input.GoalID, input.CycleID)
@@ -392,37 +471,32 @@ WHERE user_id=$1 AND source_goal_draft_id=$4`, mustUUID(input.UserID), mustUUID(
 }
 
 func (store *WorkspaceStore) Terminate(ctx context.Context, input workspace.TerminateInput) (result workspace.TerminateResult, err error) {
-	tx, err := store.pool.Begin(ctx)
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return result, err
 	}
 	defer rollback(ctx, tx)
 	if err = lockUser(ctx, tx, user.ID(input.UserID)); err != nil {
-		return result, workspace.ErrNotFound
+		if errors.Is(err, pgx.ErrNoRows) {
+			return result, workspace.ErrNotFound
+		}
+		return result, err
 	}
-	var status goal.Status
-	var revision int64
-	var terminalOperation, terminalHash *string
-	err = tx.QueryRow(ctx, `SELECT status,revision,terminal_operation_id,terminal_request_hash FROM goals
-WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(input.UserID)).Scan(&status, &revision, &terminalOperation, &terminalHash)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return result, workspace.ErrNotFound
-	}
+	result, replayed, err := loadTerminateReplay(ctx, tx, input)
 	if err != nil {
 		return result, err
 	}
-	if status == goal.StatusAchieved || status == goal.StatusEnded {
-		if terminalOperation != nil && *terminalOperation == input.OperationID {
-			if terminalHash == nil || *terminalHash != input.RequestHash {
-				return result, workspace.ErrIdempotencyKeyReused
-			}
-			result.Goal, err = getGoalView(ctx, tx, input.UserID, input.GoalID)
-			result.Replayed = true
-			return result, err
-		}
+	if replayed {
+		return result, tx.Commit(ctx)
+	}
+	lockedGoal, err := loadGoalForUpdate(ctx, tx, input.UserID, input.GoalID)
+	if err != nil {
+		return result, err
+	}
+	if lockedGoal.status == goal.StatusAchieved || lockedGoal.status == goal.StatusEnded {
 		return result, workspace.ErrGoalAlreadyTerminal
 	}
-	if revision != input.ExpectedGoalRevision || status != input.ExpectedState {
+	if lockedGoal.revision != input.ExpectedGoalRevision || lockedGoal.status != input.ExpectedState {
 		return result, workspace.ErrGoalStateConflict
 	}
 	var running bool
@@ -432,7 +506,7 @@ WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(input.U
 	if running {
 		return result, workspace.ErrAIInProgress
 	}
-	if status == goal.StatusActiveCycle {
+	if lockedGoal.status == goal.StatusActiveCycle {
 		if input.ExpectedCycleContentRevision == nil {
 			return result, workspace.ErrGoalStateConflict
 		}
