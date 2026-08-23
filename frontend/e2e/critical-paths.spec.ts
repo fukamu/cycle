@@ -1,6 +1,14 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import { newUUIDv7 } from "../src/shared/id/uuid";
+import { expectAPIError, getSession } from "./support/api";
+import {
+  completeCurrentCycle,
+  createAndCompleteGoal,
+  createProgressingGoal,
+  saveFrame,
+  saveText,
+} from "./support/workspace";
 
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
@@ -12,6 +20,25 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(goal).toHaveAttribute("maxlength", "80");
   await expect(page.getByText("0 / 80")).toBeVisible();
   await saveText(page, goal, goalText, "/api/v1/goal-drafts/");
+  await page.getByRole("button", { name: "AIで目標を整える" }).click();
+  await expect(
+    page.getByRole("heading", { name: "AIからの提案" }),
+  ).toBeVisible();
+  await expect(goal).toHaveValue(goalText);
+  const adoptResponse = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "POST" &&
+      candidate.url().includes("/refinements/") &&
+      candidate.url().endsWith("/adopt") &&
+      candidate.ok(),
+  );
+  await page.getByRole("button", { name: "提案を採用" }).click();
+  await adoptResponse;
+  await expect(page.getByRole("heading", { name: "AIからの提案" })).toHaveCount(
+    0,
+  );
+  await expect(goal).toHaveValue(goalText);
+  await expect(page.getByText("保存済み")).toBeVisible();
   await page.getByRole("button", { name: "この目標で始める" }).click();
   await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
   const planEditor = page.getByRole("textbox", { name: "P — Plan" });
@@ -436,9 +463,21 @@ test("cross-user draft, goal, cycle, and delete access is rejected", async ({
     await expect(
       outsider.getByRole("button", { name: "新しい目標を設定" }),
     ).toBeVisible();
+    const outsiderSession = await getSession(outsider);
     await expectAPIError(
       outsider,
-      `/api/v1/goal-drafts/${draftPayload.draft.id}`,
+      { path: `/api/v1/goal-drafts/${draftPayload.draft.id}` },
+      404,
+      "GOAL_DRAFT_NOT_FOUND",
+    );
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goal-drafts/${draftPayload.draft.id}`,
+        method: "PATCH",
+        csrfToken: outsiderSession.csrfToken,
+        body: { body: "所有者外の変更", expectedRevision: 0 },
+      },
       404,
       "GOAL_DRAFT_NOT_FOUND",
     );
@@ -459,37 +498,76 @@ test("cross-user draft, goal, cycle, and delete access is rejected", async ({
 
     await expectAPIError(
       outsider,
-      `/api/v1/goals/${goalId}`,
+      { path: `/api/v1/goals/${goalId}` },
       404,
       "GOAL_NOT_FOUND",
     );
     await expectAPIError(
       outsider,
-      `/api/v1/goals/${goalId}/cycles/${cycleId}`,
+      { path: `/api/v1/goals/${goalId}/cycles/${cycleId}` },
       404,
       "CYCLE_NOT_FOUND",
     );
 
-    const deleteAttempt = await outsider.evaluate(
-      async (input) => {
-        const sessionResponse = await fetch("/api/v1/session");
-        const session = (await sessionResponse.json()) as { csrfToken: string };
-        const response = await fetch(`/api/v1/goals/${input.targetGoalId}`, {
-          method: "DELETE",
-          credentials: "same-origin",
-          headers: {
-            "Content-Type": "application/json; charset=utf-8",
-            "X-CSRF-Token": session.csrfToken,
-            "Idempotency-Key": input.idempotencyKey,
-          },
-          body: JSON.stringify({ confirmed: true, expectedGoalRevision: 0 }),
-        });
-        const payload = (await response.json()) as { error: { code: string } };
-        return { status: response.status, code: payload.error.code };
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goals/${goalId}/cycles/${cycleId}/frames/plan`,
+        method: "PATCH",
+        csrfToken: outsiderSession.csrfToken,
+        body: {
+          content: "所有者外の変更",
+          expectedFrameRevision: 0,
+        },
       },
-      { targetGoalId: goalId, idempotencyKey: newUUIDv7() },
+      404,
+      "CYCLE_NOT_FOUND",
     );
-    expect(deleteAttempt).toEqual({ status: 404, code: "GOAL_NOT_FOUND" });
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goals/${goalId}/cycles/${cycleId}/actions/generate`,
+        method: "POST",
+        csrfToken: outsiderSession.csrfToken,
+        idempotencyKey: newUUIDv7(),
+        body: {
+          expectedContentRevision: 0,
+          confirmReplace: false,
+        },
+      },
+      404,
+      "CYCLE_NOT_FOUND",
+    );
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goals/${goalId}/termination`,
+        method: "POST",
+        csrfToken: outsiderSession.csrfToken,
+        body: {
+          operationId: newUUIDv7(),
+          outcome: "ended",
+          expectedGoalRevision: 0,
+          expectedState: "active_cycle",
+          activeCycleId: cycleId,
+          expectedCycleContentRevision: 0,
+        },
+      },
+      404,
+      "GOAL_NOT_FOUND",
+    );
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goals/${goalId}`,
+        method: "DELETE",
+        csrfToken: outsiderSession.csrfToken,
+        idempotencyKey: newUUIDv7(),
+        body: { confirmed: true, expectedGoalRevision: 0 },
+      },
+      404,
+      "GOAL_NOT_FOUND",
+    );
 
     const ownerReadStatus = await owner.evaluate(async (targetGoalId) => {
       const response = await fetch(`/api/v1/goals/${targetGoalId}`);
@@ -501,95 +579,3 @@ test("cross-user draft, goal, cycle, and delete access is rejected", async ({
     await outsiderContext.close();
   }
 });
-
-async function createAndCompleteGoal(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "新しい目標を設定" }).click();
-  await saveText(
-    page,
-    page.getByRole("textbox", { name: "あなたの目標" }),
-    "確認用の目標",
-    "/api/v1/goal-drafts/",
-  );
-  await page.getByRole("button", { name: "この目標で始める" }).click();
-  await completeCurrentCycle(page, "確認");
-}
-
-async function completeCurrentCycle(page: Page, suffix: string) {
-  await saveFrame(page, "P — Plan", `計画 ${suffix}`, "D");
-  await saveFrame(page, "D — Do", `実行 ${suffix}`, "C");
-  await saveFrame(page, "C — Check", `確認 ${suffix}`, "A");
-  await saveFrame(page, "A — Action", `改善 ${suffix}`, "A");
-  await page.getByRole("button", { name: "サイクルを完了" }).click();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "サイクルを完了" })
-    .click();
-}
-
-async function createProgressingGoal(page: Page, goalText: string) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "新しい目標を設定" }).click();
-  await saveText(
-    page,
-    page.getByRole("textbox", { name: "あなたの目標" }),
-    goalText,
-    "/api/v1/goal-drafts/",
-  );
-  await page.getByRole("button", { name: "この目標で始める" }).click();
-  await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
-}
-
-async function saveFrame(
-  page: Page,
-  label: string,
-  content: string,
-  next: "P" | "D" | "C" | "A",
-) {
-  const frame = ({ P: "plan", D: "do", C: "check", A: "action" } as const)[
-    label[0] as "P" | "D" | "C" | "A"
-  ];
-  const response = page.waitForResponse(
-    (candidate) =>
-      candidate.request().method() === "PATCH" &&
-      candidate.url().endsWith(`/frames/${frame}`) &&
-      candidate.ok(),
-  );
-  await page.getByRole("textbox", { name: label }).fill(content);
-  if (next !== label[0])
-    await page.getByRole("tab", { name: new RegExp(`^${next}`) }).click();
-  else await page.getByRole("textbox", { name: label }).blur();
-  await response;
-  await expect(page.getByText("保存済み")).toBeVisible();
-}
-
-async function saveText(
-  page: Page,
-  editor: Locator,
-  content: string,
-  urlPart: string,
-) {
-  const response = page.waitForResponse(
-    (candidate) =>
-      candidate.request().method() === "PATCH" &&
-      candidate.url().includes(urlPart) &&
-      candidate.ok(),
-  );
-  await editor.fill(content);
-  await response;
-  await expect(page.getByText("保存済み")).toBeVisible();
-}
-
-async function expectAPIError(
-  page: Page,
-  path: string,
-  status: number,
-  code: string,
-) {
-  const result = await page.evaluate(async (targetPath) => {
-    const response = await fetch(targetPath);
-    const payload = (await response.json()) as { error: { code: string } };
-    return { status: response.status, code: payload.error.code };
-  }, path);
-  expect(result).toEqual({ status, code });
-}

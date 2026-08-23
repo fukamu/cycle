@@ -1,11 +1,22 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { SessionContext } from "../features/auth/sessionContext";
 import { cycleQueryKey } from "../features/goal-collection/goalCache";
 import type { Cycle, Goal, Session } from "../shared/api/schemas";
-import { getCycle, getGoal, saveCycleFrame } from "../shared/api/workspace";
+import {
+  getCycle,
+  getGoal,
+  refineAction,
+  saveCycleFrame,
+} from "../shared/api/workspace";
 import {
   clearGoalDrafts,
   deleteBrowserDraft,
@@ -226,6 +237,56 @@ describe("GoalWorkspacePage", () => {
     expect(doTab).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(doTab).toHaveFocus());
     expect(screen.getByRole("textbox", { name: "D — Do" })).toBeInTheDocument();
+  });
+
+  it("preserves Action and re-enables refinement after AI failure", async () => {
+    const readyCycle: Cycle = {
+      ...cycle,
+      plan: "計画",
+      do: "実行",
+      check: "評価",
+      action: "現在のA",
+      contentRevision: 4,
+      frameRevisions: { plan: 1, do: 1, check: 1, action: 1 },
+    };
+    let rejectRefinement: (reason?: unknown) => void = () => undefined;
+    const pendingRefinement = new Promise<
+      Awaited<ReturnType<typeof refineAction>>
+    >((_resolve, reject) => {
+      rejectRefinement = reject;
+    });
+    vi.mocked(getCycle).mockResolvedValue({ cycle: readyCycle });
+    vi.mocked(refineAction).mockReturnValue(pendingRefinement);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /A\s*Action/ }));
+    const editor = screen.getByRole("textbox", { name: "A — Action" });
+    const refineButton = screen.getByRole("button", { name: "AIで推敲" });
+    expect(refineButton).toBeEnabled();
+
+    fireEvent.click(refineButton);
+
+    expect(
+      await screen.findByRole("button", { name: "推敲しています…" }),
+    ).toBeDisabled();
+    await act(async () => rejectRefinement(new Error("provider failure")));
+
+    expect(
+      await screen.findByText(
+        "AI処理を完了できませんでした。現在のAは保持されています。",
+      ),
+    ).toBeInTheDocument();
+    expect(editor).toHaveValue("現在のA");
+    expect(screen.getByRole("button", { name: "AIで推敲" })).toBeEnabled();
+    expect(refineAction).toHaveBeenCalledWith(
+      goal.id,
+      readyCycle.id,
+      readyCycle.contentRevision,
+      session.csrfToken,
+    );
   });
 });
 

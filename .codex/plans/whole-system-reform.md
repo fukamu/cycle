@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M1 black-box characterization
+- 状態: IN_PROGRESS / M2 identity・browser isolation
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -68,6 +68,9 @@
 | Production capacity、Neon backup/restore、provider limit | Operations owner、Production release前 | Production infrastructure作成とdeployを停止 |
 | AI model、価格、budget、rate limitのProduction値 | Product/Operations owner、Production release前 | Staging承認値をProductionへcopyせず、Production releaseを停止 |
 | Terraform state snapshot保持期間 | Operations owner、M27 cleanup追加前 | Snapshotをprivate R2へ保存するが、自動削除しない |
+| Browser Draft recovery telemetry transport | Product/Security owner、M23 instrumentation前 | Backendで観測可能なmetricは進めるが、新しいbrowser telemetry endpoint/header/exporterを推測で追加しない |
+| Terraform R2 credential topology | Operations owner、M27 workflow変更前 | Snapshot helperとlocal isolated testは進めるが、secret配置、Plan/Apply権限、live R2 drillを変更・実行しない |
+| React Hook Formを削除する設計変更 | Product/Architecture owner、M29 dependency削除前 | chi等の独立更新は進めるが、RHFと該当SoTは維持 |
 | Closed Beta終了日 | Product owner | `off` deploy、連続168時間、owner承認までcode/config/runbookを維持 |
 
 ## 7. Current behavior contract
@@ -546,6 +549,9 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: 実装開始時のHEADは基準commit `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`とtreeまで完全一致し、tracked/staged driftはなかった。未追跡の本ExecPlanだけをuser所有の入力として保持した。
 - 2026-08-22: Repository全体のmanifest、SDK/OpenAPI候補、API route参照を検索したが、Frontend以外のAPI consumerを示す証拠はなかった。Repository外consumerのowner確認は未取得のため、現行route/wire shapeを維持し、非互換wire変更を禁止して進める。
 - 2026-08-22: M1 acceptanceの「Behavior contract全flowがgreen」と、M2/M5/M6/M7で修正する既知contract violationを同時に満たすことはできないと判明した。M1では現在適合するblack-box behaviorとsecurity boundaryをgreenで固定し、既知defectは所有milestoneの最初に失敗するregression testを追加してから修正する。この解釈はtest削除やassertion弱体化を認めない。影響はM1とM2/M5/M6/M7のtest配置だけで、プロダクト契約は変更しない。
+- 2026-08-22: M23の`draft_recovery_total`はbrowser IndexedDB内だけで発生し、現行Backendへ安全に通知するcontractがないと判明した。元計画のmetric追加をそのまま実装せず、本文・identityを送らないtransportをownerが決めるまでこのmetricの新規境界だけを停止する。影響はM23の当該metricで、他のserver-side metric/PII allowlist testは継続する。
+- 2026-08-22: M27の「Apply EnvironmentだけがR2 credentialを保持」と、現行SoT/運用文書の「Plan/Applyがrepository secretを使い、Environmentはsecret storeにしない」が矛盾すると判明した。Credential topologyを推測で変更せず、owner判断まではsnapshot helper/local isolated testだけを行う。影響はworkflow secret配置とlive drillで、追加検証はPlan/Apply両方の最小権限matrixとfailure-before-apply testとする。
+- 2026-08-22: M29のReact Hook Form削除は現行`docs/design.md`の明示的technology selectionと矛盾すると判明した。単一textareaでは依存削除により複雑性を減らせるという元計画の根拠は維持するが、ownerの設計変更承認まではRHFとSoTを削除しない。影響はM29のRHF sliceだけで、chi更新等は独立して進める。承認時はcontrolled editorのbehavior test、bundle、dependency zero-referenceを追加検証する。
 - 2026-08-22: Free/MVPの進行Goal上限を2件に確定。
 - 2026-08-22: Homeは`GoalView/currentWork`共用に確定。
 - 2026-08-22: Goal Refine fieldを`suggestion`へ統一。
@@ -558,13 +564,15 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-22: M1完了。Protected/unsafe全routeのauthn・exact Origin・CSRF、cookie/body limit/error code/redactionをHTTP contract testで固定。実PostgreSQLで同一bootstrapの4並行requestが1 User/1 record/4 Sessionへ収束し、20件のcross-user操作がresource-specific 404かつowner state不変であることを確認。Goal Refine明示採用、Google collision/login非merge、account delete/revisit、active termination/canceled read-only、Action AI failure等を追加し、Vitest 28 files / 73 tests、Playwright 13/13が成功。Aは261.85秒、空DBからのEは276.67秒、migration version 1、sqlc drift zero。
 - 2026-08-22: M0完了。Goal上限2、Home `GoalView/currentWork`、Goal Refine `suggestion`を`docs/design.md`内で収束。Aは153秒、空のPostgreSQL 18.6を使うEは224秒で成功し、Playwright 8/8とmigration version 1を確認。既存Markdown 13 filesのlocal link/reference/fence checkも成功した。
 - 2026-08-22: 実装開始baselineを固定Docker環境（Node 24.19.0 / pnpm 11.22.0 / Go 1.26.6 / Terraform 1.15.8 / PostgreSQL 18.6）で再実行。Frontend 26 files / 70 tests、Backend unit/integration/build、sqlc差分なし、shell/Compose/Terraform、Cloudflare 8 tests、Wrangler dry-run/Container buildが成功。空のdisposable `fukamu_cycle_test` DBへmigrationを適用し、Playwright 8/8 scenariosが成功。baseline commit/treeからのdriftなし。
+- 2026-08-22: M0 commit前必須gateはfresh disposable PostgreSQL 18.6上で228秒で成功。staged candidate tree `b10e66b9d20e4eea82ad371c66effea2fcfb8d35`、Playwright 8/8、sqlc drift zeroを確認。commit権限は明示されていないためcommitせずM1へ進んだ。
 - 2026-08-22: Repository全体、文書、依存、DB、CI/CD、IaC、security、observabilityを監査。
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M1。現在適合するflowをblack-box/authz/error characterization testで固定する。
+- 現在の再開位置: M2。User ID変更時のquery/mutation/cache境界を修正し、同一user upgradeではstateを維持する。
 
 ## 26. Final definition of done
 
