@@ -242,22 +242,64 @@ func (store *WorkspaceStore) AbandonDraft(ctx context.Context, userID, draftID s
 		return err
 	}
 	defer rollback(ctx, tx)
-	var running bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ai_generations
-WHERE user_id=$1 AND source_goal_draft_id=$2 AND status='running')`, mustUUID(userID), mustUUID(draftID)).Scan(&running)
+	if err = lockUser(ctx, tx, user.ID(userID)); errors.Is(err, pgx.ErrNoRows) {
+		return workspace.ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	var lockedDraftID string
+	err = tx.QueryRow(ctx, `SELECT id FROM goal_drafts
+WHERE id=$1 AND user_id=$2 AND draft_type='creation' FOR UPDATE`,
+		mustUUID(draftID), mustUUID(userID)).Scan(&lockedDraftID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspace.ErrNotFound
+	}
 	if err != nil {
 		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT id,status FROM ai_generations
+WHERE user_id=$1 AND source_goal_draft_id=$2 ORDER BY id FOR UPDATE`,
+		mustUUID(userID), mustUUID(draftID))
+	if err != nil {
+		return err
+	}
+	generationIDs := []string{}
+	running := false
+	for rows.Next() {
+		var generationID, status string
+		if err = rows.Scan(&generationID, &status); err != nil {
+			rows.Close()
+			return err
+		}
+		generationIDs = append(generationIDs, generationID)
+		running = running || status == "running"
+	}
+	rowErr := rows.Err()
+	rows.Close()
+	if rowErr != nil {
+		return rowErr
 	}
 	if running {
 		return workspace.ErrAIInProgress
 	}
-	_, err = tx.Exec(ctx, `UPDATE ai_usage_events SET goal_id=NULL,content_deleted=true
-WHERE operation_id IN (SELECT id FROM ai_generations WHERE user_id=$1 AND source_goal_draft_id=$2)`, mustUUID(userID), mustUUID(draftID))
-	if err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `DELETE FROM ai_generations WHERE user_id=$1 AND source_goal_draft_id=$2`, mustUUID(userID), mustUUID(draftID)); err != nil {
-		return err
+	if len(generationIDs) > 0 {
+		command, updateErr := tx.Exec(ctx, `UPDATE ai_usage_events SET goal_id=NULL,content_deleted=true
+WHERE operation_id=ANY($1::text[]::uuid[])`, generationIDs)
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != int64(len(generationIDs)) {
+			return errors.New("Goal Draft abandon usage invariant violated")
+		}
+		command, updateErr = tx.Exec(ctx, `DELETE FROM ai_generations
+WHERE id=ANY($1::text[]::uuid[]) AND user_id=$2 AND source_goal_draft_id=$3`,
+			generationIDs, mustUUID(userID), mustUUID(draftID))
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != int64(len(generationIDs)) {
+			return errors.New("Goal Draft abandon generation invariant violated")
+		}
 	}
 	command, err := tx.Exec(ctx, `DELETE FROM goal_drafts WHERE id=$1 AND user_id=$2 AND draft_type='creation'`, mustUUID(draftID), mustUUID(userID))
 	if err != nil {

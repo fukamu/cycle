@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
@@ -24,8 +25,34 @@ func (store *WorkspaceStore) BeginGoalRefine(ctx context.Context, input workspac
 		return snapshot, err
 	}
 	defer rollback(ctx, tx)
-	if err = lockUser(ctx, tx, user.ID(input.UserID)); err != nil {
+	if err = lockUser(ctx, tx, user.ID(input.UserID)); errors.Is(err, pgx.ErrNoRows) {
 		return snapshot, workspace.ErrNotFound
+	} else if err != nil {
+		return snapshot, err
+	}
+	type reviewTarget struct {
+		status           goal.Status
+		revision         int64
+		currentVersionID string
+		body             string
+	}
+	var review *reviewTarget
+	if input.GoalID != "" {
+		review = &reviewTarget{}
+		err = tx.QueryRow(ctx, `SELECT g.status,g.revision,gv.id,gv.body FROM goals g
+JOIN goal_versions gv ON gv.goal_id=g.id AND gv.version_number=g.current_version_number
+WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE OF g`, mustUUID(input.GoalID), mustUUID(input.UserID)).Scan(
+			&review.status, &review.revision, &review.currentVersionID, &review.body,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return snapshot, workspace.ErrNotFound
+		}
+		if err != nil {
+			return snapshot, err
+		}
+		if review.status != goal.StatusGoalReview {
+			return snapshot, workspace.ErrGoalReviewNotActive
+		}
 	}
 	draft, err := lockGoalDraftForAI(ctx, tx, input.UserID, input.DraftID, input.GoalID)
 	if err != nil {
@@ -47,6 +74,9 @@ func (store *WorkspaceStore) BeginGoalRefine(ctx context.Context, input workspac
 		return *replayed, tx.Commit(ctx)
 	}
 	if draft.Revision != input.ExpectedDraftRevision {
+		if review != nil {
+			return snapshot, workspace.ErrReviewRevisionConflict
+		}
 		return snapshot, workspace.ErrDraftRevisionConflict
 	}
 	if strings.TrimSpace(draft.Body) == "" {
@@ -58,22 +88,16 @@ func (store *WorkspaceStore) BeginGoalRefine(ctx context.Context, input workspac
 	contextCycles := []workspace.AIContextCycle{}
 	goalID := draft.GoalID
 	if draft.DraftType == "review" {
-		if goalID == nil || input.GoalID == "" || *goalID != input.GoalID || input.ExpectedGoalRevision == nil {
+		if review == nil || goalID == nil || *goalID != input.GoalID || input.ExpectedGoalRevision == nil {
 			return snapshot, workspace.ErrGoalStateConflict
 		}
-		var status goal.Status
-		var revision int64
-		var currentVersionID string
-		if err = tx.QueryRow(ctx, `SELECT g.status,g.revision,gv.id,gv.body FROM goals g
-JOIN goal_versions gv ON gv.goal_id=g.id AND gv.version_number=g.current_version_number
-WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(input.UserID)).Scan(&status, &revision, &currentVersionID, &goalBody); err != nil {
-			return snapshot, workspace.ErrNotFound
-		}
-		if status != goal.StatusGoalReview || revision != *input.ExpectedGoalRevision || draft.BaseGoalVersionID == nil || *draft.BaseGoalVersionID != currentVersionID {
+		if review.revision != *input.ExpectedGoalRevision || draft.BaseGoalVersionID == nil ||
+			*draft.BaseGoalVersionID != review.currentVersionID {
 			return snapshot, workspace.ErrGoalRevisionConflict
 		}
+		goalBody = review.body
 		goalVersionID = draft.BaseGoalVersionID
-		sourceGoalRevision = revision
+		sourceGoalRevision = review.revision
 		contextCycles, err = loadAIContextCycles(ctx, tx, input.UserID, input.GoalID, "", 10)
 		if err != nil {
 			return snapshot, err
@@ -113,8 +137,10 @@ func (store *WorkspaceStore) BeginActionAI(ctx context.Context, input workspace.
 		return snapshot, err
 	}
 	defer rollback(ctx, tx)
-	if err = lockUser(ctx, tx, user.ID(input.UserID)); err != nil {
+	if err = lockUser(ctx, tx, user.ID(input.UserID)); errors.Is(err, pgx.ErrNoRows) {
 		return snapshot, workspace.ErrNotFound
+	} else if err != nil {
+		return snapshot, err
 	}
 	inputHash := hashActionAIRequest(input)
 	replayed, replayErr := existingActionGeneration(ctx, tx, input, inputHash)
@@ -236,8 +262,13 @@ FROM ai_budget_monthly WHERE month_utc=$1 FOR UPDATE`, month).Scan(&reserved, &a
 	if reserved+actual+unattributed+store.settings.ReservationUSD > store.settings.MonthlyBudgetUSD {
 		return workspace.ErrAIBudget
 	}
-	if _, err := tx.Exec(ctx, `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd+$2,updated_at=$3 WHERE month_utc=$1`, month, store.settings.ReservationUSD, now); err != nil {
+	command, err := tx.Exec(ctx, `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd+$2,updated_at=$3
+WHERE month_utc=$1`, month, store.settings.ReservationUSD, now)
+	if err != nil {
 		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("AI budget reservation row disappeared after lock")
 	}
 	var draftArg, goalArg, versionArg, cycleArg any
 	if draftID != "" {
@@ -256,7 +287,7 @@ FROM ai_budget_monthly WHERE month_utc=$1 FOR UPDATE`, month).Scan(&reserved, &a
 	if operation != "action_generate" {
 		sourceArg = sourceText
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO ai_generations
+	_, err = tx.Exec(ctx, `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,goal_id,goal_version_id,cycle_id,target_revision,idempotency_key,input_hash,
 source_text,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,lease_expires_at,started_at,context_cycle_ids)
 VALUES($1,$2,$3,'running',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::text[]::uuid[])`,
@@ -370,35 +401,128 @@ func aiFailureError(code string) error {
 	}
 }
 
+type aiGenerationLocator struct {
+	userID    string
+	operation string
+	status    string
+	draftID   string
+	goalID    string
+	cycleID   string
+}
+
+func loadAIGenerationLocator(ctx context.Context, tx pgx.Tx, generationID string) (aiGenerationLocator, error) {
+	var locator aiGenerationLocator
+	var draftID, goalID, cycleID pgtype.UUID
+	err := tx.QueryRow(ctx, `SELECT user_id,operation_type,status,source_goal_draft_id,goal_id,cycle_id
+FROM ai_generations WHERE id=$1`, mustUUID(generationID)).Scan(
+		&locator.userID, &locator.operation, &locator.status, &draftID, &goalID, &cycleID,
+	)
+	if err != nil {
+		return aiGenerationLocator{}, err
+	}
+	locator.draftID = uuidString(draftID)
+	locator.goalID = uuidString(goalID)
+	locator.cycleID = uuidString(cycleID)
+	return locator, nil
+}
+
+func lockAIFinalizationUser(ctx context.Context, tx pgx.Tx, userID string) error {
+	err := lockUser(ctx, tx, user.ID(userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspace.ErrNotFound
+	}
+	return err
+}
+
+func (store *WorkspaceStore) settleMissingAIResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	generationID string,
+	result workspace.AIProviderResult,
+	providerErr error,
+	now time.Time,
+) error {
+	if err := store.settleLateUsage(ctx, tx, generationID, result, providerErr, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return workspace.ErrNotFound
+}
+
 func (store *WorkspaceStore) FinishGoalRefine(ctx context.Context, snapshot workspace.AISnapshot, result workspace.AIProviderResult, providerErr error, now time.Time) (workspace.AIResponse, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return workspace.AIResponse{}, err
 	}
 	defer rollback(ctx, tx)
-	var draftID, month string
-	var reserved float64
-	err = tx.QueryRow(ctx, `SELECT source_goal_draft_id,budget_month_utc::text,budget_reserved_cost_usd
-FROM ai_generations WHERE id=$1 AND status='running' FOR UPDATE`, mustUUID(snapshot.GenerationID)).Scan(&draftID, &month, &reserved)
+	locator, err := loadAIGenerationLocator(ctx, tx, snapshot.GenerationID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if err = store.settleLateUsage(ctx, tx, snapshot.GenerationID, result, providerErr, now); err != nil {
-			return workspace.AIResponse{}, err
-		}
-		if err = tx.Commit(ctx); err != nil {
-			return workspace.AIResponse{}, err
-		}
-		return workspace.AIResponse{}, workspace.ErrNotFound
+		return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
 	}
 	if err != nil {
 		return workspace.AIResponse{}, err
 	}
-	contextChanged := true
-	var currentRevision int64
-	if err = tx.QueryRow(ctx, `SELECT revision FROM goal_drafts WHERE id=$1`, mustUUID(draftID)).Scan(&currentRevision); err == nil {
-		contextChanged = currentRevision != snapshot.TargetRevision
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	if locator.operation != "goal_refine" {
+		return workspace.AIResponse{}, errors.New("AI generation operation changed during Goal Refine finalization")
+	}
+	if locator.status != "running" {
+		return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
+	}
+	if err = lockAIFinalizationUser(ctx, tx, locator.userID); err != nil {
 		return workspace.AIResponse{}, err
 	}
+	if locator.goalID != "" {
+		var status goal.Status
+		err = tx.QueryRow(ctx, `SELECT status FROM goals WHERE id=$1 AND user_id=$2 FOR UPDATE`,
+			mustUUID(locator.goalID), mustUUID(locator.userID)).Scan(&status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
+		}
+		if err != nil {
+			return workspace.AIResponse{}, err
+		}
+		if status != goal.StatusGoalReview {
+			providerErr = workspace.ErrGoalReviewNotActive
+		}
+	}
+	var currentRevision int64
+	if locator.goalID == "" {
+		err = tx.QueryRow(ctx, `SELECT revision FROM goal_drafts
+WHERE id=$1 AND user_id=$2 AND draft_type='creation' FOR UPDATE`,
+			mustUUID(locator.draftID), mustUUID(locator.userID)).Scan(&currentRevision)
+	} else {
+		err = tx.QueryRow(ctx, `SELECT revision FROM goal_drafts
+WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND draft_type='review' FOR UPDATE`,
+			mustUUID(locator.draftID), mustUUID(locator.userID), mustUUID(locator.goalID)).Scan(&currentRevision)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
+	}
+	if err != nil {
+		return workspace.AIResponse{}, err
+	}
+	var month time.Time
+	var reserved float64
+	var targetRevision int64
+	err = tx.QueryRow(ctx, `SELECT budget_month_utc,budget_reserved_cost_usd,target_revision
+FROM ai_generations
+WHERE id=$1 AND user_id=$2 AND operation_type='goal_refine'
+  AND source_goal_draft_id=$3 AND status='running' FOR UPDATE`,
+		mustUUID(snapshot.GenerationID), mustUUID(locator.userID), mustUUID(locator.draftID)).Scan(
+		&month, &reserved, &targetRevision,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
+	}
+	if err != nil {
+		return workspace.AIResponse{}, err
+	}
+	if targetRevision != snapshot.TargetRevision {
+		return workspace.AIResponse{}, errors.New("AI generation target revision changed during Goal Refine finalization")
+	}
+	contextChanged := currentRevision != targetRevision
 	if err = store.finishGeneration(ctx, tx, snapshot.GenerationID, month, reserved, result, providerErr, contextChanged, false, now); err != nil {
 		return workspace.AIResponse{}, err
 	}
@@ -421,43 +545,78 @@ func (store *WorkspaceStore) FinishActionAI(ctx context.Context, snapshot worksp
 		return workspace.AIResponse{}, err
 	}
 	defer rollback(ctx, tx)
-	var userID, goalID, cycleID, versionID, month string
-	var reserved float64
-	err = tx.QueryRow(ctx, `SELECT user_id,goal_id,cycle_id,goal_version_id,budget_month_utc::text,budget_reserved_cost_usd
-FROM ai_generations WHERE id=$1 AND status='running' FOR UPDATE`, mustUUID(snapshot.GenerationID)).Scan(&userID, &goalID, &cycleID, &versionID, &month, &reserved)
+	locator, err := loadAIGenerationLocator(ctx, tx, snapshot.GenerationID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if err = store.settleLateUsage(ctx, tx, snapshot.GenerationID, result, providerErr, now); err != nil {
-			return workspace.AIResponse{}, err
-		}
-		if err = tx.Commit(ctx); err != nil {
-			return workspace.AIResponse{}, err
-		}
-		return workspace.AIResponse{}, workspace.ErrNotFound
+		return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
 	}
 	if err != nil {
 		return workspace.AIResponse{}, err
 	}
-	current, loadErr := loadCycleForUpdate(ctx, tx, userID, goalID, cycleID)
-	if loadErr != nil {
-		providerErr = workspace.ErrNotFound
+	if locator.operation != "action_generate" && locator.operation != "action_refine" {
+		return workspace.AIResponse{}, errors.New("AI generation operation changed during Action finalization")
 	}
-	if loadErr == nil && current.GoalVersionID != versionID {
+	if locator.status != "running" {
+		return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
+	}
+	if err = lockAIFinalizationUser(ctx, tx, locator.userID); err != nil {
+		return workspace.AIResponse{}, err
+	}
+	var goalStatus goal.Status
+	err = tx.QueryRow(ctx, `SELECT status FROM goals WHERE id=$1 AND user_id=$2 FOR UPDATE`,
+		mustUUID(locator.goalID), mustUUID(locator.userID)).Scan(&goalStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
+	}
+	if err != nil {
+		return workspace.AIResponse{}, err
+	}
+	current, loadErr := loadCycleForUpdate(ctx, tx, locator.userID, locator.goalID, locator.cycleID)
+	if errors.Is(loadErr, workspace.ErrNotFound) {
+		return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
+	}
+	if loadErr != nil {
+		return workspace.AIResponse{}, loadErr
+	}
+	var versionID string
+	var month time.Time
+	var reserved float64
+	var targetRevision int64
+	err = tx.QueryRow(ctx, `SELECT goal_version_id,budget_month_utc,budget_reserved_cost_usd,target_revision
+FROM ai_generations
+WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND cycle_id=$4
+  AND operation_type=$5 AND status='running' FOR UPDATE`,
+		mustUUID(snapshot.GenerationID), mustUUID(locator.userID), mustUUID(locator.goalID), mustUUID(locator.cycleID),
+		locator.operation).Scan(&versionID, &month, &reserved, &targetRevision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspace.AIResponse{}, store.settleMissingAIResult(ctx, tx, snapshot.GenerationID, result, providerErr, now)
+	}
+	if err != nil {
+		return workspace.AIResponse{}, err
+	}
+	if targetRevision != snapshot.TargetRevision {
+		return workspace.AIResponse{}, errors.New("AI generation target revision changed during Action finalization")
+	}
+	if goalStatus != goal.StatusActiveCycle || current.Status != cycle.StatusActive {
+		providerErr = workspace.ErrGoalStateConflict
+	}
+	if current.GoalVersionID != versionID {
 		providerErr = workspace.ErrGoalVersionConflict
 	}
-	contextChanged := loadErr == nil && current.Revisions.Content != snapshot.TargetRevision
+	contextChanged := current.Revisions.Content != targetRevision
 	if providerErr == nil {
-		if current.Status != cycle.StatusActive {
-			providerErr = workspace.ErrGoalStateConflict
-		} else {
-			current.Action = result.Output
-			current.Revisions.Action++
-			current.Revisions.Content++
-			_, err = tx.Exec(ctx, `UPDATE pdca_cycles SET action=$2,action_revision=action_revision+1,
+		current.Action = result.Output
+		current.Revisions.Action++
+		current.Revisions.Content++
+		command, updateErr := tx.Exec(ctx, `UPDATE pdca_cycles SET action=$2,action_revision=action_revision+1,
 content_revision=content_revision+1,action_last_ai_applied_content_revision=content_revision+1,
-action_user_modified_after_ai=false,updated_at=$3 WHERE id=$1`, mustUUID(cycleID), result.Output, now)
-			if err != nil {
-				return workspace.AIResponse{}, err
-			}
+	action_user_modified_after_ai=false,updated_at=$3
+WHERE id=$1 AND user_id=$4 AND goal_id=$5 AND status='active' AND goal_version_id=$6`,
+			mustUUID(locator.cycleID), result.Output, now, mustUUID(locator.userID), mustUUID(locator.goalID), mustUUID(versionID))
+		if updateErr != nil {
+			return workspace.AIResponse{}, updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return workspace.AIResponse{}, errors.New("Action AI cycle application invariant violated")
 		}
 	}
 	if err = store.finishGeneration(ctx, tx, snapshot.GenerationID, month, reserved, result, providerErr, contextChanged, providerErr == nil, now); err != nil {
@@ -475,7 +634,7 @@ action_user_modified_after_ai=false,updated_at=$3 WHERE id=$1`, mustUUID(cycleID
 	}, nil
 }
 
-func (store *WorkspaceStore) finishGeneration(ctx context.Context, tx pgx.Tx, generationID, month string, reserved float64,
+func (store *WorkspaceStore) finishGeneration(ctx context.Context, tx pgx.Tx, generationID string, month time.Time, reserved float64,
 	result workspace.AIProviderResult, providerErr error, contextChanged, applied bool, now time.Time) error {
 	failureCode := ""
 	status := "succeeded"
@@ -489,36 +648,64 @@ func (store *WorkspaceStore) finishGeneration(ctx context.Context, tx pgx.Tx, ge
 		output = nil
 		failureCode = aiFailureCode(providerErr)
 	}
-	_, err := tx.Exec(ctx, `UPDATE ai_generations SET status=$2,output=$3,input_tokens=$4,output_tokens=$5,
+	command, err := tx.Exec(ctx, `UPDATE ai_generations SET status=$2,output=$3,input_tokens=$4,output_tokens=$5,
 estimated_cost_usd=$6,budget_reserved_cost_usd=0,attempt_count=$7,failure_code=NULLIF($8,''),provider_request_id=NULLIF($9,''),
-lease_expires_at=NULL,context_changed=$10,applied_at=$11,finished_at=$12 WHERE id=$1`, mustUUID(generationID), status,
+lease_expires_at=NULL,context_changed=$10,applied_at=$11,finished_at=$12
+WHERE id=$1 AND status='running' AND budget_reserved_cost_usd=$13`, mustUUID(generationID), status,
 		output, result.InputTokens, result.OutputTokens, result.CostUSD, result.Attempts, failureCode, result.ProviderRequestID,
-		contextChanged, appliedAt, now)
+		contextChanged, appliedAt, now, reserved)
 	if err != nil {
 		return err
 	}
-	command, err := tx.Exec(ctx, `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd-$2,
-actual_cost_usd=actual_cost_usd+$3,updated_at=$4 WHERE month_utc=$1::date AND reserved_cost_usd >= $2`, month, reserved, result.CostUSD, now)
+	if command.RowsAffected() != 1 {
+		return errors.New("AI generation terminal CAS invariant violated during settlement")
+	}
+	command, err = tx.Exec(ctx, `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd-$2,
+actual_cost_usd=actual_cost_usd+$3,updated_at=$4 WHERE month_utc=$1 AND reserved_cost_usd >= $2`, month, reserved, result.CostUSD, now)
 	if err != nil {
 		return err
 	}
 	if command.RowsAffected() != 1 {
 		return errors.New("AI budget reservation invariant violated during settlement")
 	}
-	_, err = tx.Exec(ctx, `UPDATE ai_usage_events SET status=$2,input_tokens=$3,output_tokens=$4,estimated_cost_usd=$5,
-provider_usage_finalized_at=$6 WHERE operation_id=$1`, mustUUID(generationID), status, result.InputTokens, result.OutputTokens, result.CostUSD, now)
-	return err
+	command, err = tx.Exec(ctx, `UPDATE ai_usage_events SET status=$2,input_tokens=$3,output_tokens=$4,estimated_cost_usd=$5,
+provider_usage_finalized_at=$6
+WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL`,
+		mustUUID(generationID), status, result.InputTokens, result.OutputTokens, result.CostUSD, now)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("AI usage finalization CAS invariant violated during settlement")
+	}
+	return nil
 }
 
 func (store *WorkspaceStore) settleLateUsage(ctx context.Context, tx pgx.Tx, generationID string, result workspace.AIProviderResult, providerErr error, now time.Time) error {
+	var userID string
 	var acceptedAt time.Time
 	var finalizedAt *time.Time
-	err := tx.QueryRow(ctx, `SELECT accepted_at,provider_usage_finalized_at FROM ai_usage_events
-WHERE operation_id=$1 FOR UPDATE`, mustUUID(generationID)).Scan(&acceptedAt, &finalizedAt)
+	err := tx.QueryRow(ctx, `SELECT user_id,accepted_at,provider_usage_finalized_at FROM ai_usage_events
+WHERE operation_id=$1`, mustUUID(generationID)).Scan(&userID, &acceptedAt, &finalizedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // Account Delete already moved the reservation to unattributed cost and removed user usage.
 	}
 	if err != nil || finalizedAt != nil {
+		return err
+	}
+	err = lockUser(ctx, tx, user.ID(userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // Account Delete won after the locator read.
+	}
+	if err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `SELECT accepted_at,provider_usage_finalized_at FROM ai_usage_events
+WHERE operation_id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(generationID), mustUUID(userID)).Scan(&acceptedAt, &finalizedAt)
+	if errors.Is(err, pgx.ErrNoRows) || finalizedAt != nil {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 	month := time.Date(acceptedAt.UTC().Year(), acceptedAt.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -526,17 +713,28 @@ WHERE operation_id=$1 FOR UPDATE`, mustUUID(generationID)).Scan(&acceptedAt, &fi
 VALUES($1,0,0,0,$2) ON CONFLICT(month_utc) DO NOTHING`, month, now); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE ai_budget_monthly SET actual_cost_usd=actual_cost_usd+$2,updated_at=$3 WHERE month_utc=$1`, month, result.CostUSD, now); err != nil {
+	command, err := tx.Exec(ctx, `UPDATE ai_budget_monthly SET actual_cost_usd=actual_cost_usd+$2,updated_at=$3 WHERE month_utc=$1`,
+		month, result.CostUSD, now)
+	if err != nil {
 		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("AI late usage budget invariant violated")
 	}
 	status := "succeeded"
 	if providerErr != nil {
 		status = "failed"
 	}
-	_, err = tx.Exec(ctx, `UPDATE ai_usage_events SET status=$2,input_tokens=$3,output_tokens=$4,estimated_cost_usd=$5,
+	command, err = tx.Exec(ctx, `UPDATE ai_usage_events SET status=$2,input_tokens=$3,output_tokens=$4,estimated_cost_usd=$5,
 provider_usage_finalized_at=$6 WHERE operation_id=$1 AND provider_usage_finalized_at IS NULL`, mustUUID(generationID), status,
 		result.InputTokens, result.OutputTokens, result.CostUSD, now)
-	return err
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("AI late usage finalization CAS invariant violated")
+	}
+	return nil
 }
 
 func (store *WorkspaceStore) AdoptGoalSuggestion(ctx context.Context, userID, draftID, goalID, generationID string, expectedDraftRevision int64, expectedGoalRevision *int64, now time.Time) (workspace.DraftView, error) {
@@ -545,6 +743,32 @@ func (store *WorkspaceStore) AdoptGoalSuggestion(ctx context.Context, userID, dr
 		return workspace.DraftView{}, err
 	}
 	defer rollback(ctx, tx)
+	if err = lockUser(ctx, tx, user.ID(userID)); errors.Is(err, pgx.ErrNoRows) {
+		return workspace.DraftView{}, workspace.ErrNotFound
+	} else if err != nil {
+		return workspace.DraftView{}, err
+	}
+	var lockedGoalRevision int64
+	if goalID != "" {
+		if expectedGoalRevision == nil {
+			return workspace.DraftView{}, workspace.ErrGoalRevisionConflict
+		}
+		var status goal.Status
+		err = tx.QueryRow(ctx, `SELECT revision,status FROM goals
+WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(goalID), mustUUID(userID)).Scan(&lockedGoalRevision, &status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return workspace.DraftView{}, workspace.ErrNotFound
+		}
+		if err != nil {
+			return workspace.DraftView{}, err
+		}
+		if status != goal.StatusGoalReview {
+			return workspace.DraftView{}, workspace.ErrGoalReviewNotActive
+		}
+		if lockedGoalRevision != *expectedGoalRevision {
+			return workspace.DraftView{}, workspace.ErrGoalRevisionConflict
+		}
+	}
 	draft, err := lockGoalDraftForAI(ctx, tx, userID, draftID, goalID)
 	if err != nil {
 		return workspace.DraftView{}, err
@@ -557,16 +781,8 @@ func (store *WorkspaceStore) AdoptGoalSuggestion(ctx context.Context, userID, dr
 	}
 	draftID = draft.ID
 	if draft.GoalID != nil {
-		if expectedGoalRevision == nil {
-			return workspace.DraftView{}, workspace.ErrGoalRevisionConflict
-		}
-		var revision int64
-		var status goal.Status
-		if err = tx.QueryRow(ctx, `SELECT revision,status FROM goals WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(*draft.GoalID), mustUUID(userID)).Scan(&revision, &status); err != nil {
-			return workspace.DraftView{}, workspace.ErrNotFound
-		}
-		if revision != *expectedGoalRevision || status != goal.StatusGoalReview {
-			return workspace.DraftView{}, workspace.ErrGoalRevisionConflict
+		if goalID == "" || *draft.GoalID != goalID {
+			return workspace.DraftView{}, workspace.ErrDraftTypeMismatch
 		}
 	}
 	var targetRevision int64
@@ -596,11 +812,22 @@ WHERE id=$1 AND user_id=$2 AND operation_type='goal_refine' AND source_goal_draf
 	draft.Body = output
 	draft.Revision++
 	draft.UpdatedAt = now
-	if _, err = tx.Exec(ctx, `UPDATE goal_drafts SET body=$2,revision=$3,updated_at=$4 WHERE id=$1`, mustUUID(draftID), output, draft.Revision, now); err != nil {
+	command, err := tx.Exec(ctx, `UPDATE goal_drafts SET body=$2,revision=$3,updated_at=$4
+WHERE id=$1 AND user_id=$5 AND revision=$6`,
+		mustUUID(draftID), output, draft.Revision, now, mustUUID(userID), draft.Revision-1)
+	if err != nil {
 		return workspace.DraftView{}, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE ai_generations SET adopted_at=$2,adopted_draft_revision=$3 WHERE id=$1`, mustUUID(generationID), now, draft.Revision); err != nil {
+	if command.RowsAffected() != 1 {
+		return workspace.DraftView{}, errors.New("Goal suggestion Draft CAS invariant violated")
+	}
+	command, err = tx.Exec(ctx, `UPDATE ai_generations SET adopted_at=$2,adopted_draft_revision=$3
+WHERE id=$1 AND status='succeeded' AND adopted_at IS NULL`, mustUUID(generationID), now, draft.Revision)
+	if err != nil {
 		return workspace.DraftView{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return workspace.DraftView{}, errors.New("Goal suggestion adoption CAS invariant violated")
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return workspace.DraftView{}, err
@@ -731,20 +958,19 @@ RETURNING request_count`, check.scope, mac.Sum(nil), window, window.Add(2*time.M
 }
 
 func (store *WorkspaceStore) recoverExpiredAI(ctx context.Context, tx pgx.Tx, userID string, now time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT id,budget_month_utc,budget_reserved_cost_usd FROM ai_generations
-WHERE user_id=$1 AND status='running' AND lease_expires_at<=$2 ORDER BY budget_month_utc,id FOR UPDATE`, mustUUID(userID), now)
+	rows, err := tx.Query(ctx, `SELECT id,budget_reserved_cost_usd::text FROM ai_generations
+WHERE user_id=$1 AND status='running' AND lease_expires_at<=$2 ORDER BY id FOR UPDATE`, mustUUID(userID), now)
 	if err != nil {
 		return err
 	}
 	type expired struct {
 		id       string
-		month    time.Time
-		reserved float64
+		reserved string
 	}
 	items := []expired{}
 	for rows.Next() {
 		var item expired
-		if err = rows.Scan(&item.id, &item.month, &item.reserved); err != nil {
+		if err = rows.Scan(&item.id, &item.reserved); err != nil {
 			rows.Close()
 			return err
 		}
@@ -755,20 +981,67 @@ WHERE user_id=$1 AND status='running' AND lease_expires_at<=$2 ORDER BY budget_m
 		return err
 	}
 	rows.Close()
-	for _, item := range items {
-		if item.reserved > 0 {
-			command, updateErr := tx.Exec(ctx, `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd-$2,updated_at=$3
-WHERE month_utc=$1 AND reserved_cost_usd >= $2`, item.month, item.reserved, now)
-			if updateErr != nil || command.RowsAffected() != 1 {
-				return errors.New("AI budget reservation invariant violated during lease recovery")
+	itemIDs := make([]string, len(items))
+	for index, item := range items {
+		itemIDs[index] = item.id
+	}
+	type monthlyReservation struct {
+		month  time.Time
+		amount string
+	}
+	monthlyReservations := make([]monthlyReservation, 0)
+	if len(itemIDs) > 0 {
+		rows, err = tx.Query(ctx, `SELECT budget_month_utc,SUM(budget_reserved_cost_usd)::text
+FROM ai_generations
+WHERE id=ANY($1::text[]::uuid[]) AND status='running'
+GROUP BY budget_month_utc
+HAVING SUM(budget_reserved_cost_usd)>0
+ORDER BY budget_month_utc`, itemIDs)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var item monthlyReservation
+			if err = rows.Scan(&item.month, &item.amount); err != nil {
+				rows.Close()
+				return err
 			}
+			monthlyReservations = append(monthlyReservations, item)
 		}
-		if _, err = tx.Exec(ctx, `UPDATE ai_generations SET status='failed',failure_code='lease_expired',
-budget_reserved_cost_usd=0,lease_expires_at=NULL,finished_at=$2 WHERE id=$1 AND status='running'`, mustUUID(item.id), now); err != nil {
+		if err = rows.Err(); err != nil {
+			rows.Close()
 			return err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE ai_usage_events SET status='failed' WHERE operation_id=$1 AND status='accepted'`, mustUUID(item.id)); err != nil {
-			return err
+		rows.Close()
+	}
+	for _, monthly := range monthlyReservations {
+		command, updateErr := tx.Exec(ctx, `UPDATE ai_budget_monthly
+SET reserved_cost_usd=reserved_cost_usd-$2::numeric,updated_at=$3
+WHERE month_utc=$1 AND reserved_cost_usd >= $2::numeric`, monthly.month, monthly.amount, now)
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("AI budget reservation invariant violated during lease recovery")
+		}
+	}
+	for _, item := range items {
+		command, updateErr := tx.Exec(ctx, `UPDATE ai_generations SET status='failed',failure_code='lease_expired',
+budget_reserved_cost_usd=0,lease_expires_at=NULL,finished_at=$2
+WHERE id=$1 AND status='running' AND budget_reserved_cost_usd=$3::numeric`, mustUUID(item.id), now, item.reserved)
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("AI generation lease recovery CAS invariant violated")
+		}
+		command, updateErr = tx.Exec(ctx, `UPDATE ai_usage_events SET status='failed'
+WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL`, mustUUID(item.id))
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("AI usage lease recovery CAS invariant violated")
 		}
 	}
 	return nil

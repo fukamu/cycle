@@ -1851,6 +1851,8 @@ AI Budget Monthly
 
 User lockが不要なOperationではGoalから開始してよいが、Goal→Cycle→AI Budgetの相対順序は維持する。
 
+AI開始・finalization、Draft破棄、Goal / Account Delete、既存Anonymous bootstrap再開はUserからlockする。識別子取得だけのnon-locking locator queryは許可するが、locator取得後もUserより先に配下rowをlock・更新せず、User lock後にtargetを`FOR UPDATE`で再検証する。同一種別の複数rowはUUIDまたは月の昇順でlockし、状態遷移・reservation・usage settlementのCASが期待するrow数を満たさない場合はTransaction全体をrollbackする。
+
 ## 18.2 Anonymous User creation
 
 Transaction:
@@ -1861,6 +1863,8 @@ Transaction:
 4. 既存有効bootstrapなら同UserへSession再発行。
 5. ない場合、User + Session + AnonymousBootstrapを作成。
 6. `COMMIT`。
+
+既存bootstrapを再開する場合は、non-locking locatorで対応User IDを観測し、そのUserを`FOR UPDATE`した後、同じbootstrap rowをexpected User条件付きで`FOR UPDATE`して対応と有効期限を再検証する。locatorで既存対応を観測した後、User lock待機中にAccount Deleteが対応を削除した場合はTransactionを失敗させ、candidate User / Session / bootstrapを再作成しない。新規作成へ進めるのは最初のlocatorでbootstrapが存在しなかった場合だけとする。
 
 **Cycle / Goal / Goal Draftは作成しない。**
 
@@ -2068,8 +2072,8 @@ Transaction:
 1. User `FOR UPDATE`。
 2. 既存Goal Delete receiptを確認。同Key同hashなら204。
 3. Goal `FOR UPDATE`。owner / expectedGoalRevisionを検証。
-4. 配下Cycle、Draft、running AIGenerationを決めたlock順でlock。各Generationの`ai_budget_monthly` rowもGenerationの後にlockする。
-5. running AIごとに、`budget_reserved_cost_usd > 0`のときだけ同額を月次`reserved_cost_usd`から減算し、Generation側のreservationを0へする。Generationは`failed / goal_deleted`へterminal化し、AIUsageEventは`failed`・`content_deleted=true`へ更新する。Provider callがin-flightなら`provider_usage_finalized_at`は未設定のまま残す。
+4. 配下Review Draft、Cycle、running AIGenerationをそれぞれUUID昇順でlockし、Generationの後に対象`ai_budget_monthly`を月昇順でlockする。
+5. running AIのreservationはDBの`NUMERIC`として月ごとに合算する。`budget_reserved_cost_usd > 0`の月は同額を`reserved_cost_usd`から一度だけ減算し、Generation側reservationを0へする。Generationは`failed / goal_deleted`へterminal化し、AIUsageEventは`failed`・`content_deleted=true`へ更新する。Provider callがin-flightなら`provider_usage_finalized_at`は未設定のまま残す。Budget、各Generation、各running UsageのCASはexactly one rowを要求し、0-rowならdelete・receiptを含むTransaction全体をrollbackする。
 6. Goalに紐づくAIUsageEvent:
    - Quota window内: `goal_id=NULL`, `content_deleted=true`。
    - window外: Provider usageがsettle済み、またはin-flight callが存在しないことを確認してdelete。
@@ -2532,13 +2536,14 @@ RETURNING revision;
 **Use Case:** AbandonGoalCreationDraft  
 **Auth:** Session
 
-Processing:
+Transaction:
 
-1. Draft lock。
-2. running Goal Refineがあれば通常は`AI_OPERATION_IN_PROGRESS`。UIは処理完了または失敗後に再試行。
+1. User、Creation Draft、Draftに紐づくAIGenerationをこの順でlockする。複数GenerationはUUID昇順。
+2. lockしたGenerationのいずれかがrunningなら`AI_OPERATION_IN_PROGRESS`。UIは処理完了または失敗後に再試行。
 3. Draftに紐づくGoal Refine AIGeneration contentを削除。
 4. 対応するAIUsageEventを`contentDeleted=true`へ更新し、User quota recordとして保持する。
 5. Draftを削除。
+6. Usage更新数、Generation削除数、Draft削除数をlock済みrow数と照合し、0-rowまたは不足ならTransaction全体をrollbackする。
 
 Response: `204 No Content`。
 
@@ -3559,10 +3564,13 @@ Processing:
 1. Google tokenを25.1と同じ方法でverify。
 2. `(google, sub)`のAuthIdentityを取得。
 3. 存在しなければ`GOOGLE_ACCOUNT_NOT_LINKED`。
-4. target Userをlockし、新Sessionを作成。
-5. current Sessionをrevoke。
-6. Cookieをtarget Sessionへ置換。
-7. current Anonymous User / Goal / Cycleはmerge、transfer、自動deleteしない。
+4. target Userをlock。
+5. authenticated contextのcurrent active Sessionを`revoked_at IS NULL`のCASでrevokeし、exactly one rowを要求する。
+6. target Userの新Sessionを作成。
+7. Cookieをtarget Sessionへ置換。
+8. current Anonymous User / Goal / Cycleはmerge、transfer、自動deleteしない。
+
+Session revokeが0-rowなら、新Sessionを作成せずTransaction全体をrollbackする。
 
 Response `200`:
 
@@ -3609,8 +3617,8 @@ Validation:
 Transaction:
 
 1. Userを`FOR UPDATE`。
-2. User配下のGoal / Draft / Cycle / running AIGenerationをglobal lock orderでlock。
-3. running AIごとに月次budget rowをlockし、`budget_reserved_cost_usd`を`reserved_cost_usd`から一度だけ減算する。同額を`unattributed_cost_usd`へ移し、Generation側reservationを0へする。Account Delete後はUser単位のsettlement receiptを保持しないため、最大予約額を保守的なCostとしてbudget計算へ残す。
+2. User配下のGoal / Draft / Cycle / running AIGenerationをglobal lock orderでlockする。同一種別の子rowはUUID昇順、budget rowは月昇順とする。
+3. running AI reservationをDBの`NUMERIC`として月ごとに合算し、月次budget rowの`reserved_cost_usd`から一度だけ減算する。同額を`unattributed_cost_usd`へ移し、各Generation側reservationを0へする。各Generationと各月budgetのCASはexactly one rowを要求し、0-rowならUser deleteを行わずTransaction全体をrollbackする。Account Delete後はUser単位のsettlement receiptを保持しないため、最大予約額を保守的なCostとしてbudget計算へ残す。
 4. `DELETE FROM users WHERE id=?`。
 5. FK cascadeでGoals / Drafts / Versions / Cycles / AIGeneration / AIUsage / AuthIdentity / Sessions / Delete receiptsを削除。
 6. commit後Session Cookieをexpire。
@@ -4279,6 +4287,8 @@ User
 
 同一種別複数rowはUUIDまたは月の昇順でlockする。例外は本書へ理由を記録し、Concurrency Integration Testを追加する。
 
+AI finalizationがAIGeneration / Usageの識別子を得るために行うlocator queryはrow lockを取得しない。その後User→Goal→Draft/Cycle→AIGeneration→Budgetの順でlockし、locator情報を各owner/target/status条件付きqueryで再検証する。Goal Delete後のlate settlementはcontent-free Usageのlocator取得後にUser→Usage→Budgetの順とし、同一UserのDeleteとはUser lock、重複callbackとはUsage CASで直列化する。
+
 ## 31.2 Request hash
 
 Operation ID / Idempotency-Key replayでは、canonical requestからSHA-256 request hashを計算する。
@@ -4409,6 +4419,8 @@ Goal Refine成功時:
 - Draftが開始後に変更された場合は`contextChanged=true`。
 - Adoptionは現在Draft本文とGeneration `sourceText`の完全一致、およびcurrent Draft revisionのCASを要求し、異なる本文をstale suggestionで上書きしない。編集後に同一本文へ戻した場合は、revisionが進んでいても採用できる。
 
+Result finalizationはnon-locking locatorの後、User→対象Goal（Review時）→Draft→AIGeneration→Budgetの順でlockする。Generation terminal化、reservation release / actual加算、Usage finalizationは同一Transactionのexact one-row CASとし、いずれかが0-rowならsuggestionを含む全更新をrollbackする。Goal / Draft / Generationが先に削除済みなら本文を復元せず、§38.3のlate settlementだけを行う。
+
 ## 32.7 Action AI result
 
 Action AI成功時は、Cycle rowを`FOR UPDATE`し次を検証する。
@@ -4427,6 +4439,8 @@ P/D/CはAI開始後に編集されてもよい。AI適用Transactionは**Aだけ
 - `appliedAt = now`
 
 AI処理中のUserによるA saveはBackendでも`AI_OPERATION_IN_PROGRESS`として拒否するため、AI結果とUser A編集は競合しない。
+
+Result finalizationはnon-locking locatorの後、User→Goal→Cycle→AIGeneration→Budgetの順でlockし、Goal / Cycle / Version / Generation targetを再検証する。A更新、Generation terminal化、reservation release / actual加算、Usage finalizationは同一Transactionのexact one-row CASとし、いずれかが0-rowならA revisionを含む全更新をrollbackする。Targetが先に削除済みならAやAggregateを復元せず、§38.3のlate settlementだけを行う。
 
 ## 32.8 Failure behavior
 
@@ -4459,6 +4473,8 @@ leaseSeconds >
 2. AIUsageEventを`failed`へ更新する。
 3. `budget_reserved_cost_usd > 0`の場合だけ、該当月のreservationから同額を減算する。
 4. Generation側reservationを0へする。
+
+複数のexpired GenerationはUUID昇順でlockし、reservationはDBの`NUMERIC`として月ごとに合算してBudgetを月昇順で更新する。各Generation / Usage terminal CASと各月Budget更新はexactly one rowを要求し、0-rowなら新AI reservationを含むTransaction全体をrollbackする。
 
 同じGoal Draft / Cycleのrunning unique constraintを解除し、再試行可能にする。Lease切れだけでProvider callが実際に課金されなかったとは断定しない。後からusageが判明した場合は、AIUsageEventの`provider_usage_finalized_at IS NULL`をCAS条件として、個人本文を伴わないToken/Costと月次actual costへ一度だけ反映する。Late settlementではreservationを再減算しない。
 
@@ -4938,7 +4954,7 @@ else:
     reservedCost += maxAttemptCost
 ```
 
-通常FinalizeはGeneration、AIUsageEvent、月次budget rowを同一Transactionでlockし、次を行う。
+通常Finalizeは§31.1のtarget rowとGenerationをlockした後、月次budget更新とAIUsageEvent finalizationを同一Transactionで行い、次をexact one-row CASとして適用する。
 
 ```text
 if usage.providerUsageFinalizedAt is null:

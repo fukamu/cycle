@@ -101,8 +101,21 @@ func (repository *SessionRepository) createOrResumeAnonymousOnce(ctx context.Con
 	err = tx.QueryRow(ctx, `
 SELECT user_id, expires_at
 FROM anonymous_bootstraps
-WHERE key_hash = $1
-FOR UPDATE`, input.BootstrapKeyHash).Scan(&existingUserID, &existingExpires)
+WHERE key_hash = $1`, input.BootstrapKeyHash).Scan(&existingUserID, &existingExpires)
+	if err == nil {
+		locatedUserID := existingUserID
+		if err = lockUser(ctx, tx, user.ID(uuidString(locatedUserID))); err != nil {
+			return record, err
+		}
+		err = tx.QueryRow(ctx, `
+SELECT user_id, expires_at
+FROM anonymous_bootstraps
+WHERE key_hash = $1 AND user_id = $2
+FOR UPDATE`, input.BootstrapKeyHash, locatedUserID).Scan(&existingUserID, &existingExpires)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return record, err
+		}
+	}
 	switch {
 	case err == nil && existingExpires.After(input.Now):
 		err = insertSession(ctx, tx, input, existingUserID)
@@ -164,6 +177,9 @@ func mustUUID(value string) pgtype.UUID {
 }
 
 func uuidString(value pgtype.UUID) string {
+	if !value.Valid {
+		return ""
+	}
 	encoded, err := value.MarshalJSON()
 	if err != nil || len(encoded) < 2 {
 		return ""

@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -92,9 +91,13 @@ WHERE provider='google' AND provider_subject=$1`, input.Identity.Subject).Scan(&
 	if err = lockUser(ctx, tx, result.UserID); err != nil {
 		return result, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE sessions SET revoked_at=$2
-WHERE id=$1 AND revoked_at IS NULL`, mustUUID(input.CurrentSessionID), input.Now); err != nil {
-		return result, err
+	command, updateErr := tx.Exec(ctx, `UPDATE sessions SET revoked_at=$2
+WHERE id=$1 AND revoked_at IS NULL`, mustUUID(input.CurrentSessionID), input.Now)
+	if updateErr != nil {
+		return result, updateErr
+	}
+	if command.RowsAffected() != 1 {
+		return result, pgx.ErrNoRows
 	}
 	if err = insertAccountSession(ctx, tx, input.NewSessionID, result.UserID, input.SessionTokenHash, input.CSRFTokenHash,
 		input.Now, input.IdleExpiresAt, input.AbsoluteExpiresAt); err != nil {
@@ -113,52 +116,89 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 	if err = lockUser(ctx, tx, userID); err != nil {
 		return err
 	}
-	cycleRows, err := tx.Query(ctx, `SELECT id FROM goals WHERE user_id=$1 ORDER BY id FOR UPDATE`, mustUUID(string(userID)))
+	userUUID := mustUUID(string(userID))
+	goalRows, err := tx.Query(ctx, `SELECT id FROM goals WHERE user_id=$1 ORDER BY id FOR UPDATE`, userUUID)
 	if err != nil {
 		return err
 	}
-	for cycleRows.Next() {
-		var ignored pgtype.UUID
-		if err = cycleRows.Scan(&ignored); err != nil {
-			cycleRows.Close()
-			return err
-		}
+	if err = consumeLockedUUIDRows(goalRows); err != nil {
+		return err
 	}
-	cycleRows.Close()
-	if err = cycleRows.Err(); err != nil {
+	draftRows, err := tx.Query(ctx, `SELECT id FROM goal_drafts WHERE user_id=$1 ORDER BY id FOR UPDATE`, userUUID)
+	if err != nil {
+		return err
+	}
+	if err = consumeLockedUUIDRows(draftRows); err != nil {
+		return err
+	}
+	cycleRows, err := tx.Query(ctx, `SELECT id FROM pdca_cycles WHERE user_id=$1 ORDER BY id FOR UPDATE`, userUUID)
+	if err != nil {
+		return err
+	}
+	if err = consumeLockedUUIDRows(cycleRows); err != nil {
 		return err
 	}
 
-	rows, err := tx.Query(ctx, `SELECT budget_month_utc,budget_reserved_cost_usd
-FROM ai_generations WHERE user_id=$1 AND status='running' ORDER BY id FOR UPDATE`, mustUUID(string(userID)))
+	type generationReservation struct {
+		id pgtype.UUID
+	}
+	generationRows, err := tx.Query(ctx, `SELECT id
+FROM ai_generations WHERE user_id=$1 AND status='running' ORDER BY id FOR UPDATE`, userUUID)
 	if err != nil {
 		return err
 	}
-	reservations := map[time.Time]float64{}
-	for rows.Next() {
-		var month time.Time
-		var value float64
-		if err = rows.Scan(&month, &value); err != nil {
-			rows.Close()
+	generationReservations := make([]generationReservation, 0)
+	for generationRows.Next() {
+		var generation generationReservation
+		if err = generationRows.Scan(&generation.id); err != nil {
+			generationRows.Close()
 			return err
 		}
-		reservations[month.UTC()] += value
+		generationReservations = append(generationReservations, generation)
 	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
+	generationRows.Close()
+	if err = generationRows.Err(); err != nil {
 		return err
 	}
-	months := make([]time.Time, 0, len(reservations))
-	for month := range reservations {
-		months = append(months, month)
+	type monthlyReservation struct {
+		month  time.Time
+		amount pgtype.Numeric
 	}
-	sort.Slice(months, func(i, j int) bool { return months[i].Before(months[j]) })
-	for _, month := range months {
+	reservationRows, err := tx.Query(ctx, `SELECT budget_month_utc,SUM(budget_reserved_cost_usd)
+FROM ai_generations WHERE user_id=$1 AND status='running'
+GROUP BY budget_month_utc ORDER BY budget_month_utc`, userUUID)
+	if err != nil {
+		return err
+	}
+	monthlyReservations := make([]monthlyReservation, 0)
+	for reservationRows.Next() {
+		var reservation monthlyReservation
+		if err = reservationRows.Scan(&reservation.month, &reservation.amount); err != nil {
+			reservationRows.Close()
+			return err
+		}
+		monthlyReservations = append(monthlyReservations, reservation)
+	}
+	reservationRows.Close()
+	if err = reservationRows.Err(); err != nil {
+		return err
+	}
+	for _, generation := range generationReservations {
+		command, updateErr := tx.Exec(ctx, `UPDATE ai_generations SET budget_reserved_cost_usd=0
+WHERE user_id=$1 AND id=$2 AND status='running'`, userUUID, generation.id)
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("account delete generation reservation invariant failed")
+		}
+	}
+	for _, reservation := range monthlyReservations {
 		command, updateErr := tx.Exec(ctx, `UPDATE ai_budget_monthly SET
 reserved_cost_usd=reserved_cost_usd-$2,
 unattributed_cost_usd=unattributed_cost_usd+$2,
 updated_at=$3
-WHERE month_utc=$1 AND reserved_cost_usd >= $2`, month, reservations[month], now)
+WHERE month_utc=$1 AND reserved_cost_usd >= $2`, reservation.month, reservation.amount, now)
 		if updateErr != nil {
 			return updateErr
 		}
@@ -166,7 +206,7 @@ WHERE month_utc=$1 AND reserved_cost_usd >= $2`, month, reservations[month], now
 			return errors.New("account delete budget reservation invariant failed")
 		}
 	}
-	command, err := tx.Exec(ctx, `DELETE FROM users WHERE id=$1`, mustUUID(string(userID)))
+	command, err := tx.Exec(ctx, `DELETE FROM users WHERE id=$1`, userUUID)
 	if err != nil {
 		return err
 	}
@@ -180,6 +220,17 @@ WHERE month_utc=$1 AND reserved_cost_usd >= $2`, month, reservations[month], now
 func lockUser(ctx context.Context, tx pgx.Tx, userID user.ID) error {
 	var ignored pgtype.UUID
 	return tx.QueryRow(ctx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, mustUUID(string(userID))).Scan(&ignored)
+}
+
+func consumeLockedUUIDRows(rows pgx.Rows) error {
+	defer rows.Close()
+	for rows.Next() {
+		var ignored pgtype.UUID
+		if err := rows.Scan(&ignored); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func rotateSession(ctx context.Context, tx pgx.Tx, currentSessionID, newSessionID string, userID user.ID, tokenHash, csrfHash []byte, now, idleExpiry, absoluteExpiry time.Time) error {

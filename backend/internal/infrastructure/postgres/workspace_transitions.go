@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -577,8 +576,10 @@ func (store *WorkspaceStore) DeleteGoal(ctx context.Context, userID, goalID stri
 		return err
 	}
 	defer rollback(ctx, tx)
-	if err = lockUser(ctx, tx, user.ID(userID)); err != nil {
+	if err = lockUser(ctx, tx, user.ID(userID)); errors.Is(err, pgx.ErrNoRows) {
 		return workspace.ErrNotFound
+	} else if err != nil {
+		return err
 	}
 	var receiptGoal, receiptHash string
 	err = tx.QueryRow(ctx, `SELECT deleted_goal_id,request_hash FROM goal_delete_receipts
@@ -603,41 +604,127 @@ WHERE user_id=$1 AND idempotency_key=$2 AND expires_at>$3`, mustUUID(userID), mu
 	if revision != expectedRevision {
 		return workspace.ErrDeleteConflict
 	}
-	rows, err := tx.Query(ctx, `SELECT id,budget_month_utc,budget_reserved_cost_usd FROM ai_generations
+	draftRows, err := tx.Query(ctx, `SELECT id FROM goal_drafts
+WHERE goal_id=$1 AND user_id=$2 ORDER BY id FOR UPDATE`, mustUUID(goalID), mustUUID(userID))
+	if err != nil {
+		return err
+	}
+	for draftRows.Next() {
+		var ignored string
+		if err = draftRows.Scan(&ignored); err != nil {
+			draftRows.Close()
+			return err
+		}
+	}
+	rowErr := draftRows.Err()
+	draftRows.Close()
+	if rowErr != nil {
+		return rowErr
+	}
+	cycleRows, err := tx.Query(ctx, `SELECT id FROM pdca_cycles
+WHERE goal_id=$1 AND user_id=$2 ORDER BY id FOR UPDATE`, mustUUID(goalID), mustUUID(userID))
+	if err != nil {
+		return err
+	}
+	for cycleRows.Next() {
+		var ignored string
+		if err = cycleRows.Scan(&ignored); err != nil {
+			cycleRows.Close()
+			return err
+		}
+	}
+	rowErr = cycleRows.Err()
+	cycleRows.Close()
+	if rowErr != nil {
+		return rowErr
+	}
+	rows, err := tx.Query(ctx, `SELECT id,budget_reserved_cost_usd::text FROM ai_generations
 WHERE goal_id=$1 AND status='running' ORDER BY id FOR UPDATE`, mustUUID(goalID))
 	if err != nil {
 		return err
 	}
 	type reservation struct {
 		id     string
-		month  time.Time
-		amount float64
+		amount string
 	}
 	var reservations []reservation
 	for rows.Next() {
 		var item reservation
-		if err = rows.Scan(&item.id, &item.month, &item.amount); err != nil {
+		if err = rows.Scan(&item.id, &item.amount); err != nil {
 			rows.Close()
 			return err
 		}
 		reservations = append(reservations, item)
 	}
-	rowErr := rows.Err()
+	rowErr = rows.Err()
 	rows.Close()
 	if rowErr != nil {
 		return rowErr
 	}
-	sort.Slice(reservations, func(i, j int) bool { return reservations[i].month.Before(reservations[j].month) })
-	for _, item := range reservations {
-		if item.amount > 0 {
-			if _, err = tx.Exec(ctx, `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd-$2,updated_at=$3
-WHERE month_utc=$1 AND reserved_cost_usd >= $2`, item.month, item.amount, now); err != nil {
+	reservationIDs := make([]string, len(reservations))
+	for index, item := range reservations {
+		reservationIDs[index] = item.id
+	}
+	type monthlyReservation struct {
+		month  time.Time
+		amount string
+	}
+	monthlyReservations := make([]monthlyReservation, 0)
+	if len(reservationIDs) > 0 {
+		rows, err = tx.Query(ctx, `SELECT budget_month_utc,SUM(budget_reserved_cost_usd)::text
+FROM ai_generations
+WHERE id=ANY($1::text[]::uuid[]) AND status='running'
+GROUP BY budget_month_utc
+HAVING SUM(budget_reserved_cost_usd)>0
+ORDER BY budget_month_utc`, reservationIDs)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var item monthlyReservation
+			if err = rows.Scan(&item.month, &item.amount); err != nil {
+				rows.Close()
 				return err
 			}
+			monthlyReservations = append(monthlyReservations, item)
 		}
-		if _, err = tx.Exec(ctx, `UPDATE ai_generations SET status='failed',failure_code='goal_deleted',
-budget_reserved_cost_usd=0,lease_expires_at=NULL,finished_at=$2 WHERE id=$1`, mustUUID(item.id), now); err != nil {
-			return err
+		rowErr = rows.Err()
+		rows.Close()
+		if rowErr != nil {
+			return rowErr
+		}
+	}
+	for _, monthly := range monthlyReservations {
+		command, updateErr := tx.Exec(ctx, `UPDATE ai_budget_monthly
+SET reserved_cost_usd=reserved_cost_usd-$2::numeric,updated_at=$3
+WHERE month_utc=$1 AND reserved_cost_usd >= $2::numeric`, monthly.month, monthly.amount, now)
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("Goal Delete budget reservation invariant violated")
+		}
+	}
+	for _, item := range reservations {
+		command, updateErr := tx.Exec(ctx, `UPDATE ai_generations SET status='failed',failure_code='goal_deleted',
+budget_reserved_cost_usd=0,lease_expires_at=NULL,finished_at=$2
+WHERE id=$1 AND status='running' AND budget_reserved_cost_usd=$3::numeric`, mustUUID(item.id), now, item.amount)
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("Goal Delete generation terminal CAS invariant violated")
+		}
+		command, updateErr = tx.Exec(ctx, `UPDATE ai_usage_events
+SET goal_id=NULL,status='failed',content_deleted=true
+WHERE operation_id=$1 AND user_id=$2 AND goal_id=$3
+  AND status='accepted' AND provider_usage_finalized_at IS NULL`,
+			mustUUID(item.id), mustUUID(userID), mustUUID(goalID))
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("Goal Delete usage CAS invariant violated")
 		}
 	}
 	if _, err = tx.Exec(ctx, `UPDATE ai_usage_events SET goal_id=NULL,status=CASE WHEN status='accepted' THEN 'failed' ELSE status END,
@@ -645,14 +732,20 @@ content_deleted=true WHERE user_id=$1 AND goal_id=$2`, mustUUID(userID), mustUUI
 		return err
 	}
 	command, err := tx.Exec(ctx, `DELETE FROM goals WHERE id=$1 AND user_id=$2`, mustUUID(goalID), mustUUID(userID))
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
 		return workspace.ErrNotFound
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO goal_delete_receipts
+	command, err = tx.Exec(ctx, `INSERT INTO goal_delete_receipts
 (user_id,idempotency_key,deleted_goal_id,request_hash,deleted_at,expires_at)
 VALUES($1,$2,$3,$4,$5,$6)`, mustUUID(userID), mustUUID(key), mustUUID(goalID), requestHash, now, now.Add(24*time.Hour))
 	if err != nil {
 		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("Goal Delete receipt insertion invariant violated")
 	}
 	return tx.Commit(ctx)
 }
