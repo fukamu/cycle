@@ -166,17 +166,19 @@ describe("useDraftAutoSave", () => {
 
   it("does not send a mismatched browser draft until the user restores it", async () => {
     vi.useFakeTimers();
+    const recoveredBody = `${"😀".repeat(81)}\r\n末尾 \t`;
+    const canonicalBody = `${"😀".repeat(81)}\n末尾 \t`;
     vi.mocked(getBrowserDraft).mockResolvedValue({
       userId: "user-1",
       goalId: "goal-1",
       subjectKey: "goal-review:goal-1",
-      body: "local recovery",
+      body: recoveredBody,
       baseRevision: 4,
       updatedAt: new Date().toISOString(),
     });
     const save = vi
       .fn()
-      .mockResolvedValue({ body: "local recovery", revision: 6 });
+      .mockResolvedValue({ body: canonicalBody, revision: 6 });
     const { result } = renderHook(() =>
       useDraftAutoSave({
         ...input(save),
@@ -186,16 +188,25 @@ describe("useDraftAutoSave", () => {
     );
 
     await act(async () => undefined);
-    expect(result.current.body).toBe("local recovery");
+    expect(result.current.body).toBe(canonicalBody);
+    expect(result.current.recoveryConflict?.body).toBe(canonicalBody);
     expect(result.current.recoveryConflict?.baseRevision).toBe(4);
     expect(result.current.state).toBe("failed");
+
+    expect(putBrowserDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: canonicalBody,
+        baseRevision: 4,
+      }),
+    );
+    expect(Array.from(result.current.body).length).toBeGreaterThan(80);
 
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(save).not.toHaveBeenCalled();
 
     act(() => result.current.restoreRecovery());
     await act(() => vi.advanceTimersByTimeAsync(0));
-    expect(save).toHaveBeenCalledWith("local recovery", 5);
+    expect(save).toHaveBeenCalledWith(canonicalBody, 5);
   });
 
   it("converges to the latest revision without overwriting when a conflicted snapshot is already on the server", async () => {

@@ -1,9 +1,24 @@
 import { z } from "zod";
 
 import { UUID_V7_PATTERN } from "../id/uuid";
+import {
+  FRAME_TEXT_MAX_CODE_POINTS,
+  GOAL_TEXT_MAX_CODE_POINTS,
+  hasNoNUL,
+  isWithinCodePointLimit,
+  normalizeLineEndings,
+} from "../text/semantics";
 
 const uuid = z.string().regex(UUID_V7_PATTERN);
 const instant = z.string().datetime({ offset: true });
+const boundedTextSchema = (maximumCodePoints: number) =>
+  z
+    .string()
+    .transform(normalizeLineEndings)
+    .refine(hasNoNUL)
+    .refine((value) => isWithinCodePointLimit(value, maximumCodePoints));
+const goalTextSchema = boundedTextSchema(GOAL_TEXT_MAX_CODE_POINTS);
+const frameTextSchema = boundedTextSchema(FRAME_TEXT_MAX_CODE_POINTS);
 
 export const frameSchema = z.enum(["plan", "do", "check", "action"]);
 export type Frame = z.infer<typeof frameSchema>;
@@ -28,7 +43,7 @@ export type Session = z.infer<typeof sessionSchema>;
 export const goalVersionSchema = z.object({
   id: uuid,
   versionNumber: z.number().int().positive(),
-  body: z.string(),
+  body: goalTextSchema,
   createdAt: instant.optional(),
 });
 export type GoalVersion = z.infer<typeof goalVersionSchema>;
@@ -39,7 +54,7 @@ export const draftSchema = z.object({
   goalId: uuid.optional(),
   baseGoalVersionId: uuid.optional(),
   reviewCycleId: uuid.optional(),
-  body: z.string(),
+  body: goalTextSchema,
   revision: z.number().int().nonnegative(),
   updatedAt: instant,
 });
@@ -64,10 +79,10 @@ export const cycleSchema = z.object({
   cancellationReason: z
     .enum(["goal_achieved", "goal_ended", "goal_deleted"])
     .nullable(),
-  plan: z.string(),
-  do: z.string(),
-  check: z.string(),
-  action: z.string(),
+  plan: frameTextSchema,
+  do: frameTextSchema,
+  check: frameTextSchema,
+  action: frameTextSchema,
   contentRevision: z.number().int().nonnegative(),
   frameRevisions: frameRevisionsSchema,
 });
@@ -130,7 +145,7 @@ export const cycleSummarySchema = z.object({
   completedAt: instant.nullable(),
   canceledAt: instant.nullable(),
   goalVersion: goalVersionSchema,
-  planPreview: z.string(),
+  planPreview: frameTextSchema,
 });
 export type CycleSummary = z.infer<typeof cycleSummarySchema>;
 export const cyclePageSchema = z.object({
@@ -142,7 +157,7 @@ export type CyclePage = z.infer<typeof cyclePageSchema>;
 export const saveFrameSchema = z.object({
   cycleId: uuid,
   frame: frameSchema,
-  content: z.string(),
+  content: frameTextSchema,
   frameRevision: z.number().int().nonnegative(),
   contentRevision: z.number().int().nonnegative(),
   savedAt: instant,
@@ -153,8 +168,8 @@ export const aiResponseSchema = z.object({
   generationId: uuid,
   sourceDraftRevision: z.number().int().nonnegative().optional(),
   sourceGoalRevision: z.number().int().nonnegative().optional(),
-  suggestion: z.string().optional(),
-  action: z.string().optional(),
+  suggestion: goalTextSchema.optional(),
+  action: frameTextSchema.optional(),
   contentRevision: z.number().int().nonnegative().optional(),
   actionRevision: z.number().int().nonnegative().optional(),
   contextChanged: z.boolean(),
@@ -164,7 +179,7 @@ export type AIResponse = z.infer<typeof aiResponseSchema>;
 
 export const goalRefineResponseSchema = aiResponseSchema.extend({
   sourceDraftRevision: z.number().int().nonnegative(),
-  suggestion: z.string(),
+  suggestion: goalTextSchema,
 });
 export type GoalRefineResponse = z.infer<typeof goalRefineResponseSchema>;
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
@@ -256,5 +257,32 @@ func TestSaveReviewForwardsExpectedDraftGeneration(t *testing.T) {
 	}
 	if view.ID != reviewDraftID || view.Body != "local body" || view.Revision != 5 {
 		t.Fatalf("SaveReview view = %#v", view)
+	}
+}
+
+func TestValidateAIOutputUsesCodePointAndExactWhitespaceSemantics(t *testing.T) {
+	goalAtLimit := strings.Repeat("🌱", goal.MaxGoalCodePoints)
+	if output, err := validateAIOutput("goal_refine", goalAtLimit); err != nil || output != goalAtLimit {
+		t.Fatalf("80-code-point Goal AI output = %q, %v", output, err)
+	}
+	if _, err := validateAIOutput("goal_refine", goalAtLimit+"🌱"); !errors.Is(err, ErrAIInvalidResponse) {
+		t.Fatalf("81-code-point Goal AI output error = %v, want %v", err, ErrAIInvalidResponse)
+	}
+
+	frameAtLimit := strings.Repeat("🌱", cycle.MaxFrameCodePoints)
+	if output, err := validateAIOutput("action_refine", frameAtLimit); err != nil || output != frameAtLimit {
+		t.Fatalf("200-code-point Frame AI output = %q, %v", output, err)
+	}
+	if _, err := validateAIOutput("action_refine", frameAtLimit+"🌱"); !errors.Is(err, ErrAIInvalidResponse) {
+		t.Fatalf("201-code-point Frame AI output error = %v, want %v", err, ErrAIInvalidResponse)
+	}
+
+	const input = "  目標\r\n本文\r末尾 \t"
+	const want = "  目標\n本文\n末尾 \t"
+	if output, err := validateAIOutput("goal_refine", input); err != nil || output != want {
+		t.Fatalf("Goal AI newline/whitespace output = %q, %v, want %q", output, err, want)
+	}
+	if output, err := validateAIOutput("action_refine", input); err != nil || output != want {
+		t.Fatalf("Frame AI newline/whitespace output = %q, %v, want %q", output, err, want)
 	}
 }

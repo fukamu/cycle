@@ -196,6 +196,103 @@ describe("GoalReviewPage", () => {
     });
   });
 
+  it("accepts 80 non-BMP review code points and rejects the 81st", async () => {
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    const eightyCodePoints = "😀".repeat(80);
+
+    expect(editor).not.toHaveAttribute("maxlength");
+    fireEvent.change(editor, { target: { value: eightyCodePoints } });
+
+    expect(editor).toHaveValue(eightyCodePoints);
+    expect(screen.getByText("80 / 80")).toBeInTheDocument();
+
+    fireEvent.change(editor, {
+      target: { value: `${eightyCodePoints}😀` },
+    });
+
+    expect(editor).toHaveValue(eightyCodePoints);
+    expect(screen.getByText("80 / 80")).toBeInTheDocument();
+  });
+
+  it("normalizes line endings before autosave without trimming whitespace", async () => {
+    const normalizedBody = "\t一行目\n二行目\n三行目 \t";
+    vi.mocked(saveReview).mockResolvedValue({
+      reviewDraft: {
+        ...reviewDraft,
+        body: normalizedBody,
+        revision: reviewDraft.revision + 1,
+      },
+    });
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.change(editor, {
+      target: { value: "\t一行目\r\n二行目\r三行目 \t" },
+    });
+    fireEvent.blur(editor);
+
+    await waitFor(() =>
+      expect(saveReview).toHaveBeenCalledWith(
+        goal.id,
+        reviewDraft.id,
+        normalizedBody,
+        reviewDraft.revision,
+        session.csrfToken,
+      ),
+    );
+    await waitFor(() =>
+      expect(putBrowserDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: normalizedBody,
+          baseRevision: reviewDraft.revision,
+        }),
+      ),
+    );
+  });
+
+  it("treats CRLF and lone CR as LF before exact review comparison", async () => {
+    const currentBody = "一行目\n二行目";
+    vi.mocked(getReview).mockResolvedValue({
+      ...review,
+      goal: {
+        ...goal,
+        currentVersion: { ...goal.currentVersion, body: currentBody },
+      },
+      reviewDraft: { ...reviewDraft, body: "一行目\r二行目" },
+    });
+
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("treats trailing whitespace as an actual review change", async () => {
+    vi.mocked(getReview).mockResolvedValue({
+      ...review,
+      reviewDraft: {
+        ...reviewDraft,
+        body: `${goal.currentVersion.body} `,
+      },
+    });
+
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        `変更した目標をGoal v${goal.currentVersion.versionNumber + 1}として保存し、Cycle ${goal.nextCycleSequenceNumber}を開始します`,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("requires discard confirmation before terminating a dirty review", async () => {
     renderPage();
     const editor = await screen.findByRole("textbox", {

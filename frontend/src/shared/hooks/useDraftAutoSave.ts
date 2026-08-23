@@ -8,6 +8,7 @@ import {
   getBrowserDraft,
   putBrowserDraft,
 } from "../drafts/browserDraftCache";
+import { normalizeLineEndings } from "../text/semantics";
 import {
   autoSaveDebounceMs,
   autoSaveRetryDelay,
@@ -393,22 +394,30 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     void getBrowserDraft(userId, subjectKey)
       .then((draft) => {
         if (canceled || hasEditedRef.current || !draft) return;
-        if (draft.baseRevision !== revisionRef.current) {
+        const canonicalBody = normalizeLineEndings(draft.body);
+        const canonicalDraft =
+          canonicalBody === draft.body
+            ? draft
+            : { ...draft, body: canonicalBody };
+        if (canonicalBody !== draft.body)
+          void cacheDraft(canonicalBody, draft.baseRevision);
+
+        if (canonicalDraft.baseRevision !== revisionRef.current) {
           conflictRef.current = true;
           setRevisionConflictActive(true);
-          bodyRef.current = draft.body;
-          setValue("body", draft.body);
-          setRecoveryConflict(draft);
+          bodyRef.current = canonicalDraft.body;
+          setValue("body", canonicalDraft.body);
+          setRecoveryConflict(canonicalDraft);
           setState("failed");
           return;
         }
-        if (draft.body === savedBodyRef.current) {
+        if (canonicalDraft.body === savedBodyRef.current) {
           void deleteCachedDraft();
           return;
         }
-        bodyRef.current = draft.body;
+        bodyRef.current = canonicalDraft.body;
         editVersionRef.current += 1;
-        setValue("body", draft.body);
+        setValue("body", canonicalDraft.body);
         setState("dirty");
         scheduleSave(autoSaveDebounceMs);
       })
@@ -418,7 +427,14 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     return () => {
       canceled = true;
     };
-  }, [deleteCachedDraft, scheduleSave, setValue, subjectKey, userId]);
+  }, [
+    cacheDraft,
+    deleteCachedDraft,
+    scheduleSave,
+    setValue,
+    subjectKey,
+    userId,
+  ]);
 
   useEffect(() => {
     const handleOnline = () => {

@@ -57,6 +57,13 @@ import {
   formatActivePeriod,
   formatCompletedPeriod,
 } from "../shared/date/format";
+import {
+  codePointCount,
+  FRAME_TEXT_MAX_CODE_POINTS,
+  hasNonWhitespace,
+  normalizeBoundedTextInput,
+  normalizeLineEndings,
+} from "../shared/text/semantics";
 
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
 type Values = Record<Frame, string>;
@@ -837,8 +844,15 @@ function CycleWorkspace({
           cacheReadFailed = true;
           continue;
         }
-        const { draft, frame } = item;
-        if (!draft || editedFramesRef.current.has(frame)) continue;
+        const { draft: loadedDraft, frame } = item;
+        if (!loadedDraft || editedFramesRef.current.has(frame)) continue;
+        const canonicalBody = normalizeLineEndings(loadedDraft.body);
+        const draft =
+          canonicalBody === loadedDraft.body
+            ? loadedDraft
+            : { ...loadedDraft, body: canonicalBody };
+        if (canonicalBody !== loadedDraft.body)
+          void cacheFrameDraft(frame, canonicalBody, loadedDraft.baseRevision);
         nextValues = { ...nextValues, [frame]: draft.body };
         frameEditVersionsRef.current[frame] += 1;
         if (draft.baseRevision === revisions.current[frame]) {
@@ -864,6 +878,7 @@ function CycleWorkspace({
       canceled = true;
     };
   }, [
+    cacheFrameDraft,
     cycle.id,
     deleteFrameDraft,
     editable,
@@ -922,17 +937,22 @@ function CycleWorkspace({
   }, [clearBrowserTimer, clearSaveTimer, hasSavablePending, persistFrameDraft]);
 
   function change(frame: Frame, value: string) {
-    if (Array.from(value).length > 200) return;
     if (movedWorkspaceRef.current || conflictsRef.current.has(frame)) return;
+    const normalizedValue = normalizeBoundedTextInput(
+      value,
+      FRAME_TEXT_MAX_CODE_POINTS,
+    );
+    if (normalizedValue === null) return;
     editedFramesRef.current.add(frame);
     inputVersionRef.current += 1;
     frameEditVersionsRef.current[frame] += 1;
     retryCountRef.current = 0;
     lastInputAtRef.current = Date.now();
-    valuesRef.current = { ...valuesRef.current, [frame]: value };
+    valuesRef.current = { ...valuesRef.current, [frame]: normalizedValue };
     setValues(valuesRef.current);
-    if (value === savedValuesRef.current[frame]) pending.current.delete(frame);
-    else pending.current.set(frame, value);
+    if (normalizedValue === savedValuesRef.current[frame])
+      pending.current.delete(frame);
+    else pending.current.set(frame, normalizedValue);
     if (!saveInFlightRef.current)
       setSaveState(
         conflictsRef.current.size || cycleRevisionConflictsRef.current.size
@@ -1140,13 +1160,11 @@ function CycleWorkspace({
           : "saved",
     );
   }
-  const allPDC = [values.plan, values.do, values.check].every((value) =>
-    value.trim(),
-  );
-  const allFrames = allPDC && values.action.trim();
+  const allPDC = [values.plan, values.do, values.check].every(hasNonWhitespace);
+  const allFrames = allPDC && hasNonWhitespace(values.action);
   const aiReady = saveState === "saved" && aiState === "idle";
   function requestAI(kind: "generating" | "refining") {
-    if (kind === "generating" && values.action.trim()) {
+    if (kind === "generating" && hasNonWhitespace(values.action)) {
       setConfirmation({ kind: "replace-action" });
       return;
     }
@@ -1439,7 +1457,6 @@ function CycleWorkspace({
             (selected === "action" && aiState !== "idle")
           }
           value={values[selected]}
-          maxLength={200}
           placeholder={copy.placeholder}
           readOnly={
             workspaceMoved ||
@@ -1459,7 +1476,9 @@ function CycleWorkspace({
           ) : (
             <span className="read-only-badge">読み取り専用</span>
           )}
-          <span>{Array.from(values[selected]).length} / 200</span>
+          <span>
+            {codePointCount(values[selected])} / {FRAME_TEXT_MAX_CODE_POINTS}
+          </span>
         </div>
         {editable && !workspaceMoved && selected === "action" && (
           <div className="action-controls">

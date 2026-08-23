@@ -118,6 +118,34 @@ func TestTextLimitsUseCodePointsAndNeverTruncate(t *testing.T) {
 	}
 }
 
+func TestFrameTextUsesNonBMPCodePointBoundariesAndPreservesWhitespace(t *testing.T) {
+	atLimit := strings.Repeat("🌱", MaxFrameCodePoints)
+	if normalized, err := NormalizeAndValidateText(atLimit); err != nil || normalized != atLimit {
+		t.Fatalf("200 non-BMP code points = %q, %v", normalized, err)
+	}
+	if normalized, err := NormalizeAndValidateText(atLimit + "🌱"); !errors.Is(err, ErrFrameTextTooLong) || normalized != "" {
+		t.Fatalf("201 non-BMP code points = %q, %v", normalized, err)
+	}
+
+	current := New("cycle", "user", "goal", "version", 1, "operation", "hash", testNow)
+	result, err := SaveFrame(current, FramePlan, "  P\r\nD\rA \t", 0, false, testNow.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "  P\nD\nA \t" || result.Cycle.Plan != result.Content {
+		t.Fatalf("saved frame content = %q, cycle plan = %q", result.Content, result.Cycle.Plan)
+	}
+}
+
+func TestUnicodeWhitespaceBlankSemanticsMatchFrontend(t *testing.T) {
+	if !IsBlank("\u0085") {
+		t.Fatal("U+0085 must be blank")
+	}
+	if IsBlank("\uFEFF") {
+		t.Fatal("U+FEFF must not be blank")
+	}
+}
+
 func readyCycle(t *testing.T) PDCACycle {
 	t.Helper()
 	current := New("cycle", "user", "goal", "version", 1, "operation", "hash", testNow)

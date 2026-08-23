@@ -36,6 +36,12 @@ import {
   useCommandOperation,
 } from "../shared/hooks/useCommandOperation";
 import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
+import {
+  codePointCount,
+  GOAL_TEXT_MAX_CODE_POINTS,
+  hasNonWhitespace,
+  normalizeBoundedTextInput,
+} from "../shared/text/semantics";
 
 export function NewGoalPage() {
   const session = useSession();
@@ -143,8 +149,9 @@ function GoalDraftEditor({
     loadLatest,
     acceptLatest,
   });
-  const count = Array.from(editor.body).length;
-  const valid = editor.body.trim().length > 0 && count <= 80;
+  const count = codePointCount(editor.body);
+  const valid =
+    hasNonWhitespace(editor.body) && count <= GOAL_TEXT_MAX_CODE_POINTS;
 
   async function requestRefine() {
     setError(undefined);
@@ -269,10 +276,15 @@ function GoalDraftEditor({
           id="goal-body"
           aria-describedby="goal-editor-guide"
           value={editor.body}
-          maxLength={80}
           placeholder={goalCopy.placeholder}
           readOnly={conflictPending}
-          onChange={(event) => editor.setBody(event.target.value)}
+          onChange={(event) => {
+            const body = normalizeBoundedTextInput(
+              event.target.value,
+              GOAL_TEXT_MAX_CODE_POINTS,
+            );
+            if (body !== null) editor.setBody(body);
+          }}
           onBlur={editor.flush}
         />
         <div className="editor-meta">
@@ -280,8 +292,14 @@ function GoalDraftEditor({
             state={editor.state}
             retry={conflictRetryBlocked ? undefined : editor.retry}
           />
-          <span className={count > 80 ? "counter counter--error" : "counter"}>
-            {count} / 80
+          <span
+            className={
+              count > GOAL_TEXT_MAX_CODE_POINTS
+                ? "counter counter--error"
+                : "counter"
+            }
+          >
+            {count} / {GOAL_TEXT_MAX_CODE_POINTS}
           </span>
         </div>
         <div className="button-row">

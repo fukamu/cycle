@@ -17,8 +17,14 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await page.goto("/");
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
   const goal = page.getByRole("textbox", { name: "あなたの目標" });
-  await expect(goal).toHaveAttribute("maxlength", "80");
+  await expect(goal).not.toHaveAttribute("maxlength");
   await expect(page.getByText("0 / 80")).toBeVisible();
+  const maximumGoal = "😀".repeat(80);
+  await saveText(page, goal, maximumGoal, "/api/v1/goal-drafts/");
+  await expect(goal).toHaveValue(maximumGoal);
+  await expect(page.getByText("80 / 80")).toBeVisible();
+  await goal.fill(`${maximumGoal}😀`);
+  await expect(goal).toHaveValue(maximumGoal);
   await saveText(page, goal, goalText, "/api/v1/goal-drafts/");
   await page.getByRole("button", { name: "AIで目標を整える" }).click();
   await expect(
@@ -42,8 +48,14 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await page.getByRole("button", { name: "この目標で始める" }).click();
   await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
   const planEditor = page.getByRole("textbox", { name: "P — Plan" });
-  await expect(planEditor).toHaveAttribute("maxlength", "200");
+  await expect(planEditor).not.toHaveAttribute("maxlength");
   await expect(page.getByText("0 / 200")).toBeVisible();
+  const maximumFrame = "😀".repeat(200);
+  await saveFrame(page, "P — Plan", maximumFrame, "P");
+  await expect(planEditor).toHaveValue(maximumFrame);
+  await expect(page.getByText("200 / 200")).toBeVisible();
+  await planEditor.fill(`${maximumFrame}😀`);
+  await expect(planEditor).toHaveValue(maximumFrame);
 
   await saveFrame(
     page,

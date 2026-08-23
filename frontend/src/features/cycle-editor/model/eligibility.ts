@@ -1,4 +1,8 @@
 import type { Frame } from "../../../shared/api/schemas";
+import {
+  codePointCount as countCodePoints,
+  hasNonWhitespace,
+} from "../../../shared/text/semantics";
 
 export type SaveState =
   | { readonly kind: "saved" }
@@ -23,11 +27,11 @@ export type AIState =
 export type FrameValues = Readonly<Record<Frame, string>>;
 
 export function codePointCount(value: string): number {
-  return Array.from(value).length;
+  return countCodePoints(value);
 }
 
 export function isNonBlank(value: string): boolean {
-  return value.trim().length > 0;
+  return hasNonWhitespace(value);
 }
 
 export function canGenerate(

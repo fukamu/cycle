@@ -145,6 +145,27 @@ describe("NewGoalPage", () => {
     });
   });
 
+  it("accepts 80 non-BMP code points and rejects the 81st", async () => {
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "あなたの目標",
+    });
+    const eightyCodePoints = "😀".repeat(80);
+
+    expect(editor).not.toHaveAttribute("maxlength");
+    fireEvent.change(editor, { target: { value: eightyCodePoints } });
+
+    expect(editor).toHaveValue(eightyCodePoints);
+    expect(screen.getByText("80 / 80")).toBeInTheDocument();
+
+    fireEvent.change(editor, {
+      target: { value: `${eightyCodePoints}😀` },
+    });
+
+    expect(editor).toHaveValue(eightyCodePoints);
+    expect(screen.getByText("80 / 80")).toBeInTheDocument();
+  });
+
   it("keeps refinement separate until the user explicitly adopts it", async () => {
     renderPage();
     const editor = await screen.findByRole("textbox", {

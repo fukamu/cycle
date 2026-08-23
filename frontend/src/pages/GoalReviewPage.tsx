@@ -34,6 +34,13 @@ import {
   useCommandOperation,
 } from "../shared/hooks/useCommandOperation";
 import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
+import {
+  codePointCount,
+  GOAL_TEXT_MAX_CODE_POINTS,
+  hasNonWhitespace,
+  normalizeBoundedTextInput,
+  textDiffersAfterLineEndingNormalization,
+} from "../shared/text/semantics";
 
 export function GoalReviewPage() {
   const session = useSession();
@@ -113,10 +120,11 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     loadLatest,
     acceptLatest,
   });
-  const count = Array.from(editor.body).length;
-  const changed =
-    editor.body.replaceAll("\r\n", "\n").trim() !==
-    goal.currentVersion.body.replaceAll("\r\n", "\n").trim();
+  const count = codePointCount(editor.body);
+  const changed = textDiffersAfterLineEndingNormalization(
+    editor.body,
+    goal.currentVersion.body,
+  );
 
   async function requestRefine() {
     setError(undefined);
@@ -252,7 +260,8 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       setPending(false);
     }
   }
-  const valid = editor.body.trim().length > 0 && count <= 80;
+  const valid =
+    hasNonWhitespace(editor.body) && count <= GOAL_TEXT_MAX_CODE_POINTS;
   const conflictPending = editor.revisionConflictActive;
   const conflictRetryBlocked =
     editor.resolvingConflict || Boolean(editor.recoveryConflict);
@@ -294,9 +303,14 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         <textarea
           id="review-goal"
           value={editor.body}
-          maxLength={80}
           readOnly={conflictPending}
-          onChange={(event) => editor.setBody(event.target.value)}
+          onChange={(event) => {
+            const body = normalizeBoundedTextInput(
+              event.target.value,
+              GOAL_TEXT_MAX_CODE_POINTS,
+            );
+            if (body !== null) editor.setBody(body);
+          }}
           onBlur={editor.flush}
         />
         <div className="editor-meta">
@@ -304,7 +318,9 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             state={editor.state}
             retry={conflictRetryBlocked ? undefined : editor.retry}
           />
-          <span>{count} / 80</span>
+          <span>
+            {count} / {GOAL_TEXT_MAX_CODE_POINTS}
+          </span>
         </div>
         <div className="button-row">
           <button

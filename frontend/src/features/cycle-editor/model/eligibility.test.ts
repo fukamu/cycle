@@ -3,6 +3,7 @@ import {
   canGenerate,
   canRefine,
   codePointCount,
+  isNonBlank,
   type FrameValues,
   type SaveState,
 } from "./eligibility";
@@ -18,6 +19,11 @@ const saved: SaveState = { kind: "saved" };
 describe("cycle eligibility", () => {
   it("counts Unicode code points", () => {
     expect(codePointCount("改善😀")).toBe(3);
+  });
+
+  it("uses Unicode White_Space for blank checks", () => {
+    expect(isNonBlank("\u0085")).toBe(false);
+    expect(isNonBlank("\uFEFF")).toBe(true);
   });
 
   it("requires saved P/D/C for generate", () => {

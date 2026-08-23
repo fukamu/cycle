@@ -157,6 +157,28 @@ describe("GoalWorkspacePage", () => {
     });
   });
 
+  it("accepts 200 non-BMP code points and rejects the 201st", async () => {
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    const twoHundredCodePoints = "😀".repeat(200);
+
+    expect(editor).not.toHaveAttribute("maxlength");
+    fireEvent.change(editor, { target: { value: twoHundredCodePoints } });
+
+    expect(editor).toHaveValue(twoHundredCodePoints);
+    expect(screen.getByText("200 / 200")).toBeInTheDocument();
+
+    fireEvent.change(editor, {
+      target: { value: `${twoHundredCodePoints}😀` },
+    });
+
+    expect(editor).toHaveValue(twoHundredCodePoints);
+    expect(screen.getByText("200 / 200")).toBeInTheDocument();
+  });
+
   it("shows the saved frame after leaving and returning within cache stale time", async () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -225,13 +247,15 @@ describe("GoalWorkspacePage", () => {
   });
 
   it("requires an explicit choice before sending a mismatched draft", async () => {
+    const recoveredBody = `${"😀".repeat(201)}\r末尾 \t`;
+    const canonicalBody = `${"😀".repeat(201)}\n末尾 \t`;
     vi.mocked(getBrowserDraft).mockImplementation(async (_userId, key) =>
       key.endsWith(":plan")
         ? {
             userId: session.user.id,
             goalId: goal.id,
             subjectKey: key,
-            body: "端末に残った入力",
+            body: recoveredBody,
             baseRevision: 9,
             updatedAt: new Date().toISOString(),
           }
@@ -240,7 +264,7 @@ describe("GoalWorkspacePage", () => {
     vi.mocked(saveCycleFrame).mockResolvedValue({
       cycleId: cycle.id,
       frame: "plan",
-      content: "端末に残った入力",
+      content: canonicalBody,
       frameRevision: 1,
       contentRevision: 1,
       savedAt: "2026-08-20T00:01:00.000Z",
@@ -251,9 +275,17 @@ describe("GoalWorkspacePage", () => {
     renderPage(cache);
 
     const editor = await screen.findByRole("textbox", { name: "P — Plan" });
-    await waitFor(() => expect(editor).toHaveValue("端末に残った入力"));
+    await waitFor(() => expect(editor).toHaveValue(canonicalBody));
     expect(editor).toHaveAttribute("readonly");
     expect(saveCycleFrame).not.toHaveBeenCalled();
+
+    expect(putBrowserDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: canonicalBody,
+        baseRevision: 9,
+      }),
+    );
+    expect(Array.from(canonicalBody).length).toBeGreaterThan(200);
 
     fireEvent.click(
       screen.getByRole("button", { name: "この端末の入力を復元" }),
@@ -264,7 +296,7 @@ describe("GoalWorkspacePage", () => {
         goal.id,
         cycle.id,
         "plan",
-        "端末に残った入力",
+        canonicalBody,
         0,
         session.csrfToken,
       ),
