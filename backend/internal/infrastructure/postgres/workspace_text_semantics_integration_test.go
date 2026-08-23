@@ -19,13 +19,13 @@ func TestWorkspaceTextSemanticsUseCodePointsAndPreserveNormalizedWhitespace(t *t
 	fixture := progressingGoalFixtures()[0]
 
 	goalAtLimit := strings.Repeat("🌱", goal.MaxGoalCodePoints)
-	if _, err := store.CreateDraft(context.Background(), autosaveTestUserID, fixture.draftID, goalAtLimit+"🌱", now); !errors.Is(err, goal.ErrTextTooLong) {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), autosaveTestUserID, fixture.draftID, goalAtLimit+"🌱", now); !errors.Is(err, goal.ErrTextTooLong) {
 		t.Fatalf("81-code-point creation draft error = %v, want %v", err, goal.ErrTextTooLong)
 	}
 
 	const rawGoal = "  目標\r\n本文\r末尾 \t"
 	const normalizedGoal = "  目標\n本文\n末尾 \t"
-	created, err := store.CreateDraft(context.Background(), autosaveTestUserID, fixture.draftID, rawGoal, now)
+	created, err := executeGoalDraftCreateUseCase(store, context.Background(), autosaveTestUserID, fixture.draftID, rawGoal, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,13 +37,13 @@ func TestWorkspaceTextSemanticsUseCodePointsAndPreserveNormalizedWhitespace(t *t
 		t.Fatalf("persisted normalized draft = %#v, error = %v", persistedDraft, err)
 	}
 
-	saved, err := store.SaveDraft(context.Background(), autosaveTestUserID, fixture.draftID, goalAtLimit, created.Revision, now.Add(time.Minute))
+	saved, err := executeGoalDraftSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.draftID, goalAtLimit, created.Revision, now.Add(time.Minute))
 	if err != nil || saved.Body != goalAtLimit || saved.Revision != created.Revision+1 {
 		t.Fatalf("80-code-point saved draft = %#v, error = %v", saved, err)
 	}
 	startInput := fixture.startInput(autosaveTestUserID, now.Add(2*time.Minute))
 	startInput.ExpectedDraftRevision = saved.Revision
-	started, err := store.StartGoal(context.Background(), startInput, 2)
+	started, err := executeGoalStartUseCase(store, context.Background(), startInput, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestWorkspaceContinueReviewUsesNormalizedExactBodyComparison(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstSaved, err := store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, firstReviewDraftID,
+	firstSaved, err := executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, firstReviewDraftID,
 		"\t目標\r\n本文\r", firstReview.ReviewDraft.Revision, now.Add(3*time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestWorkspaceContinueReviewUsesNormalizedExactBodyComparison(t *testing.T) 
 		t.Fatal(err)
 	}
 	changedBody := fixture.body + " "
-	secondSaved, err := store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, secondReviewID,
+	secondSaved, err := executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, secondReviewID,
 		changedBody, secondReview.ReviewDraft.Revision, now.Add(7*time.Minute))
 	if err != nil || secondSaved.Body != changedBody || secondSaved.Revision != secondReview.ReviewDraft.Revision+1 {
 		t.Fatalf("trailing-whitespace Review save = %#v, error = %v", secondSaved, err)

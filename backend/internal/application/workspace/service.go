@@ -12,10 +12,20 @@ import (
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 type Settings struct {
 	MaxProgressingGoals        int
+	Provider                   string
+	RollingLimit               int
+	MonthlyBudgetUSD           float64
+	ReservationUSD             float64
+	LeaseDuration              time.Duration
+	RateHashKey                []byte
+	AIPerUserMinute            int
+	AIPerSessionMinute         int
+	AIPerIPMinute              int
 	MaxProviderAttempts        int
 	MaxRetryBackoff            time.Duration
 	FinalizationGrace          time.Duration
@@ -35,27 +45,43 @@ type Settings struct {
 }
 
 type Service struct {
-	store    Store
-	provider AIProvider
-	clock    ports.Clock
-	ids      ports.IDGenerator
-	settings Settings
+	store        Store
+	goalDraft    *GoalDraftUseCases
+	entitlements EntitlementPolicy
+	provider     AIProvider
+	clock        ports.Clock
+	ids          ports.IDGenerator
+	settings     Settings
 }
 
-func NewService(store Store, provider AIProvider, clock ports.Clock, ids ports.IDGenerator, settings Settings) *Service {
-	return &Service{store: store, provider: provider, clock: clock, ids: ids, settings: settings}
+func NewService(store Store, goalDraftUOW GoalDraftUnitOfWork, provider AIProvider, clock ports.Clock, ids ports.IDGenerator, settings Settings) *Service {
+	entitlements := NewStaticEntitlementPolicy(Entitlements{
+		MaxProgressingGoals:       settings.MaxProgressingGoals,
+		MaxAIOperationsPer24Hours: settings.RollingLimit,
+		MaxAIInputTokens:          settings.MaxInputTokens,
+		GoalRefineOutputTokens:    settings.GoalRefineMaxOutputTokens,
+		ActionOutputTokens:        settings.ActionMaxOutputTokens,
+	})
+	goalDraft := NewGoalDraftUseCases(goalDraftUOW, entitlements, clock, ids, GoalDraftUseCaseSettings{
+		Provider: settings.Provider, Model: settings.Model, GoalPromptVersion: settings.GoalPromptVersion,
+		MonthlyBudgetUSD: settings.MonthlyBudgetUSD,
+		ReservationUSD:   settings.ReservationUSD, LeaseDuration: settings.LeaseDuration,
+		RateHashKey: settings.RateHashKey, AIPerUserMinute: settings.AIPerUserMinute,
+		AIPerSessionMinute: settings.AIPerSessionMinute, AIPerIPMinute: settings.AIPerIPMinute,
+	})
+	return &Service{store: store, goalDraft: goalDraft, entitlements: entitlements, provider: provider, clock: clock, ids: ids, settings: settings}
 }
 
 func (service *Service) Home(ctx context.Context, userID string) (HomeView, error) {
-	return service.store.Home(ctx, userID, service.settings.MaxProgressingGoals)
+	limits, err := service.entitlements.Limits(ctx, user.ID(userID))
+	if err != nil {
+		return HomeView{}, err
+	}
+	return service.store.Home(ctx, userID, limits.MaxProgressingGoals)
 }
 
 func (service *Service) CreateDraft(ctx context.Context, userID, body string) (DraftView, error) {
-	id, err := service.ids.NewID()
-	if err != nil {
-		return DraftView{}, err
-	}
-	return service.store.CreateDraft(ctx, userID, id, body, service.clock.Now().UTC())
+	return service.goalDraft.CreateDraft(ctx, userID, body)
 }
 
 func (service *Service) GetDraft(ctx context.Context, userID, draftID string) (DraftView, error) {
@@ -64,7 +90,7 @@ func (service *Service) GetDraft(ctx context.Context, userID, draftID string) (D
 }
 
 func (service *Service) SaveDraft(ctx context.Context, userID, draftID, body string, expectedRevision int64) (DraftView, error) {
-	view, err := service.store.SaveDraft(ctx, userID, draftID, body, expectedRevision, service.clock.Now().UTC())
+	view, err := service.goalDraft.SaveDraft(ctx, userID, draftID, body, expectedRevision)
 	return view, resourceNotFound(err, ErrGoalDraftNotFound)
 }
 
@@ -73,19 +99,7 @@ func (service *Service) AbandonDraft(ctx context.Context, userID, draftID string
 }
 
 func (service *Service) StartGoal(ctx context.Context, userID, draftID, operationID string, expectedDraftRevision int64) (StartGoalResult, error) {
-	goalID, versionID, cycleID, err := service.threeIDs()
-	if err != nil {
-		return StartGoalResult{}, err
-	}
-	requestHash := hashRequest(struct {
-		DraftID  string `json:"draftId"`
-		Revision int64  `json:"revision"`
-	}{draftID, expectedDraftRevision})
-	result, err := service.store.StartGoal(ctx, StartGoalInput{
-		UserID: userID, DraftID: draftID, OperationID: operationID,
-		ExpectedDraftRevision: expectedDraftRevision, RequestHash: requestHash,
-		GoalID: goalID, VersionID: versionID, CycleID: cycleID, Now: service.clock.Now().UTC(),
-	}, service.settings.MaxProgressingGoals)
+	result, err := service.goalDraft.StartGoal(ctx, userID, draftID, operationID, expectedDraftRevision)
 	return result, resourceNotFound(err, ErrGoalDraftNotFound)
 }
 
@@ -104,7 +118,7 @@ func (service *Service) GetReview(ctx context.Context, userID, goalID string) (R
 }
 
 func (service *Service) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID, body string, expectedRevision int64) (DraftView, error) {
-	view, err := service.store.SaveReview(ctx, userID, goalID, expectedReviewDraftID, body, expectedRevision, service.clock.Now().UTC())
+	view, err := service.goalDraft.SaveReview(ctx, userID, goalID, expectedReviewDraftID, body, expectedRevision)
 	return view, resourceNotFound(err, ErrGoalNotFound)
 }
 
@@ -191,7 +205,7 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	}
 	input.GenerationID = generationID
 	input.Now = service.clock.Now().UTC()
-	snapshot, err := service.store.BeginGoalRefine(ctx, input, service.selectAIContext)
+	snapshot, err := service.goalDraft.BeginGoalRefine(ctx, input, service.selectAIContext)
 	if err != nil {
 		missing := ErrGoalDraftNotFound
 		if input.GoalID != "" {
@@ -215,7 +229,7 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	result, providerErr := service.executeProvider(ctx, snapshot)
 	finishContext, cancel := service.finalizationContext(ctx)
 	defer cancel()
-	response, finishErr := service.store.FinishGoalRefine(finishContext, snapshot, result, providerErr, service.clock.Now().UTC())
+	response, finishErr := service.goalDraft.FinishGoalRefine(finishContext, snapshot, result, providerErr, service.clock.Now().UTC())
 	service.observeAI(ctx, snapshot, result, providerErr, finishErr, startedAt)
 	missing := ErrGoalDraftNotFound
 	if input.GoalID != "" {
@@ -225,7 +239,7 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 }
 
 func (service *Service) AdoptGoalSuggestion(ctx context.Context, userID, draftID, goalID, generationID string, expectedDraftRevision int64, expectedGoalRevision *int64) (DraftView, error) {
-	view, err := service.store.AdoptGoalSuggestion(ctx, userID, draftID, goalID, generationID, expectedDraftRevision, expectedGoalRevision, service.clock.Now().UTC())
+	view, err := service.goalDraft.AdoptGoalSuggestion(ctx, userID, draftID, goalID, generationID, expectedDraftRevision, expectedGoalRevision)
 	missing := ErrGoalDraftNotFound
 	if goalID != "" {
 		missing = ErrGoalNotFound

@@ -139,16 +139,41 @@ func TestGoalRefineResponseIncludesZeroSourceDraftRevision(t *testing.T) {
 
 type replayOnlyStore struct {
 	Store
-	goalSnapshot   AISnapshot
 	actionSnapshot AISnapshot
-}
-
-func (store *replayOnlyStore) BeginGoalRefine(context.Context, GoalRefineInput, AIContextSelector) (AISnapshot, error) {
-	return store.goalSnapshot, nil
 }
 
 func (store *replayOnlyStore) BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error) {
 	return store.actionSnapshot, nil
+}
+
+type serviceTestGoalDraftUOW struct{ tx GoalDraftTx }
+
+func (uow serviceTestGoalDraftUOW) WithinGoalDraftTransaction(ctx context.Context, operation func(GoalDraftTx) error) error {
+	return operation(uow.tx)
+}
+
+type replayGoalDraftTx struct {
+	GoalDraftTx
+	draft  goal.Draft
+	replay GoalRefineReplayState
+}
+
+func (tx *replayGoalDraftTx) LockUser(context.Context, string) error { return nil }
+
+func (tx *replayGoalDraftTx) LockExpiredGenerations(context.Context, string, time.Time) ([]ExpiredGeneration, error) {
+	return nil, nil
+}
+
+func (tx *replayGoalDraftTx) SumLockedReservationsByMonth(context.Context, []string) ([]MonthlyReservation, error) {
+	return nil, nil
+}
+
+func (tx *replayGoalDraftTx) LockDraftByID(context.Context, string, string) (goal.Draft, error) {
+	return tx.draft, nil
+}
+
+func (tx *replayGoalDraftTx) FindGoalRefineReplay(context.Context, string, string) (*GoalRefineReplayState, error) {
+	return &tx.replay, nil
 }
 
 type replayTestClock struct{}
@@ -166,23 +191,29 @@ func (replayTestIDs) NewID() (string, error) {
 func TestGoalRefineReplayPreservesOriginalResponseMetadata(t *testing.T) {
 	output := "改善した目標"
 	expectedGoalRevision := int64(7)
-	store := &replayOnlyStore{goalSnapshot: AISnapshot{
-		GenerationID:           "20000000-0000-7000-8000-000000000001",
-		TargetRevision:         4,
-		SourceGoalRevision:     99,
-		ReplayedOutput:         &output,
-		ReplayedContextChanged: true,
-	}}
+	const generationID = "20000000-0000-7000-8000-000000000001"
+	input := GoalRefineInput{
+		UserID:                "10000000-0000-7000-8000-000000000011",
+		DraftID:               "10000000-0000-7000-8000-000000000012",
+		ExpectedDraftRevision: 4, ExpectedGoalRevision: &expectedGoalRevision,
+		IdempotencyKey: "10000000-0000-7000-8000-000000000013",
+	}
+	tx := &replayGoalDraftTx{
+		draft: goal.Draft{ID: input.DraftID, UserID: input.UserID, Type: goal.DraftCreation, Body: "元の目標", Revision: 4},
+		replay: GoalRefineReplayState{
+			GenerationID: generationID, InputHash: goalRefineRequestHash(input), Status: aiStatusSucceeded,
+			TargetRevision: 4, Output: &output, ContextChanged: true,
+		},
+	}
+	store := &replayOnlyStore{}
 	provider := &scriptedProvider{}
-	service := NewService(store, provider, replayTestClock{}, replayTestIDs{}, Settings{})
+	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, provider, replayTestClock{}, replayTestIDs{}, Settings{})
 
-	response, err := service.RefineGoal(context.Background(), GoalRefineInput{
-		ExpectedGoalRevision: &expectedGoalRevision,
-	})
+	response, err := service.RefineGoal(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.GenerationID != store.goalSnapshot.GenerationID || response.Suggestion != output ||
+	if response.GenerationID != generationID || response.Suggestion != output ||
 		response.SourceDraftRevision == nil || *response.SourceDraftRevision != 4 ||
 		response.SourceGoalRevision != expectedGoalRevision || !response.ContextChanged || !response.Replayed {
 		t.Fatalf("goal replay response = %#v", response)
@@ -202,7 +233,7 @@ func TestActionReplayPreservesOriginalContextChanged(t *testing.T) {
 		ReplayedActionRevision:  3,
 	}}
 	provider := &scriptedProvider{}
-	service := NewService(store, provider, replayTestClock{}, replayTestIDs{}, Settings{})
+	service := NewService(store, serviceTestGoalDraftUOW{}, provider, replayTestClock{}, replayTestIDs{}, Settings{})
 
 	response, err := service.RunActionAI(context.Background(), ActionAIInput{Operation: "action_refine"})
 	if err != nil {
@@ -218,29 +249,43 @@ func TestActionReplayPreservesOriginalContextChanged(t *testing.T) {
 	}
 }
 
-type saveReviewLeaseStore struct {
-	Store
+type saveReviewLeaseStore struct{ Store }
+
+type saveReviewLeaseTx struct {
+	GoalDraftTx
 	userID                string
 	goalID                string
 	expectedReviewDraftID string
-	body                  string
+	saved                 goal.Draft
 	expectedRevision      int64
-	now                   time.Time
 }
 
-func (store *saveReviewLeaseStore) SaveReview(_ context.Context, userID, goalID, expectedReviewDraftID, body string, expectedRevision int64, now time.Time) (DraftView, error) {
-	store.userID = userID
-	store.goalID = goalID
-	store.expectedReviewDraftID = expectedReviewDraftID
-	store.body = body
-	store.expectedRevision = expectedRevision
-	store.now = now
-	return DraftView{ID: expectedReviewDraftID, Body: body, Revision: expectedRevision + 1}, nil
+func (tx *saveReviewLeaseTx) LockGoalWithCurrentVersion(_ context.Context, userID, goalID string) (GoalTargetState, error) {
+	tx.userID = userID
+	tx.goalID = goalID
+	return GoalTargetState{Status: goal.StatusGoalReview}, nil
+}
+
+func (tx *saveReviewLeaseTx) LockDraftByID(_ context.Context, userID, draftID string) (goal.Draft, error) {
+	tx.userID = userID
+	tx.expectedReviewDraftID = draftID
+	goalID := tx.goalID
+	return goal.Draft{
+		ID: draftID, UserID: userID, Type: goal.DraftReview, GoalID: &goalID,
+		Body: "server body", Revision: 4,
+	}, nil
+}
+
+func (tx *saveReviewLeaseTx) SaveDraftCAS(_ context.Context, draft goal.Draft, expectedRevision int64) (int64, error) {
+	tx.saved = draft
+	tx.expectedRevision = expectedRevision
+	return 1, nil
 }
 
 func TestSaveReviewForwardsExpectedDraftGeneration(t *testing.T) {
 	store := &saveReviewLeaseStore{}
-	service := NewService(store, nil, replayTestClock{}, nil, Settings{})
+	tx := &saveReviewLeaseTx{}
+	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, nil, replayTestClock{}, nil, Settings{})
 	const (
 		userID        = "10000000-0000-7000-8000-000000000001"
 		goalID        = "20000000-0000-7000-8000-000000000001"
@@ -251,9 +296,9 @@ func TestSaveReviewForwardsExpectedDraftGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.userID != userID || store.goalID != goalID || store.expectedReviewDraftID != reviewDraftID ||
-		store.body != "local body" || store.expectedRevision != 4 || !store.now.Equal(replayTestClock{}.Now()) {
-		t.Fatalf("SaveReview store input = %#v", store)
+	if tx.userID != userID || tx.goalID != goalID || tx.expectedReviewDraftID != reviewDraftID ||
+		tx.saved.Body != "local body" || tx.expectedRevision != 4 || !tx.saved.UpdatedAt.Equal(replayTestClock{}.Now()) {
+		t.Fatalf("SaveReview transaction input = %#v", tx)
 	}
 	if view.ID != reviewDraftID || view.Body != "local body" || view.Revision != 5 {
 		t.Fatalf("SaveReview view = %#v", view)

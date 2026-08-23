@@ -403,15 +403,11 @@ type AIContextSelector func(context.Context, AISnapshot) (AISnapshot, error)
 
 type Store interface {
 	Home(context.Context, string, int) (HomeView, error)
-	CreateDraft(context.Context, string, string, string, time.Time) (DraftView, error)
 	GetDraft(context.Context, string, string) (DraftView, error)
-	SaveDraft(context.Context, string, string, string, int64, time.Time) (DraftView, error)
 	AbandonDraft(context.Context, string, string, time.Time) error
-	StartGoal(context.Context, StartGoalInput, int) (StartGoalResult, error)
 	ListGoals(context.Context, string, string, string, int) (GoalPage, error)
 	GetGoal(context.Context, string, string) (GoalView, error)
 	GetReview(context.Context, string, string) (ReviewView, error)
-	SaveReview(context.Context, string, string, string, string, int64, time.Time) (DraftView, error)
 	ContinueReview(context.Context, ContinueReviewInput) (ContinueReviewResult, error)
 	Terminate(context.Context, TerminateInput) (TerminateResult, error)
 	DeleteGoal(context.Context, string, string, bool, int64, string, string, time.Time) error
@@ -419,9 +415,6 @@ type Store interface {
 	GetCycle(context.Context, string, string, string) (CycleView, error)
 	SaveFrame(context.Context, SaveFrameInput) (SaveFrameResult, error)
 	CompleteCycle(context.Context, CompleteCycleInput) (CompleteCycleResult, error)
-	BeginGoalRefine(context.Context, GoalRefineInput, AIContextSelector) (AISnapshot, error)
-	FinishGoalRefine(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
-	AdoptGoalSuggestion(context.Context, string, string, string, string, int64, *int64, time.Time) (DraftView, error)
 	BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error)
 	FinishActionAI(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
 }

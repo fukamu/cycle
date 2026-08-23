@@ -519,7 +519,7 @@ VALUES($1,$2,$2,$2)`, fixture.userID, now); err != nil {
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
 	startProgressingGoal(t, store, fixture.userID, goalFixture, 2, now)
 	const pendingDraftID = "12000000-0000-7000-8000-000000000001"
-	if _, err := store.CreateDraft(context.Background(), fixture.userID, pendingDraftID, "保留中の目標", now.Add(time.Minute)); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), fixture.userID, pendingDraftID, "保留中の目標", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_budget_monthly
@@ -781,7 +781,7 @@ VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 	for _, fixture := range goalFixtures {
 		startProgressingGoal(t, store, userID, fixture, 2, now)
 	}
-	if _, err := store.CreateDraft(context.Background(), userID, pendingDraftID, "保留中の目標", now.Add(time.Minute)); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, pendingDraftID, "保留中の目標", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_budget_monthly

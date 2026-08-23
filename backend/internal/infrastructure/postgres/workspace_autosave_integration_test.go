@@ -14,16 +14,16 @@ const autosaveTestUserID = "10000000-0000-7000-8000-000000000001"
 func TestWorkspaceSaveDraftTreatsSamePersistedBodyWithStaleRevisionAsNoOp(t *testing.T) {
 	store, now := newAutosaveTestStore(t)
 	const creationID = "11000000-0000-7000-8000-000000000010"
-	if _, err := store.CreateDraft(context.Background(), autosaveTestUserID, creationID, "初期目標", now); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), autosaveTestUserID, creationID, "初期目標", now); err != nil {
 		t.Fatal(err)
 	}
 
 	savedAt := now.Add(time.Minute)
-	saved, err := store.SaveDraft(context.Background(), autosaveTestUserID, creationID, "保存済み目標", 0, savedAt)
+	saved, err := executeGoalDraftSaveUseCase(store, context.Background(), autosaveTestUserID, creationID, "保存済み目標", 0, savedAt)
 	if err != nil || saved.Revision != 1 {
 		t.Fatalf("save = %#v, error = %v", saved, err)
 	}
-	replayed, err := store.SaveDraft(context.Background(), autosaveTestUserID, creationID, saved.Body, 0, now.Add(2*time.Minute))
+	replayed, err := executeGoalDraftSaveUseCase(store, context.Background(), autosaveTestUserID, creationID, saved.Body, 0, now.Add(2*time.Minute))
 	if err != nil || replayed.Body != saved.Body || replayed.Revision != saved.Revision || !replayed.UpdatedAt.Equal(savedAt) {
 		t.Fatalf("stale same-body save = %#v, error = %v", replayed, err)
 	}
@@ -34,7 +34,7 @@ func TestWorkspaceSaveDraftTreatsSamePersistedBodyWithStaleRevisionAsNoOp(t *tes
 	if persisted.Body != saved.Body || persisted.Revision != saved.Revision || !persisted.UpdatedAt.Equal(savedAt) {
 		t.Fatalf("persisted draft after stale same-body save = %#v, want body/revision/updatedAt from %#v", persisted, saved)
 	}
-	if _, err = store.SaveDraft(context.Background(), autosaveTestUserID, creationID, "異なる目標", 0, now.Add(2*time.Minute)); err != workspace.ErrDraftRevisionConflict {
+	if _, err = executeGoalDraftSaveUseCase(store, context.Background(), autosaveTestUserID, creationID, "異なる目標", 0, now.Add(2*time.Minute)); err != workspace.ErrDraftRevisionConflict {
 		t.Fatalf("stale different-body error = %v, want %v", err, workspace.ErrDraftRevisionConflict)
 	}
 }
@@ -106,11 +106,11 @@ func TestWorkspaceSaveReviewTreatsSamePersistedBodyWithStaleRevisionAsNoOp(t *te
 	}
 
 	savedAt := now.Add(3 * time.Minute)
-	saved, err := store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, reviewDraftID, "保存済みレビュー目標", completed.ReviewDraft.Revision, savedAt)
+	saved, err := executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, reviewDraftID, "保存済みレビュー目標", completed.ReviewDraft.Revision, savedAt)
 	if err != nil || saved.Revision != 1 {
 		t.Fatalf("save = %#v, error = %v", saved, err)
 	}
-	replayed, err := store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, reviewDraftID, saved.Body, completed.ReviewDraft.Revision, now.Add(4*time.Minute))
+	replayed, err := executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, reviewDraftID, saved.Body, completed.ReviewDraft.Revision, now.Add(4*time.Minute))
 	if err != nil || replayed.Body != saved.Body || replayed.Revision != saved.Revision || !replayed.UpdatedAt.Equal(savedAt) {
 		t.Fatalf("stale same-body save = %#v, error = %v", replayed, err)
 	}
@@ -121,7 +121,7 @@ func TestWorkspaceSaveReviewTreatsSamePersistedBodyWithStaleRevisionAsNoOp(t *te
 	if persisted.ReviewDraft.Body != saved.Body || persisted.ReviewDraft.Revision != saved.Revision || !persisted.ReviewDraft.UpdatedAt.Equal(savedAt) {
 		t.Fatalf("persisted review after stale same-body save = %#v, want body/revision/updatedAt from %#v", persisted.ReviewDraft, saved)
 	}
-	if _, err = store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, reviewDraftID, "異なるレビュー目標", completed.ReviewDraft.Revision, now.Add(4*time.Minute)); err != workspace.ErrReviewRevisionConflict {
+	if _, err = executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, reviewDraftID, "異なるレビュー目標", completed.ReviewDraft.Revision, now.Add(4*time.Minute)); err != workspace.ErrReviewRevisionConflict {
 		t.Fatalf("stale different-body error = %v, want %v", err, workspace.ErrReviewRevisionConflict)
 	}
 }
@@ -170,12 +170,12 @@ func TestWorkspaceSaveReviewRejectsSupersededDraftGeneration(t *testing.T) {
 		t.Fatalf("second review draft = %#v", secondReview.ReviewDraft)
 	}
 
-	if _, err = store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, firstReviewDraftID,
+	if _, err = executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, firstReviewDraftID,
 		secondReview.ReviewDraft.Body, firstReview.ReviewDraft.Revision, now.Add(6*time.Minute)); err != workspace.ErrReviewRevisionConflict {
 		t.Fatalf("superseded same-body review draft error = %v, want %v", err, workspace.ErrReviewRevisionConflict)
 	}
 
-	if _, err = store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, firstReviewDraftID,
+	if _, err = executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, firstReviewDraftID,
 		"遅延した旧世代の本文", firstReview.ReviewDraft.Revision, now.Add(6*time.Minute)); err != workspace.ErrReviewRevisionConflict {
 		t.Fatalf("superseded review draft error = %v, want %v", err, workspace.ErrReviewRevisionConflict)
 	}
@@ -191,18 +191,18 @@ func TestWorkspaceSaveReviewRejectsSupersededDraftGeneration(t *testing.T) {
 	}
 
 	savedAt := now.Add(7 * time.Minute)
-	saved, err := store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, secondReviewDraftID,
+	saved, err := executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, secondReviewDraftID,
 		"現世代で保存した本文", secondReview.ReviewDraft.Revision, savedAt)
 	if err != nil || saved.Revision != secondReview.ReviewDraft.Revision+1 {
 		t.Fatalf("current generation save = %#v, error = %v", saved, err)
 	}
-	replayed, err := store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, secondReviewDraftID,
+	replayed, err := executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, secondReviewDraftID,
 		saved.Body, secondReview.ReviewDraft.Revision, now.Add(8*time.Minute))
 	if err != nil || replayed.ID != secondReviewDraftID || replayed.Body != saved.Body ||
 		replayed.Revision != saved.Revision || !replayed.UpdatedAt.Equal(savedAt) {
 		t.Fatalf("current generation stale same-body save = %#v, error = %v", replayed, err)
 	}
-	if _, err = store.SaveReview(context.Background(), autosaveTestUserID, fixture.goalID, secondReviewDraftID,
+	if _, err = executeGoalReviewSaveUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, secondReviewDraftID,
 		"現世代の競合本文", secondReview.ReviewDraft.Revision, now.Add(9*time.Minute)); err != workspace.ErrReviewRevisionConflict {
 		t.Fatalf("current generation stale different-body error = %v, want %v", err, workspace.ErrReviewRevisionConflict)
 	}

@@ -1847,9 +1847,13 @@ Goal Draft / Cycle
 AI Generation
   ↓
 AI Budget Monthly
+  ↓
+AI Rate Bucket（同じAI開始Transactionで両方を扱う場合）
 ```
 
 User lockが不要なOperationではGoalから開始してよいが、Goal→Cycle→AI Budgetの相対順序は維持する。
+
+AI開始Transactionが`ai_budget_monthly`とAI用`abuse_rate_buckets`の両方を扱う場合、expired recoveryを含む全経路でBudget rowを先にlockしてからrate bucketをlockする。業務判定とstable rejection errorの優先順はUser rolling quota→rate limit→service budgetのままとし、Budget上限判定とreservation更新はrate limit判定後に行う。
 
 AI開始・finalization、Draft破棄、Goal / Account Delete、既存Anonymous bootstrap再開はUserからlockする。識別子取得だけのnon-locking locator queryは許可するが、locator取得後もUserより先に配下rowをlock・更新せず、User lock後にtargetを`FOR UPDATE`で再検証する。同一種別の複数rowはUUIDまたは月の昇順でlockし、状態遷移・reservation・usage settlementのCASが期待するrow数を満たさない場合はTransaction全体をrollbackする。
 
@@ -4283,9 +4287,12 @@ User
     -> Cycle
       -> AIGeneration
         -> ai_budget_monthly
+          -> AI用abuse_rate_buckets（AI開始時だけ）
 ```
 
 同一種別複数rowはUUIDまたは月の昇順でlockする。例外は本書へ理由を記録し、Concurrency Integration Testを追加する。
+
+AI開始時のBudget→rate bucket物理lock順と、User rolling quota→rate limit→service budgetの判定順の分離は§18.1を正本とする。
 
 AI finalizationがAIGeneration / Usageの識別子を得るために行うlocator queryはrow lockを取得しない。その後User→Goal→Draft/Cycle→AIGeneration→Budgetの順でlockし、locator情報を各owner/target/status条件付きqueryで再検証する。Goal Delete後のlate settlementはcontent-free Usageのlocator取得後にUser→Usage→Budgetの順とし、同一UserのDeleteとはUser lock、重複callbackとはUsage CASで直列化する。
 
@@ -4400,12 +4407,13 @@ Goal Refine / Action AI共通の開始処理:
 2. expired `running` AIGenerationがあれば§32.9のstale recoveryを実行する。
 3. target state、revision、必須入力、pending save相当をBackendのDB stateで再検証する。
 4. User rolling quotaを検査する。
-5. User / Session / IP rate limitを検査する。
-6. Service monthly budget rowをlockし、最大Costをreserveする。
-7. `ai_generations(status=running)`と`ai_usage_events(status=accepted)`を同一Transactionで作る。
-8. Transaction commit後のimmutable snapshotをProviderへ渡す。
+5. §32.9の回復ですでに同じrowをlock済みの場合を含め、current UTC monthのService monthly budget rowをensureしてlock済みにする。この時点ではBudget上限判定もreservation更新も行わない。
+6. User→Session→IPの順にrate bucketをlockしてrate limitを検査する。
+7. lock済みService monthly budgetで上限を検査し、最大Costをreserveする。
+8. `ai_generations(status=running)`と`ai_usage_events(status=accepted)`を同一Transactionで作る。
+9. Transaction commit後のimmutable snapshotをProviderへ渡す。
 
-Quotaとbudgetのいずれかが拒否された場合はProvider callを行わない。
+Quota、rate limit、budgetのいずれかが拒否された場合はProvider callを行わない。開始Transactionをrollbackし、Budget prelock、rate bucket増分、Generation、Usage、reservationの副作用を残さない。
 
 ## 32.6 Goal Refine result
 
@@ -4473,6 +4481,8 @@ leaseSeconds >
 2. AIUsageEventを`failed`へ更新する。
 3. `budget_reserved_cost_usd > 0`の場合だけ、該当月のreservationから同額を減算する。
 4. Generation側reservationを0へする。
+
+同じIdempotency-Keyの`running` replayでもlease切れなら、User→target→AIGeneration→Budgetの順で回復をcommitし、同じkeyには`lease_expired`のterminal failureをreplayする。新しいlogical operation、Quota / rate / budget消費は作らない。Lease内の同一key / 同一hashは`AI_OPERATION_IN_PROGRESS`、同一key / 異hashは`IDEMPOTENCY_KEY_REUSED`を維持する。
 
 複数のexpired GenerationはUUID昇順でlockし、reservationはDBの`NUMERIC`として月ごとに合算してBudgetを月昇順で更新する。各Generation / Usage terminal CASと各月Budget更新はexactly one rowを要求し、0-rowなら新AI reservationを含むTransaction全体をrollbackする。
 

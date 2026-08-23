@@ -140,11 +140,11 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
 	fixtures := progressingGoalFixtures()
 	active := startProgressingGoal(t, store, ownerID, fixtures[0], 2, now)
-	if _, err := store.CreateDraft(context.Background(), ownerID, fixtures[1].draftID, "所有者だけの下書き", now.Add(time.Minute)); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), ownerID, fixtures[1].draftID, "所有者だけの下書き", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	provider := &contractRejectProvider{}
-	service := workspace.NewService(store, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
+	service := workspace.NewService(store, store, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
 		MaxProgressingGoals: 2,
 		MaxProviderAttempts: 1,
 	})

@@ -429,6 +429,107 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	return fixture, started, snapshot
 }
 
+func TestBeginActionAISameKeyExpiredRunningCommitsLeaseRecoveryBeforeReplay(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const userID = "10000000-0000-7000-8000-000000000001"
+	insertAIConcurrencyUser(t, pool, userID, now)
+
+	settings := aiConcurrencySettings()
+	seedStore := NewWorkspaceStore(pool, settings)
+	fixture, _, expiredSnapshot := seedRunningActionAI(t, pool, seedStore, userID, now)
+
+	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='期限切れ待機中の追記',
+content_revision=content_revision+1,plan_revision=plan_revision+1,updated_at=$2 WHERE id=$1`, fixture.cycleID, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	retrySettings := settings
+	retrySettings.AIPerUserMinute = 10
+	retrySettings.AIPerSessionMinute = 10
+	retrySettings.AIPerIPMinute = 10
+	retryStore := NewWorkspaceStore(pool, retrySettings)
+	input := workspace.ActionAIInput{
+		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
+		Operation: "action_generate", ExpectedContentRevision: 3,
+		IdempotencyKey: "82000000-0000-7000-8000-000000000001",
+		SessionID:      "same-key-expired-session", RemoteAddress: "198.51.100.88",
+	}
+
+	unexpired := input
+	unexpired.GenerationID = "83000000-0000-7000-8000-000000000002"
+	unexpired.Now = now.Add(90 * time.Second)
+	_, err := retryStore.BeginActionAI(context.Background(), unexpired, nil)
+	var inProgress *workspace.AIOperationInProgressError
+	if !errors.As(err, &inProgress) || inProgress.GenerationID != expiredSnapshot.GenerationID {
+		t.Fatalf("unexpired same-key replay error = %v, want in-progress generation %s", err, expiredSnapshot.GenerationID)
+	}
+
+	different := input
+	different.GenerationID = "83000000-0000-7000-8000-000000000003"
+	different.ConfirmReplace = true
+	different.Now = now.Add(3 * time.Minute)
+	if _, err = retryStore.BeginActionAI(context.Background(), different, nil); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
+		t.Fatalf("expired different-hash replay error = %v, want %v", err, workspace.ErrIdempotencyKeyReused)
+	}
+
+	expired := input
+	expired.GenerationID = "83000000-0000-7000-8000-000000000004"
+	expired.Now = now.Add(3 * time.Minute)
+	if _, err = retryStore.BeginActionAI(context.Background(), expired, nil); !errors.Is(err, workspace.ErrAIProviderUnavailable) {
+		t.Fatalf("expired same-key replay error = %v, want %v after committed lease recovery", err, workspace.ErrAIProviderUnavailable)
+	}
+
+	recoveredReplay := expired
+	recoveredReplay.Now = now.Add(4 * time.Minute)
+	if _, err = retryStore.BeginActionAI(context.Background(), recoveredReplay, nil); !errors.Is(err, workspace.ErrAIProviderUnavailable) {
+		t.Fatalf("recovered terminal same-key replay error = %v, want %v", err, workspace.ErrAIProviderUnavailable)
+	}
+
+	month := time.Date(now.UTC().Year(), now.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+	var (
+		generationStatus      string
+		generationFailure     string
+		generationReservation float64
+		leaseCleared          bool
+		finished              bool
+		usageStatus           string
+		usageFinalized        bool
+		budgetReserved        float64
+		rateCount             int
+		generationCount       int
+		usageCount            int
+	)
+	if err = pool.QueryRow(context.Background(), `SELECT
+(SELECT status FROM ai_generations WHERE id=$1),
+(SELECT failure_code FROM ai_generations WHERE id=$1),
+(SELECT budget_reserved_cost_usd FROM ai_generations WHERE id=$1),
+(SELECT lease_expires_at IS NULL FROM ai_generations WHERE id=$1),
+(SELECT finished_at IS NOT NULL FROM ai_generations WHERE id=$1),
+(SELECT status FROM ai_usage_events WHERE operation_id=$1),
+(SELECT provider_usage_finalized_at IS NOT NULL FROM ai_usage_events WHERE operation_id=$1),
+(SELECT reserved_cost_usd FROM ai_budget_monthly WHERE month_utc=$2),
+(SELECT count(*) FROM abuse_rate_buckets),
+(SELECT count(*) FROM ai_generations),
+(SELECT count(*) FROM ai_usage_events)`, expiredSnapshot.GenerationID, month).Scan(
+		&generationStatus, &generationFailure, &generationReservation, &leaseCleared, &finished,
+		&usageStatus, &usageFinalized, &budgetReserved, &rateCount, &generationCount, &usageCount,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if generationStatus != "failed" || generationFailure != "lease_expired" ||
+		!approximatelyEqual(generationReservation, 0) || !leaseCleared || !finished {
+		t.Fatalf("expired generation = status %s, failure %s, reserved %.8f, leaseCleared %t, finished %t",
+			generationStatus, generationFailure, generationReservation, leaseCleared, finished)
+	}
+	if usageStatus != "failed" || usageFinalized || !approximatelyEqual(budgetReserved, 0) ||
+		rateCount != 0 || generationCount != 1 || usageCount != 1 {
+		t.Fatalf("expired replay state = usage %s/finalized=%t, Budget %.8f, rate/generation/usage counts %d/%d/%d",
+			usageStatus, usageFinalized, budgetReserved, rateCount, generationCount, usageCount)
+	}
+}
+
 func passthroughAIContext(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
 	return snapshot, nil
 }
@@ -453,7 +554,9 @@ func isReviewGoalOrDraftLock(sql string) bool {
 
 func isReviewGoalLock(sql string) bool {
 	normalized := normalizeAIConcurrencySQL(sql)
-	return strings.Contains(normalized, "from goals where id=$1 and user_id=$2 for update")
+	return strings.Contains(normalized, "for update") &&
+		(strings.Contains(normalized, "from goals where id=$1 and user_id=$2") ||
+			strings.Contains(normalized, "from goals g"))
 }
 
 func isExpiredRecoveryGenerationLock(sql string) bool {
@@ -855,7 +958,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	beginCalls := make(chan aiGoalRefineCall, 1)
 	beginCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyReviewBegin)
 	go func() {
-		snapshot, callErr := store.BeginGoalRefine(beginCtx, workspace.GoalRefineInput{
+		snapshot, callErr := executeGoalRefineBeginUseCase(store, beginCtx, workspace.GoalRefineInput{
 			UserID: userID, GoalID: fixture.goalID,
 			ExpectedDraftRevision: completed.ReviewDraft.Revision,
 			ExpectedGoalRevision:  &goalRevision,
@@ -878,7 +981,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	saveCalls := make(chan aiDraftCall, 1)
 	saveCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyReviewSave)
 	go func() {
-		draft, callErr := store.SaveReview(
+		draft, callErr := executeGoalReviewSaveUseCase(store,
 			saveCtx,
 			userID,
 			fixture.goalID,
@@ -953,7 +1056,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, err := store.SaveReview(
+	saved, err := executeGoalReviewSaveUseCase(store,
 		context.Background(),
 		userID,
 		fixture.goalID,
@@ -970,7 +1073,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	}
 
 	goalRevision := completed.Goal.Revision
-	_, err = store.BeginGoalRefine(context.Background(), workspace.GoalRefineInput{
+	_, err = executeGoalRefineBeginUseCase(store, context.Background(), workspace.GoalRefineInput{
 		UserID: userID, GoalID: fixture.goalID,
 		ExpectedDraftRevision: completed.ReviewDraft.Revision,
 		ExpectedGoalRevision:  &goalRevision,
@@ -1191,7 +1294,7 @@ func TestAbandonDraftSerializesWithConcurrentGoalRefine(t *testing.T) {
 
 	settings := aiConcurrencySettings()
 	seedStore := NewWorkspaceStore(pool, settings)
-	if _, err := seedStore.CreateDraft(context.Background(), userID, draftID, "並行破棄を検証する目標", now); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(seedStore, context.Background(), userID, draftID, "並行破棄を検証する目標", now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1221,7 +1324,7 @@ func TestAbandonDraftSerializesWithConcurrentGoalRefine(t *testing.T) {
 	beginCalls := make(chan aiGoalRefineCall, 1)
 	beginCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyCreationBegin)
 	go func() {
-		snapshot, callErr := store.BeginGoalRefine(beginCtx, workspace.GoalRefineInput{
+		snapshot, callErr := executeGoalRefineBeginUseCase(store, beginCtx, workspace.GoalRefineInput{
 			UserID:                userID,
 			DraftID:               draftID,
 			ExpectedDraftRevision: 0,
@@ -1305,7 +1408,7 @@ func TestGoalRefineCommitWinsBeforeAbandonAndPreservesRunningReservation(t *test
 
 	settings := aiConcurrencySettings()
 	seedStore := NewWorkspaceStore(pool, settings)
-	if _, err := seedStore.CreateDraft(context.Background(), userID, draftID, "先にRefine予約を確定する目標", now); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(seedStore, context.Background(), userID, draftID, "先にRefine予約を確定する目標", now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1321,7 +1424,7 @@ func TestGoalRefineCommitWinsBeforeAbandonAndPreservesRunningReservation(t *test
 	beginCalls := make(chan aiGoalRefineCall, 1)
 	beginCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyCreationReserveBegin)
 	go func() {
-		snapshot, callErr := store.BeginGoalRefine(beginCtx, workspace.GoalRefineInput{
+		snapshot, callErr := executeGoalRefineBeginUseCase(store, beginCtx, workspace.GoalRefineInput{
 			UserID:                userID,
 			DraftID:               draftID,
 			ExpectedDraftRevision: 0,

@@ -25,6 +25,11 @@ import (
 	turnstileinfra "github.com/fukamu/cycle/backend/internal/infrastructure/turnstile"
 )
 
+func maximumAIReservationUSD(maxInputTokens, maxOutputTokens, maxProviderAttempts int, inputUSDPerMillionTokens, outputUSDPerMillionTokens float64) float64 {
+	return (float64(maxInputTokens)*inputUSDPerMillionTokens +
+		float64(maxOutputTokens)*outputUSDPerMillionTokens) / 1_000_000 * float64(maxProviderAttempts)
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	settings, err := config.Load(os.LookupEnv)
@@ -87,19 +92,26 @@ func main() {
 		logger.Error("AI tokenizer unavailable", "error_class", "tokenizer_startup_failed")
 		os.Exit(1)
 	}
-	reservationUSD := (float64(settings.AI.MaxInputTokens)*settings.AI.Pricing.InputUSDPerMillionTokens +
-		float64(settings.AI.ActionMaxOutputTokens)*settings.AI.Pricing.OutputUSDPerMillionTokens) / 1_000_000 * float64(settings.AI.MaxProviderAttempts)
+	actionReservationUSD := maximumAIReservationUSD(settings.AI.MaxInputTokens, settings.AI.ActionMaxOutputTokens, settings.AI.MaxProviderAttempts,
+		settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
+	goalRefineReservationUSD := maximumAIReservationUSD(settings.AI.MaxInputTokens, settings.AI.GoalRefineMaxOutputTokens, settings.AI.MaxProviderAttempts,
+		settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
 	workspaceStore := postgres.NewWorkspaceStore(pool, postgres.WorkspaceStoreSettings{
 		CursorSigningKey: []byte(settings.Session.CursorSigningSecret), Provider: settings.AI.Provider, Model: settings.AI.Model,
 		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
 		RefinePromptVersion: settings.AI.RefinePromptVersion, RollingLimit: settings.AI.MaxGenerationsPerUser24h,
-		MonthlyBudgetUSD: settings.AI.MonthlyBudgetUSD, ReservationUSD: reservationUSD, LeaseDuration: settings.AI.LeaseDuration,
+		MonthlyBudgetUSD: settings.AI.MonthlyBudgetUSD, ReservationUSD: actionReservationUSD, LeaseDuration: settings.AI.LeaseDuration,
 		RateHashKey: []byte(settings.Session.RateLimitHMACSecret), AIPerUserMinute: settings.RateLimit.AIPerUserMinute,
 		AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute, AIPerIPMinute: settings.RateLimit.AIPerIPMinute,
 	})
-	workspaceService := workspace.NewService(workspaceStore, aiProvider, system.Clock{}, random, workspace.Settings{
-		MaxProgressingGoals: settings.Goals.MaxProgressingGoals, MaxProviderAttempts: settings.AI.MaxProviderAttempts,
-		MaxRetryBackoff: settings.AI.MaxRetryBackoff, FinalizationGrace: settings.AI.FinalizationGrace, Model: settings.AI.Model,
+	workspaceService := workspace.NewService(workspaceStore, workspaceStore, aiProvider, system.Clock{}, random, workspace.Settings{
+		MaxProgressingGoals: settings.Goals.MaxProgressingGoals, Provider: settings.AI.Provider,
+		RollingLimit: settings.AI.MaxGenerationsPerUser24h, MonthlyBudgetUSD: settings.AI.MonthlyBudgetUSD,
+		ReservationUSD: goalRefineReservationUSD, LeaseDuration: settings.AI.LeaseDuration,
+		RateHashKey: []byte(settings.Session.RateLimitHMACSecret), AIPerUserMinute: settings.RateLimit.AIPerUserMinute,
+		AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute, AIPerIPMinute: settings.RateLimit.AIPerIPMinute,
+		MaxProviderAttempts: settings.AI.MaxProviderAttempts,
+		MaxRetryBackoff:     settings.AI.MaxRetryBackoff, FinalizationGrace: settings.AI.FinalizationGrace, Model: settings.AI.Model,
 		MaxInputTokens: settings.AI.MaxInputTokens, GoalRefineMaxOutputTokens: settings.AI.GoalRefineMaxOutputTokens,
 		ActionMaxOutputTokens: settings.AI.ActionMaxOutputTokens, MaxContextCycles: settings.AI.MaxContextCycles,
 		GoalRefineInstructions: promptSet.GoalRefine, ActionGenerateInstructions: promptSet.ActionGenerate,

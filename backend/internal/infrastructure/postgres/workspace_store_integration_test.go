@@ -52,10 +52,10 @@ VALUES($1,$2,'review',$3,$4,$5,$6,$7,$7)`,
 			}
 
 			overflow := fixtures[test.limit]
-			if _, err := store.CreateDraft(context.Background(), userID, overflow.draftID, overflow.body, now.Add(time.Hour)); err != nil {
+			if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, overflow.draftID, overflow.body, now.Add(time.Hour)); err != nil {
 				t.Fatal(err)
 			}
-			_, err := store.StartGoal(context.Background(), overflow.startInput(userID, now.Add(time.Hour)), test.limit)
+			_, err := executeGoalStartUseCase(store, context.Background(), overflow.startInput(userID, now.Add(time.Hour)), test.limit)
 			if !errors.Is(err, workspace.ErrGoalActiveLimit) {
 				t.Fatalf("overflow start error = %v, want %v", err, workspace.ErrGoalActiveLimit)
 			}
@@ -126,7 +126,7 @@ func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
 	fixtures := progressingGoalFixtures()
 	first := startProgressingGoal(t, store, userID, fixtures[0], 2, now)
 	startProgressingGoal(t, store, userID, fixtures[1], 2, now.Add(time.Minute))
-	if _, err := store.CreateDraft(context.Background(), userID, fixtures[2].draftID, fixtures[2].body, now.Add(2*time.Minute)); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, fixtures[2].draftID, fixtures[2].body, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -143,7 +143,7 @@ func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
 	terminateResult := make(chan error, 1)
 	go func() {
 		<-startBarrier
-		_, err := store.StartGoal(context.Background(), startInput, 2)
+		_, err := executeGoalStartUseCase(store, context.Background(), startInput, 2)
 		startResult <- err
 	}()
 	go func() {
@@ -257,10 +257,10 @@ func (fixture progressingGoalFixture) startInput(userID string, now time.Time) w
 
 func startProgressingGoal(t *testing.T, store *WorkspaceStore, userID string, fixture progressingGoalFixture, limit int, now time.Time) workspace.StartGoalResult {
 	t.Helper()
-	if _, err := store.CreateDraft(context.Background(), userID, fixture.draftID, fixture.body, now); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, fixture.draftID, fixture.body, now); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.StartGoal(context.Background(), fixture.startInput(userID, now), limit)
+	result, err := executeGoalStartUseCase(store, context.Background(), fixture.startInput(userID, now), limit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,10 +333,10 @@ func TestWorkspaceStoreDuplicateCreationDraftReturnsExistingIdentifier(t *testin
 		t.Fatal(err)
 	}
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	if _, err := store.CreateDraft(context.Background(), userID, firstDraft, "", now); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, firstDraft, "", now); err != nil {
 		t.Fatal(err)
 	}
-	_, err := store.CreateDraft(context.Background(), userID, secondDraft, "", now)
+	_, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, secondDraft, "", now)
 	var conflict *workspace.DraftAlreadyExistsError
 	if !errors.As(err, &conflict) || conflict.DraftID != firstDraft {
 		t.Fatalf("duplicate draft error = %#v", err)
@@ -435,10 +435,10 @@ VALUES($1,$2,'creation','目標本文',$3,$3)`, draftID, userID, now); err != ni
 		UserID: userID, DraftID: draftID, OperationID: startOperation, ExpectedDraftRevision: 0,
 		RequestHash: "start-hash", GoalID: goalID, VersionID: versionID, CycleID: cycleID, Now: now,
 	}
-	if _, err := store.StartGoal(context.Background(), startInput, 1); err != nil {
+	if _, err := executeGoalStartUseCase(store, context.Background(), startInput, 1); err != nil {
 		t.Fatal(err)
 	}
-	startReplay, err := store.StartGoal(context.Background(), startInput, 1)
+	startReplay, err := executeGoalStartUseCase(store, context.Background(), startInput, 1)
 	if err != nil || !startReplay.Replayed || startReplay.Goal.ID != goalID || startReplay.Cycle.ID != cycleID {
 		t.Fatalf("start replay = %#v, error = %v", startReplay, err)
 	}
@@ -540,7 +540,7 @@ VALUES($1,$2,'creation','元の目標',$3,$3)`, draftID, userID, now); err != ni
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
 output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,context_changed,started_at,finished_at)
 VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,$5,'元の目標','改善した目標','fake','test','goal-refine-v1',$6,0,1,true,$7,$7)`,
-		generationID, userID, draftID, idempotencyKey, hashGoalRefineRequest(refineInput), now.Format("2006-01-02"), now); err != nil {
+		generationID, userID, draftID, idempotencyKey, goalRefineRequestHashFixture(refineInput), now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
@@ -550,16 +550,16 @@ VALUES($1,$2,'goal_refine','succeeded','fake','test','goal-refine-v1',$3,$3,$4)`
 		generationID, userID, now, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SaveDraft(context.Background(), userID, draftID, "利用者が後から編集", 0, now.Add(time.Minute)); err != nil {
+	if _, err := executeGoalDraftSaveUseCase(store, context.Background(), userID, draftID, "利用者が後から編集", 0, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := store.BeginGoalRefine(context.Background(), refineInput, nil)
+	replayed, err := executeGoalRefineBeginUseCase(store, context.Background(), refineInput, nil)
 	if err != nil || replayed.ReplayedOutput == nil || *replayed.ReplayedOutput != "改善した目標" || !replayed.ReplayedContextChanged {
 		t.Fatalf("goal refine replay = %#v, error = %v", replayed, err)
 	}
 	differentRequest := refineInput
 	differentRequest.ExpectedDraftRevision = 1
-	if _, err = store.BeginGoalRefine(context.Background(), differentRequest, nil); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
+	if _, err = executeGoalRefineBeginUseCase(store, context.Background(), differentRequest, nil); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
 		t.Fatalf("goal refine replay with different request error = %v", err)
 	}
 	var goalGenerationCount, goalUsageCount int64
@@ -614,7 +614,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 		t.Fatal(err)
 	}
 	expectedGoalRevision := completed.Goal.Revision
-	snapshot, err := store.BeginGoalRefine(context.Background(), workspace.GoalRefineInput{
+	snapshot, err := executeGoalRefineBeginUseCase(store, context.Background(), workspace.GoalRefineInput{
 		UserID: userID, GoalID: fixture.goalID, ExpectedDraftRevision: completed.ReviewDraft.Revision,
 		ExpectedGoalRevision: &expectedGoalRevision, IdempotencyKey: refineIdempotency,
 		GenerationID: generationID, Now: now.Add(2 * time.Minute),
@@ -627,12 +627,12 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	if snapshot.GoalID != fixture.goalID || snapshot.SourceText != completed.ReviewDraft.Body {
 		t.Fatalf("review snapshot = %#v", snapshot)
 	}
-	if _, err = store.FinishGoalRefine(context.Background(), snapshot, workspace.AIProviderResult{
+	if _, err = executeGoalRefineFinishUseCase(store, context.Background(), snapshot, workspace.AIProviderResult{
 		Output: "改善した目標", InputTokens: 10, OutputTokens: 4, CostUSD: 0.01, Attempts: 1,
 	}, nil, now.Add(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, "", fixture.goalID, generationID,
+	adopted, err := executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, "", fixture.goalID, generationID,
 		completed.ReviewDraft.Revision, &expectedGoalRevision, now.Add(4*time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -667,18 +667,18 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改�
 		t.Fatal(err)
 	}
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(time.Minute))
+	adopted, err := executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(time.Minute))
 	if err != nil || adopted.Revision != 1 || adopted.Replayed {
 		t.Fatalf("adopted = %#v, error = %v", adopted, err)
 	}
-	replayed, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(2*time.Minute))
+	replayed, err := executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(2*time.Minute))
 	if err != nil || !replayed.Replayed || replayed.Body != "改善した目標" {
 		t.Fatalf("adopt replay = %#v, error = %v", replayed, err)
 	}
-	if _, err = store.SaveDraft(context.Background(), userID, draftID, "利用者が編集", 1, now.Add(3*time.Minute)); err != nil {
+	if _, err = executeGoalDraftSaveUseCase(store, context.Background(), userID, draftID, "利用者が編集", 1, now.Add(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(4*time.Minute))
+	_, err = executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(4*time.Minute))
 	if !errors.Is(err, workspace.ErrAIResultAlreadyAdopted) {
 		t.Fatalf("adopt after edit error = %v", err)
 	}
@@ -709,14 +709,14 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改�
 		t.Fatal(err)
 	}
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	if _, err := store.SaveDraft(context.Background(), userID, draftID, "一時的な変更", 0, now.Add(time.Minute)); err != nil {
+	if _, err := executeGoalDraftSaveUseCase(store, context.Background(), userID, draftID, "一時的な変更", 0, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SaveDraft(context.Background(), userID, draftID, "元の目標", 1, now.Add(2*time.Minute)); err != nil {
+	if _, err := executeGoalDraftSaveUseCase(store, context.Background(), userID, draftID, "元の目標", 1, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
-	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 2, nil, now.Add(3*time.Minute))
+	adopted, err := executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, draftID, "", generationID, 2, nil, now.Add(3*time.Minute))
 	if err != nil || adopted.Body != "改善した目標" || adopted.Revision != 3 {
 		t.Fatalf("adopted = %#v, error = %v", adopted, err)
 	}
