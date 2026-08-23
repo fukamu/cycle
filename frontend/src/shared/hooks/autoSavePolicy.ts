@@ -10,12 +10,11 @@ export function autoSaveRetryDelay(
   retryNumber: number,
   random: () => number = Math.random,
 ): number {
-  const index = Math.max(
-    0,
-    Math.min(retryNumber - 1, retryBackoffMs.length - 1),
-  );
+  const index = Math.max(0, retryNumber - 1);
+  const baseDelay =
+    index < retryBackoffMs.length ? retryBackoffMs[index]! : 30_000;
   const jitter = 0.8 + Math.min(1, Math.max(0, random())) * 0.4;
-  return Math.round(retryBackoffMs[index]! * jitter);
+  return Math.round(baseDelay * jitter);
 }
 
 export function isRetryableAutoSaveError(error: unknown): boolean {

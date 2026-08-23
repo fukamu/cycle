@@ -1,6 +1,9 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
+import { useEffect, useLayoutEffect, useState } from "react";
 
+import { AccountDeletionProvider } from "../features/auth/AccountDeletionProvider";
 import {
   ReplaceSessionContext,
   SessionContext,
@@ -11,6 +14,13 @@ import {
   upgradeGoogle,
 } from "../shared/api/account";
 import { APIError } from "../shared/api/client";
+import {
+  AutoSaveScopeProvider,
+  useAutoSaveScopeRegistry,
+  type AutoSaveQuiesceCallback,
+  type AutoSaveScopeLease,
+} from "../shared/autosave/AutoSaveScopeProvider";
+import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBoundary";
 import { clearUserDrafts } from "../shared/drafts/browserDraftCache";
 import type { Session } from "../shared/api/schemas";
 import { SettingsPage } from "./SettingsPage";
@@ -159,8 +169,20 @@ describe("SettingsPage", () => {
   });
 
   it("keeps local drafts when server deletion fails", async () => {
-    vi.mocked(deleteAccount).mockRejectedValue(new Error("network"));
-    renderPage();
+    const events: string[] = [];
+    const persistDraft = vi.fn(async () => {
+      events.push("persist");
+    });
+    const onQuiesce = vi.fn<AutoSaveQuiesceCallback>(
+      async ({ queueBrowserOperation }) => {
+        await queueBrowserOperation(persistDraft);
+      },
+    );
+    vi.mocked(deleteAccount).mockImplementation(async () => {
+      events.push("delete");
+      throw new Error("network");
+    });
+    renderPage(session, undefined, { onQuiesce });
 
     await userEvent.click(
       screen.getByRole("button", { name: "アカウントを削除" }),
@@ -174,7 +196,13 @@ describe("SettingsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "アカウントを削除できませんでした",
     );
+    expect(onQuiesce).toHaveBeenCalledWith(
+      expect.objectContaining({ preserveDrafts: true }),
+    );
+    expect(persistDraft).toHaveBeenCalledOnce();
+    expect(events).toEqual(["persist", "delete"]);
     expect(clearUserDrafts).not.toHaveBeenCalled();
+    expect(screen.getByText(session.user.id)).toBeInTheDocument();
   });
 
   it("does not delete the account when the in-app dialog is canceled", async () => {
@@ -193,10 +221,31 @@ describe("SettingsPage", () => {
     expect(deleteAccount).not.toHaveBeenCalled();
   });
 
-  it("clears only this user's drafts after a successful 204", async () => {
-    vi.mocked(deleteAccount).mockResolvedValue(undefined);
-    vi.mocked(clearUserDrafts).mockResolvedValue(undefined);
-    renderPage();
+  it("quiesces writers before deletion and clears only this user's drafts after a successful 204", async () => {
+    const persistence = deferredVoid();
+    const events: string[] = [];
+    let staleQueue!: AutoSaveScopeLease["queueBrowserOperation"];
+    const onQuiesce = vi.fn<AutoSaveQuiesceCallback>(
+      async ({ queueBrowserOperation }) => {
+        await queueBrowserOperation(async () => {
+          events.push("persist-start");
+          await persistence.promise;
+          events.push("persist-finish");
+        });
+      },
+    );
+    vi.mocked(deleteAccount).mockImplementation(async () => {
+      events.push("delete");
+    });
+    vi.mocked(clearUserDrafts).mockImplementation(async () => {
+      events.push("clear");
+    });
+    renderPage(session, undefined, {
+      onLease: (lease) => {
+        staleQueue = lease.queueBrowserOperation;
+      },
+      onQuiesce,
+    });
 
     await userEvent.click(
       screen.getByRole("button", { name: "アカウントを削除" }),
@@ -207,15 +256,51 @@ describe("SettingsPage", () => {
       }),
     );
 
+    await waitFor(() => expect(events).toEqual(["persist-start"]));
+    expect(deleteAccount).not.toHaveBeenCalled();
+    expect(clearUserDrafts).not.toHaveBeenCalled();
+
+    persistence.resolve();
     await waitFor(() =>
       expect(clearUserDrafts).toHaveBeenCalledWith(session.user.id),
     );
+    expect(onQuiesce).toHaveBeenCalledWith(
+      expect.objectContaining({ preserveDrafts: true }),
+    );
+    expect(events).toEqual([
+      "persist-start",
+      "persist-finish",
+      "delete",
+      "clear",
+    ]);
+
+    expect(staleQueue).toBeTypeOf("function");
+    await staleQueue(async () => {
+      events.push("late-write");
+    });
+    expect(events).toEqual([
+      "persist-start",
+      "persist-finish",
+      "delete",
+      "clear",
+    ]);
   });
 
-  it("does not report server deletion as failed when local cleanup fails", async () => {
-    vi.mocked(deleteAccount).mockResolvedValue(undefined);
-    vi.mocked(clearUserDrafts).mockRejectedValue(new Error("indexeddb"));
-    renderPage();
+  it("keeps post-204 cleanup alive after the Settings route subtree unmounts", async () => {
+    const deletion = deferredVoid();
+    const cleanup = deferredVoid();
+    const reloadApplication = vi.fn();
+    const onSettingsUnmount = vi.fn();
+    vi.mocked(deleteAccount).mockReturnValue(deletion.promise);
+    vi.mocked(clearUserDrafts).mockReturnValue(cleanup.promise);
+    renderPage(
+      session,
+      undefined,
+      undefined,
+      reloadApplication,
+      onSettingsUnmount,
+      true,
+    );
 
     await userEvent.click(
       screen.getByRole("button", { name: "アカウントを削除" }),
@@ -226,24 +311,151 @@ describe("SettingsPage", () => {
       }),
     );
 
-    await waitFor(() =>
-      expect(clearUserDrafts).toHaveBeenCalledWith(session.user.id),
+    await waitFor(() => expect(deleteAccount).toHaveBeenCalledOnce());
+    await userEvent.click(
+      screen.getByRole("button", { name: "別routeへ移動" }),
     );
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onSettingsUnmount).toHaveBeenCalledOnce();
+    expect(screen.getByText("home route")).toBeInTheDocument();
+    expect(clearUserDrafts).not.toHaveBeenCalled();
+
+    deletion.resolve();
+
+    await waitFor(() => expect(clearUserDrafts).toHaveBeenCalledOnce());
+    expect(screen.queryByText("home route")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "ブラウザに残る下書きを削除しています",
+    );
+    expect(reloadApplication).not.toHaveBeenCalled();
+
+    cleanup.resolve();
+
+    await waitFor(() => expect(reloadApplication).toHaveBeenCalledOnce());
+    expect(deleteAccount).toHaveBeenCalledOnce();
+    expect(clearUserDrafts).toHaveBeenCalledWith(session.user.id);
+  });
+
+  it("retries only local cleanup after a successful delete before reloading", async () => {
+    const reloadApplication = vi.fn();
+    vi.mocked(deleteAccount).mockResolvedValue(undefined);
+    vi.mocked(clearUserDrafts)
+      .mockRejectedValueOnce(new Error("indexeddb"))
+      .mockResolvedValueOnce(undefined);
+    renderPage(session, undefined, undefined, reloadApplication);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "アカウントを削除" }),
+    );
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "アカウントを削除",
+      }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "アカウントは削除されましたが、このブラウザに残る下書きを削除できませんでした",
+    );
+    expect(
+      screen.queryByRole("button", { name: "アカウントを削除" }),
+    ).not.toBeInTheDocument();
+    expect(deleteAccount).toHaveBeenCalledOnce();
+    expect(clearUserDrafts).toHaveBeenCalledOnce();
+    expect(reloadApplication).not.toHaveBeenCalled();
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "ブラウザデータの削除を再試行",
+      }),
+    );
+
+    await waitFor(() => expect(reloadApplication).toHaveBeenCalledOnce());
+    expect(deleteAccount).toHaveBeenCalledOnce();
+    expect(clearUserDrafts).toHaveBeenCalledTimes(2);
+    expect(clearUserDrafts).toHaveBeenNthCalledWith(1, session.user.id);
+    expect(clearUserDrafts).toHaveBeenNthCalledWith(2, session.user.id);
   });
 });
 
 function renderPage(
   value: Session = session,
   replaceSession: (next: Session) => Promise<void> = async () => undefined,
+  autoSaveScope?: {
+    readonly onLease?: (lease: AutoSaveScopeLease) => void;
+    readonly onQuiesce?: AutoSaveQuiesceCallback;
+  },
+  reloadApplication: () => void = () => undefined,
+  onSettingsUnmount?: () => void,
+  withRouteNavigation = false,
 ) {
   render(
-    <ReplaceSessionContext.Provider value={replaceSession}>
-      <SessionContext.Provider value={value}>
-        <SettingsPage />
-      </SessionContext.Provider>
-    </ReplaceSessionContext.Provider>,
+    <AutoSaveScopeProvider>
+      {autoSaveScope && <AutoSaveScopeProbe {...autoSaveScope} />}
+      <ReplaceSessionContext.Provider value={replaceSession}>
+        <SessionContext.Provider value={value}>
+          <MemoryRouter>
+            <PostCommitCleanupBoundary>
+              <AccountDeletionProvider reloadApplication={reloadApplication}>
+                {withRouteNavigation ? (
+                  <SettingsRouteHarness onUnmount={onSettingsUnmount} />
+                ) : (
+                  <SettingsRouteProbe onUnmount={onSettingsUnmount} />
+                )}
+              </AccountDeletionProvider>
+            </PostCommitCleanupBoundary>
+          </MemoryRouter>
+        </SessionContext.Provider>
+      </ReplaceSessionContext.Provider>
+    </AutoSaveScopeProvider>,
   );
+}
+
+function SettingsRouteHarness({
+  onUnmount,
+}: {
+  readonly onUnmount: (() => void) | undefined;
+}) {
+  const [settingsRoute, setSettingsRoute] = useState(true);
+  return (
+    <>
+      <button type="button" onClick={() => setSettingsRoute(false)}>
+        別routeへ移動
+      </button>
+      {settingsRoute ? (
+        <SettingsRouteProbe onUnmount={onUnmount} />
+      ) : (
+        <p>home route</p>
+      )}
+    </>
+  );
+}
+
+function SettingsRouteProbe({
+  onUnmount,
+}: {
+  readonly onUnmount: (() => void) | undefined;
+}) {
+  useEffect(() => () => onUnmount?.(), [onUnmount]);
+  return <SettingsPage />;
+}
+
+function AutoSaveScopeProbe({
+  onLease,
+  onQuiesce,
+}: {
+  readonly onLease?: (lease: AutoSaveScopeLease) => void;
+  readonly onQuiesce?: AutoSaveQuiesceCallback;
+}) {
+  const registry = useAutoSaveScopeRegistry();
+
+  useLayoutEffect(() => {
+    const lease = registry.prepare("settings-account-delete-test");
+    lease.activate();
+    onLease?.(lease);
+    if (!onQuiesce) return undefined;
+    return lease.onQuiesce(onQuiesce);
+  }, [onLease, onQuiesce, registry]);
+
+  return null;
 }
 
 function deferredVoid() {

@@ -76,17 +76,19 @@ export const createGoalDraft = (initialBody: string, csrfToken: string) =>
     csrfToken,
     body: { initialBody },
   });
-export const getGoalDraft = (draftId: string) =>
-  requestJSON(`/api/v1/goal-drafts/${draftId}`, draftEnvelope);
+export const getGoalDraft = (draftId: string, signal?: AbortSignal) =>
+  requestJSON(`/api/v1/goal-drafts/${draftId}`, draftEnvelope, { signal });
 export const saveGoalDraft = (
   draftId: string,
   body: string,
   expectedRevision: number,
   csrfToken: string,
+  signal?: AbortSignal,
 ) =>
   requestJSON(`/api/v1/goal-drafts/${draftId}`, draftEnvelope, {
     method: "PATCH",
     csrfToken,
+    signal,
     body: { body, expectedRevision },
   });
 export const discardGoalDraft = (draftId: string, csrfToken: string) =>
@@ -140,20 +142,22 @@ export const listGoals = (scope = "all", cursor?: string) => {
   if (cursor) query.set("cursor", cursor);
   return requestJSON(`/api/v1/goals?${query}`, goalPageSchema);
 };
-export const getGoal = (goalId: string) =>
-  requestJSON(`/api/v1/goals/${goalId}`, goalEnvelope);
-export const getReview = (goalId: string) =>
-  requestJSON(`/api/v1/goals/${goalId}/review`, reviewSchema);
+export const getGoal = (goalId: string, signal?: AbortSignal) =>
+  requestJSON(`/api/v1/goals/${goalId}`, goalEnvelope, { signal });
+export const getReview = (goalId: string, signal?: AbortSignal) =>
+  requestJSON(`/api/v1/goals/${goalId}/review`, reviewSchema, { signal });
 export const saveReview = (
   goalId: string,
   expectedReviewDraftId: string,
   body: string,
   expectedRevision: number,
   csrfToken: string,
+  signal?: AbortSignal,
 ) =>
   requestJSON(`/api/v1/goals/${goalId}/review`, reviewDraftEnvelope, {
     method: "PATCH",
     csrfToken,
+    signal,
     body: { body, expectedReviewDraftId, expectedRevision },
   });
 export const refineReview = (
@@ -244,8 +248,14 @@ export const listCycles = (goalId: string, cursor?: string) => {
     cyclePageSchema,
   );
 };
-export const getCycle = (goalId: string, cycleId: string) =>
-  requestJSON(`/api/v1/goals/${goalId}/cycles/${cycleId}`, cycleEnvelope);
+export const getCycle = (
+  goalId: string,
+  cycleId: string,
+  signal?: AbortSignal,
+) =>
+  requestJSON(`/api/v1/goals/${goalId}/cycles/${cycleId}`, cycleEnvelope, {
+    signal,
+  });
 export const saveCycleFrame = (
   goalId: string,
   cycleId: string,
@@ -253,6 +263,7 @@ export const saveCycleFrame = (
   content: string,
   expectedFrameRevision: number,
   csrfToken: string,
+  signal?: AbortSignal,
 ) =>
   requestJSON(
     `/api/v1/goals/${goalId}/cycles/${cycleId}/frames/${frame}`,
@@ -260,6 +271,7 @@ export const saveCycleFrame = (
     {
       method: "PATCH",
       csrfToken,
+      signal,
       body: { content, expectedFrameRevision },
     },
   );

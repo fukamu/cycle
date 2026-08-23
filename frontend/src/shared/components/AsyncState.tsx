@@ -1,3 +1,5 @@
+import type { AutoSaveState } from "../autosave/autoSaveCoordinator";
+
 export function PageLoading() {
   return (
     <main className="page">
@@ -82,10 +84,10 @@ export function SaveBadge({
   state,
   retry,
 }: {
-  readonly state: "dirty" | "saving" | "saved" | "failed";
+  readonly state: AutoSaveState;
   readonly retry?: (() => void) | undefined;
 }) {
-  if (state === "failed")
+  if (state.kind === "failed")
     return (
       <div className="save-status save-status--error" role="alert">
         保存失敗{" "}
@@ -101,12 +103,14 @@ export function SaveBadge({
       role="status"
       aria-live="polite"
       className={
-        state === "saved" ? "save-status save-status--saved" : "save-status"
+        state.kind === "saved"
+          ? "save-status save-status--saved"
+          : "save-status"
       }
     >
-      {state === "dirty"
+      {state.kind === "dirty"
         ? "未保存"
-        : state === "saving"
+        : state.kind === "saving"
           ? "保存中"
           : "保存済み"}
     </p>

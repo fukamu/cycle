@@ -5,10 +5,15 @@ import {
   continueReview,
   deleteGoal,
   generateAction,
+  getCycle,
+  getGoal,
+  getGoalDraft,
+  getReview,
   listCycles,
   refineAction,
   refineGoalDraft,
   refineReview,
+  saveGoalDraft,
   saveReview,
   saveCycleFrame,
   startGoal,
@@ -27,6 +32,51 @@ const commandOptions = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("goal-scoped workspace API", () => {
+  it.each([
+    {
+      name: "goal draft load",
+      invoke: (signal: AbortSignal) => getGoalDraft(goalId, signal),
+    },
+    {
+      name: "goal draft save",
+      invoke: (signal: AbortSignal) =>
+        saveGoalDraft(goalId, "目標", 0, "csrf", signal),
+    },
+    {
+      name: "goal load",
+      invoke: (signal: AbortSignal) => getGoal(goalId, signal),
+    },
+    {
+      name: "review load",
+      invoke: (signal: AbortSignal) => getReview(goalId, signal),
+    },
+    {
+      name: "review save",
+      invoke: (signal: AbortSignal) =>
+        saveReview(goalId, reviewDraftId, "見直し", 0, "csrf", signal),
+    },
+    {
+      name: "cycle load",
+      invoke: (signal: AbortSignal) => getCycle(goalId, cycleId, signal),
+    },
+    {
+      name: "cycle frame save",
+      invoke: (signal: AbortSignal) =>
+        saveCycleFrame(goalId, cycleId, "plan", "計画", 0, "csrf", signal),
+    },
+  ])("forwards one lease signal to $name", async ({ invoke }) => {
+    const controller = new AbortController();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new TypeError("request aborted"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(invoke(controller.signal)).rejects.toBeInstanceOf(TypeError);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+  });
+
   it.each([
     {
       name: "goal draft refinement",

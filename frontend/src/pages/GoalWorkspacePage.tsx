@@ -2,8 +2,11 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
@@ -15,6 +18,11 @@ import {
   userQueryKeys,
 } from "../features/goal-collection/goalCache";
 import { APIError } from "../shared/api/client";
+import { AutoSaveCoordinator } from "../shared/autosave/autoSaveCoordinator";
+import {
+  type AutoSaveBrowserOperationQueue,
+  useAutoSaveScopeRegistry,
+} from "../shared/autosave/AutoSaveScopeProvider";
 import type { CurrentWork, Cycle, Frame, Goal } from "../shared/api/schemas";
 import {
   completeCycle,
@@ -33,22 +41,17 @@ import {
   PageLoading,
   SaveBadge,
 } from "../shared/components/AsyncState";
+import { usePostCommitCleanup } from "../shared/cleanup/postCommitCleanupContext";
 import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
 import { frameCopy } from "../shared/copy/ja";
 import {
   type BrowserDraft,
   clearGoalDrafts,
   deleteBrowserDraft,
+  deleteBrowserDraftIfUnchanged,
   getBrowserDraft,
   putBrowserDraft,
 } from "../shared/drafts/browserDraftCache";
-import {
-  autoSaveDebounceMs,
-  autoSaveRetryDelay,
-  browserDraftDebounceMs,
-  isRetryableAutoSaveError,
-  maxAutoSaveRetries,
-} from "../shared/hooks/autoSavePolicy";
 import {
   commandFingerprint,
   useCommandOperation,
@@ -67,7 +70,11 @@ import {
 
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
 type Values = Record<Frame, string>;
-type SaveState = "dirty" | "saving" | "saved" | "failed";
+type CycleSaveResult = Awaited<ReturnType<typeof saveCycleFrame>>;
+type PersistedFrameSnapshot = {
+  readonly body: string;
+  readonly baseRevision: number;
+};
 type CycleRevisionConflict = {
   readonly failedSnapshot: string;
   readonly baseRevision: number;
@@ -103,11 +110,13 @@ function replayWorkspacePath(
   return `/history/goals/${goalId}`;
 }
 
-function isCycleRevisionConflict(error: unknown): error is APIError {
+function isCycleWorkspaceRecoveryError(error: unknown): error is APIError {
   return (
     error instanceof APIError &&
     error.status === 409 &&
-    error.code === "CYCLE_REVISION_CONFLICT"
+    (error.code === "CYCLE_REVISION_CONFLICT" ||
+      error.code === "GOAL_STATE_CONFLICT" ||
+      error.code === "CYCLE_NOT_ACTIVE")
   );
 }
 
@@ -156,7 +165,7 @@ export function GoalWorkspacePage() {
   if (!cycleQuery.data) return <PageLoading />;
   return (
     <CycleWorkspace
-      key={cycleQuery.data.cycle.id}
+      key={`${userId}:${cycleQuery.data.cycle.id}`}
       goal={goal}
       initial={cycleQuery.data.cycle}
     />
@@ -174,6 +183,7 @@ function CycleWorkspace({
   const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const runPostCommitCleanup = usePostCommitCleanup();
   const cycle = initial;
   const generateOperation = useCommandOperation();
   const refineOperation = useCommandOperation();
@@ -187,7 +197,6 @@ function CycleWorkspace({
     action: initial.action,
   });
   const [selected, setSelected] = useState<Frame>("plan");
-  const [saveState, setSaveState] = useState<SaveState>("saved");
   const [recoveryConflicts, setRecoveryConflicts] = useState<
     ReadonlyMap<Frame, BrowserDraft>
   >(new Map());
@@ -201,7 +210,15 @@ function CycleWorkspace({
   const [pendingAction, setPendingAction] = useState(false);
   const [confirmation, setConfirmation] = useState<WorkspaceConfirmation>();
   const [error, setError] = useState<string>();
-  const pending = useRef(new Map<Frame, string>());
+  const scopeRegistry = useAutoSaveScopeRegistry();
+  const scopeKey = ["cycle", userId, goal.id, cycle.id].join(":");
+  const lease = useMemo(
+    () => scopeRegistry.prepare(scopeKey),
+    [scopeKey, scopeRegistry],
+  );
+  const browserOperationQueueRef = useRef<AutoSaveBrowserOperationQueue>(
+    lease.queueBrowserOperation,
+  );
   const conflictsRef = useRef(new Map<Frame, BrowserDraft>());
   const movedWorkspaceRef = useRef<MovedWorkspace | undefined>(undefined);
   const cycleRevisionRefreshEpochRef = useRef(0);
@@ -209,163 +226,188 @@ function CycleWorkspace({
   const cycleRevisionConflictsRef = useRef(
     new Map<Frame, CycleRevisionConflict>(),
   );
-  const saveInFlightRef = useRef(false);
-  const savesPausedRef = useRef(false);
-  const disposedRef = useRef(false);
   const mountedRef = useRef(true);
   const cacheDisabledRef = useRef(false);
+  const pendingActionRef = useRef(false);
+  const deferredHydrationEditsRef = useRef(new Map<Frame, string>());
+  const browserBaseRevisionsRef = useRef(new Map<Frame, number>());
   const editedFramesRef = useRef(new Set<Frame>());
-  const inputVersionRef = useRef(0);
-  const frameEditVersionsRef = useRef<Record<Frame, number>>({
-    plan: 0,
-    do: 0,
-    check: 0,
-    action: 0,
-  });
-  const retryCountRef = useRef(0);
-  const lastInputAtRef = useRef(0);
-  const saveTimerRef = useRef<number | undefined>(undefined);
-  const browserTimersRef = useRef(new Map<Frame, number>());
-  const pumpRef = useRef<() => Promise<void>>(async () => undefined);
-  const drainDetachedRef = useRef<() => Promise<void>>(async () => undefined);
-  const browserQueueRef = useRef(Promise.resolve());
+  const initialValuesRef = useRef(values);
   const valuesRef = useRef(values);
-  const savedValuesRef = useRef<Values>({ ...values });
+  const csrfTokenRef = useRef(session.csrfToken);
+  csrfTokenRef.current = session.csrfToken;
   const revisions = useRef({ ...initial.frameRevisions });
   const contentRevision = useRef(initial.contentRevision);
+  const persistedFrameSnapshotsRef = useRef(
+    new Map<Frame, PersistedFrameSnapshot>(),
+  );
+  const attemptRevisionsRef = useRef(new WeakMap<AbortSignal, number>());
+  const recoverCycleRevisionConflictRef = useRef<
+    (
+      frame: Frame,
+      failedSnapshot: string,
+      baseRevision: number,
+    ) => Promise<void>
+  >(async () => undefined);
   const editable = cycle.status === "active";
-
-  const updateSaveState = useCallback((next: SaveState) => {
-    if (mountedRef.current) setSaveState(next);
-  }, []);
-
-  const queueBrowserOperation = useCallback(
-    (operation: () => Promise<void>): Promise<void> => {
-      const settled = browserQueueRef.current.then(operation).then(
-        () => {
-          if (mountedRef.current) setBrowserCacheFailed(false);
-        },
-        () => {
-          if (mountedRef.current) setBrowserCacheFailed(true);
-        },
-      );
-      browserQueueRef.current = settled;
-      return settled;
-    },
-    [],
+  const isActivePage = useCallback(
+    () => lease.isCurrent() && mountedRef.current,
+    [lease],
   );
 
-  const deleteFrameDraft = useCallback(
-    (frame: Frame) =>
-      queueBrowserOperation(() =>
-        deleteBrowserDraft(userId, `cycle:${cycle.id}:${frame}`),
-      ),
-    [cycle.id, queueBrowserOperation, userId],
+  const settleBrowserOperation = useCallback(
+    async (operation: () => Promise<unknown>): Promise<void> => {
+      try {
+        await operation();
+        if (lease.isCurrent() && mountedRef.current)
+          setBrowserCacheFailed(false);
+      } catch {
+        if (lease.isCurrent() && mountedRef.current)
+          setBrowserCacheFailed(true);
+      }
+    },
+    [lease],
+  );
+
+  const persistFrameDraftRecord = useCallback(
+    (frame: Frame, body: string, baseRevision: number): Promise<void> => {
+      browserBaseRevisionsRef.current.set(frame, baseRevision);
+      if (cacheDisabledRef.current) return Promise.resolve();
+      const snapshot: PersistedFrameSnapshot = { body, baseRevision };
+      return browserOperationQueueRef
+        .current(async () => {
+          await putBrowserDraft({
+            userId,
+            goalId: goal.id,
+            subjectKey: "cycle:" + cycle.id + ":" + frame,
+            body,
+            baseRevision,
+            updatedAt: new Date().toISOString(),
+          });
+          persistedFrameSnapshotsRef.current.set(frame, snapshot);
+        })
+        .then(() => undefined);
+    },
+    [cycle.id, goal.id, userId],
+  );
+
+  const clearFrameDraftRecord = useCallback(
+    (frame: Frame): Promise<void> =>
+      browserOperationQueueRef
+        .current(async () => {
+          if (deferredHydrationEditsRef.current.has(frame)) return;
+          const expected = persistedFrameSnapshotsRef.current.get(frame);
+          if (!expected) return;
+          await deleteBrowserDraftIfUnchanged(
+            userId,
+            "cycle:" + cycle.id + ":" + frame,
+            expected.body,
+            expected.baseRevision,
+          );
+          if (persistedFrameSnapshotsRef.current.get(frame) === expected) {
+            persistedFrameSnapshotsRef.current.delete(frame);
+            if (
+              browserBaseRevisionsRef.current.get(frame) ===
+              expected.baseRevision
+            )
+              browserBaseRevisionsRef.current.delete(frame);
+          }
+        })
+        .then(() => undefined),
+    [cycle.id, userId],
   );
 
   const cacheFrameDraft = useCallback(
-    (frame: Frame, body: string, baseRevision: number) => {
-      if (cacheDisabledRef.current) return Promise.resolve();
-      return queueBrowserOperation(() =>
-        putBrowserDraft({
-          userId,
-          goalId: goal.id,
-          subjectKey: `cycle:${cycle.id}:${frame}`,
-          body,
-          baseRevision,
-          updatedAt: new Date().toISOString(),
-        }),
-      );
-    },
-    [cycle.id, goal.id, queueBrowserOperation, userId],
-  );
-
-  const clearGoalDraftCache = useCallback(
-    () => queueBrowserOperation(() => clearGoalDrafts(userId, goal.id)),
-    [goal.id, queueBrowserOperation, userId],
-  );
-
-  const persistFrameDraft = useCallback(
-    (frame: Frame) => {
-      if (conflictsRef.current.has(frame) || cacheDisabledRef.current)
-        return Promise.resolve();
-      return valuesRef.current[frame] === savedValuesRef.current[frame]
-        ? deleteFrameDraft(frame)
-        : cacheFrameDraft(
-            frame,
-            valuesRef.current[frame],
-            revisions.current[frame],
-          );
-    },
-    [cacheFrameDraft, deleteFrameDraft],
-  );
-
-  const clearSaveTimer = useCallback(() => {
-    if (saveTimerRef.current !== undefined) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = undefined;
-    }
-  }, []);
-
-  const clearBrowserTimer = useCallback((frame: Frame) => {
-    const timer = browserTimersRef.current.get(frame);
-    if (timer !== undefined) window.clearTimeout(timer);
-    browserTimersRef.current.delete(frame);
-  }, []);
-
-  const hasSavablePending = useCallback(
-    () =>
-      Array.from(pending.current.keys()).some(
-        (frame) =>
-          !conflictsRef.current.has(frame) &&
-          !cycleRevisionConflictsRef.current.has(frame),
+    (frame: Frame, body: string, baseRevision: number) =>
+      settleBrowserOperation(() =>
+        persistFrameDraftRecord(frame, body, baseRevision),
       ),
-    [],
+    [persistFrameDraftRecord, settleBrowserOperation],
   );
 
-  const schedulePump = useCallback(
-    (delay: number) => {
-      clearSaveTimer();
-      if (
-        !editable ||
-        savesPausedRef.current ||
-        disposedRef.current ||
-        !hasSavablePending()
-      )
-        return;
-      saveTimerRef.current = window.setTimeout(() => {
-        saveTimerRef.current = undefined;
-        void pumpRef.current();
-      }, delay);
-    },
-    [clearSaveTimer, editable, hasSavablePending],
+  const coordinatorRef = useRef<
+    AutoSaveCoordinator<Frame, string, CycleSaveResult> | undefined
+  >(undefined);
+  if (!coordinatorRef.current) {
+    coordinatorRef.current = new AutoSaveCoordinator<
+      Frame,
+      string,
+      CycleSaveResult
+    >({
+      initialValues: new Map(
+        frames.map(
+          (frame) => [frame, initialValuesRef.current[frame]] as const,
+        ),
+      ),
+      initiallyHydrating: editable,
+      signal: lease.signal,
+      isCurrent: lease.isCurrent,
+      save: (entry, signal) => {
+        const baseRevision = revisions.current[entry.key];
+        attemptRevisionsRef.current.set(signal, baseRevision);
+        return saveCycleFrame(
+          goal.id,
+          cycle.id,
+          entry.key,
+          entry.value,
+          baseRevision,
+          csrfTokenRef.current,
+          signal,
+        );
+      },
+      savedValue: (result) => result.content,
+      onSaved: (entry, result) => {
+        revisions.current[entry.key] = Math.max(
+          revisions.current[entry.key],
+          result.frameRevision,
+        );
+        contentRevision.current = Math.max(
+          contentRevision.current,
+          result.contentRevision,
+        );
+        browserBaseRevisionsRef.current.delete(entry.key);
+        if (valuesRef.current[entry.key] === entry.value) {
+          valuesRef.current = {
+            ...valuesRef.current,
+            [entry.key]: result.content,
+          };
+          if (mountedRef.current) setValues(valuesRef.current);
+        }
+        cacheCycleFrame(cache, userId, goal.id, result);
+      },
+      onError: async (cause, entry, signal) => {
+        if (!isCycleWorkspaceRecoveryError(cause)) return "unhandled";
+        await recoverCycleRevisionConflictRef.current(
+          entry.key,
+          entry.value,
+          attemptRevisionsRef.current.get(signal) ??
+            revisions.current[entry.key],
+        );
+        return "handled";
+      },
+      persist: (frame, body) => {
+        const baseRevision =
+          browserBaseRevisionsRef.current.get(frame) ??
+          revisions.current[frame];
+        return persistFrameDraftRecord(frame, body, baseRevision);
+      },
+      clearPersisted: clearFrameDraftRecord,
+      onPersistenceStatus: (available) => {
+        if (lease.isCurrent() && mountedRef.current)
+          setBrowserCacheFailed(!available);
+      },
+    });
+  }
+  const coordinator = coordinatorRef.current;
+  const hydrationRunRef = useRef<{
+    readonly coordinator: typeof coordinator;
+    readonly token: symbol;
+  } | null>(null);
+  const saveState = useSyncExternalStore(
+    coordinator.subscribe,
+    coordinator.getState,
+    coordinator.getState,
   );
-
-  const scheduleBrowserDraft = useCallback(
-    (frame: Frame) => {
-      clearBrowserTimer(frame);
-      if (conflictsRef.current.has(frame) || cacheDisabledRef.current) return;
-      const timer = window.setTimeout(() => {
-        browserTimersRef.current.delete(frame);
-        void persistFrameDraft(frame);
-      }, browserDraftDebounceMs);
-      browserTimersRef.current.set(frame, timer);
-    },
-    [clearBrowserTimer, persistFrameDraft],
-  );
-
-  const firstPendingEntry = useCallback(():
-    | readonly [Frame, string]
-    | undefined => {
-    for (const entry of pending.current) {
-      if (
-        !conflictsRef.current.has(entry[0]) &&
-        !cycleRevisionConflictsRef.current.has(entry[0])
-      )
-        return entry;
-    }
-    return undefined;
-  }, []);
 
   const recoverCycleRevisionConflict = useCallback(
     async (
@@ -374,7 +416,7 @@ function CycleWorkspace({
       baseRevision: number,
     ): Promise<void> => {
       if (
-        disposedRef.current ||
+        !isActivePage() ||
         movedWorkspaceRef.current ||
         cycleRevisionRefreshInFlightRef.current.has(frame)
       )
@@ -387,22 +429,23 @@ function CycleWorkspace({
         baseRevision,
       };
       cycleRevisionConflictsRef.current.set(frame, conflict);
+      browserBaseRevisionsRef.current.set(frame, conflict.baseRevision);
       const refreshEpoch = ++cycleRevisionRefreshEpochRef.current;
       const isCurrentRefresh = () =>
-        !disposedRef.current &&
+        isActivePage() &&
         movedWorkspaceRef.current === undefined &&
         cycleRevisionRefreshEpochRef.current === refreshEpoch &&
         cycleRevisionConflictsRef.current.get(frame) === conflict;
-      const localBeforeRefresh = valuesRef.current[frame];
-      pending.current.set(frame, localBeforeRefresh);
-      clearBrowserTimer(frame);
+      const localBeforeRefresh =
+        coordinator.getCurrentValue(frame) ?? valuesRef.current[frame];
+      coordinator.block(frame, localBeforeRefresh, "CYCLE_REVISION_CONFLICT");
 
       try {
         await cacheFrameDraft(frame, localBeforeRefresh, conflict.baseRevision);
         if (!isCurrentRefresh()) return;
         if (mountedRef.current) setError(undefined);
 
-        let latestGoal = await getGoal(goal.id);
+        let latestGoal = await getGoal(goal.id, lease.signal);
         if (!isCurrentRefresh()) return;
         const cachedGoal = cache.getQueryData<{ readonly goal: Goal }>(
           userQueryKeys.goal(userId, goal.id),
@@ -411,7 +454,11 @@ function CycleWorkspace({
         const currentWork = goalBeforeCycle.currentWork;
         const currentCycleId =
           currentWork?.kind === "active_cycle" ? currentWork.cycleId : cycle.id;
-        const latestCycle = await getCycle(goal.id, currentCycleId);
+        const latestCycle = await getCycle(
+          goal.id,
+          currentCycleId,
+          lease.signal,
+        );
         if (!isCurrentRefresh()) return;
         const cachedCycleBeforeConfirmation = cache.getQueryData<{
           readonly cycle: Cycle;
@@ -425,7 +472,7 @@ function CycleWorkspace({
           currentWork?.kind === "active_cycle" &&
           currentWork.cycleId === cycleBeforeGoalConfirmation.id
         ) {
-          const confirmedGoal = await getGoal(goal.id);
+          const confirmedGoal = await getGoal(goal.id, lease.signal);
           if (!isCurrentRefresh()) return;
           latestGoal = {
             goal: preferGoal(latestGoal.goal, confirmedGoal.goal),
@@ -468,45 +515,54 @@ function CycleWorkspace({
           };
           const runtimeConflicts = new Map(cycleRevisionConflictsRef.current);
           movedWorkspaceRef.current = nextMovedWorkspace;
-          savesPausedRef.current = true;
-          clearSaveTimer();
-          retryCountRef.current = 0;
+          coordinator.fail("CYCLE_WORKSPACE_MOVED");
+          coordinator.pause(true);
           cycleRevisionRefreshEpochRef.current += 1;
           for (const candidate of frames) {
-            clearBrowserTimer(candidate);
             const explicitConflict = conflictsRef.current.get(candidate);
             const runtimeConflict = runtimeConflicts.get(candidate);
-            if (
-              pending.current.has(candidate) ||
-              valuesRef.current[candidate] !==
-                savedValuesRef.current[candidate] ||
-              explicitConflict ||
-              runtimeConflict
-            )
+            const current =
+              coordinator.getCurrentValue(candidate) ??
+              valuesRef.current[candidate];
+            const saved =
+              coordinator.getSavedValue(candidate) ??
+              initialValuesRef.current[candidate];
+            if (current !== saved || explicitConflict || runtimeConflict)
               void cacheFrameDraft(
                 candidate,
-                valuesRef.current[candidate],
+                current,
                 explicitConflict?.baseRevision ??
                   runtimeConflict?.baseRevision ??
                   revisions.current[candidate],
               );
           }
           cacheDisabledRef.current = true;
+          coordinator.setPersistenceEnabled(false);
           cycleRevisionConflictsRef.current.clear();
           if (mountedRef.current) {
             setMovedWorkspace(nextMovedWorkspace);
             setError(undefined);
           }
-          updateSaveState("failed");
           return;
         }
 
         const serverCycle = canonicalCycle;
-        const previousValues = valuesRef.current;
-        const previousSaved = savedValuesRef.current;
+        const previousValues = Object.fromEntries(
+          frames.map((candidate) => [
+            candidate,
+            coordinator.getCurrentValue(candidate) ??
+              valuesRef.current[candidate],
+          ]),
+        ) as Values;
+        const previousSaved = Object.fromEntries(
+          frames.map((candidate) => [
+            candidate,
+            coordinator.getSavedValue(candidate) ??
+              initialValuesRef.current[candidate],
+          ]),
+        ) as Values;
         const previousRevisions = { ...revisions.current };
         let nextValues = { ...previousValues };
-        const nextSaved = { ...previousSaved };
         const nextConflicts = new Map(conflictsRef.current);
 
         for (const candidate of frames) {
@@ -517,39 +573,46 @@ function CycleWorkspace({
             cycleRevisionConflictsRef.current.get(candidate);
           const existingConflict = nextConflicts.get(candidate);
           const hadLocalChange =
-            pending.current.has(candidate) ||
             localBody !== previousSaved[candidate] ||
-            existingConflict !== undefined;
+            existingConflict !== undefined ||
+            runtimeConflict !== undefined;
 
           revisions.current[candidate] = serverRevision;
-          nextSaved[candidate] = serverBody;
 
           if (runtimeConflict) {
             cycleRevisionConflictsRef.current.delete(candidate);
+            coordinator.rebase(candidate, serverBody);
             if (
               serverBody === runtimeConflict.failedSnapshot ||
               localBody === serverBody
             ) {
+              browserBaseRevisionsRef.current.set(candidate, serverRevision);
               nextConflicts.delete(candidate);
               if (localBody === serverBody) {
-                pending.current.delete(candidate);
                 nextValues = { ...nextValues, [candidate]: serverBody };
-                void deleteFrameDraft(candidate);
+                coordinator.synchronize(candidate, serverBody);
               } else {
-                pending.current.set(candidate, localBody);
-                void cacheFrameDraft(candidate, localBody, serverRevision);
+                coordinator.unblock(candidate);
               }
             } else {
+              browserBaseRevisionsRef.current.set(
+                candidate,
+                runtimeConflict.baseRevision,
+              );
               const draft: BrowserDraft = {
                 userId,
                 goalId: goal.id,
-                subjectKey: `cycle:${cycle.id}:${candidate}`,
+                subjectKey: "cycle:" + cycle.id + ":" + candidate,
                 body: localBody,
                 baseRevision: runtimeConflict.baseRevision,
                 updatedAt: new Date().toISOString(),
               };
               nextConflicts.set(candidate, draft);
-              pending.current.set(candidate, localBody);
+              coordinator.block(
+                candidate,
+                localBody,
+                "CYCLE_REVISION_CONFLICT",
+              );
               void cacheFrameDraft(
                 candidate,
                 localBody,
@@ -559,60 +622,65 @@ function CycleWorkspace({
             continue;
           }
 
-          if (existingConflict) continue;
+          coordinator.rebase(candidate, serverBody);
+          if (existingConflict) {
+            browserBaseRevisionsRef.current.set(
+              candidate,
+              existingConflict.baseRevision,
+            );
+            coordinator.block(candidate, localBody, "CYCLE_REVISION_CONFLICT");
+            continue;
+          }
           if (!hadLocalChange) {
-            pending.current.delete(candidate);
+            browserBaseRevisionsRef.current.set(candidate, serverRevision);
             nextValues = { ...nextValues, [candidate]: serverBody };
-            void deleteFrameDraft(candidate);
+            coordinator.synchronize(candidate, serverBody);
           } else if (serverBody !== previousSaved[candidate]) {
+            browserBaseRevisionsRef.current.set(
+              candidate,
+              previousRevisions[candidate],
+            );
             const draft: BrowserDraft = {
               userId,
               goalId: goal.id,
-              subjectKey: `cycle:${cycle.id}:${candidate}`,
+              subjectKey: "cycle:" + cycle.id + ":" + candidate,
               body: localBody,
               baseRevision: previousRevisions[candidate],
               updatedAt: new Date().toISOString(),
             };
             nextConflicts.set(candidate, draft);
-            pending.current.set(candidate, localBody);
+            coordinator.block(candidate, localBody, "CYCLE_REVISION_CONFLICT");
             void cacheFrameDraft(
               candidate,
               localBody,
               previousRevisions[candidate],
             );
           } else if (localBody === serverBody) {
-            pending.current.delete(candidate);
-            void deleteFrameDraft(candidate);
+            browserBaseRevisionsRef.current.set(candidate, serverRevision);
+            nextValues = { ...nextValues, [candidate]: serverBody };
+            coordinator.synchronize(candidate, serverBody);
           } else {
-            pending.current.set(candidate, localBody);
-            void cacheFrameDraft(candidate, localBody, serverRevision);
+            browserBaseRevisionsRef.current.set(candidate, serverRevision);
+            coordinator.unblock(candidate);
           }
         }
 
         valuesRef.current = nextValues;
-        savedValuesRef.current = nextSaved;
+        conflictsRef.current = nextConflicts;
         contentRevision.current = Math.max(
           contentRevision.current,
           serverCycle.contentRevision,
         );
-        conflictsRef.current = nextConflicts;
-        retryCountRef.current = 0;
         if (mountedRef.current) {
           setValues(nextValues);
           setRecoveryConflicts(new Map(nextConflicts));
           setError(undefined);
         }
-        if (nextConflicts.size || cycleRevisionConflictsRef.current.size)
-          updateSaveState("failed");
-        else if (hasSavablePending()) {
-          updateSaveState("dirty");
-          schedulePump(0);
-        } else updateSaveState("saved");
       } catch {
         if (!isCurrentRefresh()) return;
         await cacheFrameDraft(
           frame,
-          valuesRef.current[frame],
+          coordinator.getCurrentValue(frame) ?? valuesRef.current[frame],
           conflict.baseRevision,
         );
         if (!isCurrentRefresh()) return;
@@ -620,7 +688,6 @@ function CycleWorkspace({
           setError(
             "最新の内容を取得できませんでした。入力は保持されています。再試行してください。",
           );
-        updateSaveState("failed");
       } finally {
         if (cycleRevisionRefreshInFlightRef.current.get(frame) === refreshToken)
           cycleRevisionRefreshInFlightRef.current.delete(frame);
@@ -629,268 +696,146 @@ function CycleWorkspace({
     [
       cache,
       cacheFrameDraft,
-      clearBrowserTimer,
-      clearSaveTimer,
+      coordinator,
       cycle.id,
-      deleteFrameDraft,
       goal.id,
-      hasSavablePending,
-      schedulePump,
-      updateSaveState,
+      isActivePage,
+      lease.signal,
       userId,
     ],
   );
+  recoverCycleRevisionConflictRef.current = recoverCycleRevisionConflict;
 
-  const drainDetached = useCallback(async () => {
-    if (!editable || savesPausedRef.current || cacheDisabledRef.current) return;
-    for (;;) {
-      const entry = firstPendingEntry();
-      if (!entry) return;
-      const [frame, body] = entry;
-      pending.current.delete(frame);
-      try {
-        const result = await saveCycleFrame(
-          goal.id,
-          cycle.id,
-          frame,
-          body,
-          revisions.current[frame],
-          session.csrfToken,
-        );
-        revisions.current[frame] = Math.max(
-          revisions.current[frame],
-          result.frameRevision,
-        );
-        contentRevision.current = Math.max(
-          contentRevision.current,
-          result.contentRevision,
-        );
-        savedValuesRef.current = {
-          ...savedValuesRef.current,
-          [frame]: result.content,
-        };
-        cacheCycleFrame(cache, userId, goal.id, result);
-        if (pending.current.has(frame))
-          void cacheFrameDraft(
-            frame,
-            pending.current.get(frame) ?? "",
-            result.frameRevision,
-          );
-        else void deleteFrameDraft(frame);
-      } catch {
-        if (!pending.current.has(frame)) pending.current.set(frame, body);
-        void persistFrameDraft(frame);
-        return;
-      }
-    }
-  }, [
-    cache,
-    cacheFrameDraft,
-    cycle.id,
-    deleteFrameDraft,
-    editable,
-    firstPendingEntry,
-    goal.id,
-    persistFrameDraft,
-    session.csrfToken,
-    userId,
-  ]);
-  drainDetachedRef.current = drainDetached;
+  useLayoutEffect(() => {
+    lease.activate();
+    coordinator.attach();
+    const unregister = lease.onQuiesce(
+      async ({ preserveDrafts, queueBrowserOperation }) => {
+        const previousQueue = browserOperationQueueRef.current;
+        browserOperationQueueRef.current = queueBrowserOperation;
+        try {
+          await coordinator.quiesce(preserveDrafts);
+        } finally {
+          browserOperationQueueRef.current = previousQueue;
+        }
+      },
+    );
+    return () => {
+      unregister();
+      coordinator.detach();
+    };
+  }, [coordinator, lease]);
 
-  const pump = useCallback(async () => {
-    if (
-      saveInFlightRef.current ||
-      savesPausedRef.current ||
-      disposedRef.current
-    )
-      return;
-    const entry = firstPendingEntry();
-    if (!editable || !entry) {
-      updateSaveState(
-        conflictsRef.current.size || cycleRevisionConflictsRef.current.size
-          ? "failed"
-          : "saved",
-      );
-      return;
-    }
-    const [frame, body] = entry;
-    const snapshotInputVersion = inputVersionRef.current;
-    const snapshotFrameVersion = frameEditVersionsRef.current[frame];
-    const snapshotRevision = revisions.current[frame];
-    pending.current.delete(frame);
-    saveInFlightRef.current = true;
-    updateSaveState("saving");
-    let result: Awaited<ReturnType<typeof saveCycleFrame>> | undefined;
-    let failure: unknown;
-    let cycleConflictHandled = false;
-    try {
-      result = await saveCycleFrame(
-        goal.id,
-        cycle.id,
-        frame,
-        body,
-        snapshotRevision,
-        session.csrfToken,
-      );
-      revisions.current[frame] = Math.max(
-        revisions.current[frame],
-        result.frameRevision,
-      );
-      contentRevision.current = Math.max(
-        contentRevision.current,
-        result.contentRevision,
-      );
-      savedValuesRef.current = {
-        ...savedValuesRef.current,
-        [frame]: result.content,
-      };
-      if (frameEditVersionsRef.current[frame] === snapshotFrameVersion) {
-        valuesRef.current = { ...valuesRef.current, [frame]: result.content };
-        if (mountedRef.current) setValues(valuesRef.current);
-      }
-      cacheCycleFrame(cache, userId, goal.id, result);
-      if (!pending.current.has(frame)) void deleteFrameDraft(frame);
-      else
-        void cacheFrameDraft(
-          frame,
-          pending.current.get(frame) ?? "",
-          result.frameRevision,
-        );
-      retryCountRef.current = 0;
-    } catch (cause) {
-      if (!pending.current.has(frame)) pending.current.set(frame, body);
-      failure = cause;
-      if (isCycleRevisionConflict(cause)) {
-        await recoverCycleRevisionConflict(frame, body, snapshotRevision);
-        cycleConflictHandled = true;
-      }
-    } finally {
-      saveInFlightRef.current = false;
-    }
-
-    if (result) {
-      if (disposedRef.current) void drainDetachedRef.current();
-      else if (hasSavablePending()) {
-        updateSaveState("dirty");
-        schedulePump(0);
-      } else
-        updateSaveState(
-          conflictsRef.current.size || cycleRevisionConflictsRef.current.size
-            ? "failed"
-            : "saved",
-        );
-      return;
-    }
-
-    if (cycleConflictHandled) return;
-    if (disposedRef.current || savesPausedRef.current) return;
-    void persistFrameDraft(frame);
-    if (inputVersionRef.current !== snapshotInputVersion) {
-      retryCountRef.current = 0;
-      updateSaveState("dirty");
-      const elapsed = Date.now() - lastInputAtRef.current;
-      schedulePump(Math.max(0, autoSaveDebounceMs - elapsed));
-      return;
-    }
-    if (
-      isRetryableAutoSaveError(failure) &&
-      retryCountRef.current < maxAutoSaveRetries
-    ) {
-      retryCountRef.current += 1;
-      updateSaveState("dirty");
-      schedulePump(autoSaveRetryDelay(retryCountRef.current));
-      return;
-    }
-    updateSaveState("failed");
-  }, [
-    cache,
-    cacheFrameDraft,
-    cycle.id,
-    deleteFrameDraft,
-    editable,
-    firstPendingEntry,
-    goal.id,
-    hasSavablePending,
-    persistFrameDraft,
-    recoverCycleRevisionConflict,
-    schedulePump,
-    session.csrfToken,
-    updateSaveState,
-    userId,
-  ]);
-  pumpRef.current = pump;
+  useEffect(() => {
+    mountedRef.current = true;
+    const refreshes = cycleRevisionRefreshInFlightRef.current;
+    return () => {
+      mountedRef.current = false;
+      cycleRevisionRefreshEpochRef.current += 1;
+      refreshes.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (!editable) return;
+    const run = { coordinator, token: Symbol("cycle-hydration") };
+    hydrationRunRef.current = run;
     let canceled = false;
     void Promise.all(
       frames.map(async (frame) => {
         try {
           return {
             frame,
-            draft: await getBrowserDraft(userId, `cycle:${cycle.id}:${frame}`),
+            draft: await lease.queueBrowserOperation(() =>
+              getBrowserDraft(userId, `cycle:${cycle.id}:${frame}`),
+            ),
           };
         } catch {
           return { frame, failed: true as const };
         }
       }),
-    ).then((results) => {
-      if (canceled) return;
-      let nextValues = valuesRef.current;
-      const nextConflicts = new Map(conflictsRef.current);
-      let cacheReadFailed = false;
-      for (const item of results) {
-        if ("failed" in item) {
-          cacheReadFailed = true;
-          continue;
+    )
+      .then((results) => {
+        if (canceled || !isActivePage() || hydrationRunRef.current !== run)
+          return;
+        let nextValues = valuesRef.current;
+        const nextConflicts = new Map(conflictsRef.current);
+        let cacheReadFailed = false;
+        for (const item of results) {
+          if ("failed" in item) {
+            cacheReadFailed = true;
+            continue;
+          }
+          const { draft: loadedDraft, frame } = item;
+          if (!loadedDraft) continue;
+          persistedFrameSnapshotsRef.current.set(frame, {
+            body: loadedDraft.body,
+            baseRevision: loadedDraft.baseRevision,
+          });
+          if (editedFramesRef.current.has(frame)) {
+            browserBaseRevisionsRef.current.set(
+              frame,
+              revisions.current[frame],
+            );
+            continue;
+          }
+          browserBaseRevisionsRef.current.set(frame, loadedDraft.baseRevision);
+          const canonicalBody = normalizeLineEndings(loadedDraft.body);
+          const draft =
+            canonicalBody === loadedDraft.body
+              ? loadedDraft
+              : { ...loadedDraft, body: canonicalBody };
+          if (canonicalBody !== loadedDraft.body)
+            void cacheFrameDraft(
+              frame,
+              canonicalBody,
+              loadedDraft.baseRevision,
+            );
+          nextValues = { ...nextValues, [frame]: draft.body };
+          if (draft.baseRevision === revisions.current[frame]) {
+            if (
+              draft.body !==
+              (coordinator.getSavedValue(frame) ??
+                initialValuesRef.current[frame])
+            ) {
+              if (pendingActionRef.current)
+                deferredHydrationEditsRef.current.set(frame, draft.body);
+              else coordinator.edit(frame, draft.body);
+            } else coordinator.synchronize(frame, draft.body);
+          } else {
+            nextConflicts.set(frame, draft);
+            coordinator.block(frame, draft.body, "CYCLE_REVISION_CONFLICT");
+          }
         }
-        const { draft: loadedDraft, frame } = item;
-        if (!loadedDraft || editedFramesRef.current.has(frame)) continue;
-        const canonicalBody = normalizeLineEndings(loadedDraft.body);
-        const draft =
-          canonicalBody === loadedDraft.body
-            ? loadedDraft
-            : { ...loadedDraft, body: canonicalBody };
-        if (canonicalBody !== loadedDraft.body)
-          void cacheFrameDraft(frame, canonicalBody, loadedDraft.baseRevision);
-        nextValues = { ...nextValues, [frame]: draft.body };
-        frameEditVersionsRef.current[frame] += 1;
-        if (draft.baseRevision === revisions.current[frame]) {
-          if (draft.body !== savedValuesRef.current[frame])
-            pending.current.set(frame, draft.body);
-          else void deleteFrameDraft(frame);
-        } else {
-          nextConflicts.set(frame, draft);
+        valuesRef.current = nextValues;
+        conflictsRef.current = nextConflicts;
+        if (mountedRef.current) {
+          setValues(nextValues);
+          setRecoveryConflicts(new Map(nextConflicts));
         }
-      }
-      valuesRef.current = nextValues;
-      conflictsRef.current = nextConflicts;
-      setValues(nextValues);
-      setRecoveryConflicts(new Map(nextConflicts));
-      if (cacheReadFailed) setBrowserCacheFailed(true);
-      if (nextConflicts.size) setSaveState("failed");
-      else if (hasSavablePending()) {
-        setSaveState("dirty");
-        schedulePump(autoSaveDebounceMs);
-      }
-    });
+        if (cacheReadFailed && mountedRef.current) setBrowserCacheFailed(true);
+      })
+      .finally(() => {
+        const active = hydrationRunRef.current;
+        if (active?.coordinator !== coordinator || active.token === run.token)
+          coordinator.finishHydration();
+      });
     return () => {
       canceled = true;
     };
   }, [
     cacheFrameDraft,
+    coordinator,
     cycle.id,
-    deleteFrameDraft,
     editable,
-    hasSavablePending,
-    schedulePump,
+    isActivePage,
+    lease,
     userId,
   ]);
 
   useEffect(() => {
     const handleOnline = () => {
-      if (savesPausedRef.current) return;
-      retryCountRef.current = 0;
+      if (movedWorkspaceRef.current) return;
       if (cycleRevisionConflictsRef.current.size) {
         for (const [frame, conflict] of cycleRevisionConflictsRef.current)
           void recoverCycleRevisionConflict(
@@ -900,82 +845,38 @@ function CycleWorkspace({
           );
         return;
       }
-      if (!hasSavablePending()) return;
-      updateSaveState("dirty");
-      schedulePump(0);
+      coordinator.online();
     };
     window.addEventListener("online", handleOnline);
     return () => window.removeEventListener("online", handleOnline);
-  }, [
-    hasSavablePending,
-    recoverCycleRevisionConflict,
-    schedulePump,
-    updateSaveState,
-  ]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    disposedRef.current = false;
-    const pendingDrafts = pending.current;
-    return () => {
-      mountedRef.current = false;
-      disposedRef.current = true;
-      cycleRevisionRefreshEpochRef.current += 1;
-      clearSaveTimer();
-      for (const frame of frames) {
-        clearBrowserTimer(frame);
-        if (pendingDrafts.has(frame)) void persistFrameDraft(frame);
-      }
-      if (
-        !cacheDisabledRef.current &&
-        !savesPausedRef.current &&
-        !saveInFlightRef.current &&
-        hasSavablePending()
-      )
-        void drainDetachedRef.current();
-    };
-  }, [clearBrowserTimer, clearSaveTimer, hasSavablePending, persistFrameDraft]);
+  }, [coordinator, recoverCycleRevisionConflict]);
 
   function change(frame: Frame, value: string) {
-    if (movedWorkspaceRef.current || conflictsRef.current.has(frame)) return;
+    if (
+      movedWorkspaceRef.current ||
+      conflictsRef.current.has(frame) ||
+      pendingActionRef.current
+    )
+      return;
     const normalizedValue = normalizeBoundedTextInput(
       value,
       FRAME_TEXT_MAX_CODE_POINTS,
     );
     if (normalizedValue === null) return;
     editedFramesRef.current.add(frame);
-    inputVersionRef.current += 1;
-    frameEditVersionsRef.current[frame] += 1;
-    retryCountRef.current = 0;
-    lastInputAtRef.current = Date.now();
     valuesRef.current = { ...valuesRef.current, [frame]: normalizedValue };
     setValues(valuesRef.current);
-    if (normalizedValue === savedValuesRef.current[frame])
-      pending.current.delete(frame);
-    else pending.current.set(frame, normalizedValue);
-    if (!saveInFlightRef.current)
-      setSaveState(
-        conflictsRef.current.size || cycleRevisionConflictsRef.current.size
-          ? "failed"
-          : pending.current.size
-            ? "dirty"
-            : "saved",
-      );
-    scheduleBrowserDraft(frame);
-    schedulePump(autoSaveDebounceMs);
+    coordinator.edit(frame, normalizedValue);
   }
 
   function flush(frame: Frame) {
     if (
       movedWorkspaceRef.current ||
       conflictsRef.current.has(frame) ||
-      savesPausedRef.current
+      pendingActionRef.current
     )
       return;
-    clearBrowserTimer(frame);
-    void persistFrameDraft(frame);
-    clearSaveTimer();
-    void pumpRef.current();
+    coordinator.flush(frame);
   }
 
   function selectFrame(frame: Frame) {
@@ -1002,13 +903,7 @@ function CycleWorkspace({
   }
 
   function retrySave() {
-    if (
-      movedWorkspaceRef.current ||
-      savesPausedRef.current ||
-      conflictsRef.current.size
-    )
-      return;
-    retryCountRef.current = 0;
+    if (movedWorkspaceRef.current || conflictsRef.current.size) return;
     if (cycleRevisionConflictsRef.current.size) {
       for (const [frame, conflict] of cycleRevisionConflictsRef.current)
         void recoverCycleRevisionConflict(
@@ -1018,8 +913,7 @@ function CycleWorkspace({
         );
       return;
     }
-    setSaveState("dirty");
-    schedulePump(0);
+    coordinator.retry();
   }
 
   function restoreRecovery(frame: Frame) {
@@ -1031,24 +925,13 @@ function CycleWorkspace({
     conflictsRef.current = nextConflicts;
     setRecoveryConflicts(new Map(nextConflicts));
     editedFramesRef.current.add(frame);
-    inputVersionRef.current += 1;
-    frameEditVersionsRef.current[frame] += 1;
-    retryCountRef.current = 0;
-    if (draft.body === savedValuesRef.current[frame]) {
-      pending.current.delete(frame);
-      void deleteFrameDraft(frame);
-    } else {
-      pending.current.set(frame, draft.body);
-      void cacheFrameDraft(frame, draft.body, revisions.current[frame]);
-    }
-    setSaveState(
-      nextConflicts.size || cycleRevisionConflictsRef.current.size
-        ? "failed"
-        : pending.current.size
-          ? "dirty"
-          : "saved",
-    );
-    schedulePump(0);
+    browserBaseRevisionsRef.current.set(frame, revisions.current[frame]);
+    if (
+      draft.body ===
+      (coordinator.getSavedValue(frame) ?? initialValuesRef.current[frame])
+    )
+      coordinator.synchronize(frame, draft.body);
+    else coordinator.unblock(frame);
   }
 
   function discardRecovery(frame: Frame) {
@@ -1058,68 +941,45 @@ function CycleWorkspace({
     nextConflicts.delete(frame);
     conflictsRef.current = nextConflicts;
     setRecoveryConflicts(new Map(nextConflicts));
+    const saved =
+      coordinator.getSavedValue(frame) ?? initialValuesRef.current[frame];
     valuesRef.current = {
       ...valuesRef.current,
-      [frame]: savedValuesRef.current[frame],
+      [frame]: saved,
     };
-    frameEditVersionsRef.current[frame] += 1;
-    pending.current.delete(frame);
     setValues(valuesRef.current);
-    void deleteFrameDraft(frame);
-    setSaveState(
-      nextConflicts.size || cycleRevisionConflictsRef.current.size
-        ? "failed"
-        : pending.current.size
-          ? "dirty"
-          : "saved",
-    );
-    if (hasSavablePending()) schedulePump(0);
+    browserBaseRevisionsRef.current.set(frame, revisions.current[frame]);
+    coordinator.synchronize(frame, saved);
   }
 
   function pauseSaves() {
-    savesPausedRef.current = true;
     cycleRevisionRefreshEpochRef.current += 1;
-    clearSaveTimer();
     cycleRevisionRefreshInFlightRef.current.clear();
+    coordinator.pause(true);
   }
 
   function resumeSaves() {
     if (movedWorkspaceRef.current) return;
-    savesPausedRef.current = false;
+    pendingActionRef.current = false;
+    setPendingAction(false);
     cacheDisabledRef.current = false;
-    retryCountRef.current = 0;
+    coordinator.setPersistenceEnabled(true);
+    coordinator.resume();
+    const deferredHydrationEdits = new Map(deferredHydrationEditsRef.current);
+    for (const [frame, body] of deferredHydrationEdits) {
+      browserBaseRevisionsRef.current.set(frame, revisions.current[frame]);
+      editedFramesRef.current.add(frame);
+      coordinator.edit(frame, body);
+      deferredHydrationEditsRef.current.delete(frame);
+    }
     if (cycleRevisionConflictsRef.current.size) {
-      setSaveState("failed");
       for (const [frame, conflict] of cycleRevisionConflictsRef.current)
         void recoverCycleRevisionConflict(
           frame,
           conflict.failedSnapshot,
           conflict.baseRevision,
         );
-      return;
     }
-    if (conflictsRef.current.size) {
-      setSaveState("failed");
-      return;
-    }
-    if (hasSavablePending()) {
-      setSaveState("dirty");
-      schedulePump(0);
-    } else setSaveState("saved");
-  }
-
-  async function finalizeDraftCache(scope: "cycle" | "goal") {
-    cacheDisabledRef.current = true;
-    cycleRevisionRefreshEpochRef.current += 1;
-    pending.current.clear();
-    conflictsRef.current.clear();
-    cycleRevisionConflictsRef.current.clear();
-    for (const frame of frames) clearBrowserTimer(frame);
-    if (scope === "goal") {
-      await clearGoalDraftCache();
-      return;
-    }
-    for (const frame of frames) await deleteFrameDraft(frame);
   }
 
   function applyAI(
@@ -1127,8 +987,8 @@ function CycleWorkspace({
     actionRevision: number,
     nextContentRevision: number,
   ) {
+    editedFramesRef.current.add("action");
     valuesRef.current = { ...valuesRef.current, action };
-    savedValuesRef.current = { ...savedValuesRef.current, action };
     setValues(valuesRef.current);
     revisions.current.action = Math.max(
       revisions.current.action,
@@ -1145,25 +1005,27 @@ function CycleWorkspace({
       frameRevision: actionRevision,
       contentRevision: nextContentRevision,
     });
-    pending.current.delete("action");
+    cycleRevisionConflictsRef.current.delete("action");
     const nextConflicts = new Map(conflictsRef.current);
     nextConflicts.delete("action");
     conflictsRef.current = nextConflicts;
     setRecoveryConflicts(new Map(nextConflicts));
-    clearBrowserTimer("action");
-    void deleteFrameDraft("action");
-    setSaveState(
-      nextConflicts.size || cycleRevisionConflictsRef.current.size
-        ? "failed"
-        : pending.current.size
-          ? "dirty"
-          : "saved",
-    );
+    coordinator.synchronize("action", action);
   }
   const allPDC = [values.plan, values.do, values.check].every(hasNonWhitespace);
   const allFrames = allPDC && hasNonWhitespace(values.action);
-  const aiReady = saveState === "saved" && aiState === "idle";
+  const aiReady =
+    saveState.kind === "saved" && aiState === "idle" && !pendingAction;
   function requestAI(kind: "generating" | "refining") {
+    if (
+      !isActivePage() ||
+      pendingActionRef.current ||
+      movedWorkspaceRef.current ||
+      saveState.kind !== "saved" ||
+      aiState !== "idle" ||
+      (kind === "generating" ? !allPDC : !allFrames)
+    )
+      return;
     if (kind === "generating" && hasNonWhitespace(values.action)) {
       setConfirmation({ kind: "replace-action" });
       return;
@@ -1174,6 +1036,12 @@ function CycleWorkspace({
     kind: "generating" | "refining",
     confirmReplace: boolean,
   ) {
+    if (
+      !isActivePage() ||
+      pendingActionRef.current ||
+      movedWorkspaceRef.current
+    )
+      return;
     const sourcePDC = JSON.stringify([
       valuesRef.current.plan,
       valuesRef.current.do,
@@ -1216,6 +1084,7 @@ function CycleWorkspace({
                   csrfToken: session.csrfToken,
                 }),
             );
+      if (!isActivePage()) return;
       if (
         result.action === undefined ||
         result.actionRevision === undefined ||
@@ -1236,15 +1105,29 @@ function CycleWorkspace({
           "AI処理中にP/D/Cが変更されています。必要に応じて再生成してください。",
         );
     } catch {
-      setError("AI処理を完了できませんでした。現在のAは保持されています。");
+      if (isActivePage())
+        setError("AI処理を完了できませんでした。現在のAは保持されています。");
     } finally {
-      setAIState("idle");
+      if (isActivePage()) setAIState("idle");
     }
   }
-  async function finish() {
+
+  function startTerminalCommand(): boolean {
+    if (
+      !isActivePage() ||
+      pendingActionRef.current ||
+      movedWorkspaceRef.current
+    )
+      return false;
+    pendingActionRef.current = true;
     setPendingAction(true);
     setError(undefined);
     pauseSaves();
+    return true;
+  }
+
+  async function finish() {
+    if (!allFrames || !aiReady || !startTerminalCommand()) return;
     try {
       const expectedGoalRevision = goal.revision;
       const expectedContentRevision = contentRevision.current;
@@ -1267,41 +1150,56 @@ function CycleWorkspace({
             },
           ),
       );
-      await cache.invalidateQueries({
-        queryKey: userQueryKeys.root(userId),
-        refetchType: "none",
-      });
-      if ("goal" in result) {
-        cacheReview(cache, userId, {
-          goal: result.goal,
-          reviewDraft: result.reviewDraft,
-          triggerCycle: result.completedCycle,
-        });
-        await finalizeDraftCache("cycle");
-        navigate(`/goals/${goal.id}/review`, { replace: true });
-        return;
-      }
-      await finalizeDraftCache("cycle");
-      await cache
-        .refetchQueries({
-          queryKey: userQueryKeys.goal(userId, goal.id),
-          exact: true,
-        })
-        .catch(() => undefined);
-      navigate(replayWorkspacePath(goal.id, result.currentWorkspace), {
-        replace: true,
+      if (!isActivePage()) return;
+      runPostCommitCleanup({
+        cleanup: async () => {
+          for (const frame of frames)
+            await deleteBrowserDraft(userId, "cycle:" + cycle.id + ":" + frame);
+        },
+        onSuccess: async () => {
+          await cache.invalidateQueries({
+            queryKey: userQueryKeys.root(userId),
+            refetchType: "none",
+          });
+          if ("goal" in result) {
+            cacheReview(cache, userId, {
+              goal: result.goal,
+              reviewDraft: result.reviewDraft,
+              triggerCycle: result.completedCycle,
+            });
+            navigate(`/goals/${goal.id}/review`, { replace: true });
+            return;
+          }
+          await cache
+            .refetchQueries({
+              queryKey: userQueryKeys.goal(userId, goal.id),
+              exact: true,
+            })
+            .catch(() => undefined);
+          navigate(replayWorkspacePath(goal.id, result.currentWorkspace), {
+            replace: true,
+          });
+        },
+        pendingMessage: "この端末のサイクル下書きを削除しています…",
+        failureMessage:
+          "サイクルは完了しましたが、この端末の復旧用保存を削除できませんでした。",
+        retryLabel: "端末データの削除を再試行",
       });
     } catch {
+      if (!isActivePage()) return;
       resumeSaves();
       setError("サイクルを完了できませんでした。入力内容を確認してください。");
-      setPendingAction(false);
     }
   }
+
   async function terminate(outcome: "achieved" | "ended") {
     const wording = outcome === "achieved" ? "達成として終了" : "終了";
-    setPendingAction(true);
-    setError(undefined);
-    pauseSaves();
+    if (
+      saveState.kind !== "saved" ||
+      aiState !== "idle" ||
+      !startTerminalCommand()
+    )
+      return;
     try {
       const expectedContentRevision = contentRevision.current;
       await terminateOperation.invoke(
@@ -1326,22 +1224,30 @@ function CycleWorkspace({
             { id: cycle.id, revision: expectedContentRevision },
           ),
       );
-      await finalizeDraftCache("goal");
-      await cache.invalidateQueries({
-        queryKey: userQueryKeys.root(userId),
-        refetchType: "none",
+      if (!isActivePage()) return;
+      runPostCommitCleanup({
+        cleanup: () => clearGoalDrafts(userId, goal.id),
+        onSuccess: async () => {
+          await cache.invalidateQueries({
+            queryKey: userQueryKeys.root(userId),
+            refetchType: "none",
+          });
+          navigate("/", { replace: true });
+        },
+        pendingMessage: "この端末の目標下書きを削除しています…",
+        failureMessage:
+          "目標の終了は完了しましたが、この端末の復旧用保存を削除できませんでした。",
+        retryLabel: "端末データの削除を再試行",
       });
-      navigate("/", { replace: true });
     } catch {
+      if (!isActivePage()) return;
       resumeSaves();
       setError(`目標を${wording}できませんでした。`);
-      setPendingAction(false);
     }
   }
+
   async function remove() {
-    setPendingAction(true);
-    setError(undefined);
-    pauseSaves();
+    if (!startTerminalCommand()) return;
     try {
       await deleteOperation.invoke(
         commandFingerprint("goal_delete", {
@@ -1354,16 +1260,25 @@ function CycleWorkspace({
             csrfToken: session.csrfToken,
           }),
       );
-      await finalizeDraftCache("goal");
-      await cache.invalidateQueries({
-        queryKey: userQueryKeys.root(userId),
-        refetchType: "none",
+      if (!isActivePage()) return;
+      runPostCommitCleanup({
+        cleanup: () => clearGoalDrafts(userId, goal.id),
+        onSuccess: async () => {
+          await cache.invalidateQueries({
+            queryKey: userQueryKeys.root(userId),
+            refetchType: "none",
+          });
+          navigate("/", { replace: true });
+        },
+        pendingMessage: "この端末の目標下書きを削除しています…",
+        failureMessage:
+          "目標は削除されましたが、この端末の復旧用保存を削除できませんでした。",
+        retryLabel: "端末データの削除を再試行",
       });
-      navigate("/", { replace: true });
     } catch {
+      if (!isActivePage()) return;
       resumeSaves();
       setError("目標を削除できませんでした。");
-      setPendingAction(false);
     }
   }
   const copy = frameCopy[selected];
@@ -1454,6 +1369,7 @@ function CycleWorkspace({
             workspaceMoved ||
             !editable ||
             Boolean(selectedConflict) ||
+            pendingAction ||
             (selected === "action" && aiState !== "idle")
           }
           value={values[selected]}
@@ -1462,6 +1378,7 @@ function CycleWorkspace({
             workspaceMoved ||
             !editable ||
             Boolean(selectedConflict) ||
+            pendingAction ||
             (selected === "action" && aiState !== "idle")
           }
           onChange={(event) => change(selected, event.target.value)}
@@ -1523,7 +1440,9 @@ function CycleWorkspace({
             <button
               type="button"
               disabled={
-                saveState !== "saved" || aiState !== "idle" || pendingAction
+                saveState.kind !== "saved" ||
+                aiState !== "idle" ||
+                pendingAction
               }
               onClick={() =>
                 setConfirmation({ kind: "terminate", outcome: "achieved" })
@@ -1534,7 +1453,9 @@ function CycleWorkspace({
             <button
               type="button"
               disabled={
-                saveState !== "saved" || aiState !== "idle" || pendingAction
+                saveState.kind !== "saved" ||
+                aiState !== "idle" ||
+                pendingAction
               }
               onClick={() =>
                 setConfirmation({ kind: "terminate", outcome: "ended" })

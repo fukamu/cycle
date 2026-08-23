@@ -13,6 +13,12 @@ describe("auto save policy", () => {
     expect(autoSaveRetryDelay(5, () => 1)).toBe(19_200);
   });
 
+  it("caps later retry delays at 30 seconds with bounded jitter", () => {
+    expect(autoSaveRetryDelay(6, () => 0)).toBe(24_000);
+    expect(autoSaveRetryDelay(6, () => 0.5)).toBe(30_000);
+    expect(autoSaveRetryDelay(20, () => 1)).toBe(36_000);
+  });
+
   it("retries only network, timeout, generic rate limit, and server errors", () => {
     const apiError = (status: number) =>
       new APIError(status, "TEST", "test", "request-id");

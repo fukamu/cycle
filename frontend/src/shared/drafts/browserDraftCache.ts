@@ -28,7 +28,7 @@ export async function getBrowserDraft(
   return withDatabase(async (db) => {
     const stored = await read(db, keyOf({ userId, subjectKey }));
     if (!stored) return null;
-    if (Date.parse(stored.updatedAt) < Date.now() - ttl) {
+    if (isExpired(stored.updatedAt, Date.now() - ttl)) {
       await mutate(db, (store) => {
         store.delete(stored.key);
       });
@@ -54,6 +54,28 @@ export async function deleteBrowserDraft(
     }),
   );
 }
+export async function deleteBrowserDraftIfUnchanged(
+  userId: string,
+  subjectKey: string,
+  expectedBody: string,
+  expectedBaseRevision: number,
+): Promise<void> {
+  await withDatabase((db) =>
+    deleteStoredIf(
+      db,
+      keyOf({ userId, subjectKey }),
+      (stored) =>
+        stored.userId === userId &&
+        stored.subjectKey === subjectKey &&
+        stored.body === expectedBody &&
+        stored.baseRevision === expectedBaseRevision,
+    ),
+  );
+}
+export async function cleanupExpiredBrowserDrafts(): Promise<void> {
+  const expiresBefore = Date.now() - ttl;
+  await clearDrafts((item) => isExpired(item.updatedAt, expiresBefore));
+}
 export async function clearUserDrafts(userId: string): Promise<void> {
   await clearDrafts((item) => item.userId === userId);
 }
@@ -64,13 +86,11 @@ export async function clearGoalDrafts(
   await clearDrafts((item) => item.userId === userId && item.goalId === goalId);
 }
 async function clearDrafts(matches: (draft: Stored) => boolean): Promise<void> {
-  await withDatabase(async (db) => {
-    const keys = (await all(db)).filter(matches).map((item) => item.key);
-    if (keys.length === 0) return;
-    await mutate(db, (store) => {
-      for (const key of keys) store.delete(key);
-    });
-  });
+  await withDatabase((db) => deleteStoredMatching(db, matches));
+}
+function isExpired(updatedAt: string, expiresBefore: number): boolean {
+  const timestamp = Date.parse(updatedAt);
+  return !Number.isFinite(timestamp) || timestamp < expiresBefore;
 }
 async function withDatabase<T>(
   operation: (db: IDBDatabase) => Promise<T>,
@@ -118,10 +138,39 @@ function read(db: IDBDatabase, key: string): Promise<Stored | undefined> {
     request.onerror = () => reject(request.error);
   });
 }
-function all(db: IDBDatabase): Promise<readonly Stored[]> {
+function deleteStoredIf(
+  db: IDBDatabase,
+  key: string,
+  matches: (draft: Stored) => boolean,
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = db.transaction(storeName).objectStore(storeName).getAll();
-    request.onsuccess = () => resolve(request.result as readonly Stored[]);
-    request.onerror = () => reject(request.error);
+    const transaction = db.transaction(storeName, "readwrite");
+    const store = transaction.objectStore(storeName);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const stored = request.result as Stored | undefined;
+      if (stored && matches(stored)) store.delete(key);
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+function deleteStoredMatching(
+  db: IDBDatabase,
+  matches: (draft: Stored) => boolean,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, "readwrite");
+    const store = transaction.objectStore(storeName);
+    const request = store.getAll();
+    request.onsuccess = () => {
+      for (const stored of request.result as readonly Stored[]) {
+        if (matches(stored)) store.delete(stored.key);
+      }
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
   });
 }

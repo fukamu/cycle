@@ -1,6 +1,12 @@
-import { useCallback, useState } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
 import {
@@ -10,11 +16,13 @@ import {
 } from "../features/goal-collection/goalCache";
 import { GoalRefinementPanel } from "../features/goal-refine/GoalRefinementPanel";
 import { useGoalRefinement } from "../features/goal-refine/useGoalRefinement";
+import { APIError } from "../shared/api/client";
 import type { GoalReview } from "../shared/api/schemas";
 import {
   adoptReview,
   continueReview,
   deleteGoal,
+  getGoal,
   getReview,
   refineReview,
   saveReview,
@@ -29,11 +37,19 @@ import {
 } from "../shared/components/AsyncState";
 import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
 import { frameCopy } from "../shared/copy/ja";
+import { usePostCommitCleanup } from "../shared/cleanup/postCommitCleanupContext";
+import {
+  clearGoalDrafts,
+  deleteBrowserDraft,
+} from "../shared/drafts/browserDraftCache";
 import {
   commandFingerprint,
   useCommandOperation,
 } from "../shared/hooks/useCommandOperation";
-import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
+import {
+  type DraftLatestResolution,
+  useDraftAutoSave,
+} from "../shared/hooks/useDraftAutoSave";
 import {
   codePointCount,
   GOAL_TEXT_MAX_CODE_POINTS,
@@ -65,6 +81,14 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const runPostCommitCleanup = usePostCommitCleanup();
+  const mountedGenerationRef = useRef(true);
+  useLayoutEffect(() => {
+    mountedGenerationRef.current = true;
+    return () => {
+      mountedGenerationRef.current = false;
+    };
+  }, []);
   const refinement = useGoalRefinement();
   const refineOperation = useCommandOperation();
   const continueOperation = useCommandOperation();
@@ -74,7 +98,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const [confirmation, setConfirmation] = useState<ReviewConfirmation>();
   const [error, setError] = useState<string>();
   const save = useCallback(
-    async (body: string, revision: number) => {
+    async (body: string, revision: number, signal: AbortSignal) => {
       const saved = (
         await saveReview(
           goal.id,
@@ -82,6 +106,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           body,
           revision,
           session.csrfToken,
+          signal,
         )
       ).reviewDraft;
       const current = cache.getQueryData<GoalReview>(
@@ -93,32 +118,52 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     },
     [cache, goal.id, reviewDraft.id, session.csrfToken, userId],
   );
-  const loadLatest = useCallback(async () => {
-    return (await getReview(goal.id)).reviewDraft;
-  }, [goal.id]);
+  const loadLatest = useCallback(
+    async (signal: AbortSignal) => {
+      return (await getReview(goal.id, signal)).reviewDraft;
+    },
+    [goal.id],
+  );
   const acceptLatest = useCallback(
-    (latest: GoalReview["reviewDraft"]): GoalReview["reviewDraft"] | null => {
-      if (latest.id !== reviewDraft.id) return null;
+    (
+      latest: GoalReview["reviewDraft"],
+    ): DraftLatestResolution<GoalReview["reviewDraft"]> => {
+      if (latest.id !== reviewDraft.id)
+        return { kind: "scope-moved", href: "/goals/" + goal.id };
       const current = cache.getQueryData<GoalReview>(
         userQueryKeys.review(userId, goal.id),
       )?.reviewDraft;
-      if (!current || current.id !== reviewDraft.id) return null;
-      if (current.revision > latest.revision) return current;
+      if (!current || current.id !== reviewDraft.id)
+        return { kind: "scope-moved", href: "/goals/" + goal.id };
+      if (current.revision > latest.revision)
+        return { kind: "accepted", snapshot: current };
       cacheReviewDraft(cache, userId, goal.id, latest);
-      return latest;
+      return { kind: "accepted", snapshot: latest };
     },
     [cache, goal.id, reviewDraft.id, userId],
   );
+  const scopeMovedOnError = useCallback(
+    (error: unknown) => {
+      return error instanceof APIError &&
+        error.status === 409 &&
+        error.code === "GOAL_REVIEW_NOT_ACTIVE"
+        ? "/goals/" + goal.id
+        : null;
+    },
+    [goal.id],
+  );
+  const subjectKey = `goal-review:${goal.id}:${reviewDraft.id}`;
   const editor = useDraftAutoSave({
     userId,
     goalId: goal.id,
-    subjectKey: `goal-review:${goal.id}:${reviewDraft.id}`,
+    subjectKey,
     initialBody: reviewDraft.body,
     initialRevision: reviewDraft.revision,
     save,
     revisionConflictCode: "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
     loadLatest,
     acceptLatest,
+    scopeMovedOnError,
   });
   const count = codePointCount(editor.body);
   const changed = textDiffersAfterLineEndingNormalization(
@@ -165,6 +210,32 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       setPending(false);
     }
   }
+  async function openCanonicalGoal(event: ReactMouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(undefined);
+    try {
+      const canonical = await cache.fetchQuery({
+        queryKey: userQueryKeys.goal(userId, goal.id),
+        queryFn: () => getGoal(goal.id),
+        staleTime: 0,
+      });
+      cache.setQueryData(userQueryKeys.goal(userId, goal.id), canonical);
+      cache.removeQueries({
+        queryKey: userQueryKeys.review(userId, goal.id),
+        exact: true,
+      });
+      await cache.invalidateQueries({
+        queryKey: userQueryKeys.home(userId),
+        exact: true,
+        refetchType: "none",
+      });
+      navigate(`/goals/${goal.id}`, { replace: true });
+    } catch {
+      setError("現在のGoalを取得できませんでした。もう一度お試しください。");
+      setPending(false);
+    }
+  }
   async function nextCycle() {
     setPending(true);
     setError(undefined);
@@ -184,16 +255,24 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             csrfToken: session.csrfToken,
           }),
       );
-      await editor.discard();
-      await cache.invalidateQueries({
-        queryKey: userQueryKeys.root(userId),
-        refetchType: "none",
-      });
-      cacheCycle(cache, userId, result.goal, result.cycle);
-      navigate(`/goals/${goal.id}`, {
-        replace: true,
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
+      runPostCommitCleanup({
+        cleanup: () => deleteBrowserDraft(userId, subjectKey),
+        onSuccess: async () => {
+          await cache.invalidateQueries({
+            queryKey: userQueryKeys.root(userId),
+            refetchType: "none",
+          });
+          cacheCycle(cache, userId, result.goal, result.cycle);
+          navigate(`/goals/${goal.id}`, { replace: true });
+        },
+        pendingMessage: "ブラウザに残るReview下書きを削除しています…",
+        failureMessage:
+          "次のサイクルは開始されましたが、このブラウザのReview下書きを削除できませんでした。",
+        retryLabel: "ブラウザデータの削除を再試行",
       });
     } catch {
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       editor.resume();
       setError(
         "次のサイクルを開始できませんでした。保存状態を確認してください。",
@@ -202,6 +281,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     }
   }
   async function terminate(outcome: "achieved" | "ended") {
+    if (editor.hydrating || editor.scopeMovedHref) return;
     const label = outcome === "achieved" ? "達成として終了" : "終了";
     setPending(true);
     setError(undefined);
@@ -220,19 +300,29 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             csrfToken: session.csrfToken,
           }),
       );
-      await editor.discard();
-      await cache.invalidateQueries({
-        queryKey: userQueryKeys.root(userId),
-        refetchType: "none",
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
+      runPostCommitCleanup({
+        cleanup: () => deleteBrowserDraft(userId, subjectKey),
+        onSuccess: async () => {
+          await cache.invalidateQueries({
+            queryKey: userQueryKeys.root(userId),
+            refetchType: "none",
+          });
+          navigate("/", { replace: true });
+        },
+        pendingMessage: "ブラウザに残るReview下書きを削除しています…",
+        failureMessage: `目標は${label}しましたが、このブラウザのReview下書きを削除できませんでした。`,
+        retryLabel: "ブラウザデータの削除を再試行",
       });
-      navigate("/", { replace: true });
     } catch {
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       editor.resume();
       setError(`目標を${label}できませんでした。`);
       setPending(false);
     }
   }
   async function remove() {
+    if (editor.hydrating || editor.scopeMovedHref) return;
     setPending(true);
     setError(undefined);
     editor.pause();
@@ -248,13 +338,23 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             csrfToken: session.csrfToken,
           }),
       );
-      await editor.discard();
-      await cache.invalidateQueries({
-        queryKey: userQueryKeys.root(userId),
-        refetchType: "none",
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
+      runPostCommitCleanup({
+        cleanup: () => clearGoalDrafts(userId, goal.id),
+        onSuccess: async () => {
+          await cache.invalidateQueries({
+            queryKey: userQueryKeys.root(userId),
+            refetchType: "none",
+          });
+          navigate("/", { replace: true });
+        },
+        pendingMessage: "ブラウザに残るGoal関連下書きを削除しています…",
+        failureMessage:
+          "目標は削除されましたが、このブラウザの関連下書きを削除できませんでした。",
+        retryLabel: "ブラウザデータの削除を再試行",
       });
-      navigate("/", { replace: true });
     } catch {
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       editor.resume();
       setError("目標を削除できませんでした。");
       setPending(false);
@@ -264,7 +364,14 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     hasNonWhitespace(editor.body) && count <= GOAL_TEXT_MAX_CODE_POINTS;
   const conflictPending = editor.revisionConflictActive;
   const conflictRetryBlocked =
-    editor.resolvingConflict || Boolean(editor.recoveryConflict);
+    editor.resolvingConflict ||
+    Boolean(editor.recoveryConflict) ||
+    Boolean(editor.scopeMovedHref);
+  const terminalActionsBlocked =
+    editor.hydrating ||
+    Boolean(editor.scopeMovedHref) ||
+    refinement.state.kind === "running" ||
+    pending;
   return (
     <main className="page review-page">
       <header className="goal-context">
@@ -298,12 +405,27 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             別の更新を確認しています…
           </p>
         )}
+        {editor.scopeMovedHref && (
+          <p className="draft-notice" role="alert">
+            Reviewの作業場所は変わりました。入力内容はこの端末に保持されています。
+            必要なら本文をコピーしてから、
+            <Link
+              to={editor.scopeMovedHref}
+              onClick={(event) => void openCanonicalGoal(event)}
+            >
+              現在のGoalを開いてください
+            </Link>
+            。
+          </p>
+        )}
         {editor.browserCacheFailed && <DraftCacheWarning />}
         <label htmlFor="review-goal">次のサイクルで目指す目標</label>
         <textarea
           id="review-goal"
           value={editor.body}
-          readOnly={conflictPending}
+          readOnly={
+            conflictPending || Boolean(editor.scopeMovedHref) || pending
+          }
           onChange={(event) => {
             const body = normalizeBoundedTextInput(
               event.target.value,
@@ -328,7 +450,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             type="button"
             disabled={
               !valid ||
-              editor.state !== "saved" ||
+              editor.state.kind !== "saved" ||
               refinement.state.kind === "running" ||
               pending
             }
@@ -343,7 +465,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             type="button"
             disabled={
               !valid ||
-              editor.state !== "saved" ||
+              editor.state.kind !== "saved" ||
               refinement.state.kind === "running" ||
               pending
             }
@@ -376,7 +498,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         <div className="button-row">
           <button
             type="button"
-            disabled={refinement.state.kind === "running" || pending}
+            disabled={terminalActionsBlocked}
             onClick={() =>
               setConfirmation({ kind: "terminate", outcome: "achieved" })
             }
@@ -385,7 +507,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           </button>
           <button
             type="button"
-            disabled={refinement.state.kind === "running" || pending}
+            disabled={terminalActionsBlocked}
             onClick={() =>
               setConfirmation({ kind: "terminate", outcome: "ended" })
             }
@@ -395,7 +517,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           <button
             className="danger-link"
             type="button"
-            disabled={pending}
+            disabled={terminalActionsBlocked}
             onClick={() => setConfirmation({ kind: "delete" })}
           >
             目標を削除

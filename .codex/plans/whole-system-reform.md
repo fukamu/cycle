@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M7 Text/version semantics
+- 状態: IN_PROGRESS / M8 final commit gate
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -564,6 +564,10 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-23: M6監査で、Review Draftを世代ごとにrevision 0から作る一方、`PATCH /goals/{goalId}/review`がDraft IDを持たないため、Review Aのlate RequestがReview Bを上書きでき、SoTのlate overwrite禁止を現wireでは保証不能と判明した。M0の非互換wire禁止判断をこのprivate SPA contractだけ改訂し、userが明示許可した未公開Frontend/Backend contract変更としてrequired UUID v7 `expectedReviewDraftId`を追加する。Goal→exact Review Draftを同一Transactionでlockし、field欠落/invalid UUIDは400、validだがcurrentでない旧世代/foreign/不存在IDは既存409へfail-closedする。Route/Response/error codeは維持し、Frontend wire test、required-field HTTP test、cross-user 404、実DBのA→B ABA/same-body regressionを追加した。
 - 2026-08-23: M7のFrontend文字semanticsは、CRLF/単独CRをLFへ正規化してから`Array.from`相当でcode point数を判定し、blankはUnicode `White_Space`、ReviewのVersion差分は改行正規化後のtrimなしexact比較とする。HTML `maxlength`はUTF-16 code unit基準でnon-BMPを早期拒否するため外し、入力全体を80/200 code pointsで受理または拒否してsubstring切断しない。Response ZodもGoal/Frame/AIを同じ上限・NUL・改行contractで検証し、旧IndexedDB recordはoversize Localを失わず改行だけcanonicalizeしてcache/restore/requestを一致させる。
 - 2026-08-23: M7のBackend production Domain/StoreとPostgreSQL `char_length`は既にcode point、CRLF/CR、whitespace保持、Review exact比較へ適合していた。ValidationをService前段へ移すとM6で固定したownership/state/AI guard precedenceを変えるため行わず、既存guard位置のままDomain/Application AI/actual HTTP/Store/直接CHECK testを追加した。Schema、migration、route、wire、stable error、Backend production codeの変更は不要と判断した。
+- 2026-08-23: M8ではCreation/Reviewを共通`AutoSaveCoordinator` hookへ、Cycleの4 frameを同じcoordinator instanceへ統合した。Coordinatorはkeyed latest-value coalescing、editor全体でsingle in-flight、800ms API debounce、150ms browser cache、blur/route flush、retryable network/408/generic 429/5xxの1/2/4/8/16秒+jitter・初回+5回自動retry、online/input/manual resume、revision conflict rebase、identity generation fenceを所有する。`AutoSaveScopeProvider`はscope generation、AbortSignal、browser operation直列化、quiesceを明示し、page固有の旧queue/state machineは削除した。
+- 2026-08-23: M8のterminal commandはserver commit前にscopeをquiesceせず、成功応答とcurrent mounted generation/identity leaseを確認してから共通`PostCommitCleanupBoundary`へ渡す。Boundaryは全scopeをdraft保持でquiesceし、captured raw browser key/Goal prefixをFIFO削除してからcache更新/navigationを行う。Cleanup失敗時はserver commandを再送せず端末cleanupだけをretryし、account deleteも204後の旧User draft削除完了前にreloadしない。Identity切替・route移動後のlate responseはcleanup/cache/navigationを実行しない。
+- 2026-08-23: Identity切替では旧Userのdirty入力をIndexedDBへbest-effort退避してから新identityを公開し、旧User内容を新identityへ引き渡したり表示をblockしたりしない。IndexedDB自体のput失敗時はin-memory入力をrecoverableに保持できず失われ得る残存riskがある。Server cookieのidentity変更後に旧User UIを維持する方がcross-user isolationを損なうため、identity隔離を優先する。安全なpre-transition storage protocolまたは失敗UXを決めるにはproduct/security判断が必要であり、M8ではDraftCacheWarningと通常時のretry可能性を維持してbest-effort境界として記録する。
+- 2026-08-23: M8横断監査で、AI提案adoptのlate successがmounted/identity lease確認前にeditor/cacheへ作用し、同一Userの後続Draft世代をrollbackし得る既存の非terminal P2を確認した。Autosave/terminal cleanupのM8 acceptanceとは独立し、M8前のindex版にも存在するため、M10 feature boundaryで全command completion fenceを統一するREDとして追跡する。M8のP0/P1完了条件は弱めない。
 - 2026-08-22: Free/MVPの進行Goal上限を2件に確定。
 - 2026-08-22: Homeは`GoalView/currentWork`共用に確定。
 - 2026-08-22: Goal Refine fieldを`suggestion`へ統一。
@@ -576,6 +580,10 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-23: M8変更前REDでは、editor間のsingle in-flight/latest coalescing、5回backoffとonline/input/manual再開、identity/route late response fence、terminal後cleanup retry、same-revision browser recoveryを既存のpage別queueでは満たせないことをfake-timer/component regressionで再現した。実装後のtargetは13 files / 182 testsで成功し、Creation/Review/Cycleが一つのcore contractを共有すること、Cycle 4 frameの直列化、24時間TTL cleanup、conflict/moved recovery、terminal/account cleanup、quiesce中の入力保全を固定した。
+- 2026-08-23: 最初のM8 Cはstaged candidate tree `dd1652a7cb1a8fe1dbaf41a2178755f738941823`、Frontend 34/234、Playwright 15/15、migration `1|f`、開始・終了tree一致で成功した。しかし完了確定前の独立監査で、scope-moved時にdirty queueを解除して150ms後の条件付きIndexedDB削除を起動するP1を検出したため、このtreeとC結果をsupersededとした。Direct moved/conflict movedの両既存testへ削除不実行assertionを追加して2/22 REDを確認し、scopeをpaused+blocked dirtyとして保持する修正後に22/22、M8 target 13/182をGREENへ戻した。
+- 2026-08-23: Scope-moved修正後のM8 final Fはformat、eslint、strict typecheck、Frontend 34 files / 234 tests、production buildで成功した。Fresh empty PostgreSQL 18.6によるfull EもBackend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 15/15、migration version 1・dirty=falseまで成功した。検証DBは停止・削除済みで、baseline migration/sqlc生成物は不変。独立再監査で他の新規P0/P1はなく、既知のIndexedDB preservation failure残存riskだけをDecision logへ記録した。
+- 2026-08-23: M7の最終commit前必須gateはfresh disposable PostgreSQL 18.6とstaged candidate tree `2d7b735d64068007a4943448ed5a6f9416a49f4f`で成功した。Frontend 31 files / 138 tests、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、Playwright 15/15、migration version 1・dirty=false、開始・終了tree一致を確認した。検証DBは停止・削除済みで、baseline migration/sqlc生成物は不変。Commit権限がないためcommitしていない。
 - 2026-08-23: M7 fresh full E gateはempty PostgreSQL 18.6で成功した。Frontend 31 files / 138 tests、production build、Backend全package/PostgreSQL integration、sqlc drift zero、Docker context/scripts/Compose/Terraform、Cloudflare 60 tests、Wrangler dry-run/Container build、更新したnon-BMP実入力journeyを含むPlaywright 15/15、migration version 1・dirty=falseを確認した。検証DBは停止・削除済み。次に全変更をstageしてcandidate treeを固定し、最終Cを実行する。
 - 2026-08-23: M7変更前REDでは、Frontend 4 files / 39 testsに追加した境界のうちnative `maxlength`によるGoal/Frame non-BMP早期拒否、Reviewの単独CRとtrailing whitespace誤比較、U+0085/FEFF blank差の5件が失敗し、Review単独でも9 tests中3件が失敗した。Backend/DBは新しいcharacterization testが既存実装の適合を確認した。
 - 2026-08-23: M7 GREENではshared text semantics、3 editor caller、IndexedDB recovery、Response Zod、actual browser journeyを統一した。Target Frontend 8 files / 76 tests、Backend Domain/Application AI、実Service/router/PostgreSQLのGoal Draft/Review 80/81・Frame 200/201、CRLF/CR response/persistence、Review Version transition、AI source/output直接CHECKが成功した。独立監査でP0と仕様矛盾はなく、baseline migration/sqlc生成物は不変だった。
@@ -611,7 +619,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M7 Text/version semanticsの最終C。RED/GREEN、target Frontend/Backend、actual HTTP/DB/AI constraint、full F/B、fresh full E、Decision/Progress更新まで完了した。全変更をstageしてcandidate treeを固定し、別のfresh disposable PostgreSQLで`./scripts/check-before-commit.sh`を実行する。成功後はindex/working treeを変更せずM7完了treeを記録し、M8 Autosave queue/state machineへ進む。
+- 現在の再開位置: M8 Autosave coordinatorの最終C。RED/GREEN、target 13 files / 182 tests、full F 34/234、fresh full E、Decision/Progress更新まで完了した。全変更をstageしてcandidate treeを固定し、別のfresh disposable PostgreSQLで`./scripts/check-before-commit.sh`を実行する。成功後はC結果を追記して最終treeを再stage・再検証し、commitせずM9 Frontend app shellへ進む。
 
 ## 26. Final definition of done
 

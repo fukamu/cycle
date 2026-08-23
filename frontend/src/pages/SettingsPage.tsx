@@ -1,14 +1,10 @@
 import { useCallback, useState } from "react";
 
 import { GoogleIdentityButton } from "../features/auth/GoogleIdentityButton";
+import { useDeleteCurrentAccount } from "../features/auth/accountDeletionContext";
 import { useReplaceSession, useSession } from "../features/auth/sessionContext";
 import { ConfirmationDialog } from "../shared/components/ConfirmationDialog";
-import { clearUserDrafts } from "../shared/drafts/browserDraftCache";
-import {
-  deleteAccount,
-  loginGoogle,
-  upgradeGoogle,
-} from "../shared/api/account";
+import { loginGoogle, upgradeGoogle } from "../shared/api/account";
 import { APIError } from "../shared/api/client";
 
 type SettingsConfirmation =
@@ -18,6 +14,7 @@ type SettingsConfirmation =
 export function SettingsPage() {
   const session = useSession();
   const replaceSession = useReplaceSession();
+  const deleteCurrentAccount = useDeleteCurrentAccount();
   const [pending, setPending] = useState(false);
   const [confirmation, setConfirmation] = useState<SettingsConfirmation>();
   const [message, setMessage] = useState<string>();
@@ -65,9 +62,7 @@ export function SettingsPage() {
     setPending(true);
     setError(undefined);
     try {
-      await deleteAccount(session.csrfToken);
-      await clearUserDrafts(session.user.id).catch(() => undefined);
-      window.location.assign("/");
+      await deleteCurrentAccount();
     } catch (cause) {
       setError(errorMessage(cause, "アカウントを削除できませんでした。"));
       setPending(false);

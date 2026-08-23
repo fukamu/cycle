@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import {
   act,
   fireEvent,
@@ -7,9 +8,15 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useState } from "react";
+
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { SessionContext } from "../features/auth/sessionContext";
+import {
+  AutoSaveScopeProvider,
+  useAutoSaveScopeRegistry,
+} from "../shared/autosave/AutoSaveScopeProvider";
 import { userQueryKeys } from "../features/goal-collection/goalCache";
 import type {
   Cycle,
@@ -21,22 +28,29 @@ import type {
 import { APIError } from "../shared/api/client";
 import {
   continueReview,
+  deleteGoal,
+  getGoal,
   getReview,
   saveReview,
   terminateGoal,
 } from "../shared/api/workspace";
 import {
   type BrowserDraft,
+  clearGoalDrafts,
   deleteBrowserDraft,
+  deleteBrowserDraftIfUnchanged,
   getBrowserDraft,
   putBrowserDraft,
 } from "../shared/drafts/browserDraftCache";
+import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBoundary";
+import { GoalWorkspacePage } from "./GoalWorkspacePage";
 import { GoalReviewPage } from "./GoalReviewPage";
 
 vi.mock("../shared/api/workspace", () => ({
   adoptReview: vi.fn(),
   continueReview: vi.fn(),
   deleteGoal: vi.fn(),
+  getGoal: vi.fn(),
   getReview: vi.fn(),
   refineReview: vi.fn(),
   saveReview: vi.fn(),
@@ -44,7 +58,9 @@ vi.mock("../shared/api/workspace", () => ({
 }));
 
 vi.mock("../shared/drafts/browserDraftCache", () => ({
+  clearGoalDrafts: vi.fn(),
   deleteBrowserDraft: vi.fn(),
+  deleteBrowserDraftIfUnchanged: vi.fn(),
   getBrowserDraft: vi.fn(),
   putBrowserDraft: vi.fn(),
 }));
@@ -170,13 +186,46 @@ const session: Session = {
   csrfToken: "csrf-token",
 };
 
+function IdentityQuiesceControl() {
+  const registry = useAutoSaveScopeRegistry();
+  const [quiesced, setQuiesced] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          void registry
+            .quiesce({ preserveDrafts: true })
+            .then(() => setQuiesced(true));
+        }}
+      >
+        異なるUserへの切替を模擬
+      </button>
+      {quiesced ? <p>切替準備完了</p> : null}
+    </>
+  );
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("GoalReviewPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getReview).mockResolvedValue(review);
     vi.mocked(getBrowserDraft).mockResolvedValue(null);
     vi.mocked(putBrowserDraft).mockResolvedValue(undefined);
+    vi.mocked(clearGoalDrafts).mockResolvedValue(undefined);
+    vi.mocked(deleteGoal).mockResolvedValue(undefined);
     vi.mocked(deleteBrowserDraft).mockResolvedValue(undefined);
+    vi.mocked(deleteBrowserDraftIfUnchanged).mockResolvedValue(undefined);
     vi.mocked(saveReview).mockResolvedValue({ reviewDraft });
     vi.mocked(continueReview).mockResolvedValue({
       goal: continuedGoal,
@@ -243,6 +292,7 @@ describe("GoalReviewPage", () => {
         normalizedBody,
         reviewDraft.revision,
         session.csrfToken,
+        expect.any(AbortSignal),
       ),
     );
     await waitFor(() =>
@@ -291,6 +341,24 @@ describe("GoalReviewPage", () => {
         `変更した目標をGoal v${goal.currentVersion.versionNumber + 1}として保存し、Cycle ${goal.nextCycleSequenceNumber}を開始します`,
       ),
     ).toBeInTheDocument();
+  });
+
+  it("keeps terminal actions disabled until browser draft hydration finishes", async () => {
+    const browserRead = deferred<Awaited<ReturnType<typeof getBrowserDraft>>>();
+    vi.mocked(getBrowserDraft).mockReturnValueOnce(browserRead.promise);
+
+    renderPage();
+    await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    const terminate = screen.getByRole("button", { name: "目標を終了" });
+    const remove = screen.getByRole("button", { name: "目標を削除" });
+    expect(terminate).toBeDisabled();
+    expect(remove).toBeDisabled();
+
+    await act(async () => browserRead.resolve(null));
+    expect(terminate).toBeEnabled();
+    expect(remove).toBeEnabled();
   });
 
   it("requires discard confirmation before terminating a dirty review", async () => {
@@ -373,6 +441,38 @@ describe("GoalReviewPage", () => {
     );
   });
 
+  it("rejects input while Continue is pending and restores editing after failure", async () => {
+    const request = deferred<Awaited<ReturnType<typeof continueReview>>>();
+    vi.mocked(continueReview).mockImplementationOnce(() => request.promise);
+    const user = userEvent.setup();
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: "この目標で次のサイクルへ" }),
+    );
+    await waitFor(() => expect(continueReview).toHaveBeenCalledOnce());
+
+    expect(editor).toHaveAttribute("readonly");
+    await user.type(editor, "command中の追記");
+    expect(editor).toHaveValue(reviewDraft.body);
+
+    await act(async () => request.reject(new TypeError("network")));
+
+    expect(
+      await screen.findByText(
+        "次のサイクルを開始できませんでした。保存状態を確認してください。",
+      ),
+    ).toBeInTheDocument();
+    expect(editor).not.toHaveAttribute("readonly");
+    expect(editor).toHaveValue(reviewDraft.body);
+
+    await user.type(editor, "失敗後の追記");
+    expect(editor).toHaveValue(reviewDraft.body + "失敗後の追記");
+  });
+
   it("preserves a local review on the exact revision conflict and adopts the latest server draft only by choice", async () => {
     const localBody = "この端末で見直した目標";
     const nextBody = "競合解消後の見直し";
@@ -436,6 +536,7 @@ describe("GoalReviewPage", () => {
         nextBody,
         latestDraft.revision,
         session.csrfToken,
+        expect.any(AbortSignal),
       ),
     );
   });
@@ -483,6 +584,7 @@ describe("GoalReviewPage", () => {
         reviewABody,
         reviewDraft.revision,
         session.csrfToken,
+        expect.any(AbortSignal),
       ),
     );
     await waitFor(() => expect(putBrowserDraft).toHaveBeenCalled());
@@ -538,12 +640,315 @@ describe("GoalReviewPage", () => {
         reviewBBody,
         replacementReviewDraft.revision,
         session.csrfToken,
+        expect.any(AbortSignal),
       ),
     );
   });
 
-  it("rejects a conflict refresh that returns another review draft identity", async () => {
+  it("preserves the local review when the server reports the exact inactive-workspace error", async () => {
+    const localBody = "終了したReviewでコピーする入力";
+    vi.mocked(getReview)
+      .mockResolvedValueOnce(review)
+      .mockRejectedValueOnce(
+        new APIError(
+          409,
+          "GOAL_REVIEW_NOT_ACTIVE",
+          "review ended",
+          "request-review-moved",
+        ),
+      );
+    vi.mocked(saveReview).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+        "conflict",
+        "request-review-conflict",
+      ),
+    );
+
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.change(editor, { target: { value: localBody } });
+    fireEvent.blur(editor);
+
+    const resolver = await screen.findByRole("link", {
+      name: "現在のGoalを開いてください",
+    });
+    expect(resolver).toHaveAttribute("href", "/goals/" + goal.id);
+    expect(editor).toHaveValue(localBody);
+    expect(editor).toHaveAttribute("readonly");
+    expect(
+      screen.queryByRole("button", { name: "再試行" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "目標を終了" })).toBeDisabled();
+    await waitFor(() =>
+      expect(putBrowserDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ body: localBody }),
+      ),
+    );
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+  });
+
+  it("moves directly on the exact inactive-review PATCH error without refetching the stale review", async () => {
+    const localBody = "直接終了を検知したReview入力";
+    vi.mocked(saveReview).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_REVIEW_NOT_ACTIVE",
+        "review ended",
+        "request-direct-review-moved",
+      ),
+    );
+
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.change(editor, { target: { value: localBody } });
+    fireEvent.blur(editor);
+
+    expect(
+      await screen.findByRole("link", {
+        name: "現在のGoalを開いてください",
+      }),
+    ).toHaveAttribute("href", "/goals/" + goal.id);
+    expect(editor).toHaveValue(localBody);
+    expect(editor).toHaveAttribute("readonly");
+    expect(getReview).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("button", { name: "再試行" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "目標を終了" })).toBeDisabled();
+  });
+
+  it("ignores a Continue completion from a replaced review generation and preserves the new local input", async () => {
+    const completion = deferred<Awaited<ReturnType<typeof continueReview>>>();
+    const replacementBody = "新しいReview世代の端末入力";
+    vi.mocked(continueReview).mockReturnValue(completion.promise);
+    const cache = createCache();
+    renderPage(cache);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "この目標で次のサイクルへ",
+      }),
+    );
+    await waitFor(() => expect(continueReview).toHaveBeenCalledOnce());
+
+    act(() => {
+      cache.setQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+        replacementReview,
+      );
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+      ).toHaveValue(replacementReviewDraft.body),
+    );
+    const replacementEditor = screen.getByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.change(replacementEditor, { target: { value: replacementBody } });
+    vi.mocked(deleteBrowserDraft).mockClear();
+
+    await act(async () =>
+      completion.resolve({
+        goal: continuedGoal,
+        versionCreated: false,
+        cycle: replayedCycle,
+        replayed: true,
+      }),
+    );
+    await act(async () => undefined);
+
+    expect(replacementEditor).toHaveValue(replacementBody);
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toBe(replacementEditor);
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+  });
+
+  it("ignores a Continue completion after identity quiescence begins and before remount", async () => {
+    const completion = deferred<Awaited<ReturnType<typeof continueReview>>>();
+    vi.mocked(continueReview).mockReturnValue(completion.promise);
+    const cache = createCache();
+    renderPage(cache, false, true);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "この目標で次のサイクルへ",
+      }),
+    );
+    await waitFor(() => expect(continueReview).toHaveBeenCalledOnce());
+    fireEvent.click(
+      screen.getByRole("button", { name: "異なるUserへの切替を模擬" }),
+    );
+    expect(await screen.findByText("切替準備完了")).toBeInTheDocument();
+    vi.mocked(deleteBrowserDraft).mockClear();
+
+    await act(async () =>
+      completion.resolve({
+        goal: continuedGoal,
+        versionCreated: false,
+        cycle: replayedCycle,
+        replayed: true,
+      }),
+    );
+    await act(async () => undefined);
+
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toHaveValue(reviewDraft.body);
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+  });
+
+  it("ignores a terminal completion after identity quiescence begins and before remount", async () => {
+    const completion = deferred<Awaited<ReturnType<typeof terminateGoal>>>();
+    vi.mocked(terminateGoal).mockReturnValue(completion.promise);
+    renderPage(createCache(), false, true);
+
+    await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "目標を終了" }));
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "目標を終了",
+      }),
+    );
+    await waitFor(() => expect(terminateGoal).toHaveBeenCalledOnce());
+    fireEvent.click(
+      screen.getByRole("button", { name: "異なるUserへの切替を模擬" }),
+    );
+    expect(await screen.findByText("切替準備完了")).toBeInTheDocument();
+    vi.mocked(deleteBrowserDraft).mockClear();
+    vi.mocked(clearGoalDrafts).mockClear();
+
+    await act(async () =>
+      completion.resolve({
+        goal: {
+          ...goal,
+          status: "ended",
+          revision: goal.revision + 1,
+          currentWork: null,
+          terminalAt: "2026-08-20T00:02:00.000Z",
+        },
+        canceledCycle: null,
+      }),
+    );
+    await act(async () => undefined);
+
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toHaveValue(reviewDraft.body);
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+    expect(clearGoalDrafts).not.toHaveBeenCalled();
+  });
+
+  it("retries only browser cleanup after Continue succeeds", async () => {
+    vi.mocked(deleteBrowserDraft)
+      .mockRejectedValueOnce(new Error("indexeddb unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "この目標で次のサイクルへ",
+      }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "次のサイクルは開始されましたが、このブラウザのReview下書きを削除できませんでした。",
+    );
+    expect(continueReview).toHaveBeenCalledOnce();
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "ブラウザデータの削除を再試行" }),
+    );
+
+    expect(await screen.findByText("現在のワークスペース")).toBeInTheDocument();
+    expect(continueReview).toHaveBeenCalledOnce();
+    expect(deleteBrowserDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only browser cleanup after dirty Review terminal success", async () => {
+    vi.mocked(deleteBrowserDraft)
+      .mockRejectedValueOnce(new Error("indexeddb unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.change(editor, { target: { value: "破棄する端末変更" } });
+    fireEvent.click(screen.getByRole("button", { name: "目標を終了" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "目標を終了" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "目標は終了しましたが、このブラウザのReview下書きを削除できませんでした。",
+    );
+    expect(terminateGoal).toHaveBeenCalledOnce();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "ブラウザデータの削除を再試行" }),
+    );
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(terminateGoal).toHaveBeenCalledOnce();
+    expect(deleteBrowserDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries goal-scoped browser cleanup after Goal Delete without resending DELETE", async () => {
+    vi.mocked(clearGoalDrafts)
+      .mockRejectedValueOnce(new Error("indexeddb unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    renderPage();
+    await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "目標を削除" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "目標を削除" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "目標は削除されましたが、このブラウザの関連下書きを削除できませんでした。",
+    );
+    expect(deleteGoal).toHaveBeenCalledOnce();
+    expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id);
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "ブラウザデータの削除を再試行" }),
+    );
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(deleteGoal).toHaveBeenCalledOnce();
+    expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the local review and links the current Goal when the draft identity moves", async () => {
     const localBody = "レビューAの競合入力";
+    const canonicalGoal: Goal = {
+      ...goal,
+      status: "ended",
+      revision: goal.revision + 2,
+      currentWork: null,
+      terminalAt: "2026-08-20T00:06:00.000Z",
+    };
+    vi.mocked(getGoal).mockResolvedValue({ goal: canonicalGoal });
     vi.mocked(getReview)
       .mockResolvedValueOnce(review)
       .mockResolvedValueOnce(replacementReview);
@@ -556,7 +961,8 @@ describe("GoalReviewPage", () => {
       ),
     );
     const cache = createCache();
-    renderPage(cache);
+    cache.setQueryData(userQueryKeys.goal(session.user.id, goal.id), { goal });
+    renderPage(cache, true);
     const editor = await screen.findByRole("textbox", {
       name: "次のサイクルで目指す目標",
     });
@@ -568,6 +974,13 @@ describe("GoalReviewPage", () => {
     expect(await screen.findByText("保存失敗")).toBeInTheDocument();
     expect(editor).toHaveValue(localBody);
     expect(editor).toHaveAttribute("readonly");
+    const resolver = screen.getByRole("link", {
+      name: "現在のGoalを開いてください",
+    });
+    expect(resolver).toHaveAttribute("href", "/goals/" + goal.id);
+    expect(
+      screen.queryByRole("button", { name: "再試行" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText("別の更新が見つかりました"),
     ).not.toBeInTheDocument();
@@ -577,6 +990,13 @@ describe("GoalReviewPage", () => {
       )?.reviewDraft,
     ).toEqual(reviewDraft);
     expect(deleteBrowserDraft).not.toHaveBeenCalled();
+
+    fireEvent.click(resolver);
+    expect(
+      await screen.findByText("canonical goal history"),
+    ).toBeInTheDocument();
+    expect(getGoal).toHaveBeenCalledWith(goal.id);
+    expect(getReview).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -586,21 +1006,43 @@ function createCache() {
   });
 }
 
-function renderPage(cache = createCache()) {
+function renderPage(
+  cache = createCache(),
+  realCanonicalRoutes = false,
+  identityQuiesceControl = false,
+) {
   return render(
     <QueryClientProvider client={cache}>
-      <SessionContext.Provider value={session}>
-        <MemoryRouter initialEntries={[`/goals/${goal.id}/review`]}>
-          <Routes>
-            <Route path="/" element={<p>ホーム</p>} />
-            <Route path="/goals/:goalId/review" element={<GoalReviewPage />} />
-            <Route
-              path="/goals/:goalId"
-              element={<p>現在のワークスペース</p>}
-            />
-          </Routes>
-        </MemoryRouter>
-      </SessionContext.Provider>
+      <AutoSaveScopeProvider>
+        {identityQuiesceControl ? <IdentityQuiesceControl /> : null}
+        <SessionContext.Provider value={session}>
+          <MemoryRouter initialEntries={[`/goals/${goal.id}/review`]}>
+            <PostCommitCleanupBoundary>
+              <Routes>
+                <Route path="/" element={<p>ホーム</p>} />
+                <Route
+                  path="/goals/:goalId/review"
+                  element={<GoalReviewPage />}
+                />
+                <Route
+                  path="/goals/:goalId"
+                  element={
+                    realCanonicalRoutes ? (
+                      <GoalWorkspacePage />
+                    ) : (
+                      <p>現在のワークスペース</p>
+                    )
+                  }
+                />
+                <Route
+                  path="/history/goals/:goalId"
+                  element={<p>canonical goal history</p>}
+                />
+              </Routes>
+            </PostCommitCleanupBoundary>
+          </MemoryRouter>
+        </SessionContext.Provider>
+      </AutoSaveScopeProvider>
     </QueryClientProvider>,
   );
 }

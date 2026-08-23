@@ -5,11 +5,29 @@ import {
 } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ReactNode } from "react";
+import {
+  StrictMode,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 import type { Session } from "../../shared/api/schemas";
+import {
+  type AutoSaveQuiesceCallback,
+  type AutoSaveScopeLease,
+  useAutoSaveScopeRegistry,
+} from "../../shared/autosave/AutoSaveScopeProvider";
+import { cleanupExpiredBrowserDrafts } from "../../shared/drafts/browserDraftCache";
 import { SessionProvider } from "./SessionProvider";
 import { useReplaceSession, useSession } from "./sessionContext";
+
+vi.mock("../../shared/drafts/browserDraftCache", () => ({
+  cleanupExpiredBrowserDrafts: vi.fn(),
+}));
+
+const cleanupExpiredBrowserDraftsMock = vi.mocked(cleanupExpiredBrowserDrafts);
 
 const requestID = "00000000-0000-7000-8000-000000000001";
 const session: Session = {
@@ -36,6 +54,11 @@ const latestSession: Session = {
   },
   csrfToken: "latest-csrf-token",
 };
+
+beforeEach(() => {
+  cleanupExpiredBrowserDraftsMock.mockReset();
+  cleanupExpiredBrowserDraftsMock.mockResolvedValue(undefined);
+});
 
 describe("SessionProvider admission boundary", () => {
   afterEach(() => {
@@ -144,6 +167,26 @@ describe("SessionProvider admission boundary", () => {
       { method: "POST", path: "/api/v1/session/anonymous" },
     ]);
   });
+
+  it("starts browser draft cleanup once without blocking startup when cleanup fails", async () => {
+    cleanupExpiredBrowserDraftsMock.mockRejectedValueOnce(
+      new Error("IndexedDB is unavailable"),
+    );
+    stubSession(session);
+
+    render(
+      <StrictMode>
+        <QueryClientProvider client={createClient()}>
+          <SessionProvider>
+            <p>application ready</p>
+          </SessionProvider>
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+
+    expect(await screen.findByText("application ready")).toBeInTheDocument();
+    expect(cleanupExpiredBrowserDraftsMock).toHaveBeenCalledOnce();
+  });
 });
 
 describe("SessionProvider identity boundary", () => {
@@ -192,6 +235,100 @@ describe("SessionProvider identity boundary", () => {
     expect(
       screen.getByRole("textbox", { name: "identity-bound editor" }),
     ).toHaveValue("same-user local input");
+  });
+
+  it("keeps the active autosave lease for a same-user upgrade", async () => {
+    stubSession(session);
+    const upgradedSession: Session = {
+      user: {
+        ...session.user,
+        googleConnected: true,
+        googleEmail: "upgraded@example.com",
+      },
+      csrfToken: "rotated-csrf-token",
+    };
+    const lifecycle = vi.fn<AutoSaveQuiesceCallback>();
+    const leases: AutoSaveScopeLease[] = [];
+
+    renderProvider(
+      <>
+        <SessionTransitionProbe nextSession={upgradedSession} />
+        <AutoSaveScopeProbe
+          onLease={(lease) => leases.push(lease)}
+          onQuiesce={lifecycle}
+        />
+      </>,
+    );
+
+    expect(await screen.findByTestId("session-observation")).toHaveTextContent(
+      session.csrfToken,
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "セッションを置換" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session-observation")).toHaveTextContent(
+        upgradedSession.csrfToken,
+      ),
+    );
+    expect(lifecycle).not.toHaveBeenCalled();
+    expect(leases).toHaveLength(1);
+    expect(leases[0]?.signal.aborted).toBe(false);
+    expect(leases[0]?.isCurrent()).toBe(true);
+  });
+
+  it("awaits draft-preserving autosave quiescence before publishing a changed user", async () => {
+    stubSession(session);
+    const client = createClient();
+    const releaseQuiesce = deferredVoid();
+    const cancelQueries = vi.spyOn(client, "cancelQueries");
+    const lifecycle = vi.fn<AutoSaveQuiesceCallback>(
+      async ({ preserveDrafts }) => {
+        expect(preserveDrafts).toBe(true);
+        await releaseQuiesce.promise;
+      },
+    );
+    let oldLease: AutoSaveScopeLease | undefined;
+
+    renderProvider(
+      <>
+        <SessionTransitionProbe nextSession={switchedSession} />
+        <AutoSaveScopeProbe
+          onLease={(lease) => {
+            oldLease ??= lease;
+          }}
+          onQuiesce={lifecycle}
+        />
+      </>,
+      client,
+    );
+
+    expect(await screen.findByTestId("session-observation")).toHaveTextContent(
+      session.user.id,
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "セッションを置換" }));
+
+    await waitFor(() => expect(lifecycle).toHaveBeenCalledOnce());
+    expect(oldLease?.signal.aborted).toBe(true);
+    expect(oldLease?.isCurrent()).toBe(false);
+    expect(cancelQueries).not.toHaveBeenCalled();
+    expect(screen.getByTestId("session-observation")).toHaveTextContent(
+      session.user.id,
+    );
+
+    releaseQuiesce.resolve();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session-observation")).toHaveTextContent(
+        switchedSession.user.id,
+      ),
+    );
+    expect(cancelQueries).toHaveBeenCalledWith({
+      queryKey: ["user", session.user.id],
+    });
   });
 
   it("clears non-session query and mutation state before publishing a changed user", async () => {
@@ -434,6 +571,29 @@ function IdentityBoundEditor({ userId }: { userId: string }) {
       />
     </label>
   );
+}
+
+function AutoSaveScopeProbe({
+  onLease,
+  onQuiesce,
+}: {
+  readonly onLease: (lease: AutoSaveScopeLease) => void;
+  readonly onQuiesce: AutoSaveQuiesceCallback;
+}) {
+  const session = useSession();
+  const registry = useAutoSaveScopeRegistry();
+  const lease = useMemo(
+    () => registry.prepare("identity:" + session.user.id),
+    [registry, session.user.id],
+  );
+
+  useLayoutEffect(() => {
+    lease.activate();
+    onLease(lease);
+    return lease.onQuiesce(onQuiesce);
+  }, [lease, onLease, onQuiesce]);
+
+  return null;
 }
 
 function errorResponse(status: number, code: string): Response {

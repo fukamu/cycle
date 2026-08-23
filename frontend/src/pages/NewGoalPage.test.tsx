@@ -1,14 +1,22 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import {
   act,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import { useState } from "react";
+
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { SessionContext } from "../features/auth/sessionContext";
+import {
+  AutoSaveScopeProvider,
+  useAutoSaveScopeRegistry,
+} from "../shared/autosave/AutoSaveScopeProvider";
 import { userQueryKeys } from "../features/goal-collection/goalCache";
 import type {
   Cycle,
@@ -20,6 +28,7 @@ import type {
 import { APIError } from "../shared/api/client";
 import {
   adoptGoalDraft,
+  discardGoalDraft,
   getGoalDraft,
   getHome,
   refineGoalDraft,
@@ -28,9 +37,12 @@ import {
 } from "../shared/api/workspace";
 import {
   deleteBrowserDraft,
+  deleteBrowserDraftIfUnchanged,
   getBrowserDraft,
   putBrowserDraft,
 } from "../shared/drafts/browserDraftCache";
+import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBoundary";
+import { HomePage } from "./HomePage";
 import { NewGoalPage } from "./NewGoalPage";
 
 vi.mock("../shared/api/workspace", () => ({
@@ -46,6 +58,7 @@ vi.mock("../shared/api/workspace", () => ({
 
 vi.mock("../shared/drafts/browserDraftCache", () => ({
   deleteBrowserDraft: vi.fn(),
+  deleteBrowserDraftIfUnchanged: vi.fn(),
   getBrowserDraft: vi.fn(),
   putBrowserDraft: vi.fn(),
 }));
@@ -115,6 +128,36 @@ const startedGoal: Goal = {
   terminalAt: null,
 };
 
+function IdentityQuiesceControl() {
+  const registry = useAutoSaveScopeRegistry();
+  const [quiesced, setQuiesced] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          void registry
+            .quiesce({ preserveDrafts: true })
+            .then(() => setQuiesced(true));
+        }}
+      >
+        異なるUserへの切替を模擬
+      </button>
+      {quiesced ? <p>切替準備完了</p> : null}
+    </>
+  );
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("NewGoalPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -124,6 +167,7 @@ describe("NewGoalPage", () => {
     vi.mocked(getBrowserDraft).mockResolvedValue(null);
     vi.mocked(putBrowserDraft).mockResolvedValue(undefined);
     vi.mocked(deleteBrowserDraft).mockResolvedValue(undefined);
+    vi.mocked(deleteBrowserDraftIfUnchanged).mockResolvedValue(undefined);
     vi.mocked(refineGoalDraft).mockResolvedValue({
       generationId: "30000000-0000-7000-8000-000000000001",
       sourceDraftRevision: draft.revision,
@@ -231,6 +275,36 @@ describe("NewGoalPage", () => {
     );
   });
 
+  it("rejects input while Start is pending and restores editing after failure", async () => {
+    const request = deferred<Awaited<ReturnType<typeof startGoal>>>();
+    vi.mocked(startGoal).mockImplementationOnce(() => request.promise);
+    const user = userEvent.setup();
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "あなたの目標",
+    });
+
+    await user.click(screen.getByRole("button", { name: "この目標で始める" }));
+    await waitFor(() => expect(startGoal).toHaveBeenCalledOnce());
+
+    expect(editor).toHaveAttribute("readonly");
+    await user.type(editor, "command中の追記");
+    expect(editor).toHaveValue(draft.body);
+
+    await act(async () => request.reject(new TypeError("network")));
+
+    expect(
+      await screen.findByText(
+        "目標を開始できませんでした。保存状態と進行中の目標を確認してください。",
+      ),
+    ).toBeInTheDocument();
+    expect(editor).not.toHaveAttribute("readonly");
+    expect(editor).toHaveValue(draft.body);
+
+    await user.type(editor, "失敗後の追記");
+    expect(editor).toHaveValue(draft.body + "失敗後の追記");
+  });
+
   it("preserves a local draft on the exact revision conflict and reapplies it against the latest revision", async () => {
     const localBody = "この端末で変更した目標";
     const nextLocalBody = "競合解消後にもう一度変更した目標";
@@ -270,7 +344,10 @@ describe("NewGoalPage", () => {
     expect(editor).toHaveValue(localBody);
     expect(editor).toHaveAttribute("readonly");
     expect(getGoalDraft).toHaveBeenCalledTimes(1);
-    expect(getGoalDraft).toHaveBeenCalledWith(draft.id);
+    expect(getGoalDraft).toHaveBeenCalledWith(
+      draft.id,
+      expect.any(AbortSignal),
+    );
 
     fireEvent.click(retry);
     expect(
@@ -301,6 +378,7 @@ describe("NewGoalPage", () => {
         localBody,
         latestDraft.revision,
         session.csrfToken,
+        expect.any(AbortSignal),
       ),
     );
     expect(await screen.findByText("保存済み")).toBeInTheDocument();
@@ -314,8 +392,260 @@ describe("NewGoalPage", () => {
         nextLocalBody,
         2,
         session.csrfToken,
+        expect.any(AbortSignal),
       ),
     );
+  });
+
+  it("preserves a local draft and links Home when the creation scope has ended", async () => {
+    const localBody = "終了済みscopeでコピーする入力";
+    const canonicalHome: Home = {
+      ...home,
+      creationDraft: null,
+      canCreateGoalDraft: true,
+    };
+    let homeLoads = 0;
+    vi.mocked(getHome)
+      .mockReset()
+      .mockImplementation(async () => {
+        homeLoads += 1;
+        return homeLoads === 1 ? home : canonicalHome;
+      });
+    vi.mocked(saveGoalDraft).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_DRAFT_REVISION_CONFLICT",
+        "conflict",
+        "request-creation-moved",
+      ),
+    );
+    vi.mocked(getGoalDraft).mockRejectedValueOnce(
+      new APIError(
+        404,
+        "GOAL_DRAFT_NOT_FOUND",
+        "not found",
+        "request-creation-latest",
+      ),
+    );
+
+    renderPage(createCache(), true);
+    const editor = await screen.findByRole("textbox", {
+      name: "あなたの目標",
+    });
+    fireEvent.change(editor, { target: { value: localBody } });
+    fireEvent.blur(editor);
+
+    const resolver = await screen.findByRole("link", {
+      name: "現在のホームを開いてください",
+    });
+    expect(resolver).toHaveAttribute("href", "/");
+    expect(editor).toHaveValue(localBody);
+    expect(editor).toHaveAttribute("readonly");
+    expect(
+      screen.queryByRole("button", { name: "再試行" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下書きを破棄" })).toBeDisabled();
+    await waitFor(() =>
+      expect(putBrowserDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ body: localBody }),
+      ),
+    );
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+
+    fireEvent.click(resolver);
+    expect(
+      await screen.findByRole("heading", { name: "目標から、次の一歩へ。" }),
+    ).toBeInTheDocument();
+    expect(getHome).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("目標の設定を続ける")).not.toBeInTheDocument();
+  });
+
+  it("moves directly on the exact ended-draft PATCH error without fetching the stale draft", async () => {
+    const localBody = "直接終了を検知した端末入力";
+    vi.mocked(saveGoalDraft).mockRejectedValueOnce(
+      new APIError(
+        404,
+        "GOAL_DRAFT_NOT_FOUND",
+        "not found",
+        "request-direct-creation-moved",
+      ),
+    );
+
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "あなたの目標",
+    });
+    fireEvent.change(editor, { target: { value: localBody } });
+    fireEvent.blur(editor);
+
+    expect(
+      await screen.findByRole("link", {
+        name: "現在のホームを開いてください",
+      }),
+    ).toHaveAttribute("href", "/");
+    expect(editor).toHaveValue(localBody);
+    expect(editor).toHaveAttribute("readonly");
+    expect(getGoalDraft).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "再試行" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps abandon disabled until browser draft hydration finishes", async () => {
+    const browserRead = deferred<Awaited<ReturnType<typeof getBrowserDraft>>>();
+    vi.mocked(getBrowserDraft).mockReturnValueOnce(browserRead.promise);
+
+    renderPage();
+    await screen.findByRole("textbox", { name: "あなたの目標" });
+    const abandon = screen.getByRole("button", { name: "下書きを破棄" });
+    expect(abandon).toBeDisabled();
+
+    fireEvent.click(abandon);
+    expect(discardGoalDraft).not.toHaveBeenCalled();
+
+    await act(async () => browserRead.resolve(null));
+    expect(abandon).toBeEnabled();
+  });
+
+  it("retries only browser cleanup after Start succeeds", async () => {
+    vi.mocked(deleteBrowserDraft)
+      .mockRejectedValueOnce(new Error("indexeddb unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "この目標で始める" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "目標は開始されましたが、このブラウザの下書きを削除できませんでした。",
+    );
+    expect(startGoal).toHaveBeenCalledOnce();
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "ブラウザデータの削除を再試行" }),
+    );
+
+    expect(await screen.findByText("現在のワークスペース")).toBeInTheDocument();
+    expect(startGoal).toHaveBeenCalledOnce();
+    expect(deleteBrowserDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only browser cleanup after Creation abandon succeeds", async () => {
+    vi.mocked(deleteBrowserDraft)
+      .mockRejectedValueOnce(new Error("indexeddb unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "下書きを破棄" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "下書きを破棄" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "下書きは破棄されましたが、このブラウザの下書きを削除できませんでした。",
+    );
+    expect(discardGoalDraft).toHaveBeenCalledOnce();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "ブラウザデータの削除を再試行" }),
+    );
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(discardGoalDraft).toHaveBeenCalledOnce();
+    expect(deleteBrowserDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a Start completion from a replaced draft generation and preserves the new local input", async () => {
+    const completion = deferred<Awaited<ReturnType<typeof startGoal>>>();
+    const replacementDraft: GoalDraft = {
+      ...draft,
+      id: "20000000-0000-7000-8000-000000000009",
+      body: "新しい下書き",
+      updatedAt: "2026-08-20T00:09:00.000Z",
+    };
+    const replacementBody = "新しい世代の端末入力";
+    vi.mocked(startGoal).mockReturnValue(completion.promise);
+    const cache = createCache();
+    renderPage(cache);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "この目標で始める" }),
+    );
+    await waitFor(() => expect(startGoal).toHaveBeenCalledOnce());
+
+    act(() => {
+      cache.setQueryData<Home>(userQueryKeys.home(session.user.id), {
+        ...home,
+        creationDraft: replacementDraft,
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "あなたの目標" })).toHaveValue(
+        replacementDraft.body,
+      ),
+    );
+    const replacementEditor = screen.getByRole("textbox", {
+      name: "あなたの目標",
+    });
+    fireEvent.change(replacementEditor, { target: { value: replacementBody } });
+    vi.mocked(deleteBrowserDraft).mockClear();
+
+    await act(async () =>
+      completion.resolve({
+        goal: startedGoal,
+        cycle: startedCycle,
+        replayed: true,
+      }),
+    );
+    await act(async () => undefined);
+
+    expect(replacementEditor).toHaveValue(replacementBody);
+    expect(screen.getByRole("textbox", { name: "あなたの目標" })).toBe(
+      replacementEditor,
+    );
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+  });
+
+  it("ignores a Start completion after identity quiescence begins and before remount", async () => {
+    const completion = deferred<Awaited<ReturnType<typeof startGoal>>>();
+    vi.mocked(startGoal).mockReturnValue(completion.promise);
+    const cache = createCache();
+    renderPage(cache, false, true);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "この目標で始める" }),
+    );
+    await waitFor(() => expect(startGoal).toHaveBeenCalledOnce());
+    fireEvent.click(
+      screen.getByRole("button", { name: "異なるUserへの切替を模擬" }),
+    );
+    expect(await screen.findByText("切替準備完了")).toBeInTheDocument();
+    vi.mocked(deleteBrowserDraft).mockClear();
+
+    await act(async () =>
+      completion.resolve({
+        goal: startedGoal,
+        cycle: startedCycle,
+        replayed: true,
+      }),
+    );
+    await act(async () => undefined);
+
+    expect(screen.getByRole("textbox", { name: "あなたの目標" })).toHaveValue(
+      draft.body,
+    );
+    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, startedGoal.id)),
+    ).toBeUndefined();
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
   });
 
   it("isolates an in-flight creation draft save when the draft identity changes", async () => {
@@ -350,6 +680,7 @@ describe("NewGoalPage", () => {
         draftABody,
         draft.revision,
         session.csrfToken,
+        expect.any(AbortSignal),
       ),
     );
 
@@ -382,6 +713,7 @@ describe("NewGoalPage", () => {
       draftABody,
       expect.any(Number),
       session.csrfToken,
+      expect.any(AbortSignal),
     );
 
     fireEvent.change(draftBEditor, { target: { value: draftBBody } });
@@ -392,6 +724,7 @@ describe("NewGoalPage", () => {
         draftBBody,
         draftB.revision,
         session.csrfToken,
+        expect.any(AbortSignal),
       ),
     );
   });
@@ -403,20 +736,33 @@ function createCache() {
   });
 }
 
-function renderPage(cache = createCache()) {
+function renderPage(
+  cache = createCache(),
+  realCanonicalRoutes = false,
+  identityQuiesceControl = false,
+) {
   return render(
     <QueryClientProvider client={cache}>
-      <SessionContext.Provider value={session}>
-        <MemoryRouter initialEntries={["/goals/new"]}>
-          <Routes>
-            <Route path="/goals/new" element={<NewGoalPage />} />
-            <Route
-              path="/goals/:goalId"
-              element={<p>現在のワークスペース</p>}
-            />
-          </Routes>
-        </MemoryRouter>
-      </SessionContext.Provider>
+      <AutoSaveScopeProvider>
+        {identityQuiesceControl ? <IdentityQuiesceControl /> : null}
+        <SessionContext.Provider value={session}>
+          <MemoryRouter initialEntries={["/goals/new"]}>
+            <PostCommitCleanupBoundary>
+              <Routes>
+                <Route
+                  path="/"
+                  element={realCanonicalRoutes ? <HomePage /> : <p>ホーム</p>}
+                />
+                <Route path="/goals/new" element={<NewGoalPage />} />
+                <Route
+                  path="/goals/:goalId"
+                  element={<p>現在のワークスペース</p>}
+                />
+              </Routes>
+            </PostCommitCleanupBoundary>
+          </MemoryRouter>
+        </SessionContext.Provider>
+      </AutoSaveScopeProvider>
     </QueryClientProvider>,
   );
 }

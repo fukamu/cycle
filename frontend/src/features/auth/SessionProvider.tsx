@@ -1,8 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, type PropsWithChildren } from "react";
+import { useEffect, useRef, type PropsWithChildren } from "react";
 
 import { APIError, requestJSON } from "../../shared/api/client";
 import { sessionSchema, type Session } from "../../shared/api/schemas";
+import {
+  AutoSaveScopeProvider,
+  useAutoSaveScopeRegistry,
+} from "../../shared/autosave/AutoSaveScopeProvider";
+import { cleanupExpiredBrowserDrafts } from "../../shared/drafts/browserDraftCache";
 import { BetaAdmissionGate } from "../beta-admission/BetaAdmissionGate";
 import {
   clearBootstrapID,
@@ -39,8 +44,25 @@ async function loadSession(): Promise<Session> {
 }
 
 export function SessionProvider({ children }: PropsWithChildren) {
+  const browserDraftCleanupStarted = useRef(false);
+
+  useEffect(() => {
+    if (browserDraftCleanupStarted.current) return;
+    browserDraftCleanupStarted.current = true;
+    void cleanupExpiredBrowserDrafts().catch(() => undefined);
+  }, []);
+
+  return (
+    <AutoSaveScopeProvider>
+      <SessionBoundary>{children}</SessionBoundary>
+    </AutoSaveScopeProvider>
+  );
+}
+
+function SessionBoundary({ children }: PropsWithChildren) {
   const queryClient = useQueryClient();
   const transitionRef = useRef<Promise<void>>(Promise.resolve());
+  const autoSaveScopes = useAutoSaveScopeRegistry();
   const query = useQuery({
     queryKey: sessionQueryKey,
     queryFn: loadSession,
@@ -83,6 +105,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         }
 
         const oldUserQueryRoot = ["user", currentSession.user.id] as const;
+        await autoSaveScopes.quiesce({ preserveDrafts: true });
         await queryClient.cancelQueries({ queryKey: oldUserQueryRoot });
         queryClient.removeQueries({ queryKey: oldUserQueryRoot });
         queryClient.getMutationCache().clear();

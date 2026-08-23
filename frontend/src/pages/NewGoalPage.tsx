@@ -1,6 +1,12 @@
-import { useCallback, useState } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/sessionContext";
 import {
@@ -11,6 +17,7 @@ import {
 } from "../features/goal-collection/goalCache";
 import { GoalRefinementPanel } from "../features/goal-refine/GoalRefinementPanel";
 import { useGoalRefinement } from "../features/goal-refine/useGoalRefinement";
+import { APIError } from "../shared/api/client";
 import type { GoalDraft, Home } from "../shared/api/schemas";
 import {
   adoptGoalDraft,
@@ -35,7 +42,12 @@ import {
   commandFingerprint,
   useCommandOperation,
 } from "../shared/hooks/useCommandOperation";
-import { useDraftAutoSave } from "../shared/hooks/useDraftAutoSave";
+import {
+  type DraftLatestResolution,
+  useDraftAutoSave,
+} from "../shared/hooks/useDraftAutoSave";
+import { usePostCommitCleanup } from "../shared/cleanup/postCommitCleanupContext";
+import { deleteBrowserDraft } from "../shared/drafts/browserDraftCache";
 import {
   codePointCount,
   GOAL_TEXT_MAX_CODE_POINTS,
@@ -102,6 +114,14 @@ function GoalDraftEditor({
   const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const runPostCommitCleanup = usePostCommitCleanup();
+  const mountedGenerationRef = useRef(true);
+  useLayoutEffect(() => {
+    mountedGenerationRef.current = true;
+    return () => {
+      mountedGenerationRef.current = false;
+    };
+  }, []);
   const refinement = useGoalRefinement();
   const refineOperation = useCommandOperation();
   const startOperation = useCommandOperation();
@@ -109,9 +129,9 @@ function GoalDraftEditor({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [error, setError] = useState<string>();
   const save = useCallback(
-    async (body: string, revision: number) => {
+    async (body: string, revision: number, signal: AbortSignal) => {
       const saved = (
-        await saveGoalDraft(draft.id, body, revision, session.csrfToken)
+        await saveGoalDraft(draft.id, body, revision, session.csrfToken, signal)
       ).draft;
       const current = cache.getQueryData<Home>(
         userQueryKeys.home(userId),
@@ -122,32 +142,46 @@ function GoalDraftEditor({
     },
     [cache, draft.id, session.csrfToken, userId],
   );
-  const loadLatest = useCallback(async () => {
-    return (await getGoalDraft(draft.id)).draft;
-  }, [draft.id]);
+  const loadLatest = useCallback(
+    async (signal: AbortSignal) => {
+      return (await getGoalDraft(draft.id, signal)).draft;
+    },
+    [draft.id],
+  );
   const acceptLatest = useCallback(
-    (latest: GoalDraft): GoalDraft | null => {
-      if (latest.id !== draft.id) return null;
+    (latest: GoalDraft): DraftLatestResolution<GoalDraft> => {
+      if (latest.id !== draft.id) return { kind: "scope-moved", href: "/" };
       const current = cache.getQueryData<Home>(
         userQueryKeys.home(userId),
       )?.creationDraft;
-      if (!current || current.id !== draft.id) return null;
-      if (current.revision > latest.revision) return current;
+      if (!current || current.id !== draft.id)
+        return { kind: "scope-moved", href: "/" };
+      if (current.revision > latest.revision)
+        return { kind: "accepted", snapshot: current };
       cacheCreationDraft(cache, userId, latest);
-      return latest;
+      return { kind: "accepted", snapshot: latest };
     },
     [cache, draft.id, userId],
   );
+  const scopeMovedOnError = useCallback((error: unknown) => {
+    return error instanceof APIError &&
+      error.status === 404 &&
+      error.code === "GOAL_DRAFT_NOT_FOUND"
+      ? "/"
+      : null;
+  }, []);
+  const subjectKey = `goal-draft:${draft.id}`;
   const editor = useDraftAutoSave({
     userId,
     goalId: null,
-    subjectKey: `goal-draft:${draft.id}`,
+    subjectKey,
     initialBody: draft.body,
     initialRevision: draft.revision,
     save,
     revisionConflictCode: "GOAL_DRAFT_REVISION_CONFLICT",
     loadLatest,
     acceptLatest,
+    scopeMovedOnError,
   });
   const count = codePointCount(editor.body);
   const valid =
@@ -190,6 +224,22 @@ function GoalDraftEditor({
       setPending(false);
     }
   }
+  async function openCanonicalHome(event: ReactMouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(undefined);
+    try {
+      await cache.fetchQuery({
+        queryKey: userQueryKeys.home(userId),
+        queryFn: getHome,
+        staleTime: 0,
+      });
+      navigate("/", { replace: true });
+    } catch {
+      setError("現在のホームを取得できませんでした。もう一度お試しください。");
+      setPending(false);
+    }
+  }
   async function start() {
     setPending(true);
     setError(undefined);
@@ -207,16 +257,24 @@ function GoalDraftEditor({
             csrfToken: session.csrfToken,
           }),
       );
-      await editor.discard();
-      await cache.invalidateQueries({
-        queryKey: userQueryKeys.root(userId),
-        refetchType: "none",
-      });
-      cacheCycle(cache, userId, result.goal, result.cycle);
-      navigate(`/goals/${result.goal.id}`, {
-        replace: true,
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
+      runPostCommitCleanup({
+        cleanup: () => deleteBrowserDraft(userId, subjectKey),
+        onSuccess: async () => {
+          await cache.invalidateQueries({
+            queryKey: userQueryKeys.root(userId),
+            refetchType: "none",
+          });
+          cacheCycle(cache, userId, result.goal, result.cycle);
+          navigate(`/goals/${result.goal.id}`, { replace: true });
+        },
+        pendingMessage: "ブラウザに残る下書きを削除しています…",
+        failureMessage:
+          "目標は開始されましたが、このブラウザの下書きを削除できませんでした。",
+        retryLabel: "ブラウザデータの削除を再試行",
       });
     } catch {
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       editor.resume();
       setError(
         "目標を開始できませんでした。保存状態と進行中の目標を確認してください。",
@@ -225,18 +283,29 @@ function GoalDraftEditor({
     }
   }
   async function discard() {
+    if (editor.hydrating || editor.scopeMovedHref) return;
     setPending(true);
     setError(undefined);
     editor.pause();
     try {
       await discardGoalDraft(draft.id, session.csrfToken);
-      await editor.discard();
-      await cache.invalidateQueries({
-        queryKey: userQueryKeys.root(userId),
-        refetchType: "none",
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
+      runPostCommitCleanup({
+        cleanup: () => deleteBrowserDraft(userId, subjectKey),
+        onSuccess: async () => {
+          await cache.invalidateQueries({
+            queryKey: userQueryKeys.root(userId),
+            refetchType: "none",
+          });
+          navigate("/", { replace: true });
+        },
+        pendingMessage: "ブラウザに残る下書きを削除しています…",
+        failureMessage:
+          "下書きは破棄されましたが、このブラウザの下書きを削除できませんでした。",
+        retryLabel: "ブラウザデータの削除を再試行",
       });
-      navigate("/", { replace: true });
     } catch {
+      if (!mountedGenerationRef.current || !editor.isActiveScope()) return;
       editor.resume();
       setError("下書きを破棄できませんでした。");
       setPending(false);
@@ -244,13 +313,15 @@ function GoalDraftEditor({
   }
   const canStart =
     valid &&
-    editor.state === "saved" &&
+    editor.state.kind === "saved" &&
     refinement.state.kind !== "running" &&
     home.canStartProgressingGoal &&
     !pending;
   const conflictPending = editor.revisionConflictActive;
   const conflictRetryBlocked =
-    editor.resolvingConflict || Boolean(editor.recoveryConflict);
+    editor.resolvingConflict ||
+    Boolean(editor.recoveryConflict) ||
+    Boolean(editor.scopeMovedHref);
   return (
     <main className="page editor-page">
       <header className="page-heading">
@@ -270,6 +341,19 @@ function GoalDraftEditor({
             別の更新を確認しています…
           </p>
         )}
+        {editor.scopeMovedHref && (
+          <p className="draft-notice" role="alert">
+            この下書きの作業場所は変わりました。入力内容はこの端末に保持されています。
+            必要なら本文をコピーしてから、
+            <Link
+              to={editor.scopeMovedHref}
+              onClick={(event) => void openCanonicalHome(event)}
+            >
+              現在のホームを開いてください
+            </Link>
+            。
+          </p>
+        )}
         {editor.browserCacheFailed && <DraftCacheWarning />}
         <label htmlFor="goal-body">あなたの目標</label>
         <textarea
@@ -277,7 +361,9 @@ function GoalDraftEditor({
           aria-describedby="goal-editor-guide"
           value={editor.body}
           placeholder={goalCopy.placeholder}
-          readOnly={conflictPending}
+          readOnly={
+            conflictPending || Boolean(editor.scopeMovedHref) || pending
+          }
           onChange={(event) => {
             const body = normalizeBoundedTextInput(
               event.target.value,
@@ -308,7 +394,7 @@ function GoalDraftEditor({
             type="button"
             disabled={
               !valid ||
-              editor.state !== "saved" ||
+              editor.state.kind !== "saved" ||
               refinement.state.kind === "running" ||
               pending
             }
@@ -335,7 +421,9 @@ function GoalDraftEditor({
         <button
           className="text-button danger-link"
           type="button"
-          disabled={pending}
+          disabled={
+            pending || editor.hydrating || Boolean(editor.scopeMovedHref)
+          }
           onClick={() => setConfirmDiscard(true)}
         >
           下書きを破棄
