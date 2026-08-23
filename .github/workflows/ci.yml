@@ -118,6 +118,7 @@ jobs:
       - run: go test ./...
       - run: go build ./cmd/server
       - run: go build ./cmd/migrate
+      - run: go build ./cmd/configcheck
 
   infrastructure:
     needs: reuse_pr_ci

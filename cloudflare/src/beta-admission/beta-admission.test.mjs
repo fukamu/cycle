@@ -89,10 +89,106 @@ test("closed mode fails closed when configuration is invalid", async () => {
   );
 });
 
-test("redeem rejects cross-origin and unknown tokens", async () => {
-  const crossOrigin = await redeem(token, { Origin: "https://evil.example" });
-  assert.equal(crossOrigin.status, 403);
-  assert.equal((await crossOrigin.json()).error.code, "CSRF_INVALID");
+test("closed config validates TTL boundaries", async (t) => {
+  const cases = [
+    ["lower boundary", "1", true],
+    ["upper boundary", "730", true],
+    ["below range", "0", false],
+    ["above range", "731", false],
+    ["noninteger", "1.5", false],
+  ];
+  for (const [name, value, accepted] of cases) {
+    await t.test(name, () =>
+      assertClosedConfig({ BETA_ADMISSION_COOKIE_TTL_DAYS: value }, accepted),
+    );
+  }
+});
+
+test("closed config validates invite schema and boundaries", async (t) => {
+  const validCases = [
+    ["one entry", [inviteEntry("beta-001", 1)]],
+    ["one-character ID", [inviteEntry("a", 1)]],
+    ["sixty-four-character ID", [inviteEntry("a".repeat(64), 1)]],
+    ["one thousand entries", inviteEntries(1_000)],
+  ];
+  for (const [name, entries] of validCases) {
+    await t.test(name, () =>
+      assertClosedConfig({ BETA_INVITES: JSON.stringify(entries) }, true),
+    );
+  }
+
+  const invalidCases = [
+    ["empty array", []],
+    ["more than one thousand entries", inviteEntries(1_001)],
+    ["non-object entry", ["entry"]],
+    ["missing field", [{ id: "beta-001" }]],
+    ["extra field", [{ ...inviteEntry("beta-001", 1), extra: true }]],
+    ["empty ID", [inviteEntry("", 1)]],
+    ["uppercase ID", [inviteEntry("Beta-001", 1)]],
+    ["ID longer than sixty-four characters", [inviteEntry("a".repeat(65), 1)]],
+    ["short digest", [{ id: "beta-001", digest: "a".repeat(63) }]],
+    ["long digest", [{ id: "beta-001", digest: "a".repeat(65) }]],
+    ["uppercase digest", [{ id: "beta-001", digest: "A".repeat(64) }]],
+    ["duplicate ID", [inviteEntry("beta-001", 1), inviteEntry("beta-001", 2)]],
+    [
+      "duplicate digest",
+      [inviteEntry("beta-001", 1), inviteEntry("beta-002", 1)],
+    ],
+  ];
+  for (const [name, entries] of invalidCases) {
+    await t.test(name, () =>
+      assertClosedConfig({ BETA_INVITES: JSON.stringify(entries) }, false),
+    );
+  }
+});
+
+test("closed config validates cookie key byte length and alphabet", async (t) => {
+  const cases = [
+    ["thirty-two bytes", key, true],
+    ["thirty-one bytes", base64url(new Uint8Array(31).fill(7)), false],
+    ["thirty-three bytes", base64url(new Uint8Array(33).fill(7)), false],
+    ["invalid alphabet", "!".repeat(43), false],
+  ];
+  for (const [name, value, accepted] of cases) {
+    await t.test(name, () =>
+      assertClosedConfig({ BETA_ADMISSION_COOKIE_KEY: value }, accepted),
+    );
+  }
+});
+
+test("closed config requires a canonical HTTPS public origin", async (t) => {
+  const cases = [
+    ["canonical origin", origin, true],
+    ["missing origin", undefined, false],
+    ["HTTP origin", "http://cycle.fukamu.com", false],
+    ["trailing slash", `${origin}/`, false],
+    ["path", `${origin}/app`, false],
+    ["credentials", "https://user@cycle.fukamu.com", false],
+  ];
+  for (const [name, value, accepted] of cases) {
+    await t.test(name, () =>
+      assertClosedConfig({ PUBLIC_ORIGIN: value }, accepted),
+    );
+  }
+});
+
+test("redeem requires the exact configured Origin and rejects unknown tokens", async (t) => {
+  const originCases = [
+    ["exact origin", origin, true],
+    ["missing origin", null, false],
+    ["trailing slash", `${origin}/`, false],
+    ["origin suffix", `${origin}.evil`, false],
+    ["other origin", "https://evil.example", false],
+  ];
+  for (const [name, value, accepted] of originCases) {
+    await t.test(name, async () => {
+      const response = await redeem(token, { Origin: value });
+      assert.equal(response.status, accepted ? 204 : 403);
+      if (!accepted) {
+        assert.equal((await response.json()).error.code, "CSRF_INVALID");
+      }
+    });
+  }
 
   const invalid = await redeem(`fukamu_cycle_beta_${"b".repeat(43)}`);
   assert.equal(invalid.status, 403);
@@ -150,19 +246,50 @@ test("unrelated API requests are never intercepted", async () => {
 });
 
 async function redeem(inviteToken, headers = {}) {
+  const requestHeaders = new Headers({
+    "Content-Type": "application/json",
+    Origin: origin,
+  });
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === null) requestHeaders.delete(name);
+    else requestHeaders.set(name, value);
+  }
   return handleBetaAdmission(
     new Request(`${origin}/api/__beta/admission/redeem`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: origin,
-        ...headers,
-      },
+      headers: requestHeaders,
       body: JSON.stringify({ token: inviteToken }),
     }),
     closed,
     now,
   );
+}
+
+async function assertClosedConfig(overrides, accepted) {
+  const response = await handleBetaAdmission(
+    new Request(`${origin}/api/v1/session/anonymous`, { method: "POST" }),
+    { ...closed, ...overrides },
+    now,
+  );
+  assert.equal(response?.status, accepted ? 403 : 503);
+  assert.equal(
+    (await response?.json()).error.code,
+    accepted ? "BETA_ADMISSION_REQUIRED" : "BETA_ADMISSION_UNAVAILABLE",
+  );
+}
+
+function inviteEntries(count) {
+  return Array.from({ length: count }, (_, index) =>
+    inviteEntry(`beta-${index}`, index),
+  );
+}
+
+function inviteEntry(id, digestIndex) {
+  return { id, digest: fixedDigest(digestIndex) };
+}
+
+function fixedDigest(index) {
+  return index.toString(16).padStart(64, "0");
 }
 
 async function sha256Hex(value) {

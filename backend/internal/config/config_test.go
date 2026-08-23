@@ -79,6 +79,137 @@ func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsNonCanonicalPublicOrigin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "path", value: "http://localhost:5173/app"},
+		{name: "trailing slash", value: "http://localhost:5173/"},
+		{name: "query", value: "http://localhost:5173?source=test"},
+		{name: "userinfo", value: "http://user:password@localhost:5173"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			environment := validEnvironment()
+			environment["PUBLIC_ORIGIN"] = test.value
+			if _, err := Load(mapLookup(environment)); err == nil {
+				t.Fatalf("Load() accepted non-canonical PUBLIC_ORIGIN %q", test.value)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidDatabaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "malformed", value: "://not-a-url"},
+		{name: "non-postgres scheme", value: "mysql://user:password@localhost:3306/fukamu_cycle"},
+		{name: "missing database path", value: "postgres://user:password@localhost:5432"},
+		{name: "empty database name", value: "postgres://user:password@localhost:5432/"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			environment := validEnvironment()
+			environment["DATABASE_URL"] = test.value
+			_, err := Load(mapLookup(environment))
+			if err == nil {
+				t.Fatalf("Load() accepted invalid DATABASE_URL %q", test.value)
+			}
+			if strings.Contains(err.Error(), test.value) {
+				t.Fatal("Load() error exposed DATABASE_URL")
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsPostgresqlDatabaseURL(t *testing.T) {
+	t.Parallel()
+
+	environment := validEnvironment()
+	environment["DATABASE_URL"] = "postgresql://user:password@localhost:5432/fukamu_cycle?sslmode=disable"
+	if _, err := Load(mapLookup(environment)); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadRejectsNonFiniteNumbers(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{
+		"AI_MONTHLY_BUDGET_USD",
+		"AI_PRICE_INPUT_USD_PER_MILLION",
+		"AI_PRICE_OUTPUT_USD_PER_MILLION",
+		"AI_WARNING_THRESHOLDS",
+	} {
+		for _, value := range []string{"NaN", "+Inf", "-Inf"} {
+			t.Run(key+"/"+value, func(t *testing.T) {
+				t.Parallel()
+				environment := validEnvironment()
+				environment[key] = value
+				if _, err := Load(mapLookup(environment)); err == nil {
+					t.Fatalf("Load() accepted non-finite %s=%q", key, value)
+				}
+			})
+		}
+	}
+}
+
+func TestLoadRejectsDatabaseConnectionIntegerOverflow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "max open wraps to positive int32", key: "DB_MAX_OPEN_CONNS", value: "4294967306"},
+		{name: "max idle wraps to positive int32", key: "DB_MAX_IDLE_CONNS", value: "4294967301"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			environment := validEnvironment()
+			environment[test.key] = test.value
+			if _, err := Load(mapLookup(environment)); err == nil {
+				t.Fatalf("Load() accepted overflowing %s=%q", test.key, test.value)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsDurationOverflow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "seconds", key: "AI_TIMEOUT_SECONDS", value: "18446744074"},
+		{name: "minutes", key: "DB_CONN_MAX_LIFETIME_MINUTES", value: "307445735"},
+		{name: "days", key: "SESSION_IDLE_DAYS", value: "213504"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			environment := validEnvironment()
+			environment[test.key] = test.value
+			if _, err := Load(mapLookup(environment)); err == nil {
+				t.Fatalf("Load() accepted overflowing %s=%q", test.key, test.value)
+			}
+		})
+	}
+}
+
 func validEnvironment() map[string]string {
 	return map[string]string{
 		"APP_ENV":                "development",

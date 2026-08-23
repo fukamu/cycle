@@ -24,7 +24,7 @@ BETA_INVITES=<Invite entryのJSON array>
 BETA_ADMISSION_COOKIE_KEY=<32 random bytesのbase64url secret>
 ```
 
-未知のmodeや空AllowlistでClosed Betaを開始しません。`BETA_INVITES`の`id`は`beta-001`のような非個人識別子とし、氏名やemailを含めません。
+未知のmodeや空AllowlistでClosed Betaを開始しません。`BETA_INVITES`は1〜1000件のJSON arrayとし、各entryは追加fieldのない`{"id":"...","digest":"..."}`にします。`id`は1〜64文字のlowercase英数字で始まるlowercase英数字・`_`・`-`だけのuniqueな非個人識別子、`digest`は64文字lowercase hexadecimalかつuniqueとします。`id`へ氏名やemailを含めません。Deploy preflightとWorker runtimeは同じparserでこの境界を検証します。
 
 ## Cookie signing keyの初期設定
 

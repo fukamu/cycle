@@ -1,6 +1,6 @@
 # 環境変数
 
-この文書は環境変数の運用上の一覧です。Typed validationとdefaultは [`backend/internal/config/config.go`](../backend/internal/config/config.go)、Cloudflareへの受け渡しは [`cloudflare/src/index.ts`](../cloudflare/src/index.ts)、deploy入力は [`deploy.yml`](../.github/workflows/deploy.yml) が実装根拠です。上位仕様は [`design.md`](design.md) です。
+この文書は環境変数の運用上の一覧です。Typed validationとdefaultは [`backend/internal/config/config.go`](../backend/internal/config/config.go)、Cloudflareへの受け渡しは [`cloudflare/src/index.ts`](../cloudflare/src/index.ts)、deploy入力の分類とmappingは [`deployment-contract.json`](../config/deployment-contract.json) が実装根拠です。Deploy workflowはこのcontractと同じBackend config checker、Closed Beta parserを実行します。上位仕様は [`design.md`](design.md) です。
 
 ## Environment / secret rules
 
@@ -22,7 +22,7 @@ Closed Beta AdmissionはCloudflare Workerだけが使用する一時的な公開
 |---|---|---|
 | `BETA_ADMISSION_MODE` | `closed`で新規Anonymous bootstrap前にAdmissionを強制、`off`で無効化 | Worker-only non-secret。Staging workflowは未設定時`off`、初期Productionは`closed` |
 | `BETA_ADMISSION_COOKIE_TTL_DAYS` | Admission Cookie期限 | `closed`時のみ1〜730のinteger、Worker-only non-secret |
-| `BETA_INVITES` | 非個人Invite IDとSHA-256 Token digestのJSON array | `closed`時のみnon-empty、Worker-only non-secret。Raw Token禁止 |
+| `BETA_INVITES` | 非個人Invite IDとSHA-256 Token digestのJSON array | `closed`時のみ1〜1000件。entryはexactな`{id,digest}`、IDは1〜64文字の`[a-z0-9][a-z0-9_-]*`、digestは64文字lowercase hex、ID/digestは各unique。Worker-only non-secret、Raw Token禁止 |
 | `BETA_ADMISSION_COOKIE_KEY` | Admission Cookie HMAC-SHA-256署名 | `closed`時のみ32 random bytesのbase64url、**secret** |
 
 ## Backend runtime
@@ -32,10 +32,10 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | Variable | Purpose / code default | Requirement | Exposure / Staging source |
 |---|---|---|---|
 | `APP_ENV` | profile、`development` | Stagingは`production`固定 | Container only、Worker code固定 |
-| `PUBLIC_ORIGIN` | origin、`http://localhost:5173` | Production profileはHTTPS | server only、GitHub variable |
+| `PUBLIC_ORIGIN` | canonical origin、`http://localhost:5173` | schemeとhostだけを指定し、credentials、path、末尾slash、query、fragmentは禁止。Production profileはHTTPS | server only、GitHub variable |
 | `HTTP_ADDRESS` | listen、`:8080` | non-empty | Container only、Worker code固定 |
 | `STATIC_DIR` | GoによるSPA配信、空 | Cloudflareでは不要 | Local/legacy container only |
-| `DATABASE_URL` | PostgreSQL URL | 全環境必須 | **secret**、local `.env` / Staging `NEON_DATABASE_URL` pooled URL |
+| `DATABASE_URL` | PostgreSQL URL | `postgres`または`postgresql` scheme、host、database名を必須とし、全環境で設定 | **secret**、local `.env` / Staging `NEON_DATABASE_URL` pooled URL |
 | `DB_MAX_OPEN_CONNS` | pool max、`10` | positive | server only、GitHub variable |
 | `DB_MAX_IDLE_CONNS` | idle max、`5` | 0以上かつopen以下 | server only、GitHub variable |
 | `DB_CONN_MAX_LIFETIME_MINUTES` | lifetime、`30` | positive | server only、GitHub variable |

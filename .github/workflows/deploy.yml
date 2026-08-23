@@ -160,71 +160,6 @@ jobs:
         with:
           ref: ${{ env.COMMIT_SHA }}
 
-      - name: Validate required deployment inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          required=(
-            PUBLIC_ORIGIN BETA_ADMISSION_MODE GOOGLE_WEB_CLIENT_ID TURNSTILE_SITE_KEY
-            DB_MAX_OPEN_CONNS DB_MAX_IDLE_CONNS DB_CONN_MAX_LIFETIME_MINUTES
-            SESSION_IDLE_DAYS SESSION_ABSOLUTE_DAYS SESSION_ACTIVITY_TOUCH_MINUTES
-            ANONYMOUS_BOOTSTRAP_TTL_MINUTES MAX_PROGRESSING_GOALS AI_MODEL AI_MAX_INPUT_TOKENS
-            AI_GOAL_REFINE_MAX_OUTPUT_TOKENS AI_ACTION_MAX_OUTPUT_TOKENS AI_MAX_CONTEXT_CYCLES
-            AI_TIMEOUT_SECONDS AI_MAX_PROVIDER_ATTEMPTS
-            AI_MAX_RETRY_BACKOFF_SECONDS AI_FINALIZATION_GRACE_SECONDS AI_LEASE_SECONDS
-            AI_MAX_GENERATIONS_PER_USER_24H AI_GOAL_REFINE_PROMPT_VERSION AI_GENERATE_PROMPT_VERSION
-            AI_REFINE_PROMPT_VERSION AI_TOKENIZER_ENCODING AI_MONTHLY_BUDGET_USD
-            AI_WARNING_THRESHOLDS AI_PRICE_INPUT_USD_PER_MILLION
-            AI_PRICE_OUTPUT_USD_PER_MILLION RATE_ANONYMOUS_CREATE_PER_IP_HOUR
-            RATE_ANONYMOUS_CREATE_PER_IP_24H RATE_AI_PER_USER_MINUTE
-            RATE_AI_PER_SESSION_MINUTE RATE_AI_PER_IP_MINUTE
-            CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN DATABASE_URL
-            MIGRATION_DATABASE_URL OPENAI_API_KEY SESSION_TOKEN_PEPPER
-            CSRF_TOKEN_PEPPER BOOTSTRAP_ID_PEPPER RATE_LIMIT_HMAC_SECRET CURSOR_SIGNING_SECRET
-            TURNSTILE_SECRET_KEY
-          )
-          missing=0
-          for name in "${required[@]}"; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Missing GitHub staging Environment input: ${name}"
-              missing=1
-            fi
-          done
-          if [[ "${PUBLIC_ORIGIN}" != "https://cycle.staging.fukamu.matoruru.com" ]]; then
-            echo "::error::PUBLIC_ORIGIN must be exactly https://cycle.staging.fukamu.matoruru.com"
-            missing=1
-          fi
-          if [[ -n "${APP_REFERRAL_URL}" && "${APP_REFERRAL_URL}" != "https://cycle.fukamu.com/" ]]; then
-            echo "::error::APP_REFERRAL_URL must be empty or exactly https://cycle.fukamu.com/"
-            missing=1
-          fi
-          if [[ "${BETA_ADMISSION_MODE}" != 'off' && "${BETA_ADMISSION_MODE}" != 'closed' ]]; then
-            echo '::error::BETA_ADMISSION_MODE must be off or closed.'
-            missing=1
-          fi
-          if [[ "${BETA_ADMISSION_MODE}" == 'closed' ]]; then
-            for name in BETA_ADMISSION_COOKIE_TTL_DAYS BETA_INVITES BETA_ADMISSION_COOKIE_KEY; do
-              if [[ -z "${!name}" ]]; then
-                echo "::error::Closed Beta requires GitHub staging Environment input: ${name}"
-                missing=1
-              fi
-            done
-            if ! [[ "${BETA_ADMISSION_COOKIE_TTL_DAYS}" =~ ^[0-9]+$ ]] ||
-               (( BETA_ADMISSION_COOKIE_TTL_DAYS < 1 || BETA_ADMISSION_COOKIE_TTL_DAYS > 730 )); then
-              echo '::error::BETA_ADMISSION_COOKIE_TTL_DAYS must be an integer from 1 to 730.'
-              missing=1
-            fi
-            if ! jq -e 'type == "array" and length > 0' <<< "${BETA_INVITES}" >/dev/null; then
-              echo '::error::BETA_INVITES must be a non-empty JSON array.'
-              missing=1
-            fi
-            if ! [[ "${BETA_ADMISSION_COOKIE_KEY}" =~ ^[A-Za-z0-9_-]{43}$ ]]; then
-              echo '::error::BETA_ADMISSION_COOKIE_KEY must be 32 random bytes encoded as base64url.'
-              missing=1
-            fi
-          fi
-          exit "${missing}"
-
       - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
           runtime: node@24
@@ -236,6 +171,9 @@ jobs:
           go-version: 1.26.6
           cache-dependency-path: backend/go.sum
 
+      - name: Validate required deployment inputs
+        run: node ./scripts/validate-deploy-inputs.mjs
+
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
@@ -246,6 +184,18 @@ jobs:
           VITE_GOOGLE_WEB_CLIENT_ID: ${{ env.GOOGLE_WEB_CLIENT_ID }}
           VITE_TURNSTILE_SITE_KEY: ${{ env.TURNSTILE_SITE_KEY }}
         run: pnpm --filter fukamu-cycle-frontend run build
+
+      - name: Validate Backend runtime configuration
+        working-directory: backend
+        env:
+          APP_ENV: production
+          HTTP_ADDRESS: :8080
+          STATIC_DIR: ""
+          AI_PROVIDER: openai
+          AI_PRICING_MODEL: ${{ env.AI_MODEL }}
+          TURNSTILE_ENABLED: "true"
+          TURNSTILE_EXPECTED_ACTION: anonymous_bootstrap
+        run: go run ./cmd/configcheck
 
       - name: Apply database migrations
         working-directory: backend

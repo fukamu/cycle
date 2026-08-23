@@ -246,7 +246,7 @@ RATE_AI_PER_SESSION_MINUTE
 RATE_AI_PER_IP_MINUTE
 ```
 
-Workflowは空値と誤った`PUBLIC_ORIGIN`をdeploy前に拒否します。Example/defaultは運用承認値ではありません。Stagingで一時Admissionを検証するときだけ [`closed-beta-admission.md`](closed-beta-admission.md) に従い、`BETA_ADMISSION_MODE=closed`、TTL、Allowlist、Cookie keyを同じdeployへ設定します。
+Workflowは [`deployment-contract.json`](../config/deployment-contract.json) から導出した必須入力、固定Staging origin、任意紹介URLを検証し、Closed BetaはWorker runtimeと同じparserで検証します。続けてBackendのtyped config、prompt version、tokenizerをDB・外部APIへ接続せず検査し、いずれかが不正ならmigration前に停止します。Example/defaultは運用承認値ではありません。Stagingで一時Admissionを検証するときだけ [`closed-beta-admission.md`](closed-beta-admission.md) に従い、`BETA_ADMISSION_MODE=closed`、TTL、Allowlist、Cookie keyを同じdeployへ設定します。
 
 Application紹介導線は任意です。Stagingで意図して公開する場合だけ`APP_REFERRAL_URL=https://cycle.fukamu.com/`を追加します。未設定ならFrontend Componentは表示されません。Workflowは空値またはこの固定Production root URLだけを許可し、共有payloadにはUser Dataを含めません。
 

@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M4 Config/admission parity
+- 状態: IN_PROGRESS / M5 Command idempotency/replay
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -556,6 +556,8 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: `MutationCache.clear()`は実行中requestをabortせず、detached Cycle saveも切替と競合し得ることを再監査で確認した。M2ではcapture済みold User prefix/IndexedDB key、keyed remount、serverのsession-bound CSRF/ownershipによりnew User data contaminationを防止する。Request abort、identity lease、late navigation抑止、one-shot account transition noticeはM8/M9のautosave/app-shell責務として追加検証する。これはM2のdata-isolation acceptanceを弱めず、影響は切替後に拒否される旧requestとUX副作用の停止強化に限る。
 - 2026-08-22: 新しいsame-tab Google collision E2Eはpublic client IDがないbundleではtest fakeを描画できず、`scripts/check.sh --e2e`だけの設定では直接buildするGitHub E2E jobが不一致になると判明した。Production/deploy設定は変更せず、CI E2E buildだけに同じdummy public IDを与えた。影響はtest bundleだけで、workflow syntax、target/full Playwright、full gateを追加検証した。
 - 2026-08-22: M3ではDocker contextへ送らないsecret-bearing artifactを、Repositoryで使用するpath class（`.env*`、`.dev.vars*`、credential/key形式、Worker secret file、Terraform state/input、dependency/tool output）として定義した。検証は実secretを探索・読取せず、固定のbenign synthetic canaryをroot/nested pathへ作って`Dockerfile`と`Dockerfile.local`のignore precedenceをBuildKitで確認する。任意名fileや内容検査、将来のnamed/remote contextまで保証するものではなく、新context追加時は同じmilestone guardを拡張する。影響はDocker build input、Infrastructure check、CIだけで、runtime configとimage内容は不変。
+- 2026-08-23: M4の`config/deployment-contract.json`はproduction値を決めるfileではなく、Backend 49 key、Worker/Wrangler/GitHub/Frontendへのsource・handoff・alias分類だけを持つdata-only contractとした。Typed default・値境界はBackend config、Closed Betaの値境界はWorkerとdeployが共有するpure parserを正本にし、architecture testでkey set、mapping、固定literalをexact比較する。`BETA_ADMISSION_COOKIE_KEY`は`closed`時だけ必要なためWranglerの静的required secretsへ加えず、deploy/runtimeで同じconditional contractをfail-closed検証する。
+- 2026-08-23: M4ではBackend configへcanonical origin、PostgreSQL scheme/host/database名、finite number、int32/duration overflowの検証を追加した。Deployはmanifest由来のtrimmed presenceと共有Closed Beta parserを先に実行し、次にDB・providerへ接続しない`configcheck`でproduction config、embedded prompt、tokenizerをmigration前に検査する。失敗出力はkey/codeまたは固定messageだけで、secret/input値を出さない。これは未決の運用値を追加せず、既存runtimeが要求するshapeをdeploy前へ一致させる変更である。
 - 2026-08-22: Free/MVPの進行Goal上限を2件に確定。
 - 2026-08-22: Homeは`GoalView/currentWork`共用に確定。
 - 2026-08-22: Goal Refine fieldを`suggestion`へ統一。
@@ -568,6 +570,11 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-23: M4の最初のcommit前必須gateはstaged candidate tree `6eba758c80ea25b8361c8bc4e364f71b96020717`で成功した。全scope、Frontend 28 files / 81 tests、Backend PostgreSQL integration、Cloudflare 60 tests、Playwright 14/14、migration version 1・dirty=false、開始・終了tree一致を確認。M4完了記録とM5再開位置でindexを変更するため、fresh disposable DBで最終treeのgateを最初から再実行する。Commit権限はなくcommitしない。
+- 2026-08-23: 最初のC実行環境はDocker dynamic published portがnested tool containerのloopbackから到達できずBackend test開始時に停止し、bridge hostnameはRepositoryのlocalhost/`*_test` DB guardがtest前に拒否した。Host networkの未使用port 55434でlocalhost到達を事前検証してから同じcandidate treeのCを最初から再実行し成功した。いずれもproduction/runtime DBへ接続せず、失敗したassertionだけの再実行やguard緩和はしていない。
+- 2026-08-23: M4の変更前REDでは、deploy preflightがwhitespace-only必須値とruntime-invalidな`BETA_INVITES=[{}]`を受理し、Backend configが非canonical origin、不正DB URL、`NaN`/`Inf`、int32/time.Duration overflowを受理することを再現した。GREENでは49 keyのexact source/handoff、Worker/configcheck固定値、derived/secret/Frontend mapping、全必須値の空白拒否、Closed Beta schemaを機械検証し、target config/admission 60 tests、Backend config tests、typecheck、actionlintが成功した。
+- 2026-08-23: M4のAは固定tool環境で約197秒、Iは約28秒で成功した。AではFrontend 28 files / 81 tests、production build、Backend全package、sqlc差分なし、configcheck build、Docker context、script、Terraform、Cloudflare 60 tests、Wrangler dry-run/Container buildを確認。IではCompose、Terraform init/validate、Cloudflare check/dry-runを独立再実行した。次に全変更をstageし、commit前必須gateを実行する。
+- 2026-08-22: M3のExecPlan追記後にcommit前必須gateを最初から再実行し、最終staged tree `c32037fbb2b6de497198a2bc873061f2b084a76a`の開始・終了一致、全scope、Playwright 14/14、migration version 1・dirty=falseを確認した。M3完了後のindex内容変更はなく、commit権限がないためcommitしていない。
 - 2026-08-22: M3完了。Aは固定tool環境で約153秒、standalone context inspectionとIは約21秒で成功した。最初のcommit前必須gateは約298秒で全scope、Playwright 14/14、migration version 1・dirty=false、candidate tree `bb8ff3b1d0d208a4334f6c921f50689cde85f876`の開始・終了一致を確認した。本entryと再開位置更新でtreeを変更したため、完全stage後にgateを最初から再実行する。Commit権限はないためcommitしない。
 - 2026-08-22: M3の変更前REDでは、synthetic `COPY .` imageからroot/cloudflare `node_modules`、`.env.local`、`.dev.vars`、credential/key、Worker secret、Wrangler output、Terraform state/input等をpathだけで検出した。Recursive `.dockerignore` ruleへ収束後、両Dockerfile contextで全canaryが不在かつallowed markerが存在するGREENを確認。実`Dockerfile`/`Dockerfile.local`もbuildし、最終filesystemとimage historyに禁止Repository artifact名がないことを確認した。検証専用containerとimage tagは削除済み。Infrastructure scopeとCIへguardを接続し、Buildx前提と単独実行方法をdevelopment正本へ追記した。
 - 2026-08-22: M2のExecPlan追記後にcommit前必須gateを約204秒で再実行し、最終staged tree `2ec4b599d2a5edbb10aa2d0019907dcf398fd207`の開始・終了一致、全scope、Playwright 14/14を確認した。M2完了後のindex内容変更はなく、commit権限がないためcommitしていない。
@@ -584,7 +591,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M4。Backend config、`.env.example`、environment文書、Worker handoff、deploy validationとClosed Beta admission入力を機械的parity testで固定してから、重複validationを単一契約へ収束する。
+- 現在の再開位置: M5。Caller-owned operation IDとcanonical request snapshotのlifetime、AI replay metadata、`currentWorkspace`/`GoalView.currentWork`からのreplay navigationをtest先行で固定し、真のpost-commit response-loss E2Eを追加する。
 
 ## 26. Final definition of done
 
