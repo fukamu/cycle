@@ -51,12 +51,13 @@ type WorkspaceService interface {
 
 type Metrics interface {
 	ObserveHTTP(context.Context, string, int, time.Duration)
-	ObserveAutosave(context.Context, string, time.Duration)
-	CycleCompleted(context.Context)
+	ObserveAutosave(context.Context, string, string, time.Duration)
 	AccountUpgrade(context.Context, string)
+	GoogleLogin(context.Context, string)
 	AccountDelete(context.Context, string)
 	AnonymousCreate(context.Context, string)
 	RateLimitRejected(context.Context, string)
+	TurnstileVerification(context.Context, string)
 	AIContextIsolationViolation(context.Context)
 	ErrorCode(context.Context, string)
 }
@@ -84,7 +85,7 @@ type api struct {
 func NewRouter(dependencies Dependencies) http.Handler {
 	server := &api{dependencies: dependencies, validate: newRequestValidator()}
 	router := chi.NewRouter()
-	router.Use(server.traceMiddleware, server.requestIDMiddleware, server.requestLogMiddleware, server.securityHeaders)
+	router.Use(server.traceMiddleware, server.requestIDMiddleware, server.requestLogMiddleware, server.panicRecoveryMiddleware, server.securityHeaders)
 	router.Get("/healthz", healthHandler)
 	router.Get("/readyz", server.readyHandler)
 	if dependencies.Sessions != nil && dependencies.Workspace != nil {

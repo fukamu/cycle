@@ -3,9 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -150,7 +152,9 @@ func (server *api) saveGoalDraft(writer http.ResponseWriter, request *http.Reque
 		server.writeError(writer, request, err, nil)
 		return
 	}
+	startedAt := time.Now()
 	view, err := server.dependencies.Workspace.SaveDraft(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), input.Body, input.ExpectedRevision)
+	server.observeAutosave(request, "creation_draft", startedAt, err, errors.Is(err, workspace.ErrDraftRevisionConflict))
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalDraftSaveFailed), nil)
 		return
@@ -289,7 +293,9 @@ func (server *api) saveGoalReview(writer http.ResponseWriter, request *http.Requ
 		server.writeError(writer, request, err, nil)
 		return
 	}
+	startedAt := time.Now()
 	view, err := server.dependencies.Workspace.SaveReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.ExpectedReviewDraftID, input.Body, input.ExpectedRevision)
+	server.observeAutosave(request, "review_draft", startedAt, err, errors.Is(err, workspace.ErrReviewRevisionConflict))
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalReviewDraftSaveFailed), nil)
 		return
@@ -391,10 +397,12 @@ func (server *api) saveGoalCycleFrame(writer http.ResponseWriter, request *http.
 		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
+	startedAt := time.Now()
 	view, err := server.dependencies.Workspace.SaveFrame(request.Context(), workspace.SaveFrameInput{
 		UserID: currentUserID(request), GoalID: chi.URLParam(request, "goalId"), CycleID: chi.URLParam(request, "cycleId"),
 		Frame: frame, Content: input.Content, ExpectedFrameRevision: input.ExpectedFrameRevision,
 	})
+	server.observeAutosave(request, "cycle_frame", startedAt, err, errors.Is(err, cycle.ErrRevisionConflict))
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errFrameSaveFailed), nil)
 		return
@@ -466,10 +474,26 @@ func (server *api) completeGoalCycle(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, http.StatusOK, view.Replay)
 		return
 	}
-	if !view.Replayed && server.dependencies.Metrics != nil {
-		server.dependencies.Metrics.CycleCompleted(request.Context())
-	}
 	writeJSON(writer, http.StatusOK, view)
+}
+
+func (server *api) observeAutosave(
+	request *http.Request,
+	resourceType string,
+	startedAt time.Time,
+	err error,
+	conflict bool,
+) {
+	if server.dependencies.Metrics == nil {
+		return
+	}
+	result := "success"
+	if conflict {
+		result = "conflict"
+	} else if err != nil {
+		result = "failure"
+	}
+	server.dependencies.Metrics.ObserveAutosave(request.Context(), resourceType, result, time.Since(startedAt))
 }
 
 func goalListQuery(request *http.Request) (string, int, error) {

@@ -37,7 +37,12 @@ type GoogleVerifier interface {
 type Repository interface {
 	UpgradeGoogle(context.Context, UpgradeRecord) (AuthResult, error)
 	LoginGoogle(context.Context, LoginRecord) (AuthResult, error)
-	DeleteAccount(context.Context, user.ID, time.Time) error
+	DeleteAccount(context.Context, user.ID, time.Time) (DeleteResult, error)
+}
+
+type Observer interface {
+	AIUnattributedCost(context.Context, float64)
+	AICostSettlement(context.Context, string, string, int64)
 }
 
 type UpgradeRecord struct {
@@ -69,6 +74,11 @@ type AuthResult struct {
 	GoogleEmail *string
 }
 
+type DeleteResult struct {
+	UnattributedCostUSD      float64
+	SettlementOperationCount int64
+}
+
 type View struct {
 	UserID          user.ID
 	GoogleConnected bool
@@ -82,6 +92,7 @@ type Settings struct {
 	CSRFHashKey    []byte
 	IdleTTL        time.Duration
 	AbsoluteTTL    time.Duration
+	Observer       Observer
 }
 
 type Service struct {
@@ -142,8 +153,22 @@ func (service *Service) Delete(ctx context.Context, userID user.ID, confirmed bo
 	if !confirmed {
 		return ErrDeleteConfirmationRequired
 	}
-	if err := service.repository.DeleteAccount(ctx, userID, service.clock.Now().UTC()); err != nil {
+	now := service.clock.Now().UTC()
+	result, err := service.repository.DeleteAccount(ctx, userID, now)
+	if service.settings.Observer != nil && result.SettlementOperationCount > 0 {
+		settlementResult := "success"
+		if err != nil {
+			settlementResult = "failure"
+		}
+		service.settings.Observer.AICostSettlement(
+			context.WithoutCancel(ctx), "account_delete", settlementResult, result.SettlementOperationCount,
+		)
+	}
+	if err != nil {
 		return errors.Join(ErrAccountDeleteFailed, err)
+	}
+	if service.settings.Observer != nil && result.UnattributedCostUSD > 0 {
+		service.settings.Observer.AIUnattributedCost(context.WithoutCancel(ctx), result.UnattributedCostUSD)
 	}
 	return nil
 }

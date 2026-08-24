@@ -36,21 +36,23 @@ import (
 )
 
 const (
-	headerSecretCanary = "DUMMY_HEADER_SECRET"
-	traceStateCanary   = "TRACESTATE_CANARY"
-	scopeCanary        = "INSTRUMENTATION_SCOPE_CANARY"
-	rawPathCanary      = "/private/RAW_PATH_CANARY"
-	rawIPCanary        = "203.0.113.250"
-	rawUserAgentCanary = "RAW_USER_AGENT_CANARY"
-	rawBodyCanary      = "RAW_BODY_CANARY"
-	rawTokenCanary     = "RAW_TOKEN_CANARY"
-	eventCanary        = "EVENT_CANARY"
-	statusCanary       = "STATUS_DESCRIPTION_CANARY"
-	spanNameCanary     = "SPAN_NAME_CANARY"
-	linkCanary         = "LINK_ATTRIBUTE_CANARY"
-	resourceCanary     = "RESOURCE_SECRET_CANARY"
-	redirectCanary     = "REDIRECT_HEADER_SECRET_CANARY"
-	metricCanary       = "METRIC_LABEL_SECRET_CANARY"
+	headerSecretCanary      = "DUMMY_HEADER_SECRET"
+	traceStateCanary        = "TRACESTATE_CANARY"
+	scopeCanary             = "INSTRUMENTATION_SCOPE_CANARY"
+	rawPathCanary           = "/private/RAW_PATH_CANARY"
+	rawIPCanary             = "203.0.113.250"
+	rawUserAgentCanary      = "RAW_USER_AGENT_CANARY"
+	rawBodyCanary           = "RAW_BODY_CANARY"
+	rawTokenCanary          = "RAW_TOKEN_CANARY"
+	eventCanary             = "EVENT_CANARY"
+	statusCanary            = "STATUS_DESCRIPTION_CANARY"
+	spanNameCanary          = "SPAN_NAME_CANARY"
+	linkCanary              = "LINK_ATTRIBUTE_CANARY"
+	resourceCanary          = "RESOURCE_SECRET_CANARY"
+	redirectCanary          = "REDIRECT_HEADER_SECRET_CANARY"
+	metricCanary            = "METRIC_LABEL_SECRET_CANARY"
+	correlationRequestID    = "0198c20b-7b95-7000-8000-000000000001"
+	correlationGenerationID = "0198c20b-7b95-7000-8000-000000000002"
 )
 
 type recordedOTLPRequest struct {
@@ -183,6 +185,7 @@ func TestProductionOTLPHTTPExportsSanitizedTraceAndMetric(t *testing.T) {
 					attribute.String("http.request.method", "RAW_METHOD_CANARY"),
 					attribute.String("http.route", rawPathCanary),
 					attribute.Int("http.response.status_code", http.StatusServiceUnavailable),
+					attribute.String("fukamu.request_id", correlationRequestID),
 					attribute.String("client.address", rawIPCanary),
 					attribute.String("user_agent.original", rawUserAgentCanary),
 					attribute.String("http.request.body", rawBodyCanary),
@@ -203,6 +206,27 @@ func TestProductionOTLPHTTPExportsSanitizedTraceAndMetric(t *testing.T) {
 			applicationSpan.SetAttributes(attribute.String("application.secret", rawTokenCanary))
 			applicationSpan.SetStatus(codes.Error, statusCanary)
 			applicationSpan.End()
+
+			openAITracer := runtime.TracerProvider().Tracer(
+				"fukamu-cycle/openai",
+				trace.WithInstrumentationVersion(scopeCanary),
+				trace.WithSchemaURL("https://example.invalid/"+scopeCanary),
+				trace.WithInstrumentationAttributes(attribute.String("scope.secret", scopeCanary)),
+			)
+			_, openAISpan := openAITracer.Start(ctx, "openai.responses.create",
+				trace.WithSpanKind(trace.SpanKindClient),
+				trace.WithAttributes(
+					attribute.String("fukamu.request_id", correlationRequestID),
+					attribute.String("fukamu.ai_generation_id", correlationGenerationID),
+					attribute.String("fukamu.ai_operation_type", "goal_refine"),
+					attribute.String("gen_ai.prompt", rawBodyCanary),
+					attribute.String("user.id", rawTokenCanary),
+					attribute.String("server.address", rawIPCanary),
+				),
+			)
+			openAISpan.AddEvent(eventCanary, trace.WithAttributes(attribute.String("event.secret", rawBodyCanary)))
+			openAISpan.SetStatus(codes.Error, statusCanary)
+			openAISpan.End()
 
 			poisonedMeter := runtime.MeterProvider().Meter(
 				"fukamu-cycle",
@@ -237,7 +261,7 @@ func TestProductionOTLPHTTPExportsSanitizedTraceAndMetric(t *testing.T) {
 			metrics.CycleCompleted(context.Background())
 			metrics.ErrorCode(context.Background(), metricCanary)
 			metrics.ObserveAIGeneration(context.Background(), AIObservation{
-				Type:             metricCanary,
+				Operation:        metricCanary,
 				Result:           metricCanary,
 				Model:            metricCanary,
 				PromptVersion:    metricCanary,
@@ -323,7 +347,7 @@ func assertSanitizedTracePayload(
 	parentSpanID trace.SpanID,
 ) {
 	t.Helper()
-	var httpSpan, applicationSpan *tracepb.Span
+	var httpSpan, applicationSpan, openAISpan *tracepb.Span
 	for _, request := range requests {
 		for _, resourceSpans := range request.ResourceSpans {
 			if resourceSpans.SchemaUrl != "" {
@@ -338,7 +362,7 @@ func assertSanitizedTracePayload(
 					t.Fatalf("unsafe trace scope metadata was retained: %#v schema=%q", scopeSpans.Scope, scopeSpans.SchemaUrl)
 				}
 				switch scopeSpans.Scope.Name {
-				case "fukamu-cycle/http", "fukamu-cycle/application":
+				case "fukamu-cycle/http", "fukamu-cycle/application", "fukamu-cycle/openai":
 				default:
 					t.Fatalf("unexpected sanitized trace scope %q", scopeSpans.Scope.Name)
 				}
@@ -348,6 +372,8 @@ func assertSanitizedTracePayload(
 						httpSpan = span
 					case "application.operation":
 						applicationSpan = span
+					case "openai.responses.create":
+						openAISpan = span
 					default:
 						t.Fatalf("unexpected sanitized span name %q", span.Name)
 					}
@@ -355,10 +381,10 @@ func assertSanitizedTracePayload(
 			}
 		}
 	}
-	if httpSpan == nil || applicationSpan == nil {
-		t.Fatalf("sanitized spans missing: http=%v application=%v", httpSpan != nil, applicationSpan != nil)
+	if httpSpan == nil || applicationSpan == nil || openAISpan == nil {
+		t.Fatalf("sanitized spans missing: http=%v application=%v openai=%v", httpSpan != nil, applicationSpan != nil, openAISpan != nil)
 	}
-	for _, span := range []*tracepb.Span{httpSpan, applicationSpan} {
+	for _, span := range []*tracepb.Span{httpSpan, applicationSpan, openAISpan} {
 		if span.TraceState != "" {
 			t.Fatalf("span tracestate = %q, want empty", span.TraceState)
 		}
@@ -381,6 +407,9 @@ func assertSanitizedTracePayload(
 	if applicationSpan.Status == nil || applicationSpan.Status.Message != "operation failed" {
 		t.Fatalf("application status was not sanitized: %#v", applicationSpan.Status)
 	}
+	if openAISpan.Status == nil || openAISpan.Status.Message != "provider request failed" {
+		t.Fatalf("OpenAI status was not sanitized: %#v", openAISpan.Status)
+	}
 	if len(applicationSpan.Attributes) != 0 {
 		t.Fatalf("application attributes were retained: %#v", applicationSpan.Attributes)
 	}
@@ -388,7 +417,7 @@ func assertSanitizedTracePayload(
 	httpAttributes := make(map[string]any)
 	for _, item := range httpSpan.Attributes {
 		switch item.Key {
-		case "http.request.method", "http.route":
+		case "http.request.method", "http.route", "fukamu.request_id":
 			httpAttributes[item.Key] = item.Value.GetStringValue()
 		case "http.response.status_code":
 			httpAttributes[item.Key] = item.Value.GetIntValue()
@@ -400,6 +429,7 @@ func assertSanitizedTracePayload(
 		"http.request.method":       "OTHER",
 		"http.route":                "unmatched",
 		"http.response.status_code": int64(http.StatusServiceUnavailable),
+		"fukamu.request_id":         correlationRequestID,
 	}
 	if len(httpAttributes) != len(wantHTTPAttributes) {
 		t.Fatalf("HTTP attributes = %#v", httpAttributes)
@@ -414,6 +444,23 @@ func assertSanitizedTracePayload(
 	}
 	if httpSpan.Links[0].TraceState != "" || len(httpSpan.Links[0].Attributes) != 0 {
 		t.Fatalf("link metadata was not sanitized: %#v", httpSpan.Links[0])
+	}
+	openAIAttributes := map[string]string{}
+	for _, item := range openAISpan.Attributes {
+		openAIAttributes[item.Key] = item.Value.GetStringValue()
+	}
+	wantOpenAIAttributes := map[string]string{
+		"fukamu.request_id":        correlationRequestID,
+		"fukamu.ai_generation_id":  correlationGenerationID,
+		"fukamu.ai_operation_type": "goal_refine",
+	}
+	if len(openAIAttributes) != len(wantOpenAIAttributes) {
+		t.Fatalf("OpenAI attributes = %#v, want %#v", openAIAttributes, wantOpenAIAttributes)
+	}
+	for key, want := range wantOpenAIAttributes {
+		if got := openAIAttributes[key]; got != want {
+			t.Fatalf("OpenAI attribute %q = %q, want %q", key, got, want)
+		}
 	}
 }
 

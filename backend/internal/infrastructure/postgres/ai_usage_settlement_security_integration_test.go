@@ -105,13 +105,29 @@ WHERE operation_id=$1`, snapshot.GenerationID); err != nil {
 	}
 	triggerDisabled = false
 
-	if err := NewAccountRepository(pool).DeleteAccount(
+	if _, err := NewAccountRepository(pool).DeleteAccount(
 		context.Background(), user.ID(settlementSecurityUserID), now.Add(2*time.Minute),
 	); err == nil {
 		t.Fatal("DeleteAccount succeeded with mismatched settlement metadata")
 	}
 	assertSettlementSecurityState(t, pool, snapshot.GenerationID, 1, 1, 1,
 		decimalFromTestFloat(settings.ActionAI.ReservationUSD), "0.00000000", "0.00000000")
+}
+
+func TestAccountRepositoryDeleteAccountCountsRunningGenerationAndMatchingUsageOnce(t *testing.T) {
+	pool := integrationPool(t)
+	_, _, snapshot, now, settings := seedSettlementSecurityRunningAction(t, pool)
+	result, err := NewAccountRepository(pool).DeleteAccount(
+		context.Background(), user.ID(settlementSecurityUserID), now.Add(2*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SettlementOperationCount != 1 || result.UnattributedCostUSD <= 0 {
+		t.Fatalf("delete result = %#v, want one deduplicated running operation with unattributed cost", result)
+	}
+	assertSettlementSecurityState(t, pool, snapshot.GenerationID, 0, 0, 0,
+		"0.00000000", "0.00000000", decimalFromTestFloat(settings.ActionAI.ReservationUSD))
 }
 
 func TestAccountRepositoryDeleteAccountRollsBackOnOrphanUsageDeleteCASMiss(t *testing.T) {
@@ -145,10 +161,14 @@ FOR EACH ROW EXECUTE FUNCTION account_delete_suppress_orphan_usage_delete()`); e
 		t.Fatal(err)
 	}
 
-	if err := NewAccountRepository(pool).DeleteAccount(
+	result, err := NewAccountRepository(pool).DeleteAccount(
 		context.Background(), user.ID(settlementSecurityUserID), now.Add(2*time.Minute),
-	); err == nil {
+	)
+	if err == nil {
 		t.Fatal("DeleteAccount succeeded after orphan Usage delete affected zero rows")
+	}
+	if result.SettlementOperationCount != 1 || result.UnattributedCostUSD != 0 {
+		t.Fatalf("rollback delete result = %#v, want one known failed orphan settlement and no committed cost", result)
 	}
 	assertSettlementSecurityState(t, pool, snapshot.GenerationID, 1, 1, 1,
 		"0.00000000", "0.00000000", "0.00000000")
@@ -165,10 +185,14 @@ func TestAccountRepositoryDeleteAccountAfterCallbackKeepsActualWithoutUnattribut
 	if _, err := executeActionFinishUseCaseWithSettings(store, context.Background(), snapshot, result, nil, now.Add(2*time.Minute), settings); err != nil {
 		t.Fatal(err)
 	}
-	if err := NewAccountRepository(pool).DeleteAccount(
+	deleteResult, err := NewAccountRepository(pool).DeleteAccount(
 		context.Background(), user.ID(settlementSecurityUserID), now.Add(3*time.Minute),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if deleteResult.SettlementOperationCount != 0 || deleteResult.UnattributedCostUSD != 0 {
+		t.Fatalf("already finalized delete result = %#v", deleteResult)
 	}
 	assertSettlementSecurityState(t, pool, snapshot.GenerationID, 0, 0, 0,
 		"0.00000000", "0.00400000", "0.00000000")
@@ -181,10 +205,14 @@ func TestAccountRepositoryDeleteAccountTransfersRunningGenerationWithoutUsage(t 
 		t.Fatal(err)
 	}
 
-	if err := NewAccountRepository(pool).DeleteAccount(
+	deleteResult, err := NewAccountRepository(pool).DeleteAccount(
 		context.Background(), user.ID(settlementSecurityUserID), now.Add(2*time.Minute),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if deleteResult.SettlementOperationCount != 1 || deleteResult.UnattributedCostUSD <= 0 {
+		t.Fatalf("running generation without usage delete result = %#v", deleteResult)
 	}
 	assertSettlementSecurityState(t, pool, snapshot.GenerationID, 0, 0, 0,
 		"0.00000000", "0.00000000", decimalFromTestFloat(settings.ActionAI.ReservationUSD))

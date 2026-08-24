@@ -9,16 +9,29 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 )
 
 type queryTracer struct{}
 
 func (queryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	operation := sqlOperation(data.SQL)
-	ctx, _ = otel.Tracer("fukamu-cycle/postgres").Start(ctx, "postgres."+operation, trace.WithAttributes(
+	attributes := []attribute.KeyValue{
 		attribute.String("db.system.name", "postgresql"),
 		attribute.String("db.operation.name", operation),
-	))
+	}
+	correlation := ports.CorrelationFromContext(ctx)
+	if correlation.RequestID != "" {
+		attributes = append(attributes, attribute.String("fukamu.request_id", correlation.RequestID))
+	}
+	if correlation.AIGenerationID != "" {
+		attributes = append(attributes, attribute.String("fukamu.ai_generation_id", correlation.AIGenerationID))
+	}
+	if correlation.AIOperationType != "" {
+		attributes = append(attributes, attribute.String("fukamu.ai_operation_type", correlation.AIOperationType))
+	}
+	ctx, _ = otel.Tracer("fukamu-cycle/postgres").Start(ctx, "postgres."+operation, trace.WithAttributes(attributes...))
 	return ctx
 }
 

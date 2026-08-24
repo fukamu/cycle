@@ -16,6 +16,7 @@ const actionAIUnitCanonicalProviderInputHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
 type actionAIUnitTestUOW struct {
 	tx        *actionAIUnitTestTx
+	commitErr error
 	commits   int
 	rollbacks int
 }
@@ -25,6 +26,9 @@ func (uow *actionAIUnitTestUOW) WithinActionAITransaction(ctx context.Context, o
 	if err != nil {
 		uow.rollbacks++
 		return err
+	}
+	if uow.commitErr != nil {
+		return uow.commitErr
 	}
 	uow.commits++
 	return nil
@@ -361,6 +365,9 @@ func TestBeginActionAISameKeyExpiredReplayCommitsRecoveryWithoutNewUsage(t *test
 				IdempotencyRequestHash: actionAIRequestHash(input), Status: aiStatusRunning,
 				TargetRevision: current.Revisions.Content, LeaseExpiresAt: &expires},
 			{GenerationID: generationID, GoalID: current.GoalID, CycleID: current.ID,
+				IdempotencyRequestHash: actionAIRequestHash(input), Status: aiStatusRunning,
+				TargetRevision: current.Revisions.Content, LeaseExpiresAt: &expires},
+			{GenerationID: generationID, GoalID: current.GoalID, CycleID: current.ID,
 				IdempotencyRequestHash: actionAIRequestHash(input), Status: aiStatusFailed,
 				TargetRevision: current.Revisions.Content, FailureCode: "lease_expired"},
 		},
@@ -376,7 +383,7 @@ func TestBeginActionAISameKeyExpiredReplayCommitsRecoveryWithoutNewUsage(t *test
 	if !errors.Is(err, ErrAIProviderUnavailable) {
 		t.Fatalf("error = %v, want %v", err, ErrAIProviderUnavailable)
 	}
-	want := []string{"user", "replay", "goal", "cycle", "recover", "sum", "release", "expire_generation", "expire_usage", "replay"}
+	want := []string{"user", "replay", "replay", "goal", "cycle", "recover", "sum", "release", "expire_generation", "expire_usage", "replay"}
 	if !reflect.DeepEqual(tx.calls, want) || uow.commits != 1 || uow.rollbacks != 0 || ids.calls != 0 {
 		t.Fatalf("calls/commit/rollback/ids = %v/%d/%d/%d", tx.calls, uow.commits, uow.rollbacks, ids.calls)
 	}
@@ -408,7 +415,8 @@ func TestFinishActionAIAllowsPDCDriftAndAppliesOnlyAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !response.ContextChanged || response.Action != "new action" || response.ContentRevision != 10 || response.ActionRevision != 3 {
+	if !response.ContextChanged || response.Action != "new action" || response.ContentRevision != 10 || response.ActionRevision != 3 ||
+		response.SettlementPath != "normal" || response.SettlementResult != "success" {
 		t.Fatalf("response = %#v", response)
 	}
 	if tx.applyRecord.Action != "new action" || tx.applyRecord.ExpectedContentRevision != 9 ||
@@ -423,6 +431,33 @@ func TestFinishActionAIAllowsPDCDriftAndAppliesOnlyAction(t *testing.T) {
 	wantCalls := []string{"locator", "user", "goal", "cycle", "generation", "apply", "terminal", "settle_budget", "finalize_usage"}
 	if !reflect.DeepEqual(tx.calls, wantCalls) {
 		t.Fatalf("calls = %v, want %v", tx.calls, wantCalls)
+	}
+}
+
+func TestFinishActionAIReportsFailedSettlementWhenCommitFails(t *testing.T) {
+	now := time.Date(2026, time.August, 24, 5, 3, 0, 0, time.UTC)
+	current := actionAIUnitFixture(now)
+	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	tx := &actionAIUnitTestTx{
+		target: GoalTargetState{Status: goal.StatusActiveCycle, CurrentVersionID: current.GoalVersionID}, current: current,
+		locator: &AIGenerationLocator{UserID: current.UserID, GoalID: current.GoalID, CycleID: current.ID,
+			Operation: domainai.OperationActionGenerate, Status: aiStatusRunning},
+		settlement: ActionAISettlementState{GoalVersionID: current.GoalVersionID, BudgetMonthUtc: month,
+			ReservedCostUSD: "0.05", TargetRevision: current.Revisions.Content},
+		applyRows: 1, terminalRows: 1, budgetRows: 1, usageRows: 1,
+	}
+	useCases, uow := newActionAIUnitUseCases(tx, now, &actionAIUnitTestIDs{})
+	commitErr := errors.New("commit failed")
+	uow.commitErr = commitErr
+	response, err := useCases.Finish(context.Background(), AISnapshot{
+		GenerationID: "40000000-0000-7000-8000-000000000001",
+		Operation:    domainai.OperationActionGenerate, TargetRevision: current.Revisions.Content,
+	}, AIExecutionResult{Output: "new action"}, nil, now)
+	if !errors.Is(err, commitErr) || response.SettlementPath != "normal" || response.SettlementResult != "failure" {
+		t.Fatalf("response/error = %#v / %v", response, err)
+	}
+	if uow.commits != 0 || uow.rollbacks != 0 {
+		t.Fatalf("commits/rollbacks = %d/%d", uow.commits, uow.rollbacks)
 	}
 }
 

@@ -5,7 +5,7 @@ WHERE user_id = sqlc.arg(user_id)::uuid
   AND idempotency_key = sqlc.arg(idempotency_key)::uuid;
 
 -- name: LockGoalForDelete :one
-SELECT revision
+SELECT revision, status
 FROM goals
 WHERE id = sqlc.arg(goal_id)::uuid
   AND user_id = sqlc.arg(user_id)::uuid

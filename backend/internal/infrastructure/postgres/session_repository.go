@@ -204,7 +204,7 @@ func insertSession(
 func mustUUID(value string) pgtype.UUID {
 	var result pgtype.UUID
 	if err := result.Scan(value); err != nil {
-		panic(fmt.Sprintf("invalid UUID passed to PostgreSQL adapter: %q", value))
+		panic("invalid UUID passed to PostgreSQL adapter")
 	}
 	return result
 }

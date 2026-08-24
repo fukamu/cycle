@@ -14,8 +14,14 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 )
 
 type OpenAI struct {
@@ -41,7 +47,7 @@ func NewOpenAI(apiKey, model, reasoningEffort string, timeout time.Duration, max
 }
 
 func (provider *OpenAI) RefineGoal(ctx context.Context, input workspace.RefineGoalAIInput) (workspace.GoalRefineAIResult, workspace.AIUsage, error) {
-	raw, usage, err := provider.execute(ctx, input.Instructions, input.MaxOutputTokens, input, goalRefineContract())
+	raw, usage, err := provider.execute(ctx, string(domainai.OperationGoalRefine), input.Instructions, input.MaxOutputTokens, input, goalRefineContract())
 	if err != nil {
 		return workspace.GoalRefineAIResult{}, usage, err
 	}
@@ -56,7 +62,7 @@ func (provider *OpenAI) GenerateAction(ctx context.Context, input workspace.Gene
 	if input.CurrentCycle == nil {
 		return workspace.GenerateActionAIResult{}, workspace.AIUsage{}, workspace.ErrAIInputIncomplete
 	}
-	raw, usage, err := provider.execute(ctx, input.Instructions, input.MaxOutputTokens, input, actionGenerateContract())
+	raw, usage, err := provider.execute(ctx, string(domainai.OperationActionGenerate), input.Instructions, input.MaxOutputTokens, input, actionGenerateContract())
 	if err != nil {
 		return workspace.GenerateActionAIResult{}, usage, err
 	}
@@ -71,7 +77,7 @@ func (provider *OpenAI) RefineAction(ctx context.Context, input workspace.Refine
 	if input.CurrentCycle == nil {
 		return workspace.RefineActionAIResult{}, workspace.AIUsage{}, workspace.ErrAIInputIncomplete
 	}
-	raw, usage, err := provider.execute(ctx, input.Instructions, input.MaxOutputTokens, input, actionRefineContract())
+	raw, usage, err := provider.execute(ctx, string(domainai.OperationActionRefine), input.Instructions, input.MaxOutputTokens, input, actionRefineContract())
 	if err != nil {
 		return workspace.RefineActionAIResult{}, usage, err
 	}
@@ -87,7 +93,27 @@ type responseContract struct {
 	schema     map[string]any
 }
 
-func (provider *OpenAI) execute(ctx context.Context, instructions string, maxOutputTokens int64, input any, contract responseContract) (string, workspace.AIUsage, error) {
+func (provider *OpenAI) execute(ctx context.Context, operationType, instructions string, maxOutputTokens int64, input any, contract responseContract) (output string, usage workspace.AIUsage, resultErr error) {
+	attributes := []attribute.KeyValue{attribute.String("fukamu.ai_operation_type", operationType)}
+	correlation := ports.CorrelationFromContext(ctx)
+	if correlation.RequestID != "" {
+		attributes = append(attributes, attribute.String("fukamu.request_id", correlation.RequestID))
+	}
+	if correlation.AIGenerationID != "" {
+		attributes = append(attributes, attribute.String("fukamu.ai_generation_id", correlation.AIGenerationID))
+	}
+	ctx, span := otel.Tracer("fukamu-cycle/openai").Start(ctx, "openai.responses.create",
+		trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attributes...))
+	defer func() {
+		if resultErr != nil {
+			span.SetStatus(codes.Error, "provider request failed")
+		}
+		span.End()
+	}()
+	return provider.executeRequest(ctx, instructions, maxOutputTokens, input, contract)
+}
+
+func (provider *OpenAI) executeRequest(ctx context.Context, instructions string, maxOutputTokens int64, input any, contract responseContract) (string, workspace.AIUsage, error) {
 	if strings.TrimSpace(instructions) == "" {
 		return "", workspace.AIUsage{}, workspace.ErrAIInputIncomplete
 	}

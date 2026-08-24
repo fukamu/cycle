@@ -148,7 +148,7 @@ VALUES($1,$2,$3,$4,$5,$5,$6,$7)`, sourceSession, sourceUserID, []byte("source-to
 		t.Fatalf("LoginGoogle did not reach the revoke barrier: %v", ctx.Err())
 	}
 
-	if err := NewAccountRepository(pool).DeleteAccount(ctx, user.ID(sourceUserID), now.Add(2*time.Minute)); err != nil {
+	if _, err := NewAccountRepository(pool).DeleteAccount(ctx, user.ID(sourceUserID), now.Add(2*time.Minute)); err != nil {
 		t.Fatalf("DeleteAccount(source) error = %v", err)
 	}
 	barrier.release()
@@ -273,6 +273,11 @@ type accountDeleteCall struct {
 	err error
 }
 
+func accountDeleteError(pool *pgxpool.Pool, ctx context.Context, userID user.ID, now time.Time) error {
+	_, err := NewAccountRepository(pool).DeleteAccount(ctx, userID, now)
+	return err
+}
+
 func TestSessionRepositoryAnonymousResumeSerializesUserBeforeBootstrapWithAccountDelete(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
@@ -329,7 +334,7 @@ VALUES($1,$2,$3,$4)`, bootstrapHash, existingUserID, now.Add(10*time.Minute), no
 	deleteCalls := make(chan accountDeleteCall, 1)
 	deleteCtx := context.WithValue(ctx, bootstrapDeleteCommandContextKey{}, bootstrapDelete)
 	go func() {
-		deleteCalls <- accountDeleteCall{err: NewAccountRepository(tracedPool).DeleteAccount(deleteCtx, user.ID(existingUserID), now.Add(time.Minute))}
+		deleteCalls <- accountDeleteCall{err: accountDeleteError(tracedPool, deleteCtx, user.ID(existingUserID), now.Add(time.Minute))}
 	}()
 	var deletePID uint32
 	select {
@@ -625,7 +630,7 @@ func TestAccountRepositoryDeleteAccountUsesGlobalLockOrderAndTransfersReservatio
 	firstCalls := make(chan accountDeleteCall, 1)
 	firstCtx := context.WithValue(ctx, accountDeleteCommandContextKey{}, accountDeleteFirst)
 	go func() {
-		firstCalls <- accountDeleteCall{err: NewAccountRepository(tracedPool).DeleteAccount(firstCtx, user.ID(fixture.userID), now.Add(time.Minute))}
+		firstCalls <- accountDeleteCall{err: accountDeleteError(tracedPool, firstCtx, user.ID(fixture.userID), now.Add(time.Minute))}
 	}()
 	var firstPID uint32
 	select {
@@ -639,7 +644,7 @@ func TestAccountRepositoryDeleteAccountUsesGlobalLockOrderAndTransfersReservatio
 	secondCalls := make(chan accountDeleteCall, 1)
 	secondCtx := context.WithValue(ctx, accountDeleteCommandContextKey{}, accountDeleteSecond)
 	go func() {
-		secondCalls <- accountDeleteCall{err: NewAccountRepository(tracedPool).DeleteAccount(secondCtx, user.ID(fixture.userID), now.Add(2*time.Minute))}
+		secondCalls <- accountDeleteCall{err: accountDeleteError(tracedPool, secondCtx, user.ID(fixture.userID), now.Add(2*time.Minute))}
 	}()
 	var secondPID uint32
 	select {
@@ -728,7 +733,7 @@ FOR EACH ROW EXECUTE FUNCTION account_delete_suppress_generation_update()`); err
 			t.Fatal(err)
 		}
 
-		err := NewAccountRepository(pool).DeleteAccount(context.Background(), user.ID(fixture.userID), integrationNow().Add(time.Minute))
+		_, err := NewAccountRepository(pool).DeleteAccount(context.Background(), user.ID(fixture.userID), integrationNow().Add(time.Minute))
 		if err == nil {
 			t.Fatal("DeleteAccount succeeded after a zero-row Generation reservation update")
 		}
@@ -741,7 +746,7 @@ FOR EACH ROW EXECUTE FUNCTION account_delete_suppress_generation_update()`); err
 		if _, err := pool.Exec(context.Background(), `DELETE FROM ai_budget_monthly WHERE month_utc=$1`, fixture.august); err != nil {
 			t.Fatal(err)
 		}
-		err := NewAccountRepository(pool).DeleteAccount(context.Background(), user.ID(fixture.userID), integrationNow().Add(time.Minute))
+		_, err := NewAccountRepository(pool).DeleteAccount(context.Background(), user.ID(fixture.userID), integrationNow().Add(time.Minute))
 		if err == nil {
 			t.Fatal("DeleteAccount succeeded after a zero-row Budget reservation update")
 		}
@@ -895,7 +900,7 @@ VALUES
 		t.Fatal(err)
 	}
 
-	if err := NewAccountRepository(pool).DeleteAccount(context.Background(), user.ID(userID), now.Add(2*time.Minute)); err != nil {
+	if _, err := NewAccountRepository(pool).DeleteAccount(context.Background(), user.ID(userID), now.Add(2*time.Minute)); err != nil {
 		t.Fatalf("DeleteAccount with three same-month 0.1 reservations error = %v", err)
 	}
 	var users, usageEvents int
@@ -1081,7 +1086,7 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	deleteCalls := make(chan accountDeleteCall, 1)
 	deleteCtx := context.WithValue(ctx, accountDeleteAICommandContextKey{}, accountDeleteAIRunningDelete)
 	go func() {
-		deleteCalls <- accountDeleteCall{err: NewAccountRepository(tracedPool).DeleteAccount(deleteCtx, user.ID(userID), now.Add(2*time.Minute))}
+		deleteCalls <- accountDeleteCall{err: accountDeleteError(tracedPool, deleteCtx, user.ID(userID), now.Add(2*time.Minute))}
 	}()
 	var deletePID uint32
 	select {
@@ -1227,7 +1232,7 @@ SET status='failed',goal_id=NULL,content_deleted=true WHERE operation_id=$1`, sn
 	deleteCalls := make(chan accountDeleteCall, 1)
 	deleteCtx := context.WithValue(ctx, accountDeleteAICommandContextKey{}, accountDeleteAIReleasedDelete)
 	go func() {
-		deleteCalls <- accountDeleteCall{err: NewAccountRepository(tracedPool).DeleteAccount(deleteCtx, user.ID(userID), now.Add(3*time.Minute))}
+		deleteCalls <- accountDeleteCall{err: accountDeleteError(tracedPool, deleteCtx, user.ID(userID), now.Add(3*time.Minute))}
 	}()
 	var deletePID uint32
 	select {
@@ -1409,7 +1414,7 @@ VALUES($1,$2,$3,$4)`, bootstrapHash, existingUserID, now.Add(10*time.Minute), no
 	deleteCalls := make(chan accountDeleteCall, 1)
 	deleteCtx := context.WithValue(ctx, bootstrapDeleteWinsCommandContextKey{}, bootstrapDeleteWinsDelete)
 	go func() {
-		deleteCalls <- accountDeleteCall{err: NewAccountRepository(tracedPool).DeleteAccount(deleteCtx, user.ID(existingUserID), now.Add(time.Minute))}
+		deleteCalls <- accountDeleteCall{err: accountDeleteError(tracedPool, deleteCtx, user.ID(existingUserID), now.Add(time.Minute))}
 	}()
 	var deletePID uint32
 	select {

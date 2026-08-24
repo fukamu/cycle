@@ -42,6 +42,7 @@ type Settings struct {
 	GeneratePromptVersion      string
 	RefinePromptVersion        string
 	AIObserver                 AIObserver
+	EventObserver              WorkspaceObserver
 }
 
 type Service struct {
@@ -113,11 +114,19 @@ func (service *Service) Home(ctx context.Context, userID string) (HomeView, erro
 	if err != nil {
 		return HomeView{}, err
 	}
-	return service.store.Home(ctx, userID, limits.MaxProgressingGoals)
+	view, err := service.store.Home(ctx, userID, limits.MaxProgressingGoals)
+	if err == nil && len(view.ProgressingGoals) > limits.MaxProgressingGoals {
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricProgressingGoalLimitInvariantViolation})
+	}
+	return view, err
 }
 
 func (service *Service) CreateDraft(ctx context.Context, userID, body string) (DraftView, error) {
-	return service.goalDraft.CreateDraft(ctx, userID, body)
+	view, err := service.goalDraft.CreateDraft(ctx, userID, body)
+	if err == nil {
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricGoalCreationDraftCreated})
+	}
+	return view, err
 }
 
 func (service *Service) GetDraft(ctx context.Context, userID, draftID string) (DraftView, error) {
@@ -136,6 +145,17 @@ func (service *Service) AbandonDraft(ctx context.Context, userID, draftID string
 
 func (service *Service) StartGoal(ctx context.Context, userID, draftID, operationID string, expectedDraftRevision int64) (StartGoalResult, error) {
 	result, err := service.goalDraft.StartGoal(ctx, userID, draftID, operationID, expectedDraftRevision)
+	if errors.Is(err, ErrGoalActiveLimit) {
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricProgressingGoalLimitRejected})
+	}
+	if errors.Is(err, ErrProgressingGoalLimitInvariant) {
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricProgressingGoalLimitInvariantViolation})
+	}
+	if err == nil && !result.Replayed {
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricGoalStarted})
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricGoalVersionCreated})
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricCycleStarted})
+	}
 	return result, resourceNotFound(err, ErrGoalDraftNotFound)
 }
 
@@ -163,18 +183,50 @@ func (service *Service) ContinueReview(ctx context.Context, userID, goalID, oper
 		UserID: userID, GoalID: goalID, OperationID: operationID,
 		ExpectedGoalRevision: expectedGoalRevision, ExpectedDraftRevision: expectedDraftRevision,
 	})
+	if err == nil && !result.Replayed {
+		service.observeWorkspace(ctx, WorkspaceObservation{
+			Event: WorkspaceMetricGoalReviewContinued, VersionChanged: result.VersionCreated,
+		})
+		if result.VersionCreated {
+			service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricGoalVersionCreated})
+		}
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricCycleStarted})
+	}
 	return result, resourceNotFound(err, ErrGoalNotFound)
 }
 
 func (service *Service) Terminate(ctx context.Context, input TerminateInput) (TerminateResult, error) {
 	result, err := service.reviewTransitions.Terminate(ctx, input)
+	if err == nil && !result.Replayed {
+		service.observeWorkspace(ctx, WorkspaceObservation{
+			Event: WorkspaceMetricGoalTerminal, Outcome: input.Outcome, SourceState: input.ExpectedState,
+		})
+		if result.CanceledCycle != nil && result.CanceledCycle.CancellationReason != nil {
+			service.observeWorkspace(ctx, WorkspaceObservation{
+				Event: WorkspaceMetricCycleCanceled, CancellationReason: *result.CanceledCycle.CancellationReason,
+			})
+		}
+	}
 	return result, resourceNotFound(err, ErrGoalNotFound)
 }
 
 func (service *Service) DeleteGoal(ctx context.Context, userID, goalID string, confirmed bool, expectedRevision int64, idempotencyKey string) error {
-	return resourceNotFound(service.goals.DeleteGoal(
+	result, err := service.goals.DeleteGoalWithResult(
 		ctx, userID, goalID, confirmed, expectedRevision, idempotencyKey,
-	), ErrGoalNotFound)
+	)
+	if confirmed {
+		metricResult := "failure"
+		if err == nil {
+			metricResult = "success"
+			if result.Replayed {
+				metricResult = "idempotent"
+			}
+		}
+		service.observeWorkspace(ctx, WorkspaceObservation{
+			Event: WorkspaceMetricGoalDeleted, SourceState: result.SourceState, Result: metricResult,
+		})
+	}
+	return resourceNotFound(err, ErrGoalNotFound)
 }
 
 func (service *Service) ListCycles(ctx context.Context, userID, goalID, cursor string, limit int) (CyclePage, error) {
@@ -194,6 +246,10 @@ func (service *Service) SaveFrame(ctx context.Context, input SaveFrameInput) (Sa
 
 func (service *Service) CompleteCycle(ctx context.Context, input CompleteCycleInput) (CompleteCycleResult, error) {
 	result, err := service.cycles.CompleteCycle(ctx, input)
+	if err == nil && !result.Replayed && result.Replay == nil {
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricCycleCompleted})
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricGoalReviewOpened})
+	}
 	return result, resourceNotFound(err, ErrCycleNotFound)
 }
 
@@ -206,12 +262,14 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	input.Now = service.clock.Now().UTC()
 	snapshot, err := service.goalDraft.BeginGoalRefine(ctx, input, service.selectAIContextForUser(input.UserID))
 	if err != nil {
+		service.observeAIRejection(ctx, err)
 		missing := ErrGoalDraftNotFound
 		if input.GoalID != "" {
 			missing = ErrGoalNotFound
 		}
 		return AIResponse{}, specificAIInputError(domainai.OperationGoalRefine, resourceNotFound(err, missing))
 	}
+	ctx = ports.WithAIGenerationCorrelation(ctx, snapshot.GenerationID, string(snapshot.Operation))
 	if snapshot.ReplayedOutput != nil {
 		sourceDraftRevision := snapshot.TargetRevision
 		sourceGoalRevision := int64(0)
@@ -226,10 +284,11 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	}
 	startedAt := service.clock.Now()
 	result, providerErr := service.executeAI(ctx, &snapshot)
+	providerDuration := service.clock.Now().Sub(startedAt)
 	finishContext, cancel := service.finalizationContext(ctx)
 	defer cancel()
 	response, finishErr := service.goalDraft.FinishGoalRefine(finishContext, snapshot, result, providerErr, service.clock.Now().UTC())
-	service.observeAI(ctx, snapshot, result, providerErr, finishErr, startedAt)
+	service.observeAI(ctx, snapshot, result, response, providerErr, finishErr, providerDuration, startedAt)
 	missing := ErrGoalDraftNotFound
 	if input.GoalID != "" {
 		missing = ErrGoalNotFound
@@ -239,6 +298,15 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 
 func (service *Service) AdoptGoalSuggestion(ctx context.Context, userID, draftID, goalID, generationID string, expectedDraftRevision int64, expectedGoalRevision *int64) (DraftView, error) {
 	view, err := service.goalDraft.AdoptGoalSuggestion(ctx, userID, draftID, goalID, generationID, expectedDraftRevision, expectedGoalRevision)
+	if err == nil && !view.Replayed {
+		source := "creation"
+		if goalID != "" {
+			source = "review"
+		}
+		service.observeWorkspace(ctx, WorkspaceObservation{
+			Event: WorkspaceMetricAISuggestionAdopted, SuggestionSource: source,
+		})
+	}
 	missing := ErrGoalDraftNotFound
 	if goalID != "" {
 		missing = ErrGoalNotFound
@@ -247,12 +315,24 @@ func (service *Service) AdoptGoalSuggestion(ctx context.Context, userID, draftID
 }
 
 func (service *Service) GenerateAction(ctx context.Context, input ActionGenerateInput) (AIResponse, error) {
+	generationID, err := service.ids.NewID()
+	if err != nil {
+		return AIResponse{}, err
+	}
+	input.GenerationID = generationID
+	input.Now = service.clock.Now().UTC()
 	return service.runActionAI(ctx, input.UserID, domainai.OperationActionGenerate, func(selector AIContextSelector) (AISnapshot, error) {
 		return service.actionAI.BeginGenerate(ctx, input, selector)
 	})
 }
 
 func (service *Service) RefineAction(ctx context.Context, input ActionRefineInput) (AIResponse, error) {
+	generationID, err := service.ids.NewID()
+	if err != nil {
+		return AIResponse{}, err
+	}
+	input.GenerationID = generationID
+	input.Now = service.clock.Now().UTC()
 	return service.runActionAI(ctx, input.UserID, domainai.OperationActionRefine, func(selector AIContextSelector) (AISnapshot, error) {
 		return service.actionAI.BeginRefine(ctx, input, selector)
 	})
@@ -268,8 +348,10 @@ func (service *Service) runActionAI(
 ) (AIResponse, error) {
 	snapshot, err := begin(service.selectAIContextForUser(userID))
 	if err != nil {
+		service.observeAIRejection(ctx, err)
 		return AIResponse{}, specificAIInputError(operation, resourceNotFound(err, ErrCycleNotFound))
 	}
+	ctx = ports.WithAIGenerationCorrelation(ctx, snapshot.GenerationID, string(snapshot.Operation))
 	if snapshot.ReplayedOutput != nil {
 		return AIResponse{
 			GenerationID: snapshot.GenerationID, Action: *snapshot.ReplayedOutput,
@@ -279,10 +361,11 @@ func (service *Service) runActionAI(
 	}
 	startedAt := service.clock.Now()
 	result, providerErr := service.executeAI(ctx, &snapshot)
+	providerDuration := service.clock.Now().Sub(startedAt)
 	finishContext, cancel := service.finalizationContext(ctx)
 	defer cancel()
 	response, finishErr := service.actionAI.Finish(finishContext, snapshot, result, providerErr, service.clock.Now().UTC())
-	service.observeAI(ctx, snapshot, result, providerErr, finishErr, startedAt)
+	service.observeAI(ctx, snapshot, result, response, providerErr, finishErr, providerDuration, startedAt)
 	return response, specificAIInputError(operation, resourceNotFound(finishErr, ErrCycleNotFound))
 }
 
@@ -297,6 +380,7 @@ func (service *Service) executeAI(ctx context.Context, snapshot *AISnapshot) (AI
 	if err := service.verifyCanonicalProviderInputHash(snapshot); err != nil {
 		return AIExecutionResult{}, err
 	}
+	ctx = ports.WithAIGenerationCorrelation(ctx, snapshot.GenerationID, string(snapshot.Operation))
 
 	var attempt aiProviderAttempt
 	switch snapshot.Operation {
@@ -363,10 +447,14 @@ func (service *Service) executeAI(ctx context.Context, snapshot *AISnapshot) (AI
 	default:
 		return AIExecutionResult{}, ErrAIInputBudget
 	}
-	return service.executeAIAttempts(ctx, attempt)
+	return service.executeAIAttempts(ctx, snapshot.Operation, attempt)
 }
 
-func (service *Service) executeAIAttempts(ctx context.Context, execute aiProviderAttempt) (AIExecutionResult, error) {
+func (service *Service) executeAIAttempts(
+	ctx context.Context,
+	operation domainai.OperationType,
+	execute aiProviderAttempt,
+) (AIExecutionResult, error) {
 	attemptLimit := service.settings.MaxProviderAttempts
 	if attemptLimit < 1 {
 		attemptLimit = 1
@@ -376,6 +464,9 @@ func (service *Service) executeAIAttempts(ctx context.Context, execute aiProvide
 	validationRetry := false
 	for attempt := 1; attempt <= attemptLimit; attempt++ {
 		output, usage, err := execute(ctx, validationRetry)
+		service.observeWorkspace(ctx, WorkspaceObservation{
+			Event: WorkspaceMetricAIProviderAttempt, Operation: operation, Result: aiProviderAttemptResult(err),
+		})
 		result.Output = output
 		result.Usage.InputTokens += usage.InputTokens
 		result.Usage.OutputTokens += usage.OutputTokens
@@ -417,7 +508,21 @@ func (service *Service) finalizationContext(ctx context.Context) (context.Contex
 	return context.WithTimeout(context.WithoutCancel(ctx), grace)
 }
 
-func (service *Service) observeAI(ctx context.Context, snapshot AISnapshot, result AIExecutionResult, providerErr, finishErr error, startedAt time.Time) {
+func (service *Service) observeAI(
+	ctx context.Context,
+	snapshot AISnapshot,
+	result AIExecutionResult,
+	response AIResponse,
+	providerErr, finishErr error,
+	providerDuration time.Duration,
+	startedAt time.Time,
+) {
+	if response.SettlementPath != "" {
+		service.observeWorkspace(ctx, WorkspaceObservation{
+			Event:          WorkspaceMetricAICostSettlement,
+			SettlementPath: response.SettlementPath, Result: response.SettlementResult,
+		})
+	}
 	if service.settings.AIObserver == nil {
 		return
 	}
@@ -427,12 +532,50 @@ func (service *Service) observeAI(ctx context.Context, snapshot AISnapshot, resu
 	}
 	operationSettings, _ := service.aiOperationSettings(snapshot.Operation)
 	service.settings.AIObserver.ObserveAI(context.WithoutCancel(ctx), AIObservation{
-		Operation: snapshot.Operation, Result: resultLabel, Model: service.settings.Model,
+		GenerationID: snapshot.GenerationID, Operation: snapshot.Operation,
+		Result: resultLabel, Model: service.settings.Model,
 		PromptVersion: operationSettings.promptVersion, InputTokens: result.Usage.InputTokens,
 		OutputTokens: result.Usage.OutputTokens, EstimatedCostUSD: result.Usage.CostUSD,
 		ContextCycleCount: len(snapshot.PastCycles), CurrentTruncated: snapshot.CurrentTruncated,
+		ContextChanged: response.ContextChanged, ProviderDuration: providerDuration,
 		Duration: service.clock.Now().Sub(startedAt),
 	})
+}
+
+func (service *Service) observeWorkspace(ctx context.Context, event WorkspaceObservation) {
+	if service.settings.EventObserver != nil {
+		service.settings.EventObserver.ObserveWorkspace(context.WithoutCancel(ctx), event)
+	}
+}
+
+func (service *Service) observeAIRejection(ctx context.Context, err error) {
+	switch {
+	case errors.Is(err, ErrAIUserLimit):
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricAIQuotaRejected})
+	case errors.Is(err, ErrAIBudget):
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricAIBudgetRejected})
+	case errors.Is(err, ErrAIRateLimit):
+		service.observeWorkspace(ctx, WorkspaceObservation{
+			Event: WorkspaceMetricRateLimitRejected, Scope: "ai",
+		})
+	}
+}
+
+func aiProviderAttemptResult(err error) string {
+	switch {
+	case err == nil:
+		return "success"
+	case errors.Is(err, ErrAIInvalidResponse):
+		return "invalid_response"
+	case errors.Is(err, ErrAIProviderTimeout):
+		return "timeout"
+	case errors.Is(err, ErrAIProviderUnavailable):
+		return "unavailable"
+	case errors.Is(err, ErrAIProviderRejected):
+		return "rejected"
+	default:
+		return "failure"
+	}
 }
 
 func hashRequest(value any) string {

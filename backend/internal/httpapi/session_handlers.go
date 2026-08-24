@@ -62,7 +62,10 @@ func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	setSessionCookie(writer, view.SessionToken)
-	metricResult = "success"
+	metricResult = "idempotent"
+	if view.Created {
+		metricResult = "success"
+	}
 	writeJSON(writer, http.StatusCreated, mapSession(view))
 }
 

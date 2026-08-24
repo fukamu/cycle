@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
 )
 
@@ -26,8 +27,7 @@ const (
 type contextKey string
 
 const (
-	requestIDContextKey contextKey = "request_id"
-	sessionContextKey   contextKey = "authenticated_session"
+	sessionContextKey contextKey = "authenticated_session"
 )
 
 func (server *api) traceMiddleware(next http.Handler) http.Handler {
@@ -63,7 +63,40 @@ func (server *api) requestIDMiddleware(next http.Handler) http.Handler {
 			}
 		}
 		writer.Header().Set("X-Request-ID", requestID)
-		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), requestIDContextKey, requestID)))
+		ctx := ports.WithRequestCorrelation(request.Context(), requestID)
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("fukamu.request_id", requestID))
+		next.ServeHTTP(writer, request.WithContext(ctx))
+	})
+}
+
+func (server *api) panicRecoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		defer func() {
+			if recover() == nil {
+				return
+			}
+			span := trace.SpanFromContext(request.Context())
+			span.SetStatus(codes.Error, http.StatusText(http.StatusInternalServerError))
+			if server.dependencies.Logger != nil {
+				server.dependencies.Logger.LogAttrs(request.Context(), slog.LevelError, "",
+					slog.String("request_id", requestID(request.Context())),
+					slog.String("trace_id", span.SpanContext().TraceID().String()),
+					slog.String("operation", "http_handler_panic"),
+					slog.String("error_class", "http_handler_panic"),
+					slog.String("error_code", "INTERNAL_ERROR"),
+					slog.Int("status_code", http.StatusInternalServerError),
+				)
+			}
+			_, code, message := classifyError(nil)
+			if server.dependencies.Metrics != nil {
+				server.dependencies.Metrics.ErrorCode(request.Context(), code)
+			}
+			writer.Header().Set("Cache-Control", "no-store")
+			writeJSON(writer, http.StatusInternalServerError, errorEnvelope{Error: apiError{
+				Code: code, Message: message, RequestID: requestID(request.Context()),
+			}})
+		}()
+		next.ServeHTTP(writer, request)
 	})
 }
 
@@ -227,8 +260,7 @@ func authenticatedSession(ctx context.Context) (appsession.AuthenticatedSession,
 }
 
 func requestID(ctx context.Context) string {
-	value, _ := ctx.Value(requestIDContextKey).(string)
-	return value
+	return ports.CorrelationFromContext(ctx).RequestID
 }
 
 func (server *api) remoteIP(request *http.Request) string {

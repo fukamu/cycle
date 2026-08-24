@@ -772,16 +772,25 @@ func sanitizeMetric(source metricdata.Metrics) (metricdata.Metrics, bool) {
 
 func allowedMetricUnit(name string) (string, bool) {
 	switch name {
-	case "http_requests_total", "autosave_total", "cycle_completed_total",
-		"ai_generation_total", "ai_context_current_truncated_total", "ai_context_isolation_violation_total",
-		"account_upgrade_total", "account_delete_total", "anonymous_create_total",
-		"rate_limit_rejected_total", "error_code_total", "ai_budget_warning_total":
+	case "http_requests_total", "autosave_total", "revision_conflict_total",
+		"goal_creation_draft_created_total", "goal_started_total", "goal_review_opened_total",
+		"goal_review_continued_total", "goal_terminal_total", "goal_deleted_total",
+		"goal_version_created_total", "progressing_goal_limit_rejected_total",
+		"progressing_goal_limit_invariant_violation_total", "cycle_started_total",
+		"cycle_completed_total", "cycle_canceled_total", "ai_generation_total",
+		"ai_provider_attempt_total", "ai_cost_settlement_total",
+		"ai_context_current_truncated_total", "ai_context_changed_total",
+		"ai_suggestion_adopted_total", "ai_context_isolation_violation_total",
+		"ai_quota_rejected_total", "ai_budget_rejected_total",
+		"account_upgrade_total", "google_login_total", "account_delete_total",
+		"anonymous_create_total", "rate_limit_rejected_total",
+		"turnstile_verification_total", "error_code_total", "ai_budget_warning_total":
 		return "", true
 	case "http_request_duration_ms", "autosave_duration_ms", "ai_generation_duration_ms":
 		return "ms", true
 	case "ai_input_tokens_total", "ai_output_tokens_total":
 		return "{token}", true
-	case "ai_estimated_cost_usd_total":
+	case "ai_estimated_cost_usd_total", "ai_unattributed_cost_usd_total":
 		return "USD", true
 	case "ai_context_cycle_count":
 		return "{cycle}", true
@@ -868,10 +877,11 @@ func sanitizeMetricExemplars[N int64 | float64](source []metricdata.Exemplar[N])
 func sanitizeMetricAttributes(name string, source attribute.Set) attribute.Set {
 	result := make([]attribute.KeyValue, 0, source.Len())
 	for _, keyValue := range source.ToSlice() {
-		if keyValue.Value.Type() != attribute.STRING || !allowedMetricAttribute(name, string(keyValue.Key)) {
+		key := string(keyValue.Key)
+		if keyValue.Value.Type() != attribute.STRING || !allowedMetricAttribute(name, key) {
 			continue
 		}
-		result = append(result, attribute.String(string(keyValue.Key), sanitizeMetricAttributeValue(string(keyValue.Key), keyValue.Value.AsString())))
+		result = append(result, attribute.String(key, sanitizeMetricAttributeValue(name, key, keyValue.Value.AsString())))
 	}
 	return attribute.NewSet(result...)
 }
@@ -882,16 +892,35 @@ func allowedMetricAttribute(name, key string) bool {
 		return key == "route" || key == "status_class"
 	case "http_request_duration_ms":
 		return key == "route"
-	case "autosave_total", "account_upgrade_total", "account_delete_total", "anonymous_create_total":
-		return key == "result"
+	case "autosave_total":
+		return key == "resource_type" || key == "result"
+	case "autosave_duration_ms", "revision_conflict_total":
+		return key == "resource_type"
+	case "goal_review_continued_total":
+		return key == "version_changed"
+	case "goal_terminal_total":
+		return key == "outcome" || key == "source_state"
+	case "goal_deleted_total":
+		return key == "source_state" || key == "result"
+	case "cycle_canceled_total":
+		return key == "reason"
 	case "ai_generation_total":
-		return key == "type" || key == "result" || key == "model" || key == "prompt_version"
+		return key == "operation_type" || key == "result" || key == "model" || key == "prompt_version"
 	case "ai_generation_duration_ms":
-		return key == "type" || key == "model"
+		return key == "operation_type" || key == "model"
+	case "ai_provider_attempt_total":
+		return key == "operation_type" || key == "result"
 	case "ai_input_tokens_total", "ai_output_tokens_total", "ai_estimated_cost_usd_total":
 		return key == "model"
-	case "ai_context_cycle_count", "ai_context_current_truncated_total":
-		return key == "type"
+	case "ai_cost_settlement_total":
+		return key == "path" || key == "result"
+	case "ai_context_cycle_count", "ai_context_current_truncated_total", "ai_context_changed_total":
+		return key == "operation_type"
+	case "ai_suggestion_adopted_total":
+		return key == "source_type"
+	case "account_upgrade_total", "google_login_total", "account_delete_total",
+		"anonymous_create_total", "turnstile_verification_total":
+		return key == "result"
 	case "rate_limit_rejected_total":
 		return key == "scope"
 	case "error_code_total":
@@ -903,7 +932,7 @@ func allowedMetricAttribute(name, key string) bool {
 	}
 }
 
-func sanitizeMetricAttributeValue(key, value string) string {
+func sanitizeMetricAttributeValue(name, key, value string) string {
 	switch key {
 	case "route":
 		if isAllowedHTTPRoute(value) {
@@ -911,47 +940,62 @@ func sanitizeMetricAttributeValue(key, value string) string {
 		}
 		return "unmatched"
 	case "status_class":
-		switch value {
-		case "1xx", "2xx", "3xx", "4xx", "5xx":
+		if oneOf(value, "1xx", "2xx", "3xx", "4xx", "5xx") {
 			return value
-		default:
-			return "other"
+		}
+	case "resource_type":
+		if oneOf(value, "creation_draft", "review_draft", "cycle_frame") {
+			return value
 		}
 	case "result":
-		switch value {
-		case "success", "failure", "idempotent", "conflict", "rejected":
+		if allowedMetricResult(name, value) {
 			return value
-		default:
-			return "other"
 		}
-	case "type":
-		switch value {
-		case "goal_refine", "action_generate", "action_refine":
+	case "operation_type":
+		if oneOf(value, "goal_refine", "action_generate", "action_refine") {
 			return value
-		default:
-			return "other"
 		}
 	case "model":
-		switch value {
-		case "gpt-5.6-luna", "gpt-5.6-terra":
+		if oneOf(value, "gpt-5.6-luna", "gpt-5.6-terra") {
 			return value
-		default:
-			return "other"
 		}
 	case "prompt_version":
-		switch value {
-		case "goal-refine-v1", "action-generate-v1", "action-refine-v1",
-			"goal-refine-v2", "action-generate-v2", "action-refine-v2":
+		if oneOf(value,
+			"goal-refine-v1", "action-generate-v1", "action-refine-v1",
+			"goal-refine-v2", "action-generate-v2", "action-refine-v2",
+		) {
 			return value
-		default:
-			return "other"
+		}
+	case "version_changed":
+		if oneOf(value, "true", "false") {
+			return value
+		}
+	case "outcome":
+		if oneOf(value, "achieved", "ended") {
+			return value
+		}
+	case "source_state":
+		if value == "" {
+			return "unknown"
+		}
+		if oneOf(value, "active_cycle", "goal_review", "achieved", "ended", "unknown") {
+			return value
+		}
+	case "reason":
+		if oneOf(value, "goal_achieved", "goal_ended") {
+			return value
+		}
+	case "path":
+		if oneOf(value, "normal", "late", "account_delete") {
+			return value
+		}
+	case "source_type":
+		if oneOf(value, "creation", "review") {
+			return value
 		}
 	case "scope":
-		switch value {
-		case "ai", "anonymous", "auth", "session":
+		if oneOf(value, "ai", "anonymous", "auth", "session") {
 			return value
-		default:
-			return "other"
 		}
 	case "code":
 		if isAllowedMetricErrorCode(value) {
@@ -963,10 +1007,38 @@ func sanitizeMetricAttributeValue(key, value string) string {
 		if err == nil && threshold > 0 && threshold < 1 && strconv.FormatFloat(threshold, 'f', -1, 64) == value {
 			return value
 		}
-		return "other"
-	default:
-		return "other"
 	}
+	return "other"
+}
+
+func allowedMetricResult(name, value string) bool {
+	switch name {
+	case "autosave_total":
+		return oneOf(value, "success", "failure", "conflict")
+	case "goal_deleted_total", "ai_cost_settlement_total":
+		return oneOf(value, "success", "failure", "idempotent")
+	case "ai_generation_total":
+		return oneOf(value, "success", "failure")
+	case "ai_provider_attempt_total":
+		return oneOf(value, "success", "failure", "invalid_response", "timeout", "unavailable", "rejected")
+	case "anonymous_create_total":
+		return oneOf(value, "success", "failure", "idempotent")
+	case "account_upgrade_total", "google_login_total", "account_delete_total":
+		return oneOf(value, "success", "failure")
+	case "turnstile_verification_total":
+		return oneOf(value, "success", "blocked", "unavailable")
+	default:
+		return false
+	}
+}
+
+func oneOf(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func isAllowedMetricErrorCode(value string) bool {
@@ -1128,6 +1200,7 @@ const (
 	spanClassPostgres
 	spanClassGoogleIdentity
 	spanClassTurnstile
+	spanClassOpenAI
 )
 
 func classifySpan(span sdktrace.ReadOnlySpan) spanClass {
@@ -1144,6 +1217,10 @@ func classifySpan(span sdktrace.ReadOnlySpan) spanClass {
 		if span.Name() == "turnstile.siteverify" {
 			return spanClassTurnstile
 		}
+	case "fukamu-cycle/openai":
+		if span.Name() == "openai.responses.create" {
+			return spanClassOpenAI
+		}
 	}
 	return spanClassApplication
 }
@@ -1157,7 +1234,7 @@ func sanitizedSpanName(class spanClass, original string) string {
 			return original
 		}
 		return "postgres.other"
-	case spanClassGoogleIdentity, spanClassTurnstile:
+	case spanClassGoogleIdentity, spanClassTurnstile, spanClassOpenAI:
 		return original
 	default:
 		return "application.operation"
@@ -1174,6 +1251,8 @@ func sanitizedScopeName(class spanClass) string {
 		return "fukamu-cycle/google-identity"
 	case spanClassTurnstile:
 		return "fukamu-cycle/turnstile"
+	case spanClassOpenAI:
+		return "fukamu-cycle/openai"
 	default:
 		return "fukamu-cycle/application"
 	}
@@ -1190,6 +1269,10 @@ func sanitizeAttributes(class spanClass, source []attribute.KeyValue) []attribut
 	result := make([]attribute.KeyValue, 0, len(source))
 	for _, keyValue := range source {
 		key := string(keyValue.Key)
+		if safe, ok := sanitizeCorrelationAttribute(class, keyValue); ok {
+			result = append(result, safe)
+			continue
+		}
 		switch class {
 		case spanClassHTTP:
 			switch key {
@@ -1235,6 +1318,51 @@ func sanitizeAttributes(class spanClass, source []attribute.KeyValue) []attribut
 		}
 	}
 	return result
+}
+
+func sanitizeCorrelationAttribute(class spanClass, keyValue attribute.KeyValue) (attribute.KeyValue, bool) {
+	if keyValue.Value.Type() != attribute.STRING {
+		return attribute.KeyValue{}, false
+	}
+	key := string(keyValue.Key)
+	value := keyValue.Value.AsString()
+	switch key {
+	case "fukamu.request_id":
+		if class != spanClassHTTP && class != spanClassPostgres && class != spanClassOpenAI {
+			return attribute.KeyValue{}, false
+		}
+		if isCanonicalCorrelationUUIDv7(value) {
+			return attribute.String(key, value), true
+		}
+	case "fukamu.ai_generation_id":
+		if (class == spanClassPostgres || class == spanClassOpenAI) && isCanonicalCorrelationUUIDv7(value) {
+			return attribute.String(key, value), true
+		}
+	case "fukamu.ai_operation_type":
+		if class == spanClassPostgres || class == spanClassOpenAI {
+			switch value {
+			case "goal_refine", "action_generate", "action_refine":
+				return attribute.String(key, value), true
+			}
+		}
+	}
+	return attribute.KeyValue{}, false
+}
+
+func isCanonicalCorrelationUUIDv7(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' ||
+		value[14] != '7' || !strings.ContainsRune("89ab", rune(value[19])) {
+		return false
+	}
+	for index, character := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func isAllowedHTTPMethod(method string) bool {
@@ -1296,6 +1424,8 @@ func sanitizeStatus(class spanClass, status sdktrace.Status) sdktrace.Status {
 		return sdktrace.Status{Code: codes.Error, Description: "identity verification failed"}
 	case spanClassTurnstile:
 		return sdktrace.Status{Code: codes.Error, Description: "siteverify request failed"}
+	case spanClassOpenAI:
+		return sdktrace.Status{Code: codes.Error, Description: "provider request failed"}
 	default:
 		return sdktrace.Status{Code: codes.Error, Description: "operation failed"}
 	}

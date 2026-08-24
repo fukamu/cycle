@@ -250,8 +250,19 @@ func (useCases *GoalUseCases) DeleteGoal(
 	expectedRevision int64,
 	idempotencyKey string,
 ) error {
+	_, err := useCases.DeleteGoalWithResult(ctx, userID, goalID, confirmed, expectedRevision, idempotencyKey)
+	return err
+}
+
+func (useCases *GoalUseCases) DeleteGoalWithResult(
+	ctx context.Context,
+	userID, goalID string,
+	confirmed bool,
+	expectedRevision int64,
+	idempotencyKey string,
+) (result GoalDeleteResult, err error) {
 	if !confirmed {
-		return ErrDeleteConfirmation
+		return result, ErrDeleteConfirmation
 	}
 	now := useCases.clock.Now().UTC()
 	requestHash := hashRequest(struct {
@@ -260,7 +271,7 @@ func (useCases *GoalUseCases) DeleteGoal(
 		Revision  int64  `json:"revision"`
 	}{goalID, confirmed, expectedRevision})
 
-	return useCases.uow.WithinGoalTransaction(ctx, func(tx GoalTx) error {
+	err = useCases.uow.WithinGoalTransaction(ctx, func(tx GoalTx) error {
 		if err := tx.LockUser(ctx, userID); err != nil {
 			return err
 		}
@@ -273,6 +284,7 @@ func (useCases *GoalUseCases) DeleteGoal(
 				return ErrIdempotencyKeyReused
 			}
 			if receipt.ExpiresAt.After(now) {
+				result.Replayed = true
 				return nil
 			}
 		}
@@ -281,6 +293,7 @@ func (useCases *GoalUseCases) DeleteGoal(
 		if err != nil {
 			return err
 		}
+		result.SourceState = target.Status
 		if target.Revision != expectedRevision {
 			return ErrDeleteConflict
 		}
@@ -383,6 +396,7 @@ func (useCases *GoalUseCases) DeleteGoal(
 		}
 		return requireGoalRows("insert Goal Delete receipt", rows, 1)
 	})
+	return result, err
 }
 
 func partitionGoalDeleteUsages(usages []GoalDeleteUsage, now time.Time) ([]string, []string, error) {

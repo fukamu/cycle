@@ -190,7 +190,7 @@ func (q *Queries) LockGoalDraftIDs(ctx context.Context, arg LockGoalDraftIDsPara
 }
 
 const lockGoalForDelete = `-- name: LockGoalForDelete :one
-SELECT revision
+SELECT revision, status
 FROM goals
 WHERE id = $1::uuid
   AND user_id = $2::uuid
@@ -202,9 +202,14 @@ type LockGoalForDeleteParams struct {
 	UserID pgtype.UUID
 }
 
-func (q *Queries) LockGoalForDelete(ctx context.Context, arg LockGoalForDeleteParams) (int64, error) {
+type LockGoalForDeleteRow struct {
+	Revision int64
+	Status   string
+}
+
+func (q *Queries) LockGoalForDelete(ctx context.Context, arg LockGoalForDeleteParams) (*LockGoalForDeleteRow, error) {
 	row := q.db.QueryRow(ctx, lockGoalForDelete, arg.GoalID, arg.UserID)
-	var revision int64
-	err := row.Scan(&revision)
-	return revision, err
+	var i LockGoalForDeleteRow
+	err := row.Scan(&i.Revision, &i.Status)
+	return &i, err
 }

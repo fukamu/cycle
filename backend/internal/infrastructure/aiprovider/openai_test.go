@@ -15,7 +15,11 @@ import (
 	"time"
 
 	openai "github.com/openai/openai-go/v3"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 )
@@ -210,6 +214,59 @@ func TestOpenAIResponsesTransportSendsOperationSpecificStrictContracts(t *testin
 			assertOpenAIUsage(t, usage)
 			assertOpenAIWireRequest(t, <-requests, test.instructions, test.schemaName, test.schema, test.maxOutputTokens, test.expectedInput)
 		})
+	}
+}
+
+func TestOpenAIProviderSpanIsChildAndCarriesOnlySafeCorrelation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writeOpenAIJSON(writer, http.StatusOK, completedOpenAIResponse(`{"suggestion":"提案"}`))
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1/")
+
+	exporter := tracetest.NewInMemoryExporter()
+	traceProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(traceProvider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = traceProvider.Shutdown(context.Background())
+	})
+
+	ctx, parent := traceProvider.Tracer("test").Start(context.Background(), "parent")
+	ctx = ports.WithRequestCorrelation(ctx, "0198c20b-7b95-7000-8000-000000000001")
+	ctx = ports.WithAIGenerationCorrelation(ctx, "0198c20b-7b95-7000-8000-000000000002", "goal_refine")
+	aiProvider := NewOpenAI("contract-key", "contract-model", openAIContractReasoningEffort, time.Second, 999, 2.5, 10)
+	if _, _, err := aiProvider.RefineGoal(ctx, validGoalRefineTransportInput()); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	var providerSpan tracetest.SpanStub
+	for _, span := range exporter.GetSpans() {
+		if span.Name == "openai.responses.create" {
+			providerSpan = span
+		}
+	}
+	if !providerSpan.SpanContext.IsValid() {
+		t.Fatal("OpenAI provider span not found")
+	}
+	if providerSpan.Parent.SpanID() != parent.SpanContext().SpanID() || providerSpan.SpanContext.TraceID() != parent.SpanContext().TraceID() {
+		t.Fatalf("OpenAI parent/trace = %s/%s, want %s/%s", providerSpan.Parent.SpanID(), providerSpan.SpanContext.TraceID(), parent.SpanContext().SpanID(), parent.SpanContext().TraceID())
+	}
+	want := map[string]string{
+		"fukamu.request_id":        "0198c20b-7b95-7000-8000-000000000001",
+		"fukamu.ai_generation_id":  "0198c20b-7b95-7000-8000-000000000002",
+		"fukamu.ai_operation_type": "goal_refine",
+	}
+	for _, keyValue := range providerSpan.Attributes {
+		key := string(keyValue.Key)
+		if expected, ok := want[key]; ok && keyValue.Value.AsString() == expected {
+			delete(want, key)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing OpenAI correlation attributes: %#v; got %#v", want, providerSpan.Attributes)
 	}
 }
 

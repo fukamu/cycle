@@ -46,6 +46,7 @@ func (ids *goalDraftFakeIDs) NewID() (string, error) {
 
 type goalDraftFakeUOW struct {
 	tx         GoalDraftTx
+	commitErr  error
 	committed  int
 	rolledBack int
 }
@@ -55,6 +56,9 @@ func (uow *goalDraftFakeUOW) WithinGoalDraftTransaction(ctx context.Context, ope
 	if err != nil {
 		uow.rolledBack++
 		return err
+	}
+	if uow.commitErr != nil {
+		return uow.commitErr
 	}
 	uow.committed++
 	return nil
@@ -786,7 +790,7 @@ func TestGoalDraftUseCasesBeginRefineOwnsQuotaRateBudgetAndPersistence(t *testin
 		t.Fatalf("snapshot/generation/usage = %#v / %#v / %#v", snapshot, tx.generationRecord, tx.usageRecord)
 	}
 	want := []string{
-		"lock_user", "lock_draft", "lock_expired_generations", "sum_expired_reservations", "find_refine_replay",
+		"lock_user", "find_refine_replay", "lock_draft", "lock_expired_generations", "sum_expired_reservations", "find_refine_replay",
 		"has_running_generation", "count_rolling_usage",
 		"ensure_budget_month", "lock_budget_month",
 		"rate_ai_user_minute", "rate_ai_session_minute", "rate_ai_ip_minute",
@@ -810,7 +814,7 @@ func TestGoalDraftUseCasesRejectsMissingCanonicalHashBeforePaidSideEffects(t *te
 		t.Fatalf("error/transaction = %v / %#v", err, uow)
 	}
 	want := []string{
-		"lock_user", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
+		"lock_user", "find_refine_replay", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
 		"find_refine_replay",
 	}
 	if !reflect.DeepEqual(tx.trace, want) {
@@ -862,7 +866,7 @@ func TestGoalDraftUseCasesExpiredSameKeyReplayCommitsTerminalRecovery(t *testing
 		t.Fatalf("error/transaction = %v / %#v", err, uow)
 	}
 	want := []string{
-		"lock_user", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
+		"lock_user", "find_refine_replay", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
 		"release_expired_budget", "expire_generation", "expire_usage", "find_refine_replay",
 	}
 	if !reflect.DeepEqual(tx.trace, want) || tx.refineReplay.Status != aiStatusFailed ||
@@ -922,6 +926,7 @@ func TestGoalDraftUseCasesFinishRefineUsesOrderedExactSettlement(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response.Suggestion != "提案" || !response.ContextChanged ||
+		response.SettlementPath != "normal" || response.SettlementResult != "success" ||
 		tx.generationSettlement.EstimatedCostUSD != "0.30000000" ||
 		tx.usageSettlement.EstimatedCostUSD != "0.30000000" ||
 		!tx.usageSettlement.ExpectedBudgetMonthUtc.Equal(goalDraftTestNow) ||
@@ -939,11 +944,23 @@ func TestGoalDraftUseCasesFinishRefineUsesOrderedExactSettlement(t *testing.T) {
 	tx.affected = map[string]int64{"finalize_usage": 0}
 	tx.trace = nil
 	uow.committed = 0
-	_, err = useCases.FinishGoalRefine(context.Background(), AISnapshot{
+	failedResponse, err := useCases.FinishGoalRefine(context.Background(), AISnapshot{
 		GenerationID: goalDraftTestGenerationID, TargetRevision: 1,
 	}, AIExecutionResult{Output: "提案"}, nil, goalDraftTestNow)
-	if !errors.Is(err, ErrGoalDraftPersistenceInvariant) || uow.rolledBack != 1 {
-		t.Fatalf("error/transaction = %v / %#v", err, uow)
+	if !errors.Is(err, ErrGoalDraftPersistenceInvariant) || uow.rolledBack != 1 ||
+		failedResponse.SettlementPath != "normal" || failedResponse.SettlementResult != "failure" {
+		t.Fatalf("response/error/transaction = %#v / %v / %#v", failedResponse, err, uow)
+	}
+
+	tx.affected = nil
+	commitErr := errors.New("commit failed")
+	uow.commitErr = commitErr
+	failedResponse, err = useCases.FinishGoalRefine(context.Background(), AISnapshot{
+		GenerationID: goalDraftTestGenerationID, TargetRevision: 1,
+	}, AIExecutionResult{Output: "提案"}, nil, goalDraftTestNow)
+	if !errors.Is(err, commitErr) || failedResponse.SettlementPath != "normal" ||
+		failedResponse.SettlementResult != "failure" {
+		t.Fatalf("commit failure response/error = %#v / %v", failedResponse, err)
 	}
 }
 
@@ -1043,7 +1060,7 @@ func TestGoalDraftUseCasesRejectsSelectorContextIsolationBeforeReservation(t *te
 		t.Fatalf("error/transaction = %v / %#v", err, uow)
 	}
 	want := []string{
-		"lock_user", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
+		"lock_user", "find_refine_replay", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
 		"find_refine_replay",
 	}
 	if !reflect.DeepEqual(tx.trace, want) {
@@ -1172,7 +1189,7 @@ func TestGoalDraftUseCasesBeginReplayBypassesEntitlementPolicy(t *testing.T) {
 		t.Fatalf("snapshot/policy calls/transaction = %#v / %d / %#v", snapshot, policy.calls, uow)
 	}
 	want := []string{
-		"lock_user", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
+		"lock_user", "find_refine_replay", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
 		"find_refine_replay",
 	}
 	if !reflect.DeepEqual(tx.trace, want) {
@@ -1204,7 +1221,7 @@ func TestGoalDraftUseCasesRejectsCrossGoalQueryContextBeforeSelector(t *testing.
 		t.Fatalf("error/selector/transaction = %v / %d / %#v", err, selectorCalls, uow)
 	}
 	want := []string{
-		"lock_user", "lock_goal", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
+		"lock_user", "find_refine_replay", "lock_goal", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
 		"find_refine_replay", "list_ai_context",
 	}
 	if !reflect.DeepEqual(tx.trace, want) {
@@ -1226,7 +1243,7 @@ func TestGoalDraftUseCasesRejectsSelectorIdentityMutationBeforeReservation(t *te
 		t.Fatalf("error/transaction = %v / %#v", err, uow)
 	}
 	want := []string{
-		"lock_user", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
+		"lock_user", "find_refine_replay", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
 		"find_refine_replay",
 	}
 	if !reflect.DeepEqual(tx.trace, want) {
@@ -1269,7 +1286,7 @@ func TestGoalDraftUseCasesRejectsSelectorTextReplacementBeforeReservation(t *tes
 				t.Fatalf("error/transaction = %v / %#v", err, uow)
 			}
 			want := []string{
-				"lock_user", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
+				"lock_user", "find_refine_replay", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
 				"find_refine_replay",
 			}
 			if !reflect.DeepEqual(tx.trace, want) {

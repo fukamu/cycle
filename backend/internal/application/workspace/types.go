@@ -22,6 +22,7 @@ var (
 	ErrGoalRevisionConflict          = errors.New("goal revision conflict")
 	ErrGoalVersionConflict           = errors.New("goal version conflict")
 	ErrGoalActiveLimit               = errors.New("progressing goal limit exceeded")
+	ErrProgressingGoalLimitInvariant = errors.New("progressing goal limit invariant violated")
 	ErrGoalReviewNotActive           = errors.New("goal review is not active")
 	ErrGoalReviewInvariant           = errors.New("goal review invariant broken")
 	ErrGoalStateConflict             = errors.New("goal state conflict")
@@ -248,6 +249,11 @@ type TerminateResult struct {
 	Replayed      bool       `json:"replayed,omitempty"`
 }
 
+type GoalDeleteResult struct {
+	SourceState goal.Status
+	Replayed    bool
+}
+
 type CommandReplayResourceIDs struct {
 	GoalID  string `json:"goalId"`
 	CycleID string `json:"cycleId,omitempty"`
@@ -325,6 +331,7 @@ type AISnapshot struct {
 }
 
 type AIObservation struct {
+	GenerationID      string
 	Operation         domainai.OperationType
 	Result            string
 	Model             string
@@ -334,6 +341,8 @@ type AIObservation struct {
 	EstimatedCostUSD  float64
 	ContextCycleCount int
 	CurrentTruncated  bool
+	ContextChanged    bool
+	ProviderDuration  time.Duration
 	Duration          time.Duration
 }
 
@@ -347,6 +356,8 @@ type AIResponse struct {
 	ActionRevision      int64  `json:"actionRevision,omitempty"`
 	ContextChanged      bool   `json:"contextChanged"`
 	Replayed            bool   `json:"replayed,omitempty"`
+	SettlementPath      string `json:"-"`
+	SettlementResult    string `json:"-"`
 }
 
 type TokenCounter interface {
@@ -356,6 +367,46 @@ type TokenCounter interface {
 
 type AIObserver interface {
 	ObserveAI(context.Context, AIObservation)
+}
+
+type WorkspaceMetricEvent uint8
+
+const (
+	WorkspaceMetricGoalCreationDraftCreated WorkspaceMetricEvent = iota + 1
+	WorkspaceMetricGoalStarted
+	WorkspaceMetricGoalReviewOpened
+	WorkspaceMetricGoalReviewContinued
+	WorkspaceMetricGoalTerminal
+	WorkspaceMetricGoalDeleted
+	WorkspaceMetricGoalVersionCreated
+	WorkspaceMetricProgressingGoalLimitRejected
+	WorkspaceMetricProgressingGoalLimitInvariantViolation
+	WorkspaceMetricCycleStarted
+	WorkspaceMetricCycleCompleted
+	WorkspaceMetricCycleCanceled
+	WorkspaceMetricAIProviderAttempt
+	WorkspaceMetricAICostSettlement
+	WorkspaceMetricAISuggestionAdopted
+	WorkspaceMetricAIQuotaRejected
+	WorkspaceMetricAIBudgetRejected
+	WorkspaceMetricRateLimitRejected
+)
+
+type WorkspaceObservation struct {
+	Event              WorkspaceMetricEvent
+	VersionChanged     bool
+	Outcome            goal.Status
+	SourceState        goal.Status
+	Result             string
+	Scope              string
+	CancellationReason cycle.CancellationReason
+	Operation          domainai.OperationType
+	SettlementPath     string
+	SuggestionSource   string
+}
+
+type WorkspaceObserver interface {
+	ObserveWorkspace(context.Context, WorkspaceObservation)
 }
 
 type AIContextSelector func(context.Context, AISnapshot) (AISnapshot, error)

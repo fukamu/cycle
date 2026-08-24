@@ -109,6 +109,52 @@ func TestRunDoesNotCallOSExitBeforeDeferredCleanup(t *testing.T) {
 	})
 }
 
+func TestHTTPServerUsesFailClosedErrorLog(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		literal, ok := node.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		selector, ok := literal.Type.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		packageName, packageOK := selector.X.(*ast.Ident)
+		if !packageOK || packageName.Name != "http" || selector.Sel.Name != "Server" {
+			return true
+		}
+		for _, element := range literal.Elts {
+			field, fieldOK := element.(*ast.KeyValueExpr)
+			if !fieldOK {
+				continue
+			}
+			name, nameOK := field.Key.(*ast.Ident)
+			if !nameOK || name.Name != "ErrorLog" {
+				continue
+			}
+			call, callOK := field.Value.(*ast.CallExpr)
+			if !callOK {
+				continue
+			}
+			constructor, constructorOK := call.Fun.(*ast.SelectorExpr)
+			if !constructorOK {
+				continue
+			}
+			owner, ownerOK := constructor.X.(*ast.Ident)
+			found = ownerOK && owner.Name == "safelog" && constructor.Sel.Name == "NewHTTPServerErrorLog"
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("http.Server.ErrorLog must discard net/http panic values, raw remote addresses, and stacks through safelog")
+	}
+}
+
 func TestMaximumAIReservationUSDUsesOperationOutputLimit(t *testing.T) {
 	t.Parallel()
 

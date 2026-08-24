@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"math"
+	"math/big"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,6 +18,12 @@ import (
 
 type AccountRepository struct {
 	pool *pgxpool.Pool
+}
+
+type accountMonthlyExposure struct {
+	month             time.Time
+	reservedToRelease string
+	unattributedToAdd string
 }
 
 func NewAccountRepository(pool *pgxpool.Pool) *AccountRepository {
@@ -115,25 +123,29 @@ func (repository *AccountRepository) LoginGoogle(ctx context.Context, input acco
 	return result, err
 }
 
-func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID user.ID, now time.Time) (err error) {
+func (repository *AccountRepository) DeleteAccount(
+	ctx context.Context,
+	userID user.ID,
+	now time.Time,
+) (result account.DeleteResult, err error) {
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer rollbackOnError(ctx, tx, &err)
 	queries := db.New(tx)
 	if err = lockUser(ctx, tx, userID); err != nil {
-		return err
+		return result, err
 	}
 	userUUID := mustUUID(string(userID))
 	if _, err = queries.LockAccountGoalIDs(ctx, userUUID); err != nil {
-		return err
+		return result, err
 	}
 	if _, err = queries.LockAccountGoalDraftIDs(ctx, userUUID); err != nil {
-		return err
+		return result, err
 	}
 	if _, err = queries.LockAccountCycleIDs(ctx, userUUID); err != nil {
-		return err
+		return result, err
 	}
 
 	type generationExposure struct {
@@ -143,18 +155,18 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 	}
 	generationRows, err := queries.LockAccountRunningGenerationExposures(ctx, userUUID)
 	if err != nil {
-		return err
+		return result, err
 	}
 	generationExposures := make([]generationExposure, 0, len(generationRows))
 	generationByID := make(map[string]generationExposure, len(generationRows))
 	for _, row := range generationRows {
 		if row == nil {
-			return errors.New("account delete generation exposure row is nil")
+			return result, errors.New("account delete generation exposure row is nil")
 		}
 		generationID := uuidString(row.ID)
 		generationMonth, mappingErr := accountExposureDate(row.BudgetMonthUtc)
 		if generationID == "" || mappingErr != nil {
-			return errors.New("account delete generation exposure mapping invariant failed")
+			return result, errors.New("account delete generation exposure mapping invariant failed")
 		}
 		generation := generationExposure{
 			id: generationID, month: generationMonth, reservation: row.BudgetReservedCostUsd,
@@ -169,48 +181,44 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 	}
 	usageRows, err := queries.LockAccountUnfinalizedUsageExposures(ctx, userUUID)
 	if err != nil {
-		return err
+		return result, err
 	}
 	releasedUsageExposures := make([]releasedUsageExposure, 0, len(usageRows))
 	for _, row := range usageRows {
 		if row == nil {
-			return errors.New("account delete usage exposure row is nil")
+			return result, errors.New("account delete usage exposure row is nil")
 		}
 		operationID := uuidString(row.OperationID)
 		usageMonth, mappingErr := accountExposureDate(row.SettlementBudgetMonthUtc)
 		if operationID == "" || mappingErr != nil {
-			return errors.New("account delete usage exposure mapping invariant failed")
+			return result, errors.New("account delete usage exposure mapping invariant failed")
 		}
 		usage := releasedUsageExposure{
 			operationID: operationID, month: usageMonth, reservation: row.SettlementReservationCostUsd,
 		}
 		if generation, running := generationByID[usage.operationID]; running {
 			if !generation.month.Equal(usage.month) || generation.reservation != usage.reservation {
-				return errors.New("account delete running AI settlement exposure invariant failed")
+				return result, errors.New("account delete running AI settlement exposure invariant failed")
 			}
 			continue
 		}
 		releasedUsageExposures = append(releasedUsageExposures, usage)
 	}
-	type monthlyExposure struct {
-		month             time.Time
-		reservedToRelease string
-		unattributedToAdd string
-	}
+	result.SettlementOperationCount = int64(len(generationExposures) + len(releasedUsageExposures))
 	exposureRows, err := queries.ListAccountMonthlyExposures(ctx, userUUID)
 	if err != nil {
-		return err
+		return result, err
 	}
-	monthlyExposures := make([]monthlyExposure, 0, len(exposureRows))
+	monthlyExposures := make([]accountMonthlyExposure, 0, len(exposureRows))
 	for _, row := range exposureRows {
 		if row == nil {
-			return errors.New("account delete monthly exposure row is nil")
+			return result, errors.New("account delete monthly exposure row is nil")
 		}
 		exposureMonth, mappingErr := accountExposureDate(row.MonthUtc)
 		if mappingErr != nil {
-			return errors.New("account delete monthly exposure mapping invariant failed")
+			return result, errors.New("account delete monthly exposure mapping invariant failed")
 		}
-		monthlyExposures = append(monthlyExposures, monthlyExposure{
+		monthlyExposures = append(monthlyExposures, accountMonthlyExposure{
 			month:             exposureMonth,
 			reservedToRelease: row.ReservedToRelease,
 			unattributedToAdd: row.UnattributedToAdd,
@@ -227,11 +235,15 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 			},
 		)
 		if updateErr != nil {
-			return updateErr
+			return result, updateErr
 		}
 		if rows != 1 {
-			return errors.New("account delete generation reservation invariant failed")
+			return result, errors.New("account delete generation reservation invariant failed")
 		}
+	}
+	unattributedCostUSD, sumErr := sumUnattributedCost(monthlyExposures)
+	if sumErr != nil {
+		return result, sumErr
 	}
 	for _, exposure := range monthlyExposures {
 		rows, updateErr := queries.MoveAccountExposureToUnattributedCAS(
@@ -244,10 +256,10 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 			},
 		)
 		if updateErr != nil {
-			return updateErr
+			return result, updateErr
 		}
 		if rows != 1 {
-			return errors.New("account delete budget settlement exposure invariant failed")
+			return result, errors.New("account delete budget settlement exposure invariant failed")
 		}
 	}
 	for _, usage := range releasedUsageExposures {
@@ -261,21 +273,40 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 			},
 		)
 		if deleteErr != nil {
-			return deleteErr
+			return result, deleteErr
 		}
 		if rows != 1 {
-			return errors.New("account delete released AI usage exposure invariant failed")
+			return result, errors.New("account delete released AI usage exposure invariant failed")
 		}
 	}
 	rows, err := queries.DeleteAccountUserCAS(ctx, userUUID)
 	if err != nil {
-		return err
+		return result, err
 	}
 	if rows != 1 {
-		return pgx.ErrNoRows
+		return result, pgx.ErrNoRows
 	}
 	err = tx.Commit(ctx)
-	return err
+	if err == nil {
+		result.UnattributedCostUSD = unattributedCostUSD
+	}
+	return result, err
+}
+
+func sumUnattributedCost(exposures []accountMonthlyExposure) (float64, error) {
+	total := new(big.Rat)
+	for _, exposure := range exposures {
+		value, ok := new(big.Rat).SetString(exposure.unattributedToAdd)
+		if !ok || value.Sign() < 0 {
+			return 0, errors.New("account delete unattributed cost mapping invariant failed")
+		}
+		total.Add(total, value)
+	}
+	amount, _ := total.Float64()
+	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 0 {
+		return 0, errors.New("account delete unattributed cost total invariant failed")
+	}
+	return amount, nil
 }
 
 func lockUser(ctx context.Context, tx pgx.Tx, userID user.ID) error {

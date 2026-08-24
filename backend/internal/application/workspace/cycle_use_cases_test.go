@@ -460,10 +460,16 @@ func TestCompleteCycleOwnsDoubleReceiptLockOrderDomainWritesIDAndClock(t *testin
 	tx.receipts = []*CompleteCycleReceipt{{GoalID: "other", CycleID: "other", RequestHash: "other"}, nil}
 	uow := &cycleTestUOW{tx: tx}
 	useCases := NewCycleUseCases(nil, uow, clock, ids, CycleUseCaseSettings{})
+	observer := &workspaceObserverRecorder{}
+	service := &Service{cycles: useCases, settings: Settings{EventObserver: observer}}
 
-	result, err := useCases.CompleteCycle(context.Background(), input)
+	result, err := service.CompleteCycle(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(observer.events) != 2 || observer.events[0].Event != WorkspaceMetricCycleCompleted ||
+		observer.events[1].Event != WorkspaceMetricGoalReviewOpened {
+		t.Fatalf("fresh completion events = %#v", observer.events)
 	}
 	wantTrace := []string{
 		"receipt", "user", "receipt", "goal", "cycle", "version", "ai",
@@ -506,10 +512,15 @@ func TestCompleteCycleReplayDoesNotDependOnIDOrClock(t *testing.T) {
 	tx.draftView = nil
 	uow := &cycleTestUOW{tx: tx}
 	useCases := NewCycleUseCases(nil, uow, nil, nil, CycleUseCaseSettings{})
+	observer := &workspaceObserverRecorder{}
+	service := &Service{cycles: useCases, settings: Settings{EventObserver: observer}}
 
-	result, err := useCases.CompleteCycle(context.Background(), input)
+	result, err := service.CompleteCycle(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(observer.events) != 0 {
+		t.Fatalf("post-state replay events = %#v", observer.events)
 	}
 	wantTrace := []string{"receipt", "user", "receipt", "goal", "load-goal", "load-cycle", "load-draft"}
 	if !reflect.DeepEqual(tx.trace, wantTrace) || uow.committed != 1 {
@@ -531,10 +542,15 @@ func TestCompleteCycleNormalReplayReturnsOriginalReviewWithoutIDOrClock(t *testi
 	tx.receipts = []*CompleteCycleReceipt{receipt, receipt}
 	uow := &cycleTestUOW{tx: tx}
 	useCases := NewCycleUseCases(nil, uow, nil, nil, CycleUseCaseSettings{})
+	observer := &workspaceObserverRecorder{}
+	service := &Service{cycles: useCases, settings: Settings{EventObserver: observer}}
 
-	result, err := useCases.CompleteCycle(context.Background(), input)
+	result, err := service.CompleteCycle(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(observer.events) != 0 {
+		t.Fatalf("review Draft replay events = %#v", observer.events)
 	}
 	if !result.Replayed || result.Replay != nil || result.ReviewDraft.ID != cycleTestDraftID ||
 		result.CompletedCycle.ID != cycleTestCycleID1 || result.Goal.Status != goal.StatusGoalReview {

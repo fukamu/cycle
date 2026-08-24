@@ -87,7 +87,22 @@ func (useCases *ActionAIUseCases) begin(
 		if replayErr != nil {
 			return replayErr
 		}
+		correlationGenerationID := input.GenerationID
 		if replay != nil {
+			correlationGenerationID = replay.GenerationID
+		}
+		if correlationGenerationID != "" {
+			ctx = ports.WithAIGenerationCorrelation(ctx, correlationGenerationID, string(input.Operation))
+		}
+		if replay != nil {
+			confirmedReplay, confirmErr := tx.FindActionAIReplay(ctx, input.UserID, input.Operation, input.IdempotencyKey)
+			if confirmErr != nil {
+				return confirmErr
+			}
+			if confirmedReplay == nil || confirmedReplay.GenerationID != replay.GenerationID {
+				return actionAIInvariantError("Action AI replay changed while user locked")
+			}
+			replay = confirmedReplay
 			if replay.IdempotencyRequestHash != requestHash || replay.GoalID != input.GoalID || replay.CycleID != input.CycleID ||
 				replay.TargetRevision != input.ExpectedContentRevision {
 				return ErrIdempotencyKeyReused
@@ -227,6 +242,7 @@ func (useCases *ActionAIUseCases) begin(
 			if reserveErr != nil {
 				return reserveErr
 			}
+			ctx = ports.WithAIGenerationCorrelation(ctx, input.GenerationID, string(input.Operation))
 		}
 		snapshot.GenerationID = input.GenerationID
 		promptVersion := useCases.promptVersion(input.Operation)
@@ -309,13 +325,27 @@ func (useCases *ActionAIUseCases) Finish(
 ) (response AIResponse, err error) {
 	now = now.UTC()
 	var finishErr error
+	settleLate := func(ctx context.Context, tx ActionAITx, knownUserID string, userLocked bool) error {
+		response.SettlementPath = "late"
+		response.SettlementResult = "failure"
+		settled, settleErr := settleLateActionAIUsage(
+			ctx, tx, snapshot.GenerationID, knownUserID, userLocked, result, providerErr, now,
+		)
+		if settleErr == nil {
+			response.SettlementResult = "idempotent"
+			if settled {
+				response.SettlementResult = "success"
+			}
+		}
+		return settleErr
+	}
 	err = useCases.uow.WithinActionAITransaction(ctx, func(tx ActionAITx) error {
 		locator, locateErr := tx.FindGenerationLocator(ctx, snapshot.GenerationID)
 		if locateErr != nil {
 			return locateErr
 		}
 		if locator == nil {
-			if settleErr := settleLateActionAIUsage(ctx, tx, snapshot.GenerationID, "", false, result, providerErr, now); settleErr != nil {
+			if settleErr := settleLate(ctx, tx, "", false); settleErr != nil {
 				return settleErr
 			}
 			finishErr = ErrNotFound
@@ -326,7 +356,7 @@ func (useCases *ActionAIUseCases) Finish(
 			return actionAIInvariantError("Action AI generation operation changed")
 		}
 		if locator.Status != aiStatusRunning {
-			if settleErr := settleLateActionAIUsage(ctx, tx, snapshot.GenerationID, "", false, result, providerErr, now); settleErr != nil {
+			if settleErr := settleLate(ctx, tx, "", false); settleErr != nil {
 				return settleErr
 			}
 			finishErr = ErrNotFound
@@ -337,7 +367,7 @@ func (useCases *ActionAIUseCases) Finish(
 		}
 		target, lockErr := tx.LockGoalWithCurrentVersion(ctx, locator.UserID, locator.GoalID)
 		if errors.Is(lockErr, ErrNotFound) {
-			if settleErr := settleLateActionAIUsage(ctx, tx, snapshot.GenerationID, locator.UserID, true, result, providerErr, now); settleErr != nil {
+			if settleErr := settleLate(ctx, tx, locator.UserID, true); settleErr != nil {
 				return settleErr
 			}
 			finishErr = ErrNotFound
@@ -348,7 +378,7 @@ func (useCases *ActionAIUseCases) Finish(
 		}
 		current, lockErr := tx.LockActionCycle(ctx, locator.UserID, locator.GoalID, locator.CycleID)
 		if errors.Is(lockErr, ErrNotFound) {
-			if settleErr := settleLateActionAIUsage(ctx, tx, snapshot.GenerationID, locator.UserID, true, result, providerErr, now); settleErr != nil {
+			if settleErr := settleLate(ctx, tx, locator.UserID, true); settleErr != nil {
 				return settleErr
 			}
 			finishErr = ErrNotFound
@@ -362,7 +392,7 @@ func (useCases *ActionAIUseCases) Finish(
 			CycleID: locator.CycleID, Operation: locator.Operation,
 		})
 		if errors.Is(lockErr, ErrNotFound) {
-			if settleErr := settleLateActionAIUsage(ctx, tx, snapshot.GenerationID, locator.UserID, true, result, providerErr, now); settleErr != nil {
+			if settleErr := settleLate(ctx, tx, locator.UserID, true); settleErr != nil {
 				return settleErr
 			}
 			finishErr = ErrNotFound
@@ -381,6 +411,7 @@ func (useCases *ActionAIUseCases) Finish(
 			providerErr = ErrGoalVersionConflict
 		}
 		contextChanged := current.Revisions.Content != generation.TargetRevision
+		response.ContextChanged = contextChanged
 		var appliedAt *time.Time
 		if providerErr == nil {
 			updated, applyErr := cycle.ApplyAIAction(current, result.Output, now)
@@ -411,6 +442,8 @@ func (useCases *ActionAIUseCases) Finish(
 			output = nil
 			failureCode = actionAIFailureCode(providerErr)
 		}
+		response.SettlementPath = "normal"
+		response.SettlementResult = "failure"
 		cost := decimalFromFloat(result.Usage.CostUSD)
 		rows, settleErr := tx.TerminalizeActionAIGenerationCAS(ctx, ActionAIGenerationSettlement{
 			GenerationID: snapshot.GenerationID, Operation: locator.Operation,
@@ -445,6 +478,7 @@ func (useCases *ActionAIUseCases) Finish(
 		if settleErr = requireActionAIRows("finalize Action AI usage", rows, 1); settleErr != nil {
 			return settleErr
 		}
+		response.SettlementResult = "success"
 		if providerErr != nil {
 			finishErr = providerErr
 			return nil
@@ -453,11 +487,15 @@ func (useCases *ActionAIUseCases) Finish(
 			GenerationID: snapshot.GenerationID, Action: result.Output,
 			ContentRevision: current.Revisions.Content, ActionRevision: current.Revisions.Action,
 			ContextChanged: contextChanged,
+			SettlementPath: response.SettlementPath, SettlementResult: response.SettlementResult,
 		}
 		return nil
 	})
 	if err != nil {
-		return AIResponse{}, err
+		if response.SettlementPath != "" {
+			response.SettlementResult = "failure"
+		}
+		return response, err
 	}
 	return response, finishErr
 }
@@ -547,46 +585,46 @@ func settleLateActionAIUsage(
 	result AIExecutionResult,
 	providerErr error,
 	now time.Time,
-) error {
+) (bool, error) {
 	locator, err := tx.FindUsageLocator(ctx, generationID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if locator == nil || locator.FinalizedAt != nil {
-		return nil
+		return false, nil
 	}
 	userID := locator.UserID
 	if knownUserID != "" && userID != knownUserID {
-		return actionAIInvariantError("late AI usage owner changed")
+		return false, actionAIInvariantError("late AI usage owner changed")
 	}
 	if !userLocked {
 		if err = tx.LockUser(ctx, userID); errors.Is(err, ErrNotFound) {
-			return nil
+			return false, nil
 		} else if err != nil {
-			return err
+			return false, err
 		}
 	}
 	usage, err := tx.LockUsage(ctx, generationID, userID)
 	if errors.Is(err, ErrNotFound) {
-		return nil
+		return false, nil
 	}
 	if err != nil || usage.FinalizedAt != nil {
-		return err
+		return false, err
 	}
 	if usage.SettlementBudgetMonthUtc.IsZero() || usage.SettlementReservationCostUSD == "" {
-		return actionAIInvariantError("late AI usage settlement exposure is missing")
+		return false, actionAIInvariantError("late AI usage settlement exposure is missing")
 	}
 	month := usage.SettlementBudgetMonthUtc
 	if err = tx.EnsureBudgetMonth(ctx, month, now); err != nil {
-		return err
+		return false, err
 	}
 	cost := decimalFromFloat(result.Usage.CostUSD)
 	rows, err := tx.AddLateActualCostCAS(ctx, month, cost, now)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err = requireActionAIRows("add late AI actual cost", rows, 1); err != nil {
-		return err
+		return false, err
 	}
 	status := aiStatusSucceeded
 	if providerErr != nil {
@@ -599,9 +637,12 @@ func settleLateActionAIUsage(
 		EstimatedCostUSD: cost, FinalizedAt: now,
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
-	return requireActionAIRows("finalize late AI usage", rows, 1)
+	if err = requireActionAIRows("finalize late AI usage", rows, 1); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func validateActionAIContextSelection(candidate, selected AISnapshot) error {

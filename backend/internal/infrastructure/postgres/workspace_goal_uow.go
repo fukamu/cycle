@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
 	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
@@ -83,14 +84,23 @@ func (transaction *workspaceGoalTx) LockGoalForDelete(
 	ctx context.Context,
 	userID, goalID string,
 ) (workspace.GoalDeleteTarget, error) {
-	revision, err := transaction.queries.LockGoalForDelete(ctx, db.LockGoalForDeleteParams{
+	row, err := transaction.queries.LockGoalForDelete(ctx, db.LockGoalForDeleteParams{
 		GoalID: mustUUID(goalID),
 		UserID: mustUUID(userID),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspace.GoalDeleteTarget{}, workspace.ErrNotFound
 	}
-	return workspace.GoalDeleteTarget{Revision: revision}, err
+	if err != nil {
+		return workspace.GoalDeleteTarget{}, err
+	}
+	status := goal.Status(row.Status)
+	switch status {
+	case goal.StatusActiveCycle, goal.StatusGoalReview, goal.StatusAchieved, goal.StatusEnded:
+	default:
+		return workspace.GoalDeleteTarget{}, fmt.Errorf("%w: locked Goal status is invalid", workspace.ErrGoalPersistenceInvariant)
+	}
+	return workspace.GoalDeleteTarget{Revision: row.Revision, Status: status}, nil
 }
 
 func (transaction *workspaceGoalTx) LockGoalDraftIDs(

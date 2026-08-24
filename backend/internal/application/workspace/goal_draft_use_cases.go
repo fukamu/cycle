@@ -291,7 +291,10 @@ func (useCases *GoalDraftUseCases) StartGoal(ctx context.Context, userID, draftI
 		if countErr != nil {
 			return countErr
 		}
-		if count >= limits.MaxProgressingGoals {
+		if count > limits.MaxProgressingGoals {
+			return errors.Join(ErrGoalActiveLimit, ErrProgressingGoalLimitInvariant)
+		}
+		if count == limits.MaxProgressingGoals {
 			return ErrGoalActiveLimit
 		}
 		if insertErr := insertInitialAggregate(ctx, tx, aggregate); insertErr != nil {
@@ -347,6 +350,15 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 		if lockErr := tx.LockUser(ctx, input.UserID); lockErr != nil {
 			return lockErr
 		}
+		correlationReplay, correlationErr := tx.FindGoalRefineReplay(ctx, input.UserID, input.IdempotencyKey)
+		if correlationErr != nil {
+			return correlationErr
+		}
+		correlationGenerationID := input.GenerationID
+		if correlationReplay != nil {
+			correlationGenerationID = correlationReplay.GenerationID
+		}
+		ctx = ports.WithAIGenerationCorrelation(ctx, correlationGenerationID, string(goalRefineOperation))
 		var target *GoalTargetState
 		if input.GoalID != "" {
 			locked, lockErr := tx.LockGoalWithCurrentVersion(ctx, input.UserID, input.GoalID)
@@ -521,13 +533,27 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapshot AISnapshot, result AIExecutionResult, providerErr error, now time.Time) (response AIResponse, err error) {
 	now = now.UTC()
 	finishErr := error(nil)
+	settleLate := func(ctx context.Context, tx GoalDraftTx, knownUserID string, userLocked bool) error {
+		response.SettlementPath = "late"
+		response.SettlementResult = "failure"
+		settled, settleErr := useCases.settleLateUsage(
+			ctx, tx, snapshot.GenerationID, knownUserID, userLocked, result, providerErr, now,
+		)
+		if settleErr == nil {
+			response.SettlementResult = "idempotent"
+			if settled {
+				response.SettlementResult = "success"
+			}
+		}
+		return settleErr
+	}
 	err = useCases.uow.WithinGoalDraftTransaction(ctx, func(tx GoalDraftTx) error {
 		locator, locateErr := tx.FindGenerationLocator(ctx, snapshot.GenerationID)
 		if locateErr != nil {
 			return locateErr
 		}
 		if locator == nil {
-			if settleErr := useCases.settleLateUsage(ctx, tx, snapshot.GenerationID, "", false, result, providerErr, now); settleErr != nil {
+			if settleErr := settleLate(ctx, tx, "", false); settleErr != nil {
 				return settleErr
 			}
 			finishErr = ErrNotFound
@@ -537,7 +563,7 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 			return invariantError("Goal Refine generation operation changed")
 		}
 		if locator.Status != aiStatusRunning {
-			if settleErr := useCases.settleLateUsage(ctx, tx, snapshot.GenerationID, "", false, result, providerErr, now); settleErr != nil {
+			if settleErr := settleLate(ctx, tx, "", false); settleErr != nil {
 				return settleErr
 			}
 			finishErr = ErrNotFound
@@ -549,7 +575,7 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 		if locator.GoalID != "" {
 			target, lockErr := tx.LockGoalWithCurrentVersion(ctx, locator.UserID, locator.GoalID)
 			if errors.Is(lockErr, ErrNotFound) {
-				if settleErr := useCases.settleLateUsage(ctx, tx, snapshot.GenerationID, locator.UserID, true, result, providerErr, now); settleErr != nil {
+				if settleErr := settleLate(ctx, tx, locator.UserID, true); settleErr != nil {
 					return settleErr
 				}
 				finishErr = ErrNotFound
@@ -564,7 +590,7 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 		}
 		draft, lockErr := lockGoalRefineDraft(ctx, tx, locator.UserID, locator.DraftID, locator.GoalID)
 		if errors.Is(lockErr, ErrNotFound) {
-			if settleErr := useCases.settleLateUsage(ctx, tx, snapshot.GenerationID, locator.UserID, true, result, providerErr, now); settleErr != nil {
+			if settleErr := settleLate(ctx, tx, locator.UserID, true); settleErr != nil {
 				return settleErr
 			}
 			finishErr = ErrNotFound
@@ -580,7 +606,7 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 			GenerationID: snapshot.GenerationID, UserID: locator.UserID, DraftID: draft.ID,
 		})
 		if errors.Is(lockErr, ErrNotFound) {
-			if settleErr := useCases.settleLateUsage(ctx, tx, snapshot.GenerationID, locator.UserID, true, result, providerErr, now); settleErr != nil {
+			if settleErr := settleLate(ctx, tx, locator.UserID, true); settleErr != nil {
 				return settleErr
 			}
 			finishErr = ErrNotFound
@@ -593,6 +619,7 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 			return invariantError("Goal Refine generation target revision changed")
 		}
 		contextChanged := draft.Revision != generation.TargetRevision
+		response.ContextChanged = contextChanged
 		status := aiStatusSucceeded
 		output := &result.Output
 		failureCode := ""
@@ -601,6 +628,8 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 			output = nil
 			failureCode = goalRefineFailureCode(providerErr)
 		}
+		response.SettlementPath = "normal"
+		response.SettlementResult = "failure"
 		cost := decimalFromFloat(result.Usage.CostUSD)
 		rows, settleErr := tx.TerminalizeGenerationCAS(ctx, AIGenerationSettlement{
 			GenerationID: snapshot.GenerationID, ExpectedReservationUSD: generation.ReservedCostUSD,
@@ -632,6 +661,7 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 		if settleErr = requireRows("finalize Goal Refine usage", rows, 1); settleErr != nil {
 			return settleErr
 		}
+		response.SettlementResult = "success"
 		if providerErr != nil {
 			finishErr = providerErr
 			return nil
@@ -641,11 +671,15 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 			GenerationID: snapshot.GenerationID, SourceDraftRevision: &sourceDraftRevision,
 			SourceGoalRevision: snapshot.SourceGoalRevision, Suggestion: result.Output,
 			ContextChanged: contextChanged,
+			SettlementPath: response.SettlementPath, SettlementResult: response.SettlementResult,
 		}
 		return nil
 	})
 	if err != nil {
-		return AIResponse{}, err
+		if response.SettlementPath != "" {
+			response.SettlementResult = "failure"
+		}
+		return response, err
 	}
 	return response, finishErr
 }
@@ -809,46 +843,46 @@ func (useCases *GoalDraftUseCases) settleLateUsage(
 	result AIExecutionResult,
 	providerErr error,
 	now time.Time,
-) error {
+) (bool, error) {
 	locator, err := tx.FindUsageLocator(ctx, generationID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if locator == nil || locator.FinalizedAt != nil {
-		return nil
+		return false, nil
 	}
 	userID := locator.UserID
 	if knownUserID != "" && userID != knownUserID {
-		return invariantError("late AI usage owner changed")
+		return false, invariantError("late AI usage owner changed")
 	}
 	if !userLocked {
 		if err = tx.LockUser(ctx, userID); errors.Is(err, ErrNotFound) {
-			return nil
+			return false, nil
 		} else if err != nil {
-			return err
+			return false, err
 		}
 	}
 	usage, err := tx.LockUsage(ctx, generationID, userID)
 	if errors.Is(err, ErrNotFound) {
-		return nil
+		return false, nil
 	}
 	if err != nil || usage.FinalizedAt != nil {
-		return err
+		return false, err
 	}
 	if usage.SettlementBudgetMonthUtc.IsZero() || usage.SettlementReservationCostUSD == "" {
-		return invariantError("late AI usage settlement exposure is missing")
+		return false, invariantError("late AI usage settlement exposure is missing")
 	}
 	month := usage.SettlementBudgetMonthUtc
 	if err = tx.EnsureBudgetMonth(ctx, month, now); err != nil {
-		return err
+		return false, err
 	}
 	cost := decimalFromFloat(result.Usage.CostUSD)
 	rows, err := tx.AddLateActualCostCAS(ctx, month, cost, now)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err = requireRows("add late AI actual cost", rows, 1); err != nil {
-		return err
+		return false, err
 	}
 	status := aiStatusSucceeded
 	if providerErr != nil {
@@ -860,9 +894,12 @@ func (useCases *GoalDraftUseCases) settleLateUsage(
 		OutputTokens: result.Usage.OutputTokens, EstimatedCostUSD: cost, FinalizedAt: now,
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
-	return requireRows("finalize late AI usage", rows, 1)
+	if err = requireRows("finalize late AI usage", rows, 1); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func insertInitialAggregate(ctx context.Context, tx GoalDraftTx, aggregate goal.InitialAggregate) error {

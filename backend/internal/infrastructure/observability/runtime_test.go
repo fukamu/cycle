@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
@@ -232,7 +233,7 @@ func TestMetricSanitizerPreservesSoTConfigurationLabels(t *testing.T) {
 	t.Parallel()
 
 	for _, model := range []string{"gpt-5.6-luna", "gpt-5.6-terra"} {
-		if got := sanitizeMetricAttributeValue("model", model); got != model {
+		if got := sanitizeMetricAttributeValue("ai_generation_total", "model", model); got != model {
 			t.Errorf("model %q sanitized to %q", model, got)
 		}
 	}
@@ -240,7 +241,7 @@ func TestMetricSanitizerPreservesSoTConfigurationLabels(t *testing.T) {
 		"goal-refine-v1", "action-generate-v1", "action-refine-v1",
 		"goal-refine-v2", "action-generate-v2", "action-refine-v2",
 	} {
-		if got := sanitizeMetricAttributeValue("prompt_version", version); got != version {
+		if got := sanitizeMetricAttributeValue("ai_generation_total", "prompt_version", version); got != version {
 			t.Errorf("prompt version %q sanitized to %q", version, got)
 		}
 	}
@@ -248,7 +249,7 @@ func TestMetricSanitizerPreservesSoTConfigurationLabels(t *testing.T) {
 		{key: "model", value: "unapproved-model"},
 		{key: "prompt_version", value: "goal-refine-v3"},
 	} {
-		if got := sanitizeMetricAttributeValue(test.key, test.value); got != "other" {
+		if got := sanitizeMetricAttributeValue("ai_generation_total", test.key, test.value); got != "other" {
 			t.Errorf("unapproved %s %q sanitized to %q, want other", test.key, test.value, got)
 		}
 	}
@@ -327,6 +328,51 @@ func TestSetupDevelopmentUsesBoundedCountOnlyExporters(t *testing.T) {
 	}
 	if handler, ok := otel.GetErrorHandler().(*safeErrorHandler); !ok || handler.logger != nil {
 		t.Fatal("shutdown must leave a secret-discarding global error handler")
+	}
+}
+
+func TestCorrelationAttributeSanitizerIsClassAndValueFailClosed(t *testing.T) {
+	validRequestID := attribute.String("fukamu.request_id", "0198c20b-7b95-7000-8000-000000000001")
+	validGenerationID := attribute.String("fukamu.ai_generation_id", "0198c20b-7b95-7000-8000-000000000002")
+	validOperation := attribute.String("fukamu.ai_operation_type", "goal_refine")
+	for _, test := range []struct {
+		name  string
+		class spanClass
+		item  attribute.KeyValue
+	}{
+		{name: "HTTP request", class: spanClassHTTP, item: validRequestID},
+		{name: "Postgres request", class: spanClassPostgres, item: validRequestID},
+		{name: "Postgres generation", class: spanClassPostgres, item: validGenerationID},
+		{name: "Postgres operation", class: spanClassPostgres, item: validOperation},
+		{name: "OpenAI request", class: spanClassOpenAI, item: validRequestID},
+		{name: "OpenAI generation", class: spanClassOpenAI, item: validGenerationID},
+		{name: "OpenAI operation", class: spanClassOpenAI, item: validOperation},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := sanitizeCorrelationAttribute(test.class, test.item)
+			if !ok || got != test.item {
+				t.Fatalf("sanitize correlation = %#v/%v, want %#v/true", got, ok, test.item)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name  string
+		class spanClass
+		item  attribute.KeyValue
+	}{
+		{name: "request on application", class: spanClassApplication, item: validRequestID},
+		{name: "generation on HTTP", class: spanClassHTTP, item: validGenerationID},
+		{name: "wrong UUID version", class: spanClassOpenAI, item: attribute.String("fukamu.ai_generation_id", "0198c20b-7b95-4000-8000-000000000002")},
+		{name: "uppercase UUID", class: spanClassPostgres, item: attribute.String("fukamu.request_id", "0198C20B-7B95-7000-8000-000000000001")},
+		{name: "raw identity", class: spanClassOpenAI, item: attribute.String("fukamu.request_id", "private@example.com")},
+		{name: "unknown operation", class: spanClassOpenAI, item: attribute.String("fukamu.ai_operation_type", "PROMPT_BODY_CANARY")},
+		{name: "wrong type", class: spanClassOpenAI, item: attribute.Int("fukamu.request_id", 1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got, ok := sanitizeCorrelationAttribute(test.class, test.item); ok {
+				t.Fatalf("sanitize correlation = %#v/true, want rejection", got)
+			}
+		})
 	}
 }
 

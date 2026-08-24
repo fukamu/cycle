@@ -66,6 +66,7 @@ type View struct {
 	GoogleEmail     *string
 	CSRFToken       string
 	SessionToken    string
+	Created         bool `json:"-"`
 }
 
 type CreateAnonymousInput struct {
@@ -180,6 +181,7 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 		GoogleConnected: false,
 		CSRFToken:       csrfToken,
 		SessionToken:    sessionToken,
+		Created:         record.Created,
 	}, nil
 }
 

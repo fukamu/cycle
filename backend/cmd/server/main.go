@@ -22,6 +22,7 @@ import (
 	"github.com/fukamu/cycle/backend/internal/infrastructure/googleidentity"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/observability"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/postgres"
+	"github.com/fukamu/cycle/backend/internal/infrastructure/safelog"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/system"
 	turnstileinfra "github.com/fukamu/cycle/backend/internal/infrastructure/turnstile"
 )
@@ -56,7 +57,7 @@ func main() {
 }
 
 func run() (exitCode int) {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := safelog.NewJSON(os.Stdout)
 	settings, err := config.Load(os.LookupEnv)
 	if err != nil {
 		logger.Error("invalid configuration", "error_class", "configuration_invalid")
@@ -117,6 +118,7 @@ func run() (exitCode int) {
 			turnstileinfra.Settings{
 				SecretKey: settings.Turnstile.SecretKey, ExpectedAction: settings.Turnstile.ExpectedAction,
 				ExpectedHost: settings.App.PublicOrigin.Hostname(), RateHashKey: []byte(settings.Session.RateLimitHMACSecret),
+				Observer: metrics,
 			},
 		)
 	}
@@ -162,7 +164,7 @@ func run() (exitCode int) {
 			GoalRefineInstructions: promptSet.GoalRefine, ActionGenerateInstructions: promptSet.ActionGenerate,
 			ActionRefineInstructions: promptSet.ActionRefine, TokenCounter: tokenCounter,
 			GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
-			RefinePromptVersion: settings.AI.RefinePromptVersion, AIObserver: metrics,
+			RefinePromptVersion: settings.AI.RefinePromptVersion, AIObserver: metrics, EventObserver: metrics,
 		})
 	var googleVerifier account.GoogleVerifier = googleidentity.NewVerifier(settings.Google.WebClientID)
 	if settings.App.Environment == "test" {
@@ -172,7 +174,7 @@ func run() (exitCode int) {
 		postgres.NewAccountRepository(pool), googleVerifier, system.Clock{}, random, random,
 		account.Settings{
 			SessionHashKey: []byte(settings.Session.TokenPepper), CSRFHashKey: []byte(settings.Session.CSRFTokenPepper),
-			IdleTTL: settings.Session.IdleTTL, AbsoluteTTL: settings.Session.AbsoluteTTL,
+			IdleTTL: settings.Session.IdleTTL, AbsoluteTTL: settings.Session.AbsoluteTTL, Observer: metrics,
 		},
 	)
 	router := httpapi.NewRouter(httpapi.Dependencies{
@@ -182,20 +184,20 @@ func run() (exitCode int) {
 		StaticDir: settings.App.StaticDir, Metrics: metrics, TracerProvider: telemetryRuntime.TracerProvider(),
 	})
 	server := &http.Server{
-		Addr: settings.App.HTTPAddress, Handler: router,
+		Addr: settings.App.HTTPAddress, Handler: router, ErrorLog: safelog.NewHTTPServerErrorLog(logger),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second,
 		WriteTimeout: settings.AI.LeaseDuration + settings.AI.FinalizationGrace, IdleTimeout: 120 * time.Second,
 	}
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.ListenAndServe() }()
-	logger.Info("server started", "address", settings.App.HTTPAddress, "environment", settings.App.Environment)
+	logger.Info("server started", "operation", "server_start")
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
 	select {
-	case received := <-signals:
-		logger.Info("shutdown requested", "signal", received.String())
+	case <-signals:
+		logger.Info("shutdown requested", "operation", "server_shutdown_requested")
 	case listenErr := <-serverErrors:
 		if !errors.Is(listenErr, http.ErrServerClosed) {
 			logger.Error("server stopped unexpectedly", "error_class", "http_server_failed")

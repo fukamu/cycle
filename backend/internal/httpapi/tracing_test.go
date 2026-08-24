@@ -79,6 +79,7 @@ func TestRouterExportsOnlySafeServerSpanAttributes(t *testing.T) {
 		"http.request.method":       "OTHER",
 		"http.route":                "unmatched",
 		"http.response.status_code": int64(response.Code),
+		"fukamu.request_id":         "00000000-0000-7000-8000-000000000000",
 	}
 	if len(span.Attributes()) != len(wantAttributes) {
 		t.Fatalf("span attributes = %v", span.Attributes())

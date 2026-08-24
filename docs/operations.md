@@ -6,12 +6,14 @@
 
 - Cloudflare Worker/Containerのconsole出力をWorkers Logsで収集
 - Cloudflare automatic tracesを5% sample、logsを100% sampleで有効化
-- Go `slog` JSONにrequest ID、trace ID、route template、method、status、latencyを記録
+- Go safe JSON loggerで [`design.md` §42.2](design.md#422-structured-log-fields) のfieldだけを記録。Free-form message、group、unknown/malformed fieldは出力しない
 - Application metric eventをstructured logとして出力
-- Backend trace / metricをvendor-neutralなOTLP/HTTPでexport
+- Backend traceと、Browser内だけで発生する`draft_recovery_total`を除く [`design.md` §42.3](design.md#423-minimum-metrics) のserver-side metricをvendor-neutralなOTLP/HTTPでexport
 - `/healthz` と `/readyz`
 
 OTLP endpoint / header credential ownerと実値は未決です。使用するpinned SDK defaultのsampler / export volumeをStagingで受入確認し、接続先とcredential ownerを承認するまでStaging deployを行いません。Retention、dashboard、alert policy、notification channel、uptime monitor、on-callはProduction release blockerとして別途所有者と値を決定します。Cloudflareの5% trace / 100% log設定は変更せず、Cloudflare Analytics/Logs、Neon Monitoring、OpenAI usageを横断して確認します。Collector障害はApplication requestやreadinessを失敗させず、bounded retry後の固定diagnosticをWorkers Logsへ出します。Process終了時はHTTP requestをdrainしてからtrace / metric providerをflushします。
+
+調査では`request_id`と`trace_id`を起点にし、AI処理は判定後に付与される`ai_generation_id`と`ai_operation_type`でDB/OpenAI spanまで追跡します。Raw path、query、remote address、panic値/stack、provider responseは相関情報として追加しません。未知または不正なlog fieldは出力されず、metric labelは低cardinalityのclosed valueへ収束します。`draft_recovery_total`は本文・identityを送らないBrowser transportのowner判断まで未送信です。
 
 ## Health check
 

@@ -3,6 +3,8 @@ package workspace
 import (
 	"context"
 	"time"
+
+	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 type GoalListScope string
@@ -74,6 +76,7 @@ type GoalDeleteReceipt struct {
 
 type GoalDeleteTarget struct {
 	Revision int64
+	Status   goal.Status
 }
 
 type GoalDeleteGeneration struct {
