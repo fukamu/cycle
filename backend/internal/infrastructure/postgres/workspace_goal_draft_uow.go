@@ -794,3 +794,10 @@ func scanGoalDraft(row pgx.Row) (goal.Draft, error) {
 	}
 	return draft, err
 }
+
+func nullableUUID(value string) any {
+	if value == "" {
+		return nil
+	}
+	return mustUUID(value)
+}

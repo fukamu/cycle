@@ -16,7 +16,7 @@ func TestWorkspaceStoreWithinCycleTransactionIsReadCommittedAndAtomic(t *testing
 	now := integrationNow()
 	const userID = "10000000-0000-7000-8000-000000000001"
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 
 	committedAt := now.Add(time.Minute)
 	if err := store.WithinCycleTransaction(context.Background(), func(port workspace.CycleTx) error {
@@ -62,7 +62,7 @@ func TestCycleTxSeparatesGoalAndCycleNotFound(t *testing.T) {
 	)
 	insertAIConcurrencyUser(t, pool, ownerID, now)
 	insertAIConcurrencyUser(t, pool, outsiderID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixtures := progressingGoalFixtures()
 	_ = startProgressingGoal(t, store, ownerID, fixtures[0], 2, now)
 	_ = startProgressingGoal(t, store, ownerID, fixtures[1], 2, now)

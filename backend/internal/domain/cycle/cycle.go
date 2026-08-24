@@ -164,12 +164,9 @@ func SaveFrame(current PDCACycle, frame Frame, content string, expectedRevision 
 	return SaveFrameResult{Cycle: current, Frame: frame, Content: content, SavedAt: current.UpdatedAt}, nil
 }
 
-func ApplyAIAction(current PDCACycle, action string, expectedContentRevision int64, now time.Time) (PDCACycle, error) {
+func ApplyAIAction(current PDCACycle, action string, now time.Time) (PDCACycle, error) {
 	if current.Status != StatusActive {
 		return PDCACycle{}, ErrCycleNotActive
-	}
-	if current.Revisions.Content != expectedContentRevision {
-		return PDCACycle{}, ErrRevisionConflict
 	}
 	action, err := NormalizeAndValidateText(action)
 	if err != nil || IsBlank(action) {

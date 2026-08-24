@@ -9,75 +9,268 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fukamu/cycle/backend/internal/domain/cycle"
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
 type scriptedProvider struct {
-	results []AIProviderResult
-	errors  []error
-	inputs  []AIProviderRequest
+	goalResults     []GoalRefineAIResult
+	generateResults []GenerateActionAIResult
+	refineResults   []RefineActionAIResult
+	usages          []AIUsage
+	errors          []error
+	goalInputs      []RefineGoalAIInput
+	generateInputs  []GenerateActionAIInput
+	refineInputs    []RefineActionAIInput
 }
 
-func (provider *scriptedProvider) Execute(_ context.Context, input AIProviderRequest) (AIProviderResult, error) {
-	provider.inputs = append(provider.inputs, input)
-	index := len(provider.inputs) - 1
-	return provider.results[index], provider.errors[index]
-}
-
-func TestExecuteProviderRetriesInvalidResponseWithinOneLogicalOperation(t *testing.T) {
-	provider := &scriptedProvider{
-		results: []AIProviderResult{{Output: "", InputTokens: 10, OutputTokens: 2, CostUSD: 0.01}, {Output: " 目標\r\n本文 ", InputTokens: 11, OutputTokens: 3, CostUSD: 0.02}},
-		errors:  []error{ErrAIInvalidResponse, nil},
+func (provider *scriptedProvider) attempt(index int) (AIUsage, error) {
+	var usage AIUsage
+	var err error
+	if index < len(provider.usages) {
+		usage = provider.usages[index]
 	}
-	service := &Service{provider: provider, settings: Settings{MaxProviderAttempts: 2}}
-	result, err := service.executeProvider(context.Background(), AISnapshot{Operation: "goal_refine", SourceText: "元の目標"})
+	if index < len(provider.errors) {
+		err = provider.errors[index]
+	}
+	return usage, err
+}
+
+func (provider *scriptedProvider) RefineGoal(_ context.Context, input RefineGoalAIInput) (GoalRefineAIResult, AIUsage, error) {
+	provider.goalInputs = append(provider.goalInputs, input)
+	index := len(provider.goalInputs) - 1
+	usage, err := provider.attempt(index)
+	return provider.goalResults[index], usage, err
+}
+
+func (provider *scriptedProvider) GenerateAction(_ context.Context, input GenerateActionAIInput) (GenerateActionAIResult, AIUsage, error) {
+	provider.generateInputs = append(provider.generateInputs, input)
+	index := len(provider.generateInputs) - 1
+	usage, err := provider.attempt(index)
+	return provider.generateResults[index], usage, err
+}
+
+func (provider *scriptedProvider) RefineAction(_ context.Context, input RefineActionAIInput) (RefineActionAIResult, AIUsage, error) {
+	provider.refineInputs = append(provider.refineInputs, input)
+	index := len(provider.refineInputs) - 1
+	usage, err := provider.attempt(index)
+	return provider.refineResults[index], usage, err
+}
+
+func (provider *scriptedProvider) callCount() int {
+	return len(provider.goalInputs) + len(provider.generateInputs) + len(provider.refineInputs)
+}
+
+func TestExecuteAIRetriesInvalidResponseWithinOneLogicalOperation(t *testing.T) {
+	provider := &scriptedProvider{
+		goalResults: []GoalRefineAIResult{{}, {Suggestion: " goal\r\ntext "}},
+		usages: []AIUsage{
+			{InputTokens: 10, OutputTokens: 2, CostUSD: 0.01, ProviderRequestID: "request-1"},
+			{InputTokens: 11, OutputTokens: 3, CostUSD: 0.02, ProviderRequestID: "request-2"},
+		},
+		errors: []error{ErrAIInvalidResponse, nil},
+	}
+	service := &Service{
+		goalRefiner: provider,
+		settings: Settings{
+			MaxProviderAttempts: 2, Model: "test-model", GoalRefineInstructions: "goal instructions",
+			GoalPromptVersion: "goal-v2",
+		},
+	}
+	snapshot := AISnapshot{
+		Operation: domainai.OperationGoalRefine, SourceText: "source", MaxOutputTokens: 400,
+	}
+	result, err := service.executeAI(context.Background(), &snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(provider.inputs) != 2 || result.Attempts != 2 {
-		t.Fatalf("attempts = %d calls = %d", result.Attempts, len(provider.inputs))
+	if len(provider.goalInputs) != 2 || result.Attempts != 2 {
+		t.Fatalf("attempts = %d calls = %d", result.Attempts, len(provider.goalInputs))
 	}
-	if result.Output != " 目標\n本文 " {
+	if result.Output != " goal\ntext " {
 		t.Fatalf("output was not newline-normalized: %q", result.Output)
 	}
-	if result.InputTokens != 21 || result.OutputTokens != 5 || math.Abs(result.CostUSD-0.03) > 0.000001 {
+	if result.Usage.InputTokens != 21 || result.Usage.OutputTokens != 5 ||
+		math.Abs(result.Usage.CostUSD-0.03) > 0.000001 || result.Usage.ProviderRequestID != "request-2" {
 		t.Fatalf("retry usage was not accumulated: %#v", result)
 	}
+	if strings.Contains(provider.goalInputs[0].Instructions, invalidResponseRetryInstruction) ||
+		!strings.Contains(provider.goalInputs[1].Instructions, invalidResponseRetryInstruction) {
+		t.Fatalf("retry instructions = %#v", provider.goalInputs)
+	}
+	if snapshot.CanonicalProviderInputHash == "" {
+		t.Fatal("canonical provider input hash was not attached")
+	}
 }
 
-func TestExecuteProviderRetriesDomainInvalidOutput(t *testing.T) {
+func TestExecuteAIRetriesProviderUnavailableWithoutValidationReinforcement(t *testing.T) {
 	provider := &scriptedProvider{
-		results: []AIProviderResult{{Output: strings.Repeat("長", 501)}, {Output: "意図を維持した目標"}},
-		errors:  []error{nil, nil},
+		goalResults: []GoalRefineAIResult{{}, {Suggestion: "recovered goal"}},
+		usages: []AIUsage{
+			{InputTokens: 7, OutputTokens: 1, CostUSD: 0.01, ProviderRequestID: "request-1"},
+			{InputTokens: 8, OutputTokens: 2, CostUSD: 0.02, ProviderRequestID: "request-2"},
+		},
+		errors: []error{ErrAIProviderUnavailable, nil},
 	}
-	service := &Service{provider: provider, settings: Settings{MaxProviderAttempts: 2}}
-	result, err := service.executeProvider(context.Background(), AISnapshot{Operation: "goal_refine"})
+	service := &Service{
+		goalRefiner: provider,
+		settings: Settings{
+			MaxProviderAttempts: 2, Model: "test-model", GoalRefineInstructions: "goal instructions",
+			GoalPromptVersion: "goal-v2",
+		},
+	}
+	snapshot := AISnapshot{
+		Operation: domainai.OperationGoalRefine, SourceText: "source", MaxOutputTokens: 400,
+	}
+
+	result, err := service.executeAI(context.Background(), &snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(provider.inputs) != 2 || result.Output != "意図を維持した目標" {
-		t.Fatalf("calls/result = %d/%#v", len(provider.inputs), result)
+	if result.Output != "recovered goal" || result.Attempts != 2 || len(provider.goalInputs) != 2 {
+		t.Fatalf("result/calls = %#v/%d", result, len(provider.goalInputs))
+	}
+	if result.Usage.InputTokens != 15 || result.Usage.OutputTokens != 3 ||
+		math.Abs(result.Usage.CostUSD-0.03) > 0.000001 || result.Usage.ProviderRequestID != "request-2" {
+		t.Fatalf("retry usage was not accumulated: %#v", result.Usage)
+	}
+	for index, input := range provider.goalInputs {
+		if strings.Contains(input.Instructions, invalidResponseRetryInstruction) {
+			t.Fatalf("provider-unavailable attempt %d received validation reinforcement: %q", index+1, input.Instructions)
+		}
 	}
 }
 
-func TestExecuteProviderPassesOnlySelectedSameGoalContext(t *testing.T) {
-	provider := &scriptedProvider{results: []AIProviderResult{{Output: "次に行うこと"}}, errors: []error{nil}}
-	service := &Service{provider: provider, settings: Settings{MaxProviderAttempts: 1}}
-	past := []AIContextCycle{{ID: "cycle-1", GoalID: "goal-1", SequenceNumber: 1, Plan: "P"}}
-	_, err := service.executeProvider(context.Background(), AISnapshot{
-		Operation: "action_generate", GoalID: "goal-1", GoalBody: "目標", CurrentCycle: &AIContextCycle{ID: "cycle-2", GoalID: "goal-1", SequenceNumber: 2}, PastCycles: past,
-	})
+func TestExecuteAIStopsAfterOneAttemptForNonRetryableFailuresAndCancellation(t *testing.T) {
+	nonRetryableErr := errors.New("non-retryable provider failure")
+	tests := []struct {
+		name          string
+		providerError error
+		cancelContext bool
+		wantError     error
+	}{
+		{name: "provider timeout", providerError: ErrAIProviderTimeout, wantError: ErrAIProviderTimeout},
+		{name: "non-retryable provider error", providerError: nonRetryableErr, wantError: nonRetryableErr},
+		{
+			name: "context cancellation before retry", providerError: ErrAIProviderUnavailable,
+			cancelContext: true, wantError: context.Canceled,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &scriptedProvider{
+				goalResults: []GoalRefineAIResult{{}, {Suggestion: "must not be used"}},
+				usages: []AIUsage{
+					{InputTokens: 7, OutputTokens: 1, CostUSD: 0.01, ProviderRequestID: "request-1"},
+					{InputTokens: 99, OutputTokens: 99, CostUSD: 9.99, ProviderRequestID: "request-2"},
+				},
+				errors: []error{test.providerError, nil},
+			}
+			service := &Service{
+				goalRefiner: provider,
+				settings: Settings{
+					MaxProviderAttempts: 2, MaxRetryBackoff: 0, Model: "test-model",
+					GoalRefineInstructions: "goal instructions", GoalPromptVersion: "goal-v2",
+				},
+			}
+			ctx := context.Background()
+			if test.cancelContext {
+				canceledCtx, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceledCtx
+			}
+
+			result, err := service.executeAI(ctx, &AISnapshot{
+				Operation: domainai.OperationGoalRefine, SourceText: "source", MaxOutputTokens: 400,
+			})
+			if !errors.Is(err, test.wantError) {
+				t.Fatalf("error = %v, want %v", err, test.wantError)
+			}
+			if result.Attempts != 1 || len(provider.goalInputs) != 1 {
+				t.Fatalf("attempts/calls = %d/%d", result.Attempts, len(provider.goalInputs))
+			}
+			if result.Usage.InputTokens != 7 || result.Usage.OutputTokens != 1 ||
+				result.Usage.CostUSD != 0.01 || result.Usage.ProviderRequestID != "request-1" {
+				t.Fatalf("usage includes an unexecuted retry: %#v", result.Usage)
+			}
+			if strings.Contains(provider.goalInputs[0].Instructions, invalidResponseRetryInstruction) {
+				t.Fatalf("first attempt received validation reinforcement: %q", provider.goalInputs[0].Instructions)
+			}
+		})
+	}
+}
+
+func TestExecuteAIRetriesDomainInvalidRawGoalResult(t *testing.T) {
+	rawInvalid := strings.Repeat("x", 81)
+	provider := &scriptedProvider{
+		goalResults: []GoalRefineAIResult{
+			{Suggestion: rawInvalid},
+			{Suggestion: "preserve the intent"},
+		},
+		errors: []error{nil, nil},
+	}
+	service := &Service{
+		goalRefiner: provider,
+		settings: Settings{
+			MaxProviderAttempts: 2, Model: "test-model", GoalRefineInstructions: "goal instructions",
+			GoalPromptVersion: "goal-v2",
+		},
+	}
+	snapshot := AISnapshot{Operation: domainai.OperationGoalRefine, MaxOutputTokens: 400}
+	result, err := service.executeAI(context.Background(), &snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := provider.inputs[0]
-	if got.CurrentCycle == nil || got.CurrentCycle.SequenceNumber != 2 || len(got.PastCycles) != 1 || got.PastCycles[0].SequenceNumber != 1 {
+	if len(provider.goalInputs) != 2 || result.Attempts != 2 || result.Output != "preserve the intent" {
+		t.Fatalf("calls/result = %d/%#v", len(provider.goalInputs), result)
+	}
+	if provider.goalInputs[0].Instructions != "goal instructions" ||
+		provider.goalInputs[1].Instructions != "goal instructions"+invalidResponseRetryInstruction {
+		t.Fatalf("retry changed more than validation instructions: %#v", provider.goalInputs)
+	}
+	encodedRetry, err := json.Marshal(provider.goalInputs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encodedRetry), rawInvalid) {
+		t.Fatalf("raw invalid output was reinserted into retry input: %s", encodedRetry)
+	}
+}
+
+func TestExecuteAIValidatesAndRendersRawGeneratedActionsWithSelectedContext(t *testing.T) {
+	provider := &scriptedProvider{
+		generateResults: []GenerateActionAIResult{{Actions: []string{" first ", "second"}}},
+		errors:          []error{nil},
+	}
+	service := &Service{
+		actionGenerator: provider,
+		settings: Settings{
+			MaxProviderAttempts: 1, Model: "test-model", ActionGenerateInstructions: "generate instructions",
+			GeneratePromptVersion: "generate-v2",
+		},
+	}
+	past := []AIContextCycle{{ID: "cycle-1", GoalID: "goal-1", SequenceNumber: 1, Plan: "P"}}
+	snapshot := AISnapshot{
+		Operation: domainai.OperationActionGenerate, GoalID: "goal-1", GoalBody: "goal",
+		CurrentCycle: &AIContextCycle{ID: "cycle-2", GoalID: "goal-1", SequenceNumber: 2},
+		PastCycles:   past, MaxOutputTokens: 800,
+	}
+	result, err := service.executeAI(context.Background(), &snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "1. first\n\n2. second" || len(provider.generateInputs) != 1 {
+		t.Fatalf("result/calls = %#v/%d", result, len(provider.generateInputs))
+	}
+	got := provider.generateInputs[0]
+	if got.CurrentCycle == nil || got.CurrentCycle.SequenceNumber != 2 ||
+		len(got.PastCycles) != 1 || got.PastCycles[0].SequenceNumber != 1 {
 		t.Fatalf("provider context = %#v", got)
 	}
 	got.PastCycles[0].Plan = "mutated"
 	if past[0].Plan != "P" {
-		t.Fatal("provider was given the service snapshot backing slice")
+		t.Fatal("provider received the snapshot backing slice")
 	}
 	encoded, err := json.Marshal(got)
 	if err != nil {
@@ -85,6 +278,28 @@ func TestExecuteProviderPassesOnlySelectedSameGoalContext(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "cycle-1") || strings.Contains(string(encoded), "goal-1") {
 		t.Fatalf("provider payload leaked internal IDs: %s", encoded)
+	}
+}
+
+func TestExecuteAIValidatesRawRefinedAction(t *testing.T) {
+	provider := &scriptedProvider{
+		refineResults: []RefineActionAIResult{{RefinedAction: " improve\r\naction "}},
+		errors:        []error{nil},
+	}
+	service := &Service{
+		actionGenerator: provider,
+		settings: Settings{
+			MaxProviderAttempts: 1, Model: "test-model", ActionRefineInstructions: "refine instructions",
+			RefinePromptVersion: "refine-v2",
+		},
+	}
+	snapshot := AISnapshot{
+		Operation: domainai.OperationActionRefine, MaxOutputTokens: 800,
+		CurrentCycle: &AIContextCycle{GoalID: "goal-1", Action: "action"},
+	}
+	result, err := service.executeAI(context.Background(), &snapshot)
+	if err != nil || result.Output != " improve\naction " || len(provider.refineInputs) != 1 {
+		t.Fatalf("result/error/calls = %#v/%v/%d", result, err, len(provider.refineInputs))
 	}
 }
 
@@ -108,12 +323,12 @@ func TestRequestHashIsStableAndBodySensitive(t *testing.T) {
 
 func TestAIInputErrorsAreSpecificToEachOperation(t *testing.T) {
 	tests := []struct {
-		operation string
+		operation domainai.OperationType
 		want      error
 	}{
-		{"goal_refine", ErrGoalRefineInputEmpty},
-		{"action_generate", ErrActionGenerateInputIncomplete},
-		{"action_refine", ErrActionRefineInputIncomplete},
+		{domainai.OperationGoalRefine, ErrGoalRefineInputEmpty},
+		{domainai.OperationActionGenerate, ErrActionGenerateInputIncomplete},
+		{domainai.OperationActionRefine, ErrActionRefineInputIncomplete},
 	}
 	for _, test := range tests {
 		if got := specificAIInputError(test.operation, ErrAIInputIncomplete); !errors.Is(got, test.want) {
@@ -139,11 +354,6 @@ func TestGoalRefineResponseIncludesZeroSourceDraftRevision(t *testing.T) {
 
 type replayOnlyStore struct {
 	Store
-	actionSnapshot AISnapshot
-}
-
-func (store *replayOnlyStore) BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error) {
-	return store.actionSnapshot, nil
 }
 
 type serviceTestGoalDraftUOW struct{ tx GoalDraftTx }
@@ -207,7 +417,7 @@ func TestGoalRefineReplayPreservesOriginalResponseMetadata(t *testing.T) {
 	}
 	store := &replayOnlyStore{}
 	provider := &scriptedProvider{}
-	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, nil, nil, nil, nil, nil, provider, replayTestClock{}, replayTestIDs{}, Settings{})
+	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, nil, nil, nil, nil, nil, nil, provider, provider, replayTestClock{}, replayTestIDs{}, Settings{})
 
 	response, err := service.RefineGoal(context.Background(), input)
 	if err != nil {
@@ -218,34 +428,37 @@ func TestGoalRefineReplayPreservesOriginalResponseMetadata(t *testing.T) {
 		response.SourceGoalRevision != expectedGoalRevision || !response.ContextChanged || !response.Replayed {
 		t.Fatalf("goal replay response = %#v", response)
 	}
-	if len(provider.inputs) != 0 {
-		t.Fatalf("provider calls on replay = %d", len(provider.inputs))
+	if provider.callCount() != 0 {
+		t.Fatalf("provider calls on replay = %d", provider.callCount())
 	}
 }
 
 func TestActionReplayPreservesOriginalContextChanged(t *testing.T) {
 	output := "次の行動"
-	store := &replayOnlyStore{actionSnapshot: AISnapshot{
+	snapshot := AISnapshot{
 		GenerationID:            "30000000-0000-7000-8000-000000000001",
 		ReplayedOutput:          &output,
 		ReplayedContextChanged:  true,
 		ReplayedContentRevision: 9,
 		ReplayedActionRevision:  3,
-	}}
+	}
 	provider := &scriptedProvider{}
-	service := NewService(store, serviceTestGoalDraftUOW{}, nil, nil, nil, nil, nil, provider, replayTestClock{}, replayTestIDs{}, Settings{})
+	service := &Service{goalRefiner: provider, actionGenerator: provider}
 
-	response, err := service.RunActionAI(context.Background(), ActionAIInput{Operation: "action_refine"})
+	response, err := service.runActionAI(
+		context.Background(), "user-id", domainai.OperationActionRefine,
+		func(AIContextSelector) (AISnapshot, error) { return snapshot, nil },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.GenerationID != store.actionSnapshot.GenerationID || response.Action != output ||
+	if response.GenerationID != snapshot.GenerationID || response.Action != output ||
 		response.ContentRevision != 9 || response.ActionRevision != 3 ||
 		!response.ContextChanged || !response.Replayed {
 		t.Fatalf("action replay response = %#v", response)
 	}
-	if len(provider.inputs) != 0 {
-		t.Fatalf("provider calls on replay = %d", len(provider.inputs))
+	if provider.callCount() != 0 {
+		t.Fatalf("provider calls on replay = %d", provider.callCount())
 	}
 }
 
@@ -285,7 +498,7 @@ func (tx *saveReviewLeaseTx) SaveDraftCAS(_ context.Context, draft goal.Draft, e
 func TestSaveReviewForwardsExpectedDraftGeneration(t *testing.T) {
 	store := &saveReviewLeaseStore{}
 	tx := &saveReviewLeaseTx{}
-	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, nil, nil, nil, nil, nil, nil, replayTestClock{}, nil, Settings{})
+	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, nil, nil, nil, nil, nil, nil, nil, nil, replayTestClock{}, nil, Settings{})
 	const (
 		userID        = "10000000-0000-7000-8000-000000000001"
 		goalID        = "20000000-0000-7000-8000-000000000001"
@@ -302,32 +515,5 @@ func TestSaveReviewForwardsExpectedDraftGeneration(t *testing.T) {
 	}
 	if view.ID != reviewDraftID || view.Body != "local body" || view.Revision != 5 {
 		t.Fatalf("SaveReview view = %#v", view)
-	}
-}
-
-func TestValidateAIOutputUsesCodePointAndExactWhitespaceSemantics(t *testing.T) {
-	goalAtLimit := strings.Repeat("🌱", goal.MaxGoalCodePoints)
-	if output, err := validateAIOutput("goal_refine", goalAtLimit); err != nil || output != goalAtLimit {
-		t.Fatalf("80-code-point Goal AI output = %q, %v", output, err)
-	}
-	if _, err := validateAIOutput("goal_refine", goalAtLimit+"🌱"); !errors.Is(err, ErrAIInvalidResponse) {
-		t.Fatalf("81-code-point Goal AI output error = %v, want %v", err, ErrAIInvalidResponse)
-	}
-
-	frameAtLimit := strings.Repeat("🌱", cycle.MaxFrameCodePoints)
-	if output, err := validateAIOutput("action_refine", frameAtLimit); err != nil || output != frameAtLimit {
-		t.Fatalf("200-code-point Frame AI output = %q, %v", output, err)
-	}
-	if _, err := validateAIOutput("action_refine", frameAtLimit+"🌱"); !errors.Is(err, ErrAIInvalidResponse) {
-		t.Fatalf("201-code-point Frame AI output error = %v, want %v", err, ErrAIInvalidResponse)
-	}
-
-	const input = "  目標\r\n本文\r末尾 \t"
-	const want = "  目標\n本文\n末尾 \t"
-	if output, err := validateAIOutput("goal_refine", input); err != nil || output != want {
-		t.Fatalf("Goal AI newline/whitespace output = %q, %v, want %q", output, err, want)
-	}
-	if output, err := validateAIOutput("action_refine", input); err != nil || output != want {
-		t.Fatalf("Frame AI newline/whitespace output = %q, %v, want %q", output, err, want)
 	}
 }

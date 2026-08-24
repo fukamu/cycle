@@ -251,8 +251,7 @@ func TestWorkspaceStoreCompleteCycleAndTerminateUseGoalBeforeCycleLockOrder(t *t
 		t.Fatal(err)
 	}
 
-	settings := WorkspaceStoreSettings{}
-	seedStore := NewWorkspaceStore(pool, settings)
+	seedStore := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, seedStore, userID, fixture, 2, now)
 	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',action='A',
@@ -277,7 +276,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 		cancel()
 	}()
 
-	store := NewWorkspaceStore(tracedPool, settings)
+	store := NewWorkspaceStore(tracedPool)
 	completeInput := workspace.CompleteCycleInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		ReviewDraftID:        "61000000-0000-7000-8000-000000000001",
@@ -391,8 +390,7 @@ func TestWorkspaceStoreConcurrentCompleteCyclePreservesUserScopedReplayContract(
 				t.Fatal(err)
 			}
 
-			settings := WorkspaceStoreSettings{}
-			seedStore := NewWorkspaceStore(pool, settings)
+			seedStore := NewWorkspaceStore(pool)
 			fixtures := progressingGoalFixtures()
 			startedByFixture := make(map[int]workspace.StartGoalResult)
 			for _, fixtureIndex := range test.fixtureIndexes {
@@ -452,7 +450,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 				}
 			}
 
-			store := NewWorkspaceStore(tracedPool, settings)
+			store := NewWorkspaceStore(tracedPool)
 			calls := make(chan concurrentCompleteCycleCall, 2)
 			attemptStates := make([]*completeReplayAttemptTraceState, len(inputs))
 			for attempt := range inputs {
@@ -608,8 +606,7 @@ func TestWorkspaceStoreTerminatePreservesUserScopedReplayContract(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	settings := WorkspaceStoreSettings{}
-	store := NewWorkspaceStore(pool, settings)
+	store := NewWorkspaceStore(pool)
 	fixtures := progressingGoalFixtures()
 	first := startProgressingGoal(t, store, userID, fixtures[0], 2, now)
 	second := startProgressingGoal(t, store, userID, fixtures[1], 2, now.Add(time.Minute))

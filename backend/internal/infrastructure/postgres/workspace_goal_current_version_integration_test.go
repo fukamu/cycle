@@ -28,7 +28,7 @@ VALUES($1,$2,'ended',1,2,3,$3,$4,'missing-current-version',$3,$3)`,
 		t.Fatal(err)
 	}
 
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	useCases := newGoalQueryIntegrationUseCases(store)
 	if _, err := useCases.ListGoals(context.Background(), userID, "all", "", 20); !errors.Is(err, workspace.ErrGoalPersistenceInvariant) {
 		t.Fatalf("ListGoals missing current Version error = %v, want %v", err, workspace.ErrGoalPersistenceInvariant)

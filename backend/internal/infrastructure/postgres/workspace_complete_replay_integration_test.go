@@ -102,8 +102,7 @@ func TestWorkspaceStoreCompleteReplaySerializesWithContinueReview(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	settings := WorkspaceStoreSettings{}
-	seedStore := NewWorkspaceStore(pool, settings)
+	seedStore := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, seedStore, userID, fixture, 2, now)
 	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',action='A',
@@ -142,7 +141,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 		barrier.release()
 		cancel()
 	}()
-	store := NewWorkspaceStore(tracedPool, settings)
+	store := NewWorkspaceStore(tracedPool)
 
 	replayCalls := make(chan completeCycleCall, 1)
 	replayCtx := context.WithValue(ctx, completeReplayContinueCommandContextKey{}, completeReplayCommand)

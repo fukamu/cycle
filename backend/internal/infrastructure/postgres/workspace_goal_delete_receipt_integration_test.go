@@ -18,7 +18,7 @@ func TestGoalDeleteApplicationReceiptExpirySemantics(t *testing.T) {
 		deleteKey = "89000000-0000-7000-8000-000000000001"
 	)
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, aiConcurrencySettings())
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, store, userID, fixture, 2, now)
 

@@ -17,9 +17,9 @@ func TestWorkspaceHTTPTerminationRejectsHistoricalCycleBeforeStaleRevision(t *te
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	now := integrationNow()
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	provider := &contractRejectProvider{}
-	service := workspace.NewService(store, store, store, store, store, store, store, provider,
+	service := workspace.NewService(store, store, store, store, store, store, store, store, provider, provider,
 		contractIntegrationClock{now: now.Add(10 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
 			MaxProgressingGoals: 2,
 			CursorSigningKey:    []byte("test-cursor-key"),

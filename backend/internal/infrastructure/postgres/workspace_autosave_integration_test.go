@@ -235,5 +235,5 @@ func newAutosaveTestStore(t *testing.T) (*WorkspaceStore, time.Time) {
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, autosaveTestUserID, now); err != nil {
 		t.Fatal(err)
 	}
-	return NewWorkspaceStore(pool, WorkspaceStoreSettings{}), now
+	return NewWorkspaceStore(pool), now
 }

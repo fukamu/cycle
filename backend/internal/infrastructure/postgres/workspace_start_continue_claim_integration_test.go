@@ -50,7 +50,7 @@ func newStartContinueClaimFixture(
 		reviewDraftBody = "changed review body written before the shared Cycle claim"
 	)
 	insertAIConcurrencyUser(t, pool, userID, now)
-	seedStore := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	seedStore := NewWorkspaceStore(pool)
 	reviewGoal := progressingGoalFixtures()[0]
 	review := prepareReviewTransitionReview(t, seedStore, userID, reviewGoal, 2,
 		reviewDraftID, "71000000-0000-7000-8000-000000000501", now)

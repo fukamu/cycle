@@ -27,7 +27,7 @@ func TestWorkspaceStoreWithinGoalTransactionCommitsOnlyNilCallback(t *testing.T)
 	t.Run("rollback", func(t *testing.T) {
 		resetDatabase(t, pool)
 		insertAIConcurrencyUser(t, pool, userID, now)
-		store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+		store := NewWorkspaceStore(pool)
 		sentinel := errors.New("rollback Goal transaction")
 		err := store.WithinGoalTransaction(context.Background(), func(tx workspace.GoalTx) error {
 			if lockErr := tx.LockUser(context.Background(), userID); lockErr != nil {
@@ -51,7 +51,7 @@ func TestWorkspaceStoreWithinGoalTransactionCommitsOnlyNilCallback(t *testing.T)
 	t.Run("commit", func(t *testing.T) {
 		resetDatabase(t, pool)
 		insertAIConcurrencyUser(t, pool, userID, now)
-		store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+		store := NewWorkspaceStore(pool)
 		err := store.WithinGoalTransaction(context.Background(), func(tx workspace.GoalTx) error {
 			if lockErr := tx.LockUser(context.Background(), userID); lockErr != nil {
 				return lockErr

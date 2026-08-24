@@ -68,7 +68,8 @@ lease_expires_at=NULL,finished_at=$2 WHERE id=$1`, fixture.generationID, now); e
 		}
 	}
 
-	store := NewWorkspaceStore(pool, aiConcurrencySettings())
+	settings := aiConcurrencySettings()
+	store := NewWorkspaceStore(pool)
 	if err := executeGoalDraftAbandonUseCase(store, ctx, userID, draftID, now); err != nil {
 		t.Fatal(err)
 	}
@@ -109,10 +110,12 @@ lease_expires_at=NULL,finished_at=$2 WHERE id=$1`, fixture.generationID, now); e
 		t.Fatalf("retained usage IDs = %v, want %v", retained, wantRetained)
 	}
 
-	lateResult := workspace.AIProviderResult{InputTokens: 7, OutputTokens: 11, CostUSD: 0.025, Attempts: 1}
+	lateResult := workspace.AIExecutionResult{
+		Usage: workspace.AIUsage{InputTokens: 7, OutputTokens: 11, CostUSD: 0.025}, Attempts: 1,
+	}
 	lateSnapshot := workspace.AISnapshot{GenerationID: fixtures[3].generationID}
 	for attempt := 0; attempt < 2; attempt++ {
-		if _, finishErr := executeGoalRefineFinishUseCase(store, ctx, lateSnapshot, lateResult, nil, now.Add(time.Duration(attempt+1)*time.Minute)); !errors.Is(finishErr, workspace.ErrNotFound) {
+		if _, finishErr := executeGoalRefineFinishUseCaseWithSettings(store, ctx, lateSnapshot, lateResult, nil, now.Add(time.Duration(attempt+1)*time.Minute), settings); !errors.Is(finishErr, workspace.ErrNotFound) {
 			t.Fatalf("late callback %d error = %v, want not found after settlement", attempt+1, finishErr)
 		}
 	}
@@ -131,8 +134,8 @@ lease_expires_at=NULL,finished_at=$2 WHERE id=$1`, fixture.generationID, now); e
 		&status, &inputTokens, &outputTokens, &cost, &usageFinalized, &actualCost); err != nil {
 		t.Fatal(err)
 	}
-	if status != "succeeded" || inputTokens != lateResult.InputTokens || outputTokens != lateResult.OutputTokens ||
-		!usageFinalized || !approximatelyEqual(cost, lateResult.CostUSD) || !approximatelyEqual(actualCost, lateResult.CostUSD) {
+	if status != "succeeded" || inputTokens != lateResult.Usage.InputTokens || outputTokens != lateResult.Usage.OutputTokens ||
+		!usageFinalized || !approximatelyEqual(cost, lateResult.Usage.CostUSD) || !approximatelyEqual(actualCost, lateResult.Usage.CostUSD) {
 		t.Fatalf("late settlement = %s %d/%d cost %.8f finalized=%t actual=%.8f",
 			status, inputTokens, outputTokens, cost, usageFinalized, actualCost)
 	}
@@ -157,7 +160,8 @@ func TestActionAIStoresSharedQuotaRetentionDeadline(t *testing.T) {
 			now := integrationNow()
 			const userID = "10000000-0000-7000-8000-000000000001"
 			insertAIConcurrencyUser(t, pool, userID, now)
-			store := NewWorkspaceStore(pool, aiConcurrencySettings())
+			settings := aiConcurrencySettings()
+			store := NewWorkspaceStore(pool)
 			fixture := progressingGoalFixtures()[0]
 			startProgressingGoal(t, store, userID, fixture, 2, now)
 			if _, err := pool.Exec(ctx, `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',action=$2,
@@ -166,11 +170,21 @@ WHERE id=$1`, fixture.cycleID, test.action); err != nil {
 				t.Fatal(err)
 			}
 			acceptedAt := now.Add(time.Minute)
-			if _, err := store.BeginActionAI(ctx, workspace.ActionAIInput{
-				UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-				Operation: test.operation, ExpectedContentRevision: 4,
-				IdempotencyKey: test.idempotencyID, GenerationID: test.generationID, Now: acceptedAt,
-			}, passthroughAIContext); err != nil {
+			var err error
+			if test.operation == "action_generate" {
+				_, err = executeActionGenerateBeginUseCaseWithSettings(store, ctx, workspace.ActionGenerateInput{
+					UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
+					ExpectedContentRevision: 4, IdempotencyKey: test.idempotencyID,
+					GenerationID: test.generationID, Now: acceptedAt,
+				}, passthroughAIContext, settings)
+			} else {
+				_, err = executeActionRefineBeginUseCaseWithSettings(store, ctx, workspace.ActionRefineInput{
+					UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
+					ExpectedContentRevision: 4, IdempotencyKey: test.idempotencyID,
+					GenerationID: test.generationID, Now: acceptedAt,
+				}, passthroughAIContext, settings)
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
 			var storedAcceptedAt, retainUntil, settlementMonth time.Time

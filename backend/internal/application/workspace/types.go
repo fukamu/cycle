@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
@@ -291,20 +292,6 @@ type GoalRefineInput struct {
 	Now                   time.Time
 }
 
-type ActionAIInput struct {
-	UserID                  string
-	GoalID                  string
-	CycleID                 string
-	Operation               string
-	ExpectedContentRevision int64
-	ConfirmReplace          bool
-	IdempotencyKey          string
-	GenerationID            string
-	RemoteAddress           string
-	SessionID               string
-	Now                     time.Time
-}
-
 type AIContextCycle struct {
 	ID             string
 	GoalID         string
@@ -318,52 +305,26 @@ type AIContextCycle struct {
 }
 
 type AISnapshot struct {
-	GenerationID            string
-	Operation               string
-	TargetRevision          int64
-	SourceGoalRevision      int64
-	GoalID                  string
-	GoalBody                string
-	SourceText              string
-	CurrentCycle            *AIContextCycle
-	PastCycles              []AIContextCycle
-	CurrentTruncated        bool
-	ReplayedOutput          *string
-	ReplayedContextChanged  bool
-	ReplayedContentRevision int64
-	ReplayedActionRevision  int64
-}
-
-type AIProviderCycle struct {
-	SequenceNumber int32        `json:"sequenceNumber"`
-	Status         cycle.Status `json:"status"`
-	GoalBody       string       `json:"goalBody"`
-	Plan           string       `json:"plan"`
-	Do             string       `json:"do"`
-	Check          string       `json:"check"`
-	Action         string       `json:"action"`
-}
-
-type AIProviderRequest struct {
-	Operation       string            `json:"operation"`
-	GoalBody        string            `json:"goalBody"`
-	SourceText      string            `json:"sourceText"`
-	CurrentCycle    *AIProviderCycle  `json:"currentCycle,omitempty"`
-	PastCycles      []AIProviderCycle `json:"pastCycles"`
-	MaxOutputTokens int64             `json:"-"`
-}
-
-type AIProviderResult struct {
-	Output            string
-	InputTokens       int64
-	OutputTokens      int64
-	ProviderRequestID string
-	CostUSD           float64
-	Attempts          int16
+	GenerationID               string
+	Operation                  domainai.OperationType
+	TargetRevision             int64
+	SourceGoalRevision         int64
+	CanonicalProviderInputHash string
+	MaxOutputTokens            int64
+	GoalID                     string
+	GoalBody                   string
+	SourceText                 string
+	CurrentCycle               *AIContextCycle
+	PastCycles                 []AIContextCycle
+	CurrentTruncated           bool
+	ReplayedOutput             *string
+	ReplayedContextChanged     bool
+	ReplayedContentRevision    int64
+	ReplayedActionRevision     int64
 }
 
 type AIObservation struct {
-	Operation         string
+	Operation         domainai.OperationType
 	Result            string
 	Model             string
 	PromptVersion     string
@@ -387,10 +348,6 @@ type AIResponse struct {
 	Replayed            bool   `json:"replayed,omitempty"`
 }
 
-type AIProvider interface {
-	Execute(context.Context, AIProviderRequest) (AIProviderResult, error)
-}
-
 type TokenCounter interface {
 	Count(context.Context, string, string) (int, error)
 	Truncate(context.Context, string, string, int, string) (string, error)
@@ -406,6 +363,4 @@ type Store interface {
 	Home(context.Context, string, int) (HomeView, error)
 	GetDraft(context.Context, string, string) (DraftView, error)
 	GetReview(context.Context, string, string) (ReviewView, error)
-	BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error)
-	FinishActionAI(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
 }

@@ -78,14 +78,16 @@ func (stub *contractSessionStub) VerifyCSRF(record appsession.AuthenticatedSessi
 
 type contractWorkspaceStub struct {
 	httpapi.WorkspaceService
-	home        func(context.Context, string) (workspace.HomeView, error)
-	createDraft func(context.Context, string, string) (workspace.DraftView, error)
-	saveDraft   func(context.Context, string, string, string, int64) (workspace.DraftView, error)
-	getGoal     func(context.Context, string, string) (workspace.GoalView, error)
-	saveReview  func(context.Context, string, string, string, string, int64) (workspace.DraftView, error)
-	saveFrame   func(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
-	refineGoal  func(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
-	terminate   func(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error)
+	home           func(context.Context, string) (workspace.HomeView, error)
+	createDraft    func(context.Context, string, string) (workspace.DraftView, error)
+	saveDraft      func(context.Context, string, string, string, int64) (workspace.DraftView, error)
+	getGoal        func(context.Context, string, string) (workspace.GoalView, error)
+	saveReview     func(context.Context, string, string, string, string, int64) (workspace.DraftView, error)
+	saveFrame      func(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
+	refineGoal     func(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
+	generateAction func(context.Context, workspace.ActionGenerateInput) (workspace.AIResponse, error)
+	refineAction   func(context.Context, workspace.ActionRefineInput) (workspace.AIResponse, error)
+	terminate      func(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error)
 }
 
 func (stub *contractWorkspaceStub) Home(ctx context.Context, userID string) (workspace.HomeView, error) {
@@ -135,6 +137,20 @@ func (stub *contractWorkspaceStub) RefineGoal(ctx context.Context, input workspa
 		panic("unexpected RefineGoal call")
 	}
 	return stub.refineGoal(ctx, input)
+}
+
+func (stub *contractWorkspaceStub) GenerateAction(ctx context.Context, input workspace.ActionGenerateInput) (workspace.AIResponse, error) {
+	if stub.generateAction == nil {
+		panic("unexpected GenerateAction call")
+	}
+	return stub.generateAction(ctx, input)
+}
+
+func (stub *contractWorkspaceStub) RefineAction(ctx context.Context, input workspace.ActionRefineInput) (workspace.AIResponse, error) {
+	if stub.refineAction == nil {
+		panic("unexpected RefineAction call")
+	}
+	return stub.refineAction(ctx, input)
 }
 
 func (stub *contractWorkspaceStub) Terminate(ctx context.Context, input workspace.TerminateInput) (workspace.TerminateResult, error) {
@@ -677,6 +693,110 @@ func TestAutosaveRevisionConflictsHaveStableHTTPContract(t *testing.T) {
 			`{"content":"local plan","expectedFrameRevision":7}`, addContractAuthentication)
 		assertContractError(t, response, http.StatusConflict, "CYCLE_REVISION_CONFLICT", nil)
 	})
+}
+
+func TestTypedActionAIHTTPContract(t *testing.T) {
+	const remoteAddress = "203.0.113.9:4321"
+	generatePath := "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/actions/generate"
+	refinePath := "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/actions/refine"
+	wantResponse := workspace.AIResponse{
+		GenerationID: contractGenerationID, Action: "1. 次の行動", ContentRevision: 8,
+		ActionRevision: 3, ContextChanged: true,
+	}
+	configure := func(request *http.Request) {
+		addContractAuthentication(request)
+		request.Header.Set("Idempotency-Key", contractOperationID)
+		request.RemoteAddr = remoteAddress
+	}
+
+	t.Run("generate uses only the typed generate method", func(t *testing.T) {
+		calls := 0
+		wantInput := workspace.ActionGenerateInput{
+			UserID: contractUserID, GoalID: contractGoalID, CycleID: contractCycleID,
+			ExpectedContentRevision: 7, ConfirmReplace: true, IdempotencyKey: contractOperationID,
+			SessionID: contractSessionID, RemoteAddress: remoteAddress,
+		}
+		spaces := &contractWorkspaceStub{generateAction: func(_ context.Context, input workspace.ActionGenerateInput) (workspace.AIResponse, error) {
+			calls++
+			if !reflect.DeepEqual(input, wantInput) {
+				t.Fatalf("GenerateAction input = %#v, want %#v", input, wantInput)
+			}
+			return wantResponse, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, generatePath, `{"expectedContentRevision":7,"confirmReplace":true}`, configure)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		if calls != 1 {
+			t.Fatalf("GenerateAction calls = %d, want 1", calls)
+		}
+		var got workspace.AIResponse
+		decodeContractJSON(t, response, &got)
+		if !reflect.DeepEqual(got, wantResponse) {
+			t.Fatalf("response = %#v, want %#v", got, wantResponse)
+		}
+	})
+
+	t.Run("refine uses only the typed refine method", func(t *testing.T) {
+		calls := 0
+		wantInput := workspace.ActionRefineInput{
+			UserID: contractUserID, GoalID: contractGoalID, CycleID: contractCycleID,
+			ExpectedContentRevision: 11, IdempotencyKey: contractOperationID,
+			SessionID: contractSessionID, RemoteAddress: remoteAddress,
+		}
+		spaces := &contractWorkspaceStub{refineAction: func(_ context.Context, input workspace.ActionRefineInput) (workspace.AIResponse, error) {
+			calls++
+			if !reflect.DeepEqual(input, wantInput) {
+				t.Fatalf("RefineAction input = %#v, want %#v", input, wantInput)
+			}
+			return wantResponse, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, refinePath, `{"expectedContentRevision":11}`, configure)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		if calls != 1 {
+			t.Fatalf("RefineAction calls = %d, want 1", calls)
+		}
+		var got workspace.AIResponse
+		decodeContractJSON(t, response, &got)
+		if !reflect.DeepEqual(got, wantResponse) {
+			t.Fatalf("response = %#v, want %#v", got, wantResponse)
+		}
+	})
+
+	t.Run("typed errors retain their public codes", func(t *testing.T) {
+		generateSpaces := &contractWorkspaceStub{generateAction: func(context.Context, workspace.ActionGenerateInput) (workspace.AIResponse, error) {
+			return workspace.AIResponse{}, workspace.ErrActionGenerateInputIncomplete
+		}}
+		generateResponse := serveContract(contractRouter(authenticatedContractSessions(), generateSpaces, &contractAccountStub{}, nil),
+			http.MethodPost, generatePath, `{"expectedContentRevision":7,"confirmReplace":false}`, configure)
+		assertContractError(t, generateResponse, http.StatusBadRequest, "ACTION_GENERATE_INPUT_INCOMPLETE", nil)
+
+		refineSpaces := &contractWorkspaceStub{refineAction: func(context.Context, workspace.ActionRefineInput) (workspace.AIResponse, error) {
+			return workspace.AIResponse{}, workspace.ErrActionRefineInputIncomplete
+		}}
+		refineResponse := serveContract(contractRouter(authenticatedContractSessions(), refineSpaces, &contractAccountStub{}, nil),
+			http.MethodPost, refinePath, `{"expectedContentRevision":11}`, configure)
+		assertContractError(t, refineResponse, http.StatusBadRequest, "ACTION_REFINE_INPUT_INCOMPLETE", nil)
+	})
+
+	for _, test := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "generate requires idempotency key", path: generatePath, body: `{"expectedContentRevision":7,"confirmReplace":false}`},
+		{name: "refine requires idempotency key", path: refinePath, body: `{"expectedContentRevision":11}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := serveContract(contractRouter(authenticatedContractSessions(), &contractWorkspaceStub{}, &contractAccountStub{}, nil),
+				http.MethodPost, test.path, test.body, addContractAuthentication)
+			assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
+		})
+	}
 }
 
 func TestGoalTerminationDiscriminatedUnionHTTPContract(t *testing.T) {

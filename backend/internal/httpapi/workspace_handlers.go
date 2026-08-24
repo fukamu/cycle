@@ -408,7 +408,21 @@ func (server *api) generateAction(writer http.ResponseWriter, request *http.Requ
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	server.runActionAI(writer, request, "action_generate", input.ExpectedContentRevision, input.ConfirmReplace)
+	key := idempotencyKey(request)
+	if key == "" {
+		server.writeError(writer, request, errRequestValidation, nil)
+		return
+	}
+	view, err := server.dependencies.Workspace.GenerateAction(request.Context(), workspace.ActionGenerateInput{
+		UserID: currentUserID(request), GoalID: chi.URLParam(request, "goalId"), CycleID: chi.URLParam(request, "cycleId"),
+		ExpectedContentRevision: input.ExpectedContentRevision, ConfirmReplace: input.ConfirmReplace,
+		IdempotencyKey: key, SessionID: sessionID(request), RemoteAddress: server.remoteIP(request),
+	})
+	if err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
 }
 
 func (server *api) refineAction(writer http.ResponseWriter, request *http.Request) {
@@ -417,19 +431,15 @@ func (server *api) refineAction(writer http.ResponseWriter, request *http.Reques
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	server.runActionAI(writer, request, "action_refine", input.ExpectedContentRevision, false)
-}
-
-func (server *api) runActionAI(writer http.ResponseWriter, request *http.Request, operation string, revision int64, confirmReplace bool) {
 	key := idempotencyKey(request)
 	if key == "" {
 		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
-	view, err := server.dependencies.Workspace.RunActionAI(request.Context(), workspace.ActionAIInput{
+	view, err := server.dependencies.Workspace.RefineAction(request.Context(), workspace.ActionRefineInput{
 		UserID: currentUserID(request), GoalID: chi.URLParam(request, "goalId"), CycleID: chi.URLParam(request, "cycleId"),
-		Operation: operation, ExpectedContentRevision: revision, ConfirmReplace: confirmReplace,
-		IdempotencyKey: key, SessionID: sessionID(request), RemoteAddress: server.remoteIP(request),
+		ExpectedContentRevision: input.ExpectedContentRevision,
+		IdempotencyKey:          key, SessionID: sessionID(request), RemoteAddress: server.remoteIP(request),
 	})
 	if err != nil {
 		server.writeError(writer, request, err, nil)

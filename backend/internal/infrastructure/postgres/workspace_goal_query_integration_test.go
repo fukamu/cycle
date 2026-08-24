@@ -133,7 +133,7 @@ func TestGoalQueryApplicationOwnsAllScopePaginationAndOwnerBoundary(t *testing.T
 		seedGoalQueryFixture(t, pool, fixture.userID, fixture.fixture, now)
 	}
 
-	useCases := newGoalQueryIntegrationUseCases(NewWorkspaceStore(pool, WorkspaceStoreSettings{}))
+	useCases := newGoalQueryIntegrationUseCases(NewWorkspaceStore(pool))
 	first, err := useCases.ListGoals(context.Background(), ownerID, "all", "", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +242,7 @@ VALUES($1,$2,'review',$3,$4,$5,'review goal',0,$6,$6)`,
 			t.Fatal(err)
 		}
 	}
-	useCases := newGoalQueryIntegrationUseCases(NewWorkspaceStore(pool, WorkspaceStoreSettings{}))
+	useCases := newGoalQueryIntegrationUseCases(NewWorkspaceStore(pool))
 	valid, err := useCases.GetGoal(context.Background(), userID, goalID)
 	if err != nil || valid.CurrentWork == nil || valid.CurrentWork.Kind != "goal_review" {
 		t.Fatalf("valid review Goal = %#v, error = %v", valid, err)

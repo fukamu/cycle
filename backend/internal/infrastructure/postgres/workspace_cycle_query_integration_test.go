@@ -75,7 +75,7 @@ func TestCycleQueryApplicationOwnsPaginationNullableRowsAndOwnerErrors(t *testin
 	)
 	insertAIConcurrencyUser(t, pool, ownerID, now)
 	insertAIConcurrencyUser(t, pool, outsiderID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixtures := progressingGoalFixtures()
 	first := startProgressingGoal(t, store, ownerID, fixtures[0], 3, now.Add(-3*time.Hour))
 	second := startProgressingGoal(t, store, ownerID, fixtures[1], 3, now.Add(-2*time.Hour))
@@ -209,7 +209,7 @@ func assertCycleQuerySnapshotAcrossGoalDelete(
 	const userID = "10000000-0000-7000-8000-000000000001"
 	insertAIConcurrencyUser(t, pool, userID, now)
 	fixture := progressingGoalFixtures()[0]
-	baseStore := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	baseStore := NewWorkspaceStore(pool)
 	_ = startProgressingGoal(t, baseStore, userID, fixture, 2, now)
 
 	config := pool.Config()
@@ -221,7 +221,7 @@ func assertCycleQuerySnapshotAcrossGoalDelete(
 		t.Fatal(err)
 	}
 	t.Cleanup(tracedPool.Close)
-	tracedStore := NewWorkspaceStore(tracedPool, WorkspaceStoreSettings{})
+	tracedStore := NewWorkspaceStore(tracedPool)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

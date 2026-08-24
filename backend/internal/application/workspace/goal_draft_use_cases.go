@@ -14,12 +14,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 const (
-	goalRefineOperation   = "goal_refine"
 	aiStatusRunning       = "running"
 	aiStatusSucceeded     = "succeeded"
 	aiStatusFailed        = "failed"
@@ -27,6 +27,8 @@ const (
 	goalRefineContextSize = 10
 	aiRateBucketLifetime  = 2 * time.Minute
 )
+
+const goalRefineOperation = domainai.OperationGoalRefine
 
 var ErrGoalDraftPersistenceInvariant = errors.New("Goal Draft persistence invariant violated")
 
@@ -512,7 +514,7 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 	return snapshot, replayOutcomeErr
 }
 
-func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapshot AISnapshot, result AIProviderResult, providerErr error, now time.Time) (response AIResponse, err error) {
+func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapshot AISnapshot, result AIExecutionResult, providerErr error, now time.Time) (response AIResponse, err error) {
 	now = now.UTC()
 	finishErr := error(nil)
 	err = useCases.uow.WithinGoalDraftTransaction(ctx, func(tx GoalDraftTx) error {
@@ -595,12 +597,12 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 			output = nil
 			failureCode = goalRefineFailureCode(providerErr)
 		}
-		cost := decimalFromFloat(result.CostUSD)
+		cost := decimalFromFloat(result.Usage.CostUSD)
 		rows, settleErr := tx.TerminalizeGenerationCAS(ctx, AIGenerationSettlement{
 			GenerationID: snapshot.GenerationID, ExpectedReservationUSD: generation.ReservedCostUSD,
-			Status: status, Output: output, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+			Status: status, Output: output, InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens,
 			EstimatedCostUSD: cost, AttemptCount: result.Attempts, FailureCode: failureCode,
-			ProviderRequestID: result.ProviderRequestID, ContextChanged: contextChanged, FinishedAt: now,
+			ProviderRequestID: result.Usage.ProviderRequestID, ContextChanged: contextChanged, FinishedAt: now,
 		})
 		if settleErr != nil {
 			return settleErr
@@ -617,8 +619,8 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 		}
 		rows, settleErr = tx.FinalizeUsageCAS(ctx, AIUsageSettlement{
 			OperationID: snapshot.GenerationID, ExpectedBudgetMonthUtc: generation.BudgetMonthUtc,
-			ExpectedReservationCostUSD: generation.ReservedCostUSD, Status: status, InputTokens: result.InputTokens,
-			OutputTokens: result.OutputTokens, EstimatedCostUSD: cost, FinalizedAt: now,
+			ExpectedReservationCostUSD: generation.ReservedCostUSD, Status: status, InputTokens: result.Usage.InputTokens,
+			OutputTokens: result.Usage.OutputTokens, EstimatedCostUSD: cost, FinalizedAt: now,
 		})
 		if settleErr != nil {
 			return settleErr
@@ -800,7 +802,7 @@ func (useCases *GoalDraftUseCases) settleLateUsage(
 	generationID string,
 	knownUserID string,
 	userLocked bool,
-	result AIProviderResult,
+	result AIExecutionResult,
 	providerErr error,
 	now time.Time,
 ) error {
@@ -836,7 +838,7 @@ func (useCases *GoalDraftUseCases) settleLateUsage(
 	if err = tx.EnsureBudgetMonth(ctx, month, now); err != nil {
 		return err
 	}
-	cost := decimalFromFloat(result.CostUSD)
+	cost := decimalFromFloat(result.Usage.CostUSD)
 	rows, err := tx.AddLateActualCostCAS(ctx, month, cost, now)
 	if err != nil {
 		return err
@@ -850,8 +852,8 @@ func (useCases *GoalDraftUseCases) settleLateUsage(
 	}
 	rows, err = tx.FinalizeLateUsageCAS(ctx, AIUsageSettlement{
 		OperationID: generationID, ExpectedBudgetMonthUtc: month,
-		ExpectedReservationCostUSD: usage.SettlementReservationCostUSD, Status: status, InputTokens: result.InputTokens,
-		OutputTokens: result.OutputTokens, EstimatedCostUSD: cost, FinalizedAt: now,
+		ExpectedReservationCostUSD: usage.SettlementReservationCostUSD, Status: status, InputTokens: result.Usage.InputTokens,
+		OutputTokens: result.Usage.OutputTokens, EstimatedCostUSD: cost, FinalizedAt: now,
 	})
 	if err != nil {
 		return err
@@ -994,11 +996,11 @@ func replayGoalRefine(replay GoalRefineReplayState, inputHash string) (AISnapsho
 
 func goalRefineRequestHash(input GoalRefineInput) string {
 	return hashRequest(struct {
-		Operation             string `json:"operation"`
-		DraftID               string `json:"draftId"`
-		GoalID                string `json:"goalId,omitempty"`
-		ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
-		ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty"`
+		Operation             domainai.OperationType `json:"operation"`
+		DraftID               string                 `json:"draftId"`
+		GoalID                string                 `json:"goalId,omitempty"`
+		ExpectedDraftRevision int64                  `json:"expectedDraftRevision"`
+		ExpectedGoalRevision  *int64                 `json:"expectedGoalRevision,omitempty"`
 	}{goalRefineOperation, input.DraftID, input.GoalID, input.ExpectedDraftRevision, input.ExpectedGoalRevision})
 }
 

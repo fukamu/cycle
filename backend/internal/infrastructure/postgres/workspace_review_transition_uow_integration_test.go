@@ -15,7 +15,7 @@ func TestWorkspaceStoreWithinReviewTransitionTransactionIsReadCommittedAndAtomic
 	now := integrationNow()
 	const userID = "10000000-0000-7000-8000-000000000001"
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 
 	committedAt := now.Add(time.Minute)
 	if err := store.WithinReviewTransitionTransaction(context.Background(), func(port workspace.ReviewTransitionTx) error {
@@ -63,7 +63,7 @@ func TestReviewTransitionTxOwnerScopesParentLocks(t *testing.T) {
 	)
 	insertAIConcurrencyUser(t, pool, ownerID, now)
 	insertAIConcurrencyUser(t, pool, outsiderID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	_ = startProgressingGoal(t, store, ownerID, fixture, 2, now)
 

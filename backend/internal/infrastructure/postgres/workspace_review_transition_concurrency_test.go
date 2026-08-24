@@ -161,7 +161,7 @@ func newContinueContentionStore(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewWorkspaceStore(tracedPool, WorkspaceStoreSettings{}), tracedPool
+	return NewWorkspaceStore(tracedPool), tracedPool
 }
 
 func waitForContinueContention(
@@ -310,5 +310,5 @@ func newReviewTransitionRaceStore(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewWorkspaceStore(tracedPool, WorkspaceStoreSettings{}), tracedPool
+	return NewWorkspaceStore(tracedPool), tracedPool
 }

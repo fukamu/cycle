@@ -111,14 +111,14 @@ WHERE operation_id=$1`, snapshot.GenerationID); err != nil {
 		t.Fatal("DeleteAccount succeeded with mismatched settlement metadata")
 	}
 	assertSettlementSecurityState(t, pool, snapshot.GenerationID, 1, 1, 1,
-		decimalFromTestFloat(settings.ReservationUSD), "0.00000000", "0.00000000")
+		decimalFromTestFloat(settings.ActionAI.ReservationUSD), "0.00000000", "0.00000000")
 }
 
 func TestAccountRepositoryDeleteAccountRollsBackOnOrphanUsageDeleteCASMiss(t *testing.T) {
 	pool := integrationPool(t)
 	_, _, snapshot, now, settings := seedSettlementSecurityRunningAction(t, pool)
 	month := settlementSecurityMonth(now)
-	if err := releaseSettlementSecurityGeneration(t, pool, snapshot.GenerationID, month, settings.ReservationUSD, now); err != nil {
+	if err := releaseSettlementSecurityGeneration(t, pool, snapshot.GenerationID, month, settings.ActionAI.ReservationUSD, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -156,12 +156,13 @@ FOR EACH ROW EXECUTE FUNCTION account_delete_suppress_orphan_usage_delete()`); e
 
 func TestAccountRepositoryDeleteAccountAfterCallbackKeepsActualWithoutUnattributedCost(t *testing.T) {
 	pool := integrationPool(t)
-	store, _, snapshot, now, _ := seedSettlementSecurityRunningAction(t, pool)
-	result := workspace.AIProviderResult{
-		Output: "精算後に削除する行動", InputTokens: 12, OutputTokens: 5,
-		CostUSD: 0.004, Attempts: 1, ProviderRequestID: "provider-before-account-delete",
+	store, _, snapshot, now, settings := seedSettlementSecurityRunningAction(t, pool)
+	result := workspace.AIExecutionResult{
+		Output: "精算後に削除する行動", Attempts: 1,
+		Usage: workspace.AIUsage{InputTokens: 12, OutputTokens: 5,
+			CostUSD: 0.004, ProviderRequestID: "provider-before-account-delete"},
 	}
-	if _, err := store.FinishActionAI(context.Background(), snapshot, result, nil, now.Add(2*time.Minute)); err != nil {
+	if _, err := executeActionFinishUseCaseWithSettings(store, context.Background(), snapshot, result, nil, now.Add(2*time.Minute), settings); err != nil {
 		t.Fatal(err)
 	}
 	if err := NewAccountRepository(pool).DeleteAccount(
@@ -186,7 +187,7 @@ func TestAccountRepositoryDeleteAccountTransfersRunningGenerationWithoutUsage(t 
 		t.Fatal(err)
 	}
 	assertSettlementSecurityState(t, pool, snapshot.GenerationID, 0, 0, 0,
-		"0.00000000", "0.00000000", decimalFromTestFloat(settings.ReservationUSD))
+		"0.00000000", "0.00000000", decimalFromTestFloat(settings.ActionAI.ReservationUSD))
 }
 
 func TestOldAccountDeleteGuardRollsBackPriorReservationTransfer(t *testing.T) {
@@ -263,14 +264,14 @@ WHERE month_utc=$1 AND reserved_cost_usd >= $2::numeric`, fixture.august, fixtur
 func seedSettlementSecurityRunningAction(
 	t *testing.T,
 	pool *pgxpool.Pool,
-) (*WorkspaceStore, progressingGoalFixture, workspace.AISnapshot, time.Time, WorkspaceStoreSettings) {
+) (*WorkspaceStore, progressingGoalFixture, workspace.AISnapshot, time.Time, aiIntegrationApplicationSettings) {
 	t.Helper()
 	resetDatabase(t, pool)
 	now := integrationNow()
 	insertAIConcurrencyUser(t, pool, settlementSecurityUserID, now)
 	settings := aiConcurrencySettings()
-	store := NewWorkspaceStore(pool, settings)
-	fixture, _, snapshot := seedRunningActionAI(t, pool, store, settlementSecurityUserID, now)
+	store := NewWorkspaceStore(pool)
+	fixture, _, snapshot := seedRunningActionAI(t, pool, store, settlementSecurityUserID, now, settings)
 	return store, fixture, snapshot, now, settings
 }
 

@@ -36,23 +36,27 @@ func (generator *goalDraftIntegrationIDGenerator) NewID() (string, error) {
 }
 
 func newGoalDraftIntegrationUseCases(store *WorkspaceStore, now time.Time, maxProgressing int, ids ...string) *workspace.GoalDraftUseCases {
-	policy := workspace.NewStaticEntitlementPolicy(workspace.Entitlements{
-		MaxProgressingGoals:       maxProgressing,
-		MaxAIOperationsPer24Hours: store.settings.RollingLimit,
-	})
+	return newGoalDraftIntegrationUseCasesWithSettings(
+		store, now, maxProgressing, defaultAIIntegrationApplicationSettings(), ids...,
+	)
+}
+
+func newGoalDraftIntegrationUseCasesWithSettings(
+	store *WorkspaceStore,
+	now time.Time,
+	maxProgressing int,
+	settings aiIntegrationApplicationSettings,
+	ids ...string,
+) *workspace.GoalDraftUseCases {
+	entitlements := settings.Entitlements
+	entitlements.MaxProgressingGoals = maxProgressing
+	policy := workspace.NewStaticEntitlementPolicy(entitlements)
 	return workspace.NewGoalDraftUseCases(
 		store,
 		policy,
 		goalDraftIntegrationClock{now: now},
 		&goalDraftIntegrationIDGenerator{ids: ids},
-		workspace.GoalDraftUseCaseSettings{
-			Provider: store.settings.Provider, Model: store.settings.Model,
-			GoalPromptVersion: store.settings.GoalPromptVersion,
-			MonthlyBudgetUSD:  store.settings.MonthlyBudgetUSD, ReservationUSD: store.settings.ReservationUSD,
-			LeaseDuration: store.settings.LeaseDuration, RateHashKey: store.settings.RateHashKey,
-			AIPerUserMinute: store.settings.AIPerUserMinute, AIPerSessionMinute: store.settings.AIPerSessionMinute,
-			AIPerIPMinute: store.settings.AIPerIPMinute,
-		},
+		settings.GoalDraft,
 	)
 }
 
@@ -130,6 +134,18 @@ func executeGoalRefineBeginUseCase(
 	input workspace.GoalRefineInput,
 	selectContext workspace.AIContextSelector,
 ) (workspace.AISnapshot, error) {
+	return executeGoalRefineBeginUseCaseWithSettings(
+		store, ctx, input, selectContext, defaultAIIntegrationApplicationSettings(),
+	)
+}
+
+func executeGoalRefineBeginUseCaseWithSettings(
+	store *WorkspaceStore,
+	ctx context.Context,
+	input workspace.GoalRefineInput,
+	selectContext workspace.AIContextSelector,
+	settings aiIntegrationApplicationSettings,
+) (workspace.AISnapshot, error) {
 	ids := []string(nil)
 	if input.GenerationID == "" {
 		ids = append(ids, goalDraftIntegrationFallbackID)
@@ -138,18 +154,32 @@ func executeGoalRefineBeginUseCase(
 	if now.IsZero() {
 		now = time.Unix(0, 0).UTC()
 	}
-	return newGoalDraftIntegrationUseCases(store, now, 0, ids...).BeginGoalRefine(ctx, input, selectContext)
+	return newGoalDraftIntegrationUseCasesWithSettings(store, now, 0, settings, ids...).BeginGoalRefine(ctx, input, selectContext)
 }
 
 func executeGoalRefineFinishUseCase(
 	store *WorkspaceStore,
 	ctx context.Context,
 	snapshot workspace.AISnapshot,
-	result workspace.AIProviderResult,
+	result workspace.AIExecutionResult,
 	providerErr error,
 	now time.Time,
 ) (workspace.AIResponse, error) {
-	return newGoalDraftIntegrationUseCases(store, now, 0).FinishGoalRefine(ctx, snapshot, result, providerErr, now)
+	return executeGoalRefineFinishUseCaseWithSettings(
+		store, ctx, snapshot, result, providerErr, now, defaultAIIntegrationApplicationSettings(),
+	)
+}
+
+func executeGoalRefineFinishUseCaseWithSettings(
+	store *WorkspaceStore,
+	ctx context.Context,
+	snapshot workspace.AISnapshot,
+	result workspace.AIExecutionResult,
+	providerErr error,
+	now time.Time,
+	settings aiIntegrationApplicationSettings,
+) (workspace.AIResponse, error) {
+	return newGoalDraftIntegrationUseCasesWithSettings(store, now, 0, settings).FinishGoalRefine(ctx, snapshot, result, providerErr, now)
 }
 
 func executeGoalSuggestionAdoptUseCase(

@@ -6,12 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
-	"github.com/fukamu/cycle/backend/internal/domain/cycle"
-	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
@@ -22,6 +20,7 @@ type Settings struct {
 	RollingLimit               int
 	MonthlyBudgetUSD           float64
 	ReservationUSD             float64
+	ActionReservationUSD       float64
 	LeaseDuration              time.Duration
 	RateHashKey                []byte
 	AIPerUserMinute            int
@@ -51,8 +50,10 @@ type Service struct {
 	goals             *GoalUseCases
 	cycles            *CycleUseCases
 	reviewTransitions *ReviewTransitionUseCases
+	actionAI          *ActionAIUseCases
 	entitlements      EntitlementPolicy
-	provider          AIProvider
+	goalRefiner       GoalRefiner
+	actionGenerator   ActionGenerator
 	clock             ports.Clock
 	ids               ports.IDGenerator
 	settings          Settings
@@ -66,7 +67,9 @@ func NewService(
 	cycleQueries CycleQueryRepository,
 	cycleUOW CycleUnitOfWork,
 	reviewTransitionUOW ReviewTransitionUnitOfWork,
-	provider AIProvider,
+	actionAIUOW ActionAIUnitOfWork,
+	goalRefiner GoalRefiner,
+	actionGenerator ActionGenerator,
 	clock ports.Clock,
 	ids ports.IDGenerator,
 	settings Settings,
@@ -92,8 +95,17 @@ func NewService(
 		CursorSigningKey: settings.CursorSigningKey,
 	})
 	reviewTransitions := NewReviewTransitionUseCases(reviewTransitionUOW, clock, ids)
+	actionAI := NewActionAIUseCases(actionAIUOW, entitlements, clock, ids, ActionAIUseCaseSettings{
+		Provider: settings.Provider, Model: settings.Model,
+		GeneratePromptVersion: settings.GeneratePromptVersion, RefinePromptVersion: settings.RefinePromptVersion,
+		MonthlyBudgetUSD: settings.MonthlyBudgetUSD, ReservationUSD: settings.ActionReservationUSD,
+		LeaseDuration: settings.LeaseDuration, RateHashKey: settings.RateHashKey,
+		AIPerUserMinute: settings.AIPerUserMinute, AIPerSessionMinute: settings.AIPerSessionMinute,
+		AIPerIPMinute: settings.AIPerIPMinute,
+	})
 	return &Service{store: store, goalDraft: goalDraft, goals: goals, cycles: cycles, reviewTransitions: reviewTransitions,
-		entitlements: entitlements, provider: provider, clock: clock, ids: ids, settings: settings}
+		actionAI: actionAI, entitlements: entitlements, goalRefiner: goalRefiner, actionGenerator: actionGenerator,
+		clock: clock, ids: ids, settings: settings}
 }
 
 func (service *Service) Home(ctx context.Context, userID string) (HomeView, error) {
@@ -192,13 +204,13 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	}
 	input.GenerationID = generationID
 	input.Now = service.clock.Now().UTC()
-	snapshot, err := service.goalDraft.BeginGoalRefine(ctx, input, service.selectAIContext)
+	snapshot, err := service.goalDraft.BeginGoalRefine(ctx, input, service.selectAIContextForUser(input.UserID))
 	if err != nil {
 		missing := ErrGoalDraftNotFound
 		if input.GoalID != "" {
 			missing = ErrGoalNotFound
 		}
-		return AIResponse{}, specificAIInputError("goal_refine", resourceNotFound(err, missing))
+		return AIResponse{}, specificAIInputError(domainai.OperationGoalRefine, resourceNotFound(err, missing))
 	}
 	if snapshot.ReplayedOutput != nil {
 		sourceDraftRevision := snapshot.TargetRevision
@@ -213,7 +225,7 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 		}, nil
 	}
 	startedAt := service.clock.Now()
-	result, providerErr := service.executeProvider(ctx, snapshot)
+	result, providerErr := service.executeAI(ctx, &snapshot)
 	finishContext, cancel := service.finalizationContext(ctx)
 	defer cancel()
 	response, finishErr := service.goalDraft.FinishGoalRefine(finishContext, snapshot, result, providerErr, service.clock.Now().UTC())
@@ -222,7 +234,7 @@ func (service *Service) RefineGoal(ctx context.Context, input GoalRefineInput) (
 	if input.GoalID != "" {
 		missing = ErrGoalNotFound
 	}
-	return response, specificAIInputError("goal_refine", resourceNotFound(finishErr, missing))
+	return response, specificAIInputError(domainai.OperationGoalRefine, resourceNotFound(finishErr, missing))
 }
 
 func (service *Service) AdoptGoalSuggestion(ctx context.Context, userID, draftID, goalID, generationID string, expectedDraftRevision int64, expectedGoalRevision *int64) (DraftView, error) {
@@ -234,16 +246,29 @@ func (service *Service) AdoptGoalSuggestion(ctx context.Context, userID, draftID
 	return view, resourceNotFound(err, missing)
 }
 
-func (service *Service) RunActionAI(ctx context.Context, input ActionAIInput) (AIResponse, error) {
-	generationID, err := service.ids.NewID()
+func (service *Service) GenerateAction(ctx context.Context, input ActionGenerateInput) (AIResponse, error) {
+	return service.runActionAI(ctx, input.UserID, domainai.OperationActionGenerate, func(selector AIContextSelector) (AISnapshot, error) {
+		return service.actionAI.BeginGenerate(ctx, input, selector)
+	})
+}
+
+func (service *Service) RefineAction(ctx context.Context, input ActionRefineInput) (AIResponse, error) {
+	return service.runActionAI(ctx, input.UserID, domainai.OperationActionRefine, func(selector AIContextSelector) (AISnapshot, error) {
+		return service.actionAI.BeginRefine(ctx, input, selector)
+	})
+}
+
+type actionAIBegin func(AIContextSelector) (AISnapshot, error)
+
+func (service *Service) runActionAI(
+	ctx context.Context,
+	userID string,
+	operation domainai.OperationType,
+	begin actionAIBegin,
+) (AIResponse, error) {
+	snapshot, err := begin(service.selectAIContextForUser(userID))
 	if err != nil {
-		return AIResponse{}, err
-	}
-	input.GenerationID = generationID
-	input.Now = service.clock.Now().UTC()
-	snapshot, err := service.store.BeginActionAI(ctx, input, service.selectAIContext)
-	if err != nil {
-		return AIResponse{}, specificAIInputError(input.Operation, resourceNotFound(err, ErrCycleNotFound))
+		return AIResponse{}, specificAIInputError(operation, resourceNotFound(err, ErrCycleNotFound))
 	}
 	if snapshot.ReplayedOutput != nil {
 		return AIResponse{
@@ -253,45 +278,124 @@ func (service *Service) RunActionAI(ctx context.Context, input ActionAIInput) (A
 		}, nil
 	}
 	startedAt := service.clock.Now()
-	result, providerErr := service.executeProvider(ctx, snapshot)
+	result, providerErr := service.executeAI(ctx, &snapshot)
 	finishContext, cancel := service.finalizationContext(ctx)
 	defer cancel()
-	response, finishErr := service.store.FinishActionAI(finishContext, snapshot, result, providerErr, service.clock.Now().UTC())
+	response, finishErr := service.actionAI.Finish(finishContext, snapshot, result, providerErr, service.clock.Now().UTC())
 	service.observeAI(ctx, snapshot, result, providerErr, finishErr, startedAt)
-	return response, specificAIInputError(input.Operation, resourceNotFound(finishErr, ErrCycleNotFound))
+	return response, specificAIInputError(operation, resourceNotFound(finishErr, ErrCycleNotFound))
 }
 
-func (service *Service) executeProvider(ctx context.Context, snapshot AISnapshot) (AIProviderResult, error) {
-	request := providerRequestFromSnapshot(snapshot, service.outputTokenLimit(snapshot.Operation))
-	var result AIProviderResult
-	var err error
-	var inputTokens, outputTokens int64
-	var costUSD float64
-	attempts := service.settings.MaxProviderAttempts
-	if attempts < 1 {
-		attempts = 1
+type aiProviderAttempt func(context.Context, bool) (string, AIUsage, error)
+
+const invalidResponseRetryInstruction = "\nThe previous response was invalid. Follow the JSON Schema exactly and stay within the stated character limit."
+
+func (service *Service) executeAI(ctx context.Context, snapshot *AISnapshot) (AIExecutionResult, error) {
+	if snapshot.MaxOutputTokens <= 0 {
+		return AIExecutionResult{}, ErrAIInputBudget
 	}
-	for attempt := 1; attempt <= attempts; attempt++ {
-		attemptResult, attemptErr := service.provider.Execute(ctx, request)
-		inputTokens += attemptResult.InputTokens
-		outputTokens += attemptResult.OutputTokens
-		costUSD += attemptResult.CostUSD
-		result = attemptResult
-		result.InputTokens = inputTokens
-		result.OutputTokens = outputTokens
-		result.CostUSD = costUSD
+	if err := service.setCanonicalProviderInputHash(snapshot); err != nil {
+		return AIExecutionResult{}, err
+	}
+
+	var attempt aiProviderAttempt
+	switch snapshot.Operation {
+	case domainai.OperationGoalRefine:
+		if service.goalRefiner == nil {
+			return AIExecutionResult{}, ErrAIProviderUnavailable
+		}
+		input := service.refineGoalAIInput(*snapshot)
+		attempt = func(ctx context.Context, validationRetry bool) (string, AIUsage, error) {
+			request := input
+			if validationRetry {
+				request.Instructions += invalidResponseRetryInstruction
+			}
+			raw, usage, err := service.goalRefiner.RefineGoal(ctx, request)
+			if err != nil {
+				return "", usage, err
+			}
+			output, validationErr := domainai.ValidateGoalSuggestion(raw.Suggestion)
+			if validationErr != nil {
+				return "", usage, ErrAIInvalidResponse
+			}
+			return output, usage, nil
+		}
+	case domainai.OperationActionGenerate:
+		if service.actionGenerator == nil {
+			return AIExecutionResult{}, ErrAIProviderUnavailable
+		}
+		input := service.generateActionAIInput(*snapshot)
+		attempt = func(ctx context.Context, validationRetry bool) (string, AIUsage, error) {
+			request := input
+			if validationRetry {
+				request.Instructions += invalidResponseRetryInstruction
+			}
+			raw, usage, err := service.actionGenerator.GenerateAction(ctx, request)
+			if err != nil {
+				return "", usage, err
+			}
+			output, validationErr := domainai.RenderGeneratedActions(raw.Actions)
+			if validationErr != nil {
+				return "", usage, ErrAIInvalidResponse
+			}
+			return output, usage, nil
+		}
+	case domainai.OperationActionRefine:
+		if service.actionGenerator == nil {
+			return AIExecutionResult{}, ErrAIProviderUnavailable
+		}
+		input := service.refineActionAIInput(*snapshot)
+		attempt = func(ctx context.Context, validationRetry bool) (string, AIUsage, error) {
+			request := input
+			if validationRetry {
+				request.Instructions += invalidResponseRetryInstruction
+			}
+			raw, usage, err := service.actionGenerator.RefineAction(ctx, request)
+			if err != nil {
+				return "", usage, err
+			}
+			output, validationErr := domainai.ValidateRefinedAction(raw.RefinedAction)
+			if validationErr != nil {
+				return "", usage, ErrAIInvalidResponse
+			}
+			return output, usage, nil
+		}
+	default:
+		return AIExecutionResult{}, ErrAIInputBudget
+	}
+	return service.executeAIAttempts(ctx, attempt)
+}
+
+func (service *Service) executeAIAttempts(ctx context.Context, execute aiProviderAttempt) (AIExecutionResult, error) {
+	attemptLimit := service.settings.MaxProviderAttempts
+	if attemptLimit < 1 {
+		attemptLimit = 1
+	}
+	var result AIExecutionResult
+	var finalErr error
+	validationRetry := false
+	for attempt := 1; attempt <= attemptLimit; attempt++ {
+		output, usage, err := execute(ctx, validationRetry)
+		result.Output = output
+		result.Usage.InputTokens += usage.InputTokens
+		result.Usage.OutputTokens += usage.OutputTokens
+		result.Usage.CostUSD += usage.CostUSD
+		if usage.ProviderRequestID != "" {
+			result.Usage.ProviderRequestID = usage.ProviderRequestID
+		}
 		result.Attempts = int16(attempt)
-		err = attemptErr
-		if err == nil {
-			result.Output, err = validateAIOutput(snapshot.Operation, result.Output)
+		finalErr = err
+		if finalErr == nil {
+			return result, nil
 		}
-		if err == nil {
+		if !errors.Is(finalErr, ErrAIInvalidResponse) && !errors.Is(finalErr, ErrAIProviderUnavailable) {
 			break
 		}
-		if !errors.Is(err, ErrAIInvalidResponse) && !errors.Is(err, ErrAIProviderUnavailable) {
-			break
-		}
-		if attempt < attempts {
+		validationRetry = errors.Is(finalErr, ErrAIInvalidResponse)
+		if attempt < attemptLimit {
+			if cancellationErr := ctx.Err(); cancellationErr != nil {
+				return result, cancellationErr
+			}
 			delay := min(time.Duration(1<<(attempt-1))*250*time.Millisecond, service.settings.MaxRetryBackoff)
 			if delay > 0 {
 				select {
@@ -302,26 +406,7 @@ func (service *Service) executeProvider(ctx context.Context, snapshot AISnapshot
 			}
 		}
 	}
-	return result, err
-}
-
-func validateAIOutput(operation, output string) (string, error) {
-	switch operation {
-	case "goal_refine":
-		normalized, err := goal.NormalizeText(output, false)
-		if err != nil {
-			return "", ErrAIInvalidResponse
-		}
-		return normalized, nil
-	case "action_generate", "action_refine":
-		normalized, err := cycle.NormalizeAndValidateText(output)
-		if err != nil || strings.TrimSpace(normalized) == "" {
-			return "", ErrAIInvalidResponse
-		}
-		return normalized, nil
-	default:
-		return "", ErrAIInvalidResponse
-	}
+	return result, finalErr
 }
 
 func (service *Service) finalizationContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -332,7 +417,7 @@ func (service *Service) finalizationContext(ctx context.Context) (context.Contex
 	return context.WithTimeout(context.WithoutCancel(ctx), grace)
 }
 
-func (service *Service) observeAI(ctx context.Context, snapshot AISnapshot, result AIProviderResult, providerErr, finishErr error, startedAt time.Time) {
+func (service *Service) observeAI(ctx context.Context, snapshot AISnapshot, result AIExecutionResult, providerErr, finishErr error, startedAt time.Time) {
 	if service.settings.AIObserver == nil {
 		return
 	}
@@ -340,26 +425,14 @@ func (service *Service) observeAI(ctx context.Context, snapshot AISnapshot, resu
 	if providerErr != nil || finishErr != nil {
 		resultLabel = "failure"
 	}
+	operationSettings, _ := service.aiOperationSettings(snapshot.Operation)
 	service.settings.AIObserver.ObserveAI(context.WithoutCancel(ctx), AIObservation{
 		Operation: snapshot.Operation, Result: resultLabel, Model: service.settings.Model,
-		PromptVersion: service.promptVersion(snapshot.Operation), InputTokens: result.InputTokens,
-		OutputTokens: result.OutputTokens, EstimatedCostUSD: result.CostUSD,
+		PromptVersion: operationSettings.promptVersion, InputTokens: result.Usage.InputTokens,
+		OutputTokens: result.Usage.OutputTokens, EstimatedCostUSD: result.Usage.CostUSD,
 		ContextCycleCount: len(snapshot.PastCycles), CurrentTruncated: snapshot.CurrentTruncated,
 		Duration: service.clock.Now().Sub(startedAt),
 	})
-}
-
-func (service *Service) promptVersion(operation string) string {
-	switch operation {
-	case "goal_refine":
-		return service.settings.GoalPromptVersion
-	case "action_generate":
-		return service.settings.GeneratePromptVersion
-	case "action_refine":
-		return service.settings.RefinePromptVersion
-	default:
-		return ""
-	}
 }
 
 func hashRequest(value any) string {
@@ -375,16 +448,16 @@ func resourceNotFound(err, replacement error) error {
 	return err
 }
 
-func specificAIInputError(operation string, err error) error {
+func specificAIInputError(operation domainai.OperationType, err error) error {
 	if !errors.Is(err, ErrAIInputIncomplete) {
 		return err
 	}
 	switch operation {
-	case "goal_refine":
+	case domainai.OperationGoalRefine:
 		return ErrGoalRefineInputEmpty
-	case "action_generate":
+	case domainai.OperationActionGenerate:
 		return ErrActionGenerateInputIncomplete
-	case "action_refine":
+	case domainai.OperationActionRefine:
 		return ErrActionRefineInputIncomplete
 	default:
 		return err

@@ -41,9 +41,19 @@ type contractRejectProvider struct {
 	calls int
 }
 
-func (provider *contractRejectProvider) Execute(context.Context, workspace.AIProviderRequest) (workspace.AIProviderResult, error) {
+func (provider *contractRejectProvider) RefineGoal(context.Context, workspace.RefineGoalAIInput) (workspace.GoalRefineAIResult, workspace.AIUsage, error) {
 	provider.calls++
-	return workspace.AIProviderResult{}, errors.New("provider must not be called for another user's resource")
+	return workspace.GoalRefineAIResult{}, workspace.AIUsage{}, errors.New("provider must not be called for another user's resource")
+}
+
+func (provider *contractRejectProvider) GenerateAction(context.Context, workspace.GenerateActionAIInput) (workspace.GenerateActionAIResult, workspace.AIUsage, error) {
+	provider.calls++
+	return workspace.GenerateActionAIResult{}, workspace.AIUsage{}, errors.New("provider must not be called for another user's resource")
+}
+
+func (provider *contractRejectProvider) RefineAction(context.Context, workspace.RefineActionAIInput) (workspace.RefineActionAIResult, workspace.AIUsage, error) {
+	provider.calls++
+	return workspace.RefineActionAIResult{}, workspace.AIUsage{}, errors.New("provider must not be called for another user's resource")
 }
 
 type contractIntegrationClient struct {
@@ -137,14 +147,14 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 		t.Fatal(err)
 	}
 
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixtures := progressingGoalFixtures()
 	active := startProgressingGoal(t, store, ownerID, fixtures[0], 2, now)
 	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), ownerID, fixtures[1].draftID, "所有者だけの下書き", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	provider := &contractRejectProvider{}
-	service := workspace.NewService(store, store, store, store, store, store, store, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
+	service := workspace.NewService(store, store, store, store, store, store, store, store, provider, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
 		MaxProgressingGoals: 2,
 		CursorSigningKey:    []byte("test-cursor-key"),
 		MaxProviderAttempts: 1,
@@ -260,9 +270,9 @@ func TestWorkspaceHTTPCycleHierarchyReturnsCycleNotFoundForOwnedGoalMismatch(t *
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	now := integrationNow()
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	provider := &contractRejectProvider{}
-	service := workspace.NewService(store, store, store, store, store, store, store, provider,
+	service := workspace.NewService(store, store, store, store, store, store, store, store, provider, provider,
 		contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
 			MaxProgressingGoals: 2,
 			CursorSigningKey:    []byte("test-cursor-key"),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
@@ -217,7 +218,7 @@ type AIUsageRecord struct {
 	OperationID                  string
 	UserID                       string
 	GoalID                       string
-	Operation                    string
+	Operation                    domainai.OperationType
 	Provider                     string
 	Model                        string
 	PromptVersion                string
@@ -229,7 +230,7 @@ type AIUsageRecord struct {
 
 type AIGenerationLocator struct {
 	UserID    string
-	Operation string
+	Operation domainai.OperationType
 	Status    string
 	DraftID   string
 	GoalID    string

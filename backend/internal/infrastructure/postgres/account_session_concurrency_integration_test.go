@@ -518,7 +518,7 @@ VALUES($1,$2,$2,$2)`, fixture.userID, now); err != nil {
 		t.Fatal(err)
 	}
 	goalFixture := progressingGoalFixtures()[0]
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	startProgressingGoal(t, store, fixture.userID, goalFixture, 2, now)
 	const pendingDraftID = "12000000-0000-7000-8000-000000000001"
 	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), fixture.userID, pendingDraftID, "保留中の目標", now.Add(time.Minute)); err != nil {
@@ -780,7 +780,7 @@ VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
 	goalFixtures := progressingGoalFixtures()[:2]
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	for _, fixture := range goalFixtures {
 		startProgressingGoal(t, store, userID, fixture, 2, now)
 	}
@@ -953,18 +953,21 @@ type accountDeleteAIFinishCall struct {
 	err      error
 }
 
-func accountDeleteAISettings() WorkspaceStoreSettings {
-	return WorkspaceStoreSettings{
-		Provider:              "fake",
-		Model:                 "test",
-		GoalPromptVersion:     "goal-refine-v1",
-		GeneratePromptVersion: "action-generate-v1",
-		RefinePromptVersion:   "action-refine-v1",
-		RollingLimit:          20,
-		MonthlyBudgetUSD:      100,
-		ReservationUSD:        0.1,
-		LeaseDuration:         time.Minute,
-		RateHashKey:           []byte("test-rate-key"),
+func accountDeleteAISettings() aiIntegrationApplicationSettings {
+	rateHashKey := []byte("test-rate-key")
+	return aiIntegrationApplicationSettings{
+		Entitlements: workspace.Entitlements{MaxAIOperationsPer24Hours: 20},
+		GoalDraft: workspace.GoalDraftUseCaseSettings{
+			Provider: "fake", Model: "test", GoalPromptVersion: "goal-refine-v1",
+			MonthlyBudgetUSD: 100, ReservationUSD: 0.1, LeaseDuration: time.Minute,
+			RateHashKey: append([]byte(nil), rateHashKey...),
+		},
+		ActionAI: workspace.ActionAIUseCaseSettings{
+			Provider: "fake", Model: "test",
+			GeneratePromptVersion: "action-generate-v1", RefinePromptVersion: "action-refine-v1",
+			MonthlyBudgetUSD: 100, ReservationUSD: 0.1, LeaseDuration: time.Minute,
+			RateHashKey: append([]byte(nil), rateHashKey...),
+		},
 	}
 }
 
@@ -982,20 +985,20 @@ VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
 	settings := accountDeleteAISettings()
-	seedStore := NewWorkspaceStore(pool, settings)
+	seedStore := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	startProgressingGoal(t, seedStore, userID, fixture, 2, now)
 	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',
 content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, fixture.cycleID); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := seedStore.BeginActionAI(context.Background(), workspace.ActionAIInput{
+	snapshot, err := executeActionGenerateBeginUseCaseWithSettings(seedStore, context.Background(), workspace.ActionGenerateInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		Operation: "action_generate", ExpectedContentRevision: 3,
-		IdempotencyKey: "82000000-0000-7000-8000-000000000001",
-		GenerationID:   "83000000-0000-7000-8000-000000000001",
-		Now:            now.Add(time.Minute),
-	}, accountDeleteAIContext)
+		ExpectedContentRevision: 3,
+		IdempotencyKey:          "82000000-0000-7000-8000-000000000001",
+		GenerationID:            "83000000-0000-7000-8000-000000000001",
+		Now:                     now.Add(time.Minute),
+	}, accountDeleteAIContext, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1034,15 +1037,16 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	default:
 	}
 
-	result := workspace.AIProviderResult{
-		Output: "削除後には適用しない行動", InputTokens: 12, OutputTokens: 5,
-		CostUSD: 0.004, Attempts: 1, ProviderRequestID: "provider-after-account-delete",
+	result := workspace.AIExecutionResult{
+		Output: "削除後には適用しない行動", Attempts: 1,
+		Usage: workspace.AIUsage{InputTokens: 12, OutputTokens: 5,
+			CostUSD: 0.004, ProviderRequestID: "provider-after-account-delete"},
 	}
 	finishCalls := make(chan accountDeleteAIFinishCall, 1)
 	finishCtx := context.WithValue(ctx, accountDeleteAICommandContextKey{}, accountDeleteAILateFinish)
-	store := NewWorkspaceStore(tracedPool, settings)
+	store := NewWorkspaceStore(tracedPool)
 	go func() {
-		response, callErr := store.FinishActionAI(finishCtx, snapshot, result, nil, now.Add(3*time.Minute))
+		response, callErr := executeActionFinishUseCaseWithSettings(store, finishCtx, snapshot, result, nil, now.Add(3*time.Minute), settings)
 		finishCalls <- accountDeleteAIFinishCall{response: response, err: callErr}
 	}()
 	var finishPID uint32
@@ -1094,9 +1098,9 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	if users != 0 || goals != 0 || generations != 0 || usageEvents != 0 {
 		t.Fatalf("post-race user/goal/generation/usage = %d/%d/%d/%d, want 0/0/0/0", users, goals, generations, usageEvents)
 	}
-	if reserved != 0 || actual != initialActual || unattributed != settings.ReservationUSD {
+	if reserved != 0 || actual != initialActual || unattributed != settings.ActionAI.ReservationUSD {
 		t.Fatalf("post-race budget reserved/actual/unattributed = %.8f/%.8f/%.8f, want 0/%.8f/%.8f",
-			reserved, actual, unattributed, initialActual, settings.ReservationUSD)
+			reserved, actual, unattributed, initialActual, settings.ActionAI.ReservationUSD)
 	}
 }
 
@@ -1110,20 +1114,20 @@ VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
 	settings := accountDeleteAISettings()
-	seedStore := NewWorkspaceStore(pool, settings)
+	seedStore := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	startProgressingGoal(t, seedStore, userID, fixture, 2, now)
 	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',
 content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, fixture.cycleID); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := seedStore.BeginActionAI(context.Background(), workspace.ActionAIInput{
+	snapshot, err := executeActionGenerateBeginUseCaseWithSettings(seedStore, context.Background(), workspace.ActionGenerateInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		Operation: "action_generate", ExpectedContentRevision: 3,
-		IdempotencyKey: "82000000-0000-7000-8000-000000000001",
-		GenerationID:   "83000000-0000-7000-8000-000000000001",
-		Now:            now.Add(time.Minute),
-	}, accountDeleteAIContext)
+		ExpectedContentRevision: 3,
+		IdempotencyKey:          "82000000-0000-7000-8000-000000000001",
+		GenerationID:            "83000000-0000-7000-8000-000000000001",
+		Now:                     now.Add(time.Minute),
+	}, accountDeleteAIContext, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1133,7 +1137,7 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 		t.Fatal(err)
 	}
 	if _, err = releaseTx.Exec(context.Background(), `UPDATE ai_budget_monthly
-SET reserved_cost_usd=reserved_cost_usd-$2 WHERE month_utc=$1`, month, settings.ReservationUSD); err != nil {
+SET reserved_cost_usd=reserved_cost_usd-$2 WHERE month_utc=$1`, month, settings.ActionAI.ReservationUSD); err != nil {
 		_ = releaseTx.Rollback(context.Background())
 		t.Fatal(err)
 	}
@@ -1174,15 +1178,16 @@ SET status='failed',goal_id=NULL,content_deleted=true WHERE operation_id=$1`, sn
 		t.Fatalf("DeleteAccount did not lock released Usage: %v", ctx.Err())
 	}
 
-	result := workspace.AIProviderResult{
-		Output: "削除後には適用しない行動", InputTokens: 12, OutputTokens: 5,
-		CostUSD: 0.004, Attempts: 1, ProviderRequestID: "provider-after-released-account-delete",
+	result := workspace.AIExecutionResult{
+		Output: "削除後には適用しない行動", Attempts: 1,
+		Usage: workspace.AIUsage{InputTokens: 12, OutputTokens: 5,
+			CostUSD: 0.004, ProviderRequestID: "provider-after-released-account-delete"},
 	}
 	finishCalls := make(chan accountDeleteAIFinishCall, 1)
 	finishCtx := context.WithValue(ctx, accountDeleteAICommandContextKey{}, accountDeleteAILateFinish)
-	store := NewWorkspaceStore(tracedPool, settings)
+	store := NewWorkspaceStore(tracedPool)
 	go func() {
-		response, callErr := store.FinishActionAI(finishCtx, snapshot, result, nil, now.Add(4*time.Minute))
+		response, callErr := executeActionFinishUseCaseWithSettings(store, finishCtx, snapshot, result, nil, now.Add(4*time.Minute), settings)
 		finishCalls <- accountDeleteAIFinishCall{response: response, err: callErr}
 	}()
 	var finishPID uint32

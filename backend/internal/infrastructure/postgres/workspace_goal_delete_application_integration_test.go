@@ -21,7 +21,7 @@ func TestGoalDeleteApplicationPartitionsUsageAtExactRetentionDeadline(t *testing
 		deleteKey          = "89000000-0000-7000-8000-000000000001"
 	)
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, aiConcurrencySettings())
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, store, userID, fixture, 2, now.Add(-48*time.Hour))
 
@@ -88,7 +88,7 @@ budget_reserved_cost_usd,lease_expires_at,started_at)
 VALUES($1,$2,'action_generate','running',NULL,$3,$4,$5,0,$6,$7,NULL,$8,$9,$10,$11,0,$12,$13)`,
 		operationID, userID, fixture.goalID, fixture.versionID, fixture.cycleID,
 		"8a000000-0000-7000-8000-000000000001", "goal-delete-unfinalized-usage",
-		settings.Provider, settings.Model, settings.GeneratePromptVersion, month, now.Add(time.Minute), now,
+		settings.ActionAI.Provider, settings.ActionAI.Model, settings.ActionAI.GeneratePromptVersion, month, now.Add(time.Minute), now,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ VALUES($1,$2,'action_generate','running',NULL,$3,$4,$5,0,$6,$7,NULL,$8,$9,$10,$1
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_usage_events
 (operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
 VALUES($1,$2,$3,'action_generate','accepted',$4,$5,$6,$7,$8)`,
-		operationID, userID, fixture.goalID, settings.Provider, settings.Model, settings.GeneratePromptVersion,
+		operationID, userID, fixture.goalID, settings.ActionAI.Provider, settings.ActionAI.Model, settings.ActionAI.GeneratePromptVersion,
 		acceptedAt, workspace.AIUsageQuotaRetainUntil(acceptedAt),
 	); err != nil {
 		t.Fatal(err)

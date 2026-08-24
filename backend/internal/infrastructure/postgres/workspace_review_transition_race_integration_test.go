@@ -42,7 +42,7 @@ func newContinueTerminateRaceFixture(
 	now := integrationNow()
 	const userID = "10000000-0000-7000-8000-000000000001"
 	insertAIConcurrencyUser(t, pool, userID, now)
-	seedStore := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	seedStore := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	review := prepareReviewTransitionReview(t, seedStore, userID, fixture, 2,
 		"61000000-0000-7000-8000-000000000401",

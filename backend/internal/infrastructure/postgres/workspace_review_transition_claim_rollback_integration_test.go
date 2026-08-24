@@ -22,7 +22,7 @@ func TestReviewTransitionContinueRollsBackChangedVersionAfterLosingDifferentGoal
 	now := integrationNow()
 	const userID = "10000000-0000-7000-8000-000000000001"
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixtures := progressingGoalFixtures()
 	first := prepareReviewTransitionReview(t, store, userID, fixtures[0], 2,
 		"61000000-0000-7000-8000-000000000251",

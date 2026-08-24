@@ -17,7 +17,7 @@ func TestReviewTransitionContinueReplaysCurrentReviewAfterCreatedCycleCompleted(
 	now := integrationNow()
 	const userID = "10000000-0000-7000-8000-000000000001"
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	review := prepareReviewTransitionReview(t, store, userID, fixture, 2,
 		"61000000-0000-7000-8000-000000000451",

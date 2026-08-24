@@ -2,7 +2,7 @@ package aiprovider
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"unicode/utf8"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
@@ -11,23 +11,37 @@ import (
 // Fake is deterministic and must never be enabled in production.
 type Fake struct{}
 
-func (Fake) Execute(_ context.Context, input workspace.AIProviderRequest) (workspace.AIProviderResult, error) {
-	output := ""
-	switch input.Operation {
-	case "goal_refine":
-		output = input.SourceText
-	case "action_generate":
-		output = "1. 次の実行では、計画した手順を一つずつ確認し、完了後に結果を記録する。"
-	case "action_refine":
-		if input.CurrentCycle == nil {
-			return workspace.AIProviderResult{}, workspace.ErrAIInputIncomplete
-		}
-		output = input.CurrentCycle.Action + " 次のサイクルでは実行結果を記録して確認する。"
-	default:
-		return workspace.AIProviderResult{}, fmt.Errorf("unsupported fake operation: %s", input.Operation)
+var (
+	_ workspace.GoalRefiner     = Fake{}
+	_ workspace.ActionGenerator = Fake{}
+)
+
+func (Fake) RefineGoal(_ context.Context, input workspace.RefineGoalAIInput) (workspace.GoalRefineAIResult, workspace.AIUsage, error) {
+	result := workspace.GoalRefineAIResult{Suggestion: input.SourceText}
+	return result, fakeUsage(input, result), nil
+}
+
+func (Fake) GenerateAction(_ context.Context, input workspace.GenerateActionAIInput) (workspace.GenerateActionAIResult, workspace.AIUsage, error) {
+	if input.CurrentCycle == nil {
+		return workspace.GenerateActionAIResult{}, workspace.AIUsage{}, workspace.ErrAIInputIncomplete
 	}
-	return workspace.AIProviderResult{
-		Output: output, InputTokens: int64(utf8.RuneCountInString(input.GoalBody+input.SourceText) / 2),
-		OutputTokens: int64(utf8.RuneCountInString(output) / 2), ProviderRequestID: "fake", Attempts: 1,
-	}, nil
+	result := workspace.GenerateActionAIResult{Actions: []string{"次の実行では、計画した手順を一つずつ確認し、完了後に結果を記録する。"}}
+	return result, fakeUsage(input, result), nil
+}
+
+func (Fake) RefineAction(_ context.Context, input workspace.RefineActionAIInput) (workspace.RefineActionAIResult, workspace.AIUsage, error) {
+	if input.CurrentCycle == nil {
+		return workspace.RefineActionAIResult{}, workspace.AIUsage{}, workspace.ErrAIInputIncomplete
+	}
+	result := workspace.RefineActionAIResult{RefinedAction: input.CurrentCycle.Action + " 次のサイクルでは実行結果を記録して確認する。"}
+	return result, fakeUsage(input, result), nil
+}
+
+func fakeUsage(input, output any) workspace.AIUsage {
+	encodedInput, _ := json.Marshal(input)
+	encodedOutput, _ := json.Marshal(output)
+	return workspace.AIUsage{
+		InputTokens: int64(utf8.RuneCount(encodedInput) / 2), OutputTokens: int64(utf8.RuneCount(encodedOutput) / 2),
+		ProviderRequestID: "fake",
+	}
 }

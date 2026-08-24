@@ -256,7 +256,7 @@ func (metrics *Metrics) AIContextIsolationViolation(ctx context.Context) {
 
 func (metrics *Metrics) ObserveAI(ctx context.Context, event workspace.AIObservation) {
 	metrics.ObserveAIGeneration(ctx, AIObservation{
-		Type: event.Operation, Result: event.Result, Model: event.Model, PromptVersion: event.PromptVersion,
+		Type: string(event.Operation), Result: event.Result, Model: event.Model, PromptVersion: event.PromptVersion,
 		Usage:            AIUsage{InputTokens: event.InputTokens, OutputTokens: event.OutputTokens},
 		EstimatedCostUSD: event.EstimatedCostUSD, ContextCycleCount: event.ContextCycleCount,
 		CurrentTruncated: event.CurrentTruncated, Duration: event.Duration,

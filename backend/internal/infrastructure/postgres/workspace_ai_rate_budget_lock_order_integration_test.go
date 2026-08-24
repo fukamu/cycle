@@ -175,8 +175,9 @@ func runAIRateBudgetLockOrderTest(t *testing.T, contender string) {
 	}
 
 	settings := aiConcurrencySettings()
-	settings.AIPerIPMinute = 10
-	seedStore := NewWorkspaceStore(pool, settings)
+	settings.GoalDraft.AIPerIPMinute = 10
+	settings.ActionAI.AIPerIPMinute = 10
+	seedStore := NewWorkspaceStore(pool)
 	if _, err := executeGoalDraftCreateUseCase(
 		seedStore, context.Background(), recoveryUserID, recoveryDraftID, "期限切れ回復後に再実行する目標", now.Add(-3*time.Minute),
 	); err != nil {
@@ -231,7 +232,7 @@ WHERE id=$1`, mustUUID(actionFixture.cycleID)); err != nil {
 	}
 
 	barrier := newAIRateBudgetLockBarrier()
-	store := newAIConcurrencyTracedStore(t, pool, settings, barrier)
+	store := newAIConcurrencyTracedStore(t, pool, barrier)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer func() {
 		barrier.release()
@@ -241,11 +242,11 @@ WHERE id=$1`, mustUUID(actionFixture.cycleID)); err != nil {
 	recoveryCalls := make(chan aiRateBudgetReservationCall, 1)
 	recoveryCtx := context.WithValue(ctx, aiRateBudgetLockCommandContextKey{}, aiRateBudgetExpiredRecovery)
 	go func() {
-		_, callErr := executeGoalRefineBeginUseCase(store, recoveryCtx, workspace.GoalRefineInput{
+		_, callErr := executeGoalRefineBeginUseCaseWithSettings(store, recoveryCtx, workspace.GoalRefineInput{
 			UserID: recoveryUserID, DraftID: recoveryDraftID, ExpectedDraftRevision: 0,
 			IdempotencyKey: recoveryKey, GenerationID: recoveryGenerationID,
 			RemoteAddress: sharedRemoteAddress, Now: now,
-		}, passthroughAIContext)
+		}, passthroughAIContext, settings)
 		recoveryCalls <- aiRateBudgetReservationCall{err: callErr}
 	}()
 
@@ -264,18 +265,18 @@ WHERE id=$1`, mustUUID(actionFixture.cycleID)); err != nil {
 		var callErr error
 		switch contender {
 		case "goal_refine":
-			_, callErr = executeGoalRefineBeginUseCase(store, freshCtx, workspace.GoalRefineInput{
+			_, callErr = executeGoalRefineBeginUseCaseWithSettings(store, freshCtx, workspace.GoalRefineInput{
 				UserID: freshUserID, DraftID: freshDraftID, ExpectedDraftRevision: 0,
 				IdempotencyKey: freshKey, GenerationID: freshGenerationID,
 				RemoteAddress: sharedRemoteAddress, Now: now,
-			}, passthroughAIContext)
+			}, passthroughAIContext, settings)
 		case "action_generate":
-			_, callErr = store.BeginActionAI(freshCtx, workspace.ActionAIInput{
+			_, callErr = executeActionGenerateBeginUseCaseWithSettings(store, freshCtx, workspace.ActionGenerateInput{
 				UserID: freshUserID, GoalID: actionFixture.goalID, CycleID: actionFixture.cycleID,
-				Operation: "action_generate", ExpectedContentRevision: 3,
-				IdempotencyKey: freshKey, GenerationID: freshGenerationID,
+				ExpectedContentRevision: 3,
+				IdempotencyKey:          freshKey, GenerationID: freshGenerationID,
 				RemoteAddress: sharedRemoteAddress, Now: now,
-			}, passthroughAIContext)
+			}, passthroughAIContext, settings)
 		}
 		freshCalls <- aiRateBudgetReservationCall{err: callErr}
 	}()
@@ -324,7 +325,7 @@ WHERE id=$1`, mustUUID(actionFixture.cycleID)); err != nil {
 		t.Fatal(err)
 	}
 	if failedGenerations != 1 || runningGenerations != 2 || failedUsage != 1 || acceptedUsage != 2 ||
-		!approximatelyEqual(budgetReserved, 2*settings.ReservationUSD) || rateCount != 2 {
+		!approximatelyEqual(budgetReserved, 2*settings.GoalDraft.ReservationUSD) || rateCount != 2 {
 		t.Fatalf("post-lock-order state generations failed/running=%d/%d usage failed/accepted=%d/%d Budget=%.8f rate=%d",
 			failedGenerations, runningGenerations, failedUsage, acceptedUsage, budgetReserved, rateCount)
 	}

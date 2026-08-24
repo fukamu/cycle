@@ -3,13 +3,11 @@ package prompts
 import (
 	_ "embed"
 	"fmt"
+
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 )
 
 const (
-	OperationGoalRefine     = "goal_refine"
-	OperationActionGenerate = "action_generate"
-	OperationActionRefine   = "action_refine"
-
 	VersionGoalRefineV1     = "goal-refine-v1"
 	VersionActionGenerateV1 = "action-generate-v1"
 	VersionActionRefineV1   = "action-refine-v1"
@@ -49,36 +47,36 @@ type Set struct {
 }
 
 type registryKey struct {
-	operation string
+	operation domainai.OperationType
 	version   string
 }
 
 var registry = map[registryKey]string{
-	{OperationGoalRefine, VersionGoalRefineV1}:         goalRefineV1,
-	{OperationActionGenerate, VersionActionGenerateV1}: actionGenerateV1,
-	{OperationActionRefine, VersionActionRefineV1}:     actionRefineV1,
-	{OperationGoalRefine, VersionGoalRefineV2}:         goalRefineV2,
-	{OperationActionGenerate, VersionActionGenerateV2}: actionGenerateV2,
-	{OperationActionRefine, VersionActionRefineV2}:     actionRefineV2,
+	{domainai.OperationGoalRefine, VersionGoalRefineV1}:         goalRefineV1,
+	{domainai.OperationActionGenerate, VersionActionGenerateV1}: actionGenerateV1,
+	{domainai.OperationActionRefine, VersionActionRefineV1}:     actionRefineV1,
+	{domainai.OperationGoalRefine, VersionGoalRefineV2}:         goalRefineV2,
+	{domainai.OperationActionGenerate, VersionActionGenerateV2}: actionGenerateV2,
+	{domainai.OperationActionRefine, VersionActionRefineV2}:     actionRefineV2,
 }
 
 func Resolve(versions Versions) (Set, error) {
-	goalRefine, err := lookup(OperationGoalRefine, versions.GoalRefine)
+	goalRefine, err := lookup(domainai.OperationGoalRefine, versions.GoalRefine)
 	if err != nil {
 		return Set{}, err
 	}
-	actionGenerate, err := lookup(OperationActionGenerate, versions.ActionGenerate)
+	actionGenerate, err := lookup(domainai.OperationActionGenerate, versions.ActionGenerate)
 	if err != nil {
 		return Set{}, err
 	}
-	actionRefine, err := lookup(OperationActionRefine, versions.ActionRefine)
+	actionRefine, err := lookup(domainai.OperationActionRefine, versions.ActionRefine)
 	if err != nil {
 		return Set{}, err
 	}
 	return Set{GoalRefine: goalRefine, ActionGenerate: actionGenerate, ActionRefine: actionRefine}, nil
 }
 
-func lookup(operation, version string) (string, error) {
+func lookup(operation domainai.OperationType, version string) (string, error) {
 	instructions, ok := registry[registryKey{operation: operation, version: version}]
 	if !ok {
 		return "", fmt.Errorf("prompt asset is not registered for %s version %q", operation, version)

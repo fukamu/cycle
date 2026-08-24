@@ -28,7 +28,7 @@ VALUES($1,$2,$2,$2)`, mustUUID(userID), now); err != nil {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 
 	sentinelError := errors.New("rollback Goal Draft transaction")
 	var rollbackRows int64

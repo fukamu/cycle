@@ -22,7 +22,7 @@ func TestReviewTransitionContinueDoubleTapAndReplay(t *testing.T) {
 	now := integrationNow()
 	const userID = "10000000-0000-7000-8000-000000000001"
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	review := prepareReviewTransitionReview(t, store, userID, fixture, 2,
 		"61000000-0000-7000-8000-000000000101",
@@ -98,7 +98,7 @@ func TestReviewTransitionContinueSameOperationDifferentGoalsClassifiesClaim(t *t
 	now := integrationNow()
 	const userID = "10000000-0000-7000-8000-000000000001"
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixtures := progressingGoalFixtures()
 	first := prepareReviewTransitionReview(t, store, userID, fixtures[0], 2,
 		"61000000-0000-7000-8000-000000000201",
@@ -173,7 +173,7 @@ func TestReviewTransitionTerminatesReviewWithExactUsageRetention(t *testing.T) {
 		reviewDraftID = "61000000-0000-7000-8000-000000000301"
 	)
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	review := prepareReviewTransitionReview(t, store, userID, fixture, 2, reviewDraftID,
 		"71000000-0000-7000-8000-000000000301", now)

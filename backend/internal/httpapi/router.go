@@ -45,7 +45,8 @@ type WorkspaceService interface {
 	CompleteCycle(context.Context, workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error)
 	RefineGoal(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
 	AdoptGoalSuggestion(context.Context, string, string, string, string, int64, *int64) (workspace.DraftView, error)
-	RunActionAI(context.Context, workspace.ActionAIInput) (workspace.AIResponse, error)
+	GenerateAction(context.Context, workspace.ActionGenerateInput) (workspace.AIResponse, error)
+	RefineAction(context.Context, workspace.ActionRefineInput) (workspace.AIResponse, error)
 }
 
 type Metrics interface {

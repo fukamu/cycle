@@ -86,6 +86,119 @@ func TestSaveFrameNoOpPreservesStateAndAIGuards(t *testing.T) {
 	}
 }
 
+func TestApplyAIActionPreservesCurrentPDCDriftAndUpdatesActionMetadata(t *testing.T) {
+	current := New("cycle", "user", "goal", "version", 1, "operation", "hash", testNow)
+	for _, frame := range []Frame{FramePlan, FrameDo, FrameCheck, FrameAction} {
+		result, err := SaveFrame(current, frame, strings.ToUpper(string(frame)), current.FrameRevision(frame), false, testNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current = result.Cycle
+	}
+
+	previousAIRevision := current.Revisions.Content
+	current.ActionLastAIRevision = &previousAIRevision
+	modified, err := SaveFrame(current, FrameAction, "手動で変更したAction", current.Revisions.Action, false, testNow.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = modified.Cycle
+	providerTargetRevision := current.Revisions.Content
+
+	for index, update := range []struct {
+		frame   Frame
+		content string
+	}{
+		{frame: FramePlan, content: "provider待機中のPlan"},
+		{frame: FrameDo, content: "provider待機中のDo"},
+		{frame: FrameCheck, content: "provider待機中のCheck"},
+	} {
+		result, saveErr := SaveFrame(
+			current,
+			update.frame,
+			update.content,
+			current.FrameRevision(update.frame),
+			false,
+			testNow.Add(time.Duration(index+2)*time.Minute),
+		)
+		if saveErr != nil {
+			t.Fatal(saveErr)
+		}
+		current = result.Cycle
+	}
+	if current.Revisions.Content == providerTargetRevision {
+		t.Fatal("test setup did not create provider-time content drift")
+	}
+
+	before := current
+	location := time.FixedZone("test-offset", 9*60*60)
+	appliedAt := time.Date(2026, time.August, 20, 12, 34, 56, 789, location)
+	applied, err := ApplyAIAction(current, "  AI Action\r\n次の行動 \t", appliedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if applied.Plan != before.Plan || applied.Do != before.Do || applied.Check != before.Check {
+		t.Fatalf("P/D/C drift was overwritten: before=%#v, applied=%#v", before, applied)
+	}
+	if applied.Action != "  AI Action\n次の行動 \t" {
+		t.Fatalf("Action = %q", applied.Action)
+	}
+	if applied.Revisions.Content != before.Revisions.Content+1 || applied.Revisions.Action != before.Revisions.Action+1 {
+		t.Fatalf("revisions = %#v, before = %#v", applied.Revisions, before.Revisions)
+	}
+	if applied.Revisions.Plan != before.Revisions.Plan || applied.Revisions.Do != before.Revisions.Do || applied.Revisions.Check != before.Revisions.Check {
+		t.Fatalf("P/D/C revisions changed: %#v, before = %#v", applied.Revisions, before.Revisions)
+	}
+	if applied.ActionLastAIRevision == nil || *applied.ActionLastAIRevision != applied.Revisions.Content {
+		t.Fatalf("ActionLastAIRevision = %v, content revision = %d", applied.ActionLastAIRevision, applied.Revisions.Content)
+	}
+	if applied.ActionModifiedAfterAI {
+		t.Fatal("ActionModifiedAfterAI must be reset after AI application")
+	}
+	if applied.UpdatedAt != appliedAt.UTC() || applied.UpdatedAt.Location() != time.UTC {
+		t.Fatalf("UpdatedAt = %v, want UTC %v", applied.UpdatedAt, appliedAt.UTC())
+	}
+
+	expected := before
+	expected.Action = "  AI Action\n次の行動 \t"
+	expected.Revisions.Content++
+	expected.Revisions.Action++
+	expected.ActionLastAIRevision = applied.ActionLastAIRevision
+	expected.ActionModifiedAfterAI = false
+	expected.UpdatedAt = appliedAt.UTC()
+	if applied != expected {
+		t.Fatalf("fields outside A and its revision metadata changed: applied=%#v, expected=%#v", applied, expected)
+	}
+}
+
+func TestApplyAIActionRejectsInactiveBlankAndInvalidAction(t *testing.T) {
+	active := New("cycle", "user", "goal", "version", 1, "operation", "hash", testNow)
+	completed := active
+	completed.Status = StatusCompleted
+	canceled := active
+	canceled.Status = StatusCanceled
+
+	for _, test := range []struct {
+		name    string
+		current PDCACycle
+		action  string
+		wantErr error
+	}{
+		{name: "completed", current: completed, action: "Action", wantErr: ErrCycleNotActive},
+		{name: "canceled", current: canceled, action: "Action", wantErr: ErrCycleNotActive},
+		{name: "blank", current: active, action: " \n\t ", wantErr: ErrCycleIncomplete},
+		{name: "forbidden control", current: active, action: "Action\x00", wantErr: ErrForbiddenCharacter},
+		{name: "too long", current: active, action: strings.Repeat("界", MaxFrameCodePoints+1), wantErr: ErrFrameTextTooLong},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ApplyAIAction(test.current, test.action, testNow); !errors.Is(err, test.wantErr) {
+				t.Fatalf("error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestCompleteDoesNotCreateNextCycleAndCompletedIsImmutable(t *testing.T) {
 	current := readyCycle(t)
 	completed, err := Complete(current, "complete-op", "hash", current.Revisions.Content, false, testNow.Add(time.Hour))

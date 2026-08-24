@@ -370,22 +370,25 @@ type aiResponseCall struct {
 	err      error
 }
 
-func aiConcurrencySettings() WorkspaceStoreSettings {
-	return WorkspaceStoreSettings{
-		Provider:              "fake",
-		Model:                 "test",
-		GoalPromptVersion:     "goal-refine-v1",
-		GeneratePromptVersion: "action-generate-v1",
-		RefinePromptVersion:   "action-refine-v1",
-		RollingLimit:          20,
-		MonthlyBudgetUSD:      100,
-		ReservationUSD:        0.01,
-		LeaseDuration:         time.Minute,
-		RateHashKey:           []byte("test-rate-key"),
+func aiConcurrencySettings() aiIntegrationApplicationSettings {
+	rateHashKey := []byte("test-rate-key")
+	return aiIntegrationApplicationSettings{
+		Entitlements: workspace.Entitlements{MaxAIOperationsPer24Hours: 20},
+		GoalDraft: workspace.GoalDraftUseCaseSettings{
+			Provider: "fake", Model: "test", GoalPromptVersion: "goal-refine-v1",
+			MonthlyBudgetUSD: 100, ReservationUSD: 0.01, LeaseDuration: time.Minute,
+			RateHashKey: append([]byte(nil), rateHashKey...),
+		},
+		ActionAI: workspace.ActionAIUseCaseSettings{
+			Provider: "fake", Model: "test",
+			GeneratePromptVersion: "action-generate-v1", RefinePromptVersion: "action-refine-v1",
+			MonthlyBudgetUSD: 100, ReservationUSD: 0.01, LeaseDuration: time.Minute,
+			RateHashKey: append([]byte(nil), rateHashKey...),
+		},
 	}
 }
 
-func newAIConcurrencyTracedStore(t *testing.T, pool *pgxpool.Pool, settings WorkspaceStoreSettings, tracer pgx.QueryTracer) *WorkspaceStore {
+func newAIConcurrencyTracedStore(t *testing.T, pool *pgxpool.Pool, tracer pgx.QueryTracer) *WorkspaceStore {
 	t.Helper()
 	config := pool.Config()
 	config.ConnConfig.Tracer = tracer
@@ -396,7 +399,7 @@ func newAIConcurrencyTracedStore(t *testing.T, pool *pgxpool.Pool, settings Work
 		t.Fatal(err)
 	}
 	t.Cleanup(tracedPool.Close)
-	return NewWorkspaceStore(tracedPool, settings)
+	return NewWorkspaceStore(tracedPool)
 }
 
 func insertAIConcurrencyUser(t *testing.T, pool *pgxpool.Pool, userID string, now time.Time) {
@@ -407,7 +410,7 @@ VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 	}
 }
 
-func seedRunningActionAI(t *testing.T, pool *pgxpool.Pool, store *WorkspaceStore, userID string, now time.Time) (progressingGoalFixture, workspace.StartGoalResult, workspace.AISnapshot) {
+func seedRunningActionAI(t *testing.T, pool *pgxpool.Pool, store *WorkspaceStore, userID string, now time.Time, settings aiIntegrationApplicationSettings) (progressingGoalFixture, workspace.StartGoalResult, workspace.AISnapshot) {
 	t.Helper()
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, store, userID, fixture, 2, now)
@@ -415,13 +418,13 @@ func seedRunningActionAI(t *testing.T, pool *pgxpool.Pool, store *WorkspaceStore
 content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, fixture.cycleID); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := store.BeginActionAI(context.Background(), workspace.ActionAIInput{
+	snapshot, err := executeActionGenerateBeginUseCaseWithSettings(store, context.Background(), workspace.ActionGenerateInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		Operation: "action_generate", ExpectedContentRevision: 3,
-		IdempotencyKey: "82000000-0000-7000-8000-000000000001",
-		GenerationID:   "83000000-0000-7000-8000-000000000001",
-		Now:            now.Add(time.Minute),
-	}, passthroughAIContext)
+		ExpectedContentRevision: 3,
+		IdempotencyKey:          "82000000-0000-7000-8000-000000000001",
+		GenerationID:            "83000000-0000-7000-8000-000000000001",
+		Now:                     now.Add(time.Minute),
+	}, passthroughAIContext, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,8 +439,8 @@ func TestBeginActionAISameKeyExpiredRunningCommitsLeaseRecoveryBeforeReplay(t *t
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	seedStore := NewWorkspaceStore(pool, settings)
-	fixture, _, expiredSnapshot := seedRunningActionAI(t, pool, seedStore, userID, now)
+	seedStore := NewWorkspaceStore(pool)
+	fixture, _, expiredSnapshot := seedRunningActionAI(t, pool, seedStore, userID, now, settings)
 
 	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='期限切れ待機中の追記',
 content_revision=content_revision+1,plan_revision=plan_revision+1,updated_at=$2 WHERE id=$1`, fixture.cycleID, now.Add(2*time.Minute)); err != nil {
@@ -445,21 +448,21 @@ content_revision=content_revision+1,plan_revision=plan_revision+1,updated_at=$2 
 	}
 
 	retrySettings := settings
-	retrySettings.AIPerUserMinute = 10
-	retrySettings.AIPerSessionMinute = 10
-	retrySettings.AIPerIPMinute = 10
-	retryStore := NewWorkspaceStore(pool, retrySettings)
-	input := workspace.ActionAIInput{
+	retrySettings.ActionAI.AIPerUserMinute = 10
+	retrySettings.ActionAI.AIPerSessionMinute = 10
+	retrySettings.ActionAI.AIPerIPMinute = 10
+	retryStore := NewWorkspaceStore(pool)
+	input := workspace.ActionGenerateInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		Operation: "action_generate", ExpectedContentRevision: 3,
-		IdempotencyKey: "82000000-0000-7000-8000-000000000001",
-		SessionID:      "same-key-expired-session", RemoteAddress: "198.51.100.88",
+		ExpectedContentRevision: 3,
+		IdempotencyKey:          "82000000-0000-7000-8000-000000000001",
+		SessionID:               "same-key-expired-session", RemoteAddress: "198.51.100.88",
 	}
 
 	unexpired := input
 	unexpired.GenerationID = "83000000-0000-7000-8000-000000000002"
 	unexpired.Now = now.Add(90 * time.Second)
-	_, err := retryStore.BeginActionAI(context.Background(), unexpired, nil)
+	_, err := executeActionGenerateBeginUseCaseWithSettings(retryStore, context.Background(), unexpired, nil, retrySettings)
 	var inProgress *workspace.AIOperationInProgressError
 	if !errors.As(err, &inProgress) || inProgress.GenerationID != expiredSnapshot.GenerationID {
 		t.Fatalf("unexpired same-key replay error = %v, want in-progress generation %s", err, expiredSnapshot.GenerationID)
@@ -469,20 +472,20 @@ content_revision=content_revision+1,plan_revision=plan_revision+1,updated_at=$2 
 	different.GenerationID = "83000000-0000-7000-8000-000000000003"
 	different.ConfirmReplace = true
 	different.Now = now.Add(3 * time.Minute)
-	if _, err = retryStore.BeginActionAI(context.Background(), different, nil); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
+	if _, err = executeActionGenerateBeginUseCaseWithSettings(retryStore, context.Background(), different, nil, retrySettings); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
 		t.Fatalf("expired different-hash replay error = %v, want %v", err, workspace.ErrIdempotencyKeyReused)
 	}
 
 	expired := input
 	expired.GenerationID = "83000000-0000-7000-8000-000000000004"
 	expired.Now = now.Add(3 * time.Minute)
-	if _, err = retryStore.BeginActionAI(context.Background(), expired, nil); !errors.Is(err, workspace.ErrAIProviderUnavailable) {
+	if _, err = executeActionGenerateBeginUseCaseWithSettings(retryStore, context.Background(), expired, nil, retrySettings); !errors.Is(err, workspace.ErrAIProviderUnavailable) {
 		t.Fatalf("expired same-key replay error = %v, want %v after committed lease recovery", err, workspace.ErrAIProviderUnavailable)
 	}
 
 	recoveredReplay := expired
 	recoveredReplay.Now = now.Add(4 * time.Minute)
-	if _, err = retryStore.BeginActionAI(context.Background(), recoveredReplay, nil); !errors.Is(err, workspace.ErrAIProviderUnavailable) {
+	if _, err = executeActionGenerateBeginUseCaseWithSettings(retryStore, context.Background(), recoveredReplay, nil, retrySettings); !errors.Is(err, workspace.ErrAIProviderUnavailable) {
 		t.Fatalf("recovered terminal same-key replay error = %v, want %v", err, workspace.ErrAIProviderUnavailable)
 	}
 
@@ -617,8 +620,8 @@ func TestDeleteGoalRollsBackWhenBudgetReservationReleaseAffectsZeroRows(t *testi
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	store := NewWorkspaceStore(pool, settings)
-	fixture, started, snapshot := seedRunningActionAI(t, pool, store, userID, now)
+	store := NewWorkspaceStore(pool)
+	fixture, started, snapshot := seedRunningActionAI(t, pool, store, userID, now, settings)
 	if _, err := pool.Exec(context.Background(), `UPDATE ai_budget_monthly SET reserved_cost_usd=0
 WHERE month_utc=$1`, time.Date(now.UTC().Year(), now.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
@@ -678,7 +681,7 @@ WHERE month_utc=$1`, time.Date(now.UTC().Year(), now.UTC().Month(), 1, 0, 0, 0, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goalCount != 1 || generationStatus != "running" || !approximatelyEqual(generationReservation, settings.ReservationUSD) {
+	if goalCount != 1 || generationStatus != "running" || !approximatelyEqual(generationReservation, settings.ActionAI.ReservationUSD) {
 		t.Fatalf("rollback goal/generation = count %d, status %s, reservation %.8f", goalCount, generationStatus, generationReservation)
 	}
 	if usageStatus != "accepted" || usageContentDeleted || usageGoalID == nil || *usageGoalID != fixture.goalID {
@@ -697,7 +700,7 @@ func TestDeleteGoalReleasesThreeExactDecimalReservationsWithoutFloatAggregation(
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	store := NewWorkspaceStore(pool, settings)
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, store, userID, fixture, 2, now)
 	extraCycles := []struct {
@@ -755,9 +758,9 @@ VALUES($1,$2,'action_generate','running',NULL,$3,$4,$5,0,$6,$7,NULL,$8,$9,$10,$1
 			generation.cycleID,
 			generation.idempotencyKey,
 			"seed-"+generation.id,
-			settings.Provider,
-			settings.Model,
-			settings.GeneratePromptVersion,
+			settings.ActionAI.Provider,
+			settings.ActionAI.Model,
+			settings.ActionAI.GeneratePromptVersion,
 			month,
 			now.Add(10*time.Minute),
 			now,
@@ -770,9 +773,9 @@ VALUES($1,$2,$3,'action_generate','accepted',$4,$5,$6,$7,$8)`,
 			generation.id,
 			userID,
 			fixture.goalID,
-			settings.Provider,
-			settings.Model,
-			settings.GeneratePromptVersion,
+			settings.ActionAI.Provider,
+			settings.ActionAI.Model,
+			settings.ActionAI.GeneratePromptVersion,
 			now,
 			now.Add(24*time.Hour),
 		); err != nil {
@@ -854,17 +857,20 @@ func TestFinishActionAIRollsBackWhenUsageFinalizationAffectsZeroRows(t *testing.
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	store := NewWorkspaceStore(pool, settings)
-	fixture, _, snapshot := seedRunningActionAI(t, pool, store, userID, now)
+	store := NewWorkspaceStore(pool)
+	fixture, _, snapshot := seedRunningActionAI(t, pool, store, userID, now, settings)
 	if _, err := pool.Exec(context.Background(), `DELETE FROM ai_usage_events WHERE operation_id=$1`, snapshot.GenerationID); err != nil {
 		t.Fatal(err)
 	}
 
-	result := workspace.AIProviderResult{
-		Output: "次に行うこと", InputTokens: 10, OutputTokens: 4,
-		CostUSD: 0.004, Attempts: 1, ProviderRequestID: "provider-zero-row-usage",
+	result := workspace.AIExecutionResult{
+		Output: "次に行うこと", Attempts: 1,
+		Usage: workspace.AIUsage{
+			InputTokens: 10, OutputTokens: 4,
+			CostUSD: 0.004, ProviderRequestID: "provider-zero-row-usage",
+		},
 	}
-	_, err := store.FinishActionAI(context.Background(), snapshot, result, nil, now.Add(2*time.Minute))
+	_, err := executeActionFinishUseCaseWithSettings(store, context.Background(), snapshot, result, nil, now.Add(2*time.Minute), settings)
 	if err == nil {
 		t.Fatal("FinishActionAI succeeded after its usage finalization affected zero rows")
 	}
@@ -914,11 +920,11 @@ func TestFinishActionAIRollsBackWhenUsageFinalizationAffectsZeroRows(t *testing.
 		t.Fatalf("cycle partially applied AI action=%q content/action revisions=%d/%d", action, contentRevision, actionRevision)
 	}
 	if generationStatus != "running" || generationOutput != nil || generationFinishedAt != nil ||
-		!approximatelyEqual(generationReservation, settings.ReservationUSD) {
+		!approximatelyEqual(generationReservation, settings.ActionAI.ReservationUSD) {
 		t.Fatalf("generation did not roll back: status=%s output=%v reservation=%.8f finishedAt=%v",
 			generationStatus, generationOutput, generationReservation, generationFinishedAt)
 	}
-	if usageCount != 0 || !approximatelyEqual(budgetReserved, settings.ReservationUSD) || !approximatelyEqual(budgetActual, 0) {
+	if usageCount != 0 || !approximatelyEqual(budgetReserved, settings.ActionAI.ReservationUSD) || !approximatelyEqual(budgetActual, 0) {
 		t.Fatalf("usage/budget after rollback = usage %d, reserved %.8f, actual %.8f", usageCount, budgetReserved, budgetActual)
 	}
 }
@@ -931,7 +937,7 @@ func TestReviewGoalRefineAndSaveUseGoalBeforeDraftLockOrder(t *testing.T) {
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	seedStore := NewWorkspaceStore(pool, settings)
+	seedStore := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, seedStore, userID, fixture, 2, now)
 	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',action='A',
@@ -952,7 +958,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	}
 
 	barrier := newAIConcurrencyReviewBarrier()
-	store := newAIConcurrencyTracedStore(t, pool, settings, barrier)
+	store := newAIConcurrencyTracedStore(t, pool, barrier)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer func() {
 		barrier.release()
@@ -963,14 +969,14 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	beginCalls := make(chan aiGoalRefineCall, 1)
 	beginCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyReviewBegin)
 	go func() {
-		snapshot, callErr := executeGoalRefineBeginUseCase(store, beginCtx, workspace.GoalRefineInput{
+		snapshot, callErr := executeGoalRefineBeginUseCaseWithSettings(store, beginCtx, workspace.GoalRefineInput{
 			UserID: userID, GoalID: fixture.goalID,
 			ExpectedDraftRevision: completed.ReviewDraft.Revision,
 			ExpectedGoalRevision:  &goalRevision,
 			IdempotencyKey:        "63000000-0000-7000-8000-000000000001",
 			GenerationID:          "64000000-0000-7000-8000-000000000001",
 			Now:                   now.Add(2 * time.Minute),
-		}, passthroughAIContext)
+		}, passthroughAIContext, settings)
 		beginCalls <- aiGoalRefineCall{snapshot: snapshot, err: callErr}
 	}()
 
@@ -1042,7 +1048,7 @@ func TestBeginGoalRefineReviewStaleDraftUsesReviewRevisionConflict(t *testing.T)
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	store := NewWorkspaceStore(pool, settings)
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, store, userID, fixture, 2, now)
 	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',action='A',
@@ -1078,14 +1084,14 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	}
 
 	goalRevision := completed.Goal.Revision
-	_, err = executeGoalRefineBeginUseCase(store, context.Background(), workspace.GoalRefineInput{
+	_, err = executeGoalRefineBeginUseCaseWithSettings(store, context.Background(), workspace.GoalRefineInput{
 		UserID: userID, GoalID: fixture.goalID,
 		ExpectedDraftRevision: completed.ReviewDraft.Revision,
 		ExpectedGoalRevision:  &goalRevision,
 		IdempotencyKey:        "67000000-0000-7000-8000-000000000001",
 		GenerationID:          "68000000-0000-7000-8000-000000000001",
 		Now:                   now.Add(3 * time.Minute),
-	}, passthroughAIContext)
+	}, passthroughAIContext, settings)
 	if !errors.Is(err, workspace.ErrReviewRevisionConflict) {
 		t.Fatalf("BeginGoalRefine stale Review error = %v, want %v", err, workspace.ErrReviewRevisionConflict)
 	}
@@ -1116,8 +1122,8 @@ func TestExpiredRecoveryWinsBeforeLateActionFinalizationWithoutApplyingOldResult
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	seedStore := NewWorkspaceStore(pool, settings)
-	expiredFixture, _, expiredSnapshot := seedRunningActionAI(t, pool, seedStore, userID, now)
+	seedStore := NewWorkspaceStore(pool)
+	expiredFixture, _, expiredSnapshot := seedRunningActionAI(t, pool, seedStore, userID, now, settings)
 	recoveryFixture := progressingGoalFixtures()[1]
 	startProgressingGoal(t, seedStore, userID, recoveryFixture, 2, now)
 	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P2',do_text='D2',check_text='C2',
@@ -1126,7 +1132,7 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	}
 
 	barrier := newAIConcurrencyExpiredRecoveryBarrier()
-	store := newAIConcurrencyTracedStore(t, pool, settings, barrier)
+	store := newAIConcurrencyTracedStore(t, pool, barrier)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer func() {
 		barrier.release()
@@ -1136,13 +1142,13 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	beginCalls := make(chan aiGoalRefineCall, 1)
 	beginCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyExpiredRecoveryBegin)
 	go func() {
-		nextSnapshot, callErr := store.BeginActionAI(beginCtx, workspace.ActionAIInput{
+		nextSnapshot, callErr := executeActionGenerateBeginUseCaseWithSettings(store, beginCtx, workspace.ActionGenerateInput{
 			UserID: userID, GoalID: recoveryFixture.goalID, CycleID: recoveryFixture.cycleID,
-			Operation: "action_generate", ExpectedContentRevision: 3,
-			IdempotencyKey: "82000000-0000-7000-8000-000000000002",
-			GenerationID:   "83000000-0000-7000-8000-000000000002",
-			Now:            now.Add(3 * time.Minute),
-		}, passthroughAIContext)
+			ExpectedContentRevision: 3,
+			IdempotencyKey:          "82000000-0000-7000-8000-000000000002",
+			GenerationID:            "83000000-0000-7000-8000-000000000002",
+			Now:                     now.Add(3 * time.Minute),
+		}, passthroughAIContext, settings)
 		beginCalls <- aiGoalRefineCall{snapshot: nextSnapshot, err: callErr}
 	}()
 
@@ -1157,16 +1163,19 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 		t.Fatalf("BeginActionAI did not lock the expired Generation: %v", ctx.Err())
 	}
 
-	result := workspace.AIProviderResult{
-		Output: "期限切れ後には適用しない行動", InputTokens: 12, OutputTokens: 5,
-		CostUSD: 0.004, Attempts: 1, ProviderRequestID: "provider-after-expired-recovery",
+	result := workspace.AIExecutionResult{
+		Output: "期限切れ後には適用しない行動", Attempts: 1,
+		Usage: workspace.AIUsage{
+			InputTokens: 12, OutputTokens: 5,
+			CostUSD: 0.004, ProviderRequestID: "provider-after-expired-recovery",
+		},
 	}
 	finishCalls := make(chan aiResponseCall, 1)
 	finishState := &aiConcurrencyLateFinishState{}
 	finishCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyExpiredFinish)
 	finishCtx = context.WithValue(finishCtx, aiConcurrencyLateFinishContextKey{}, finishState)
 	go func() {
-		response, callErr := store.FinishActionAI(finishCtx, expiredSnapshot, result, nil, now.Add(4*time.Minute))
+		response, callErr := executeActionFinishUseCaseWithSettings(store, finishCtx, expiredSnapshot, result, nil, now.Add(4*time.Minute), settings)
 		finishCalls <- aiResponseCall{response: response, err: callErr}
 	}()
 
@@ -1273,15 +1282,15 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 		t.Fatalf("expired target/generation = action %q, revision %d, status %s, failure %s, reserved %.8f",
 			expiredAction, expiredContentRevision, expiredGenerationStatus, expiredGenerationFailure, expiredGenerationReservation)
 	}
-	if expiredUsageStatus != "succeeded" || expiredInputTokens != result.InputTokens ||
-		expiredOutputTokens != result.OutputTokens || !approximatelyEqual(expiredUsageCost, result.CostUSD) ||
+	if expiredUsageStatus != "succeeded" || expiredInputTokens != result.Usage.InputTokens ||
+		expiredOutputTokens != result.Usage.OutputTokens || !approximatelyEqual(expiredUsageCost, result.Usage.CostUSD) ||
 		!expiredUsageFinalized {
 		t.Fatalf("expired late usage = status %s, tokens %d/%d, cost %.8f, finalized %t",
 			expiredUsageStatus, expiredInputTokens, expiredOutputTokens, expiredUsageCost, expiredUsageFinalized)
 	}
-	if recoveryGenerationStatus != "running" || !approximatelyEqual(recoveryGenerationReserved, settings.ReservationUSD) ||
-		recoveryUsageStatus != "accepted" || !approximatelyEqual(budgetReserved, settings.ReservationUSD) ||
-		!approximatelyEqual(budgetActual, result.CostUSD) {
+	if recoveryGenerationStatus != "running" || !approximatelyEqual(recoveryGenerationReserved, settings.ActionAI.ReservationUSD) ||
+		recoveryUsageStatus != "accepted" || !approximatelyEqual(budgetReserved, settings.ActionAI.ReservationUSD) ||
+		!approximatelyEqual(budgetActual, result.Usage.CostUSD) {
 		t.Fatalf("recovery winner/budget = status %s, generation reserved %.8f, usage %s, budget %.8f/%.8f",
 			recoveryGenerationStatus, recoveryGenerationReserved, recoveryUsageStatus, budgetReserved, budgetActual)
 	}
@@ -1298,13 +1307,13 @@ func TestAbandonDraftSerializesWithConcurrentGoalRefine(t *testing.T) {
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	seedStore := NewWorkspaceStore(pool, settings)
+	seedStore := NewWorkspaceStore(pool)
 	if _, err := executeGoalDraftCreateUseCase(seedStore, context.Background(), userID, draftID, "並行破棄を検証する目標", now); err != nil {
 		t.Fatal(err)
 	}
 
 	barrier := newAIConcurrencyAbandonBarrier()
-	store := newAIConcurrencyTracedStore(t, pool, settings, barrier)
+	store := newAIConcurrencyTracedStore(t, pool, barrier)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer func() {
 		barrier.release()
@@ -1329,14 +1338,14 @@ func TestAbandonDraftSerializesWithConcurrentGoalRefine(t *testing.T) {
 	beginCalls := make(chan aiGoalRefineCall, 1)
 	beginCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyCreationBegin)
 	go func() {
-		snapshot, callErr := executeGoalRefineBeginUseCase(store, beginCtx, workspace.GoalRefineInput{
+		snapshot, callErr := executeGoalRefineBeginUseCaseWithSettings(store, beginCtx, workspace.GoalRefineInput{
 			UserID:                userID,
 			DraftID:               draftID,
 			ExpectedDraftRevision: 0,
 			IdempotencyKey:        "65000000-0000-7000-8000-000000000001",
 			GenerationID:          "66000000-0000-7000-8000-000000000001",
 			Now:                   now.Add(time.Minute),
-		}, passthroughAIContext)
+		}, passthroughAIContext, settings)
 		beginCalls <- aiGoalRefineCall{snapshot: snapshot, err: callErr}
 	}()
 
@@ -1412,13 +1421,13 @@ func TestGoalRefineCommitWinsBeforeAbandonAndPreservesRunningReservation(t *test
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	seedStore := NewWorkspaceStore(pool, settings)
+	seedStore := NewWorkspaceStore(pool)
 	if _, err := executeGoalDraftCreateUseCase(seedStore, context.Background(), userID, draftID, "先にRefine予約を確定する目標", now); err != nil {
 		t.Fatal(err)
 	}
 
 	barrier := newAIConcurrencyBeginWinsAbandonBarrier()
-	store := newAIConcurrencyTracedStore(t, pool, settings, barrier)
+	store := newAIConcurrencyTracedStore(t, pool, barrier)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer func() {
 		barrier.release()
@@ -1429,14 +1438,14 @@ func TestGoalRefineCommitWinsBeforeAbandonAndPreservesRunningReservation(t *test
 	beginCalls := make(chan aiGoalRefineCall, 1)
 	beginCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyCreationReserveBegin)
 	go func() {
-		snapshot, callErr := executeGoalRefineBeginUseCase(store, beginCtx, workspace.GoalRefineInput{
+		snapshot, callErr := executeGoalRefineBeginUseCaseWithSettings(store, beginCtx, workspace.GoalRefineInput{
 			UserID:                userID,
 			DraftID:               draftID,
 			ExpectedDraftRevision: 0,
 			IdempotencyKey:        "6a000000-0000-7000-8000-000000000001",
 			GenerationID:          generationID,
 			Now:                   now.Add(time.Minute),
-		}, passthroughAIContext)
+		}, passthroughAIContext, settings)
 		beginCalls <- aiGoalRefineCall{snapshot: snapshot, err: callErr}
 	}()
 
@@ -1534,9 +1543,9 @@ func TestGoalRefineCommitWinsBeforeAbandonAndPreservesRunningReservation(t *test
 		t.Fatal(err)
 	}
 	if draftCount != 1 || draftRevision != 0 || draftBody != "先にRefine予約を確定する目標" ||
-		generationStatus != "running" || !approximatelyEqual(generationReservation, settings.ReservationUSD) ||
+		generationStatus != "running" || !approximatelyEqual(generationReservation, settings.GoalDraft.ReservationUSD) ||
 		usageStatus != "accepted" || usageContentDeleted ||
-		!approximatelyEqual(budgetReserved, settings.ReservationUSD) || !approximatelyEqual(budgetActual, 0) {
+		!approximatelyEqual(budgetReserved, settings.GoalDraft.ReservationUSD) || !approximatelyEqual(budgetActual, 0) {
 		t.Fatalf("Begin-first retained state = draft %d/%d/%q, generation %s/%.8f, usage %s/deleted=%t, budget %.8f/%.8f",
 			draftCount, draftRevision, draftBody, generationStatus, generationReservation,
 			usageStatus, usageContentDeleted, budgetReserved, budgetActual)
@@ -1551,11 +1560,11 @@ func TestGoalDeleteLateProviderCallbacksSettleUsageExactlyOnce(t *testing.T) {
 	insertAIConcurrencyUser(t, pool, userID, now)
 
 	settings := aiConcurrencySettings()
-	seedStore := NewWorkspaceStore(pool, settings)
-	fixture, started, snapshot := seedRunningActionAI(t, pool, seedStore, userID, now)
+	seedStore := NewWorkspaceStore(pool)
+	fixture, started, snapshot := seedRunningActionAI(t, pool, seedStore, userID, now, settings)
 	deleteKey := "84000000-0000-7000-8000-000000000001"
 	barrier := newAIConcurrencyGoalDeleteBarrier()
-	store := newAIConcurrencyTracedStore(t, pool, settings, barrier)
+	store := newAIConcurrencyTracedStore(t, pool, barrier)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer func() {
 		barrier.release()
@@ -1588,9 +1597,12 @@ func TestGoalDeleteLateProviderCallbacksSettleUsageExactlyOnce(t *testing.T) {
 		t.Fatalf("DeleteGoal did not lock its running Generation: %v", ctx.Err())
 	}
 
-	result := workspace.AIProviderResult{
-		Output: "削除後には適用しない行動", InputTokens: 12, OutputTokens: 5,
-		CostUSD: 0.004, Attempts: 1, ProviderRequestID: "provider-parallel-late-result",
+	result := workspace.AIExecutionResult{
+		Output: "削除後には適用しない行動", Attempts: 1,
+		Usage: workspace.AIUsage{
+			InputTokens: 12, OutputTokens: 5,
+			CostUSD: 0.004, ProviderRequestID: "provider-parallel-late-result",
+		},
 	}
 	calls := make(chan aiResponseCall, 2)
 	startCallback := func() {
@@ -1598,7 +1610,7 @@ func TestGoalDeleteLateProviderCallbacksSettleUsageExactlyOnce(t *testing.T) {
 		finishCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyDeletedFinish)
 		finishCtx = context.WithValue(finishCtx, aiConcurrencyLateFinishContextKey{}, state)
 		go func() {
-			response, callErr := store.FinishActionAI(finishCtx, snapshot, result, nil, now.Add(3*time.Minute))
+			response, callErr := executeActionFinishUseCaseWithSettings(store, finishCtx, snapshot, result, nil, now.Add(3*time.Minute), settings)
 			calls <- aiResponseCall{response: response, err: callErr}
 		}()
 	}
@@ -1698,13 +1710,13 @@ func TestGoalDeleteLateProviderCallbacksSettleUsageExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if goalCount != 0 || generationCount != 0 || usageStatus != "succeeded" ||
-		inputTokens != result.InputTokens || outputTokens != result.OutputTokens ||
-		!approximatelyEqual(usageCost, result.CostUSD) || !usageFinalized || !exposureCleared || !contentDeleted || !goalDetached {
+		inputTokens != result.Usage.InputTokens || outputTokens != result.Usage.OutputTokens ||
+		!approximatelyEqual(usageCost, result.Usage.CostUSD) || !usageFinalized || !exposureCleared || !contentDeleted || !goalDetached {
 		t.Fatalf("late usage state = goal/gen %d/%d, status %s, tokens %d/%d, cost %.8f, finalized/deleted/detached %t/%t/%t",
 			goalCount, generationCount, usageStatus, inputTokens, outputTokens, usageCost, usageFinalized, contentDeleted, goalDetached)
 	}
 	if receiptCount != 1 || !approximatelyEqual(budgetReserved, 0) ||
-		!approximatelyEqual(budgetActual, result.CostUSD) || !approximatelyEqual(unattributed, 0) {
+		!approximatelyEqual(budgetActual, result.Usage.CostUSD) || !approximatelyEqual(unattributed, 0) {
 		t.Fatalf("late settlement receipt/reserved/actual/unattributed = %d/%.8f/%.8f/%.8f",
 			receiptCount, budgetReserved, budgetActual, unattributed)
 	}

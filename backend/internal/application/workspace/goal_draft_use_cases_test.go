@@ -887,8 +887,8 @@ func TestGoalDraftUseCasesFinishRefineUsesOrderedExactSettlement(t *testing.T) {
 	useCases, uow := newGoalDraftTestUseCases(tx)
 	response, err := useCases.FinishGoalRefine(context.Background(), AISnapshot{
 		GenerationID: goalDraftTestGenerationID, TargetRevision: 1,
-	}, AIProviderResult{
-		Output: "提案", InputTokens: 10, OutputTokens: 3, CostUSD: 0.1 * 3, Attempts: 2,
+	}, AIExecutionResult{
+		Output: "提案", Usage: AIUsage{InputTokens: 10, OutputTokens: 3, CostUSD: 0.1 * 3}, Attempts: 2,
 	}, nil, goalDraftTestNow)
 	if err != nil {
 		t.Fatal(err)
@@ -913,7 +913,7 @@ func TestGoalDraftUseCasesFinishRefineUsesOrderedExactSettlement(t *testing.T) {
 	uow.committed = 0
 	_, err = useCases.FinishGoalRefine(context.Background(), AISnapshot{
 		GenerationID: goalDraftTestGenerationID, TargetRevision: 1,
-	}, AIProviderResult{Output: "提案"}, nil, goalDraftTestNow)
+	}, AIExecutionResult{Output: "提案"}, nil, goalDraftTestNow)
 	if !errors.Is(err, ErrGoalDraftPersistenceInvariant) || uow.rolledBack != 1 {
 		t.Fatalf("error/transaction = %v / %#v", err, uow)
 	}
@@ -931,7 +931,7 @@ func TestGoalDraftUseCasesFinishShapeMismatchRollsBackWithoutLateUsageSettlement
 	useCases, uow := newGoalDraftTestUseCases(tx)
 	_, err := useCases.FinishGoalRefine(context.Background(), AISnapshot{
 		GenerationID: goalDraftTestGenerationID, TargetRevision: 1,
-	}, AIProviderResult{CostUSD: 0.1}, nil, goalDraftTestNow)
+	}, AIExecutionResult{Usage: AIUsage{CostUSD: 0.1}}, nil, goalDraftTestNow)
 	if !errors.Is(err, ErrGoalDraftPersistenceInvariant) || uow.rolledBack != 1 || uow.committed != 0 {
 		t.Fatalf("error/transaction = %v / %#v", err, uow)
 	}
@@ -952,7 +952,7 @@ func TestGoalDraftUseCasesFinishLateUsageCommitsBeforeNotFound(t *testing.T) {
 	useCases, uow := newGoalDraftTestUseCases(tx)
 	_, err := useCases.FinishGoalRefine(context.Background(), AISnapshot{
 		GenerationID: goalDraftTestGenerationID,
-	}, AIProviderResult{CostUSD: 0.1}, nil, goalDraftTestNow.Add(time.Minute))
+	}, AIExecutionResult{Usage: AIUsage{CostUSD: 0.1}}, nil, goalDraftTestNow.Add(time.Minute))
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("error = %v", err)
 	}

@@ -15,25 +15,8 @@ import (
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
-type WorkspaceStoreSettings struct {
-	Provider              string
-	Model                 string
-	GoalPromptVersion     string
-	GeneratePromptVersion string
-	RefinePromptVersion   string
-	RollingLimit          int
-	MonthlyBudgetUSD      float64
-	ReservationUSD        float64
-	LeaseDuration         time.Duration
-	RateHashKey           []byte
-	AIPerUserMinute       int
-	AIPerSessionMinute    int
-	AIPerIPMinute         int
-}
-
 type WorkspaceStore struct {
-	pool     *pgxpool.Pool
-	settings WorkspaceStoreSettings
+	pool *pgxpool.Pool
 }
 
 const goalViewQuery = `SELECT g.id,g.status,g.revision,g.next_cycle_sequence_number,g.created_at,g.terminal_at,
@@ -52,8 +35,8 @@ LEFT JOIN goal_drafts review_draft
 LEFT JOIN pdca_cycles trigger_cycle
   ON trigger_cycle.user_id=g.user_id AND trigger_cycle.goal_id=g.id AND trigger_cycle.id=review_draft.review_cycle_id`
 
-func NewWorkspaceStore(pool *pgxpool.Pool, settings WorkspaceStoreSettings) *WorkspaceStore {
-	return &WorkspaceStore{pool: pool, settings: settings}
+func NewWorkspaceStore(pool *pgxpool.Pool) *WorkspaceStore {
+	return &WorkspaceStore{pool: pool}
 }
 
 func (store *WorkspaceStore) Home(ctx context.Context, userID string, limit int) (workspace.HomeView, error) {

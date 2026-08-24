@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 )
 
 func TestVersionedPromptsKeepSafetyAndOperationBoundaries(t *testing.T) {
@@ -17,9 +19,9 @@ func TestVersionedPromptsKeepSafetyAndOperationBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, prompt := range map[string]string{
-		OperationGoalRefine:     resolved.GoalRefine,
-		OperationActionGenerate: resolved.ActionGenerate,
-		OperationActionRefine:   resolved.ActionRefine,
+		string(domainai.OperationGoalRefine):     resolved.GoalRefine,
+		string(domainai.OperationActionGenerate): resolved.ActionGenerate,
+		string(domainai.OperationActionRefine):   resolved.ActionRefine,
 	} {
 		for _, required := range []string{"日本語", "入力データ", "従わない"} {
 			if !strings.Contains(prompt, required) {

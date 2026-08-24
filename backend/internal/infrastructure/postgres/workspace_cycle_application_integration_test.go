@@ -108,7 +108,7 @@ func TestCycleApplicationSerializesSameFrameAndAllowsDifferentFrames(t *testing.
 	now := integrationNow()
 	const userID = "10000000-0000-7000-8000-000000000001"
 	insertAIConcurrencyUser(t, pool, userID, now)
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	_ = startProgressingGoal(t, store, userID, fixture, 2, now)
 	tracedConfig := pool.Config()
@@ -120,7 +120,7 @@ func TestCycleApplicationSerializesSameFrameAndAllowsDifferentFrames(t *testing.
 		t.Fatal(err)
 	}
 	defer tracedPool.Close()
-	useCases := newCycleApplicationTestUseCases(NewWorkspaceStore(tracedPool, WorkspaceStoreSettings{}), now.Add(time.Minute))
+	useCases := newCycleApplicationTestUseCases(NewWorkspaceStore(tracedPool), now.Add(time.Minute))
 
 	sameInputs := []workspace.SaveFrameInput{
 		{UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID, Frame: cycle.FramePlan, Content: "同一Frame A", ExpectedFrameRevision: 0},
@@ -172,7 +172,7 @@ func TestCycleApplicationCompleteReceiptAndRollbackInvariants(t *testing.T) {
 		now := integrationNow()
 		const userID = "10000000-0000-7000-8000-000000000001"
 		insertAIConcurrencyUser(t, pool, userID, now)
-		store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+		store := NewWorkspaceStore(pool)
 		fixture := progressingGoalFixtures()[0]
 		started := startProgressingGoal(t, store, userID, fixture, 2, now)
 		useCases := newCycleApplicationTestUseCases(store, now.Add(time.Minute),
@@ -210,7 +210,7 @@ func TestCycleApplicationCompleteReceiptAndRollbackInvariants(t *testing.T) {
 			collidingID = "71000000-0000-7000-8000-000000000001"
 		)
 		insertAIConcurrencyUser(t, pool, userID, now)
-		store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+		store := NewWorkspaceStore(pool)
 		fixture := progressingGoalFixtures()[0]
 		started := startProgressingGoal(t, store, userID, fixture, 2, now)
 		useCases := newCycleApplicationTestUseCases(store, now.Add(time.Minute), collidingID)
@@ -237,7 +237,7 @@ VALUES($1,$2,'creation','collision',0,$3,$3)`, collidingID, userID, now); err !=
 		now := integrationNow()
 		const userID = "10000000-0000-7000-8000-000000000001"
 		insertAIConcurrencyUser(t, pool, userID, now)
-		store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+		store := NewWorkspaceStore(pool)
 		fixture := progressingGoalFixtures()[0]
 		started := startProgressingGoal(t, store, userID, fixture, 2, now)
 		useCases := newCycleApplicationTestUseCases(store, now.Add(time.Minute), "71000000-0000-7000-8000-000000000001")
