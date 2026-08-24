@@ -95,7 +95,7 @@ type GoalDraftTx interface {
 	SumLockedReservationsByMonth(context.Context, []string) ([]MonthlyReservation, error)
 	ReleaseBudgetReservationCAS(context.Context, time.Time, string, time.Time) (int64, error)
 	ExpireGenerationCAS(context.Context, string, string, time.Time) (int64, error)
-	ExpireUsageCAS(context.Context, string) (int64, error)
+	ExpireUsageCAS(context.Context, string, time.Time, string) (int64, error)
 	HasRunningDraftGeneration(context.Context, string) (bool, error)
 	CountRollingUsage(context.Context, string, time.Time) (int, error)
 	IncrementRateBucket(context.Context, AIRateBucket) (int, error)
@@ -171,6 +171,7 @@ type GoalRefineReplayState struct {
 
 type ExpiredGeneration struct {
 	ID              string
+	BudgetMonthUtc  time.Time
 	ReservedCostUSD string
 }
 
@@ -213,15 +214,17 @@ type GoalRefineGenerationRecord struct {
 }
 
 type AIUsageRecord struct {
-	OperationID      string
-	UserID           string
-	GoalID           string
-	Operation        string
-	Provider         string
-	Model            string
-	PromptVersion    string
-	AcceptedAt       time.Time
-	QuotaRetainUntil time.Time
+	OperationID                  string
+	UserID                       string
+	GoalID                       string
+	Operation                    string
+	Provider                     string
+	Model                        string
+	PromptVersion                string
+	AcceptedAt                   time.Time
+	QuotaRetainUntil             time.Time
+	SettlementBudgetMonthUtc     time.Time
+	SettlementReservationCostUSD string
 }
 
 type AIGenerationLocator struct {
@@ -261,12 +264,14 @@ type AIGenerationSettlement struct {
 }
 
 type AIUsageSettlement struct {
-	OperationID      string
-	Status           string
-	InputTokens      int64
-	OutputTokens     int64
-	EstimatedCostUSD string
-	FinalizedAt      time.Time
+	OperationID                string
+	ExpectedBudgetMonthUtc     time.Time
+	ExpectedReservationCostUSD string
+	Status                     string
+	InputTokens                int64
+	OutputTokens               int64
+	EstimatedCostUSD           string
+	FinalizedAt                time.Time
 }
 
 type AIUsageLocator struct {
@@ -276,8 +281,10 @@ type AIUsageLocator struct {
 }
 
 type AIUsageState struct {
-	AcceptedAt  time.Time
-	FinalizedAt *time.Time
+	AcceptedAt                   time.Time
+	FinalizedAt                  *time.Time
+	SettlementBudgetMonthUtc     time.Time
+	SettlementReservationCostUSD string
 }
 
 type GoalSuggestionState struct {

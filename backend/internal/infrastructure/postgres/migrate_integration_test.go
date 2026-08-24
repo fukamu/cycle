@@ -2,12 +2,14 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -15,6 +17,11 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	exposureDown, err := os.ReadFile(filepath.Join(directory, "000003_ai_usage_settlement_exposure.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, exposureDown)
 	retentionDown, err := os.ReadFile(filepath.Join(directory, "000002_ai_usage_retention_margin.down.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -31,12 +38,13 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 2 {
-		t.Fatalf("applied migrations = %v, want 2", result.Applied)
+	if len(result.Applied) != 3 {
+		t.Fatalf("applied migrations = %v, want 3", result.Applied)
 	}
-	baseline, retention := result.Applied[0], result.Applied[1]
+	baseline, retention, exposure := result.Applied[0], result.Applied[1], result.Applied[2]
 	if baseline.Version != 1 || baseline.Direction != "up" || baseline.File != "000001_fukamu_cycle_baseline.up.sql" ||
-		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" {
+		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" ||
+		exposure.Version != 3 || exposure.Direction != "up" || exposure.File != "000003_ai_usage_settlement_exposure.up.sql" {
 		t.Fatalf("applied migrations = %+v", result.Applied)
 	}
 	result, err = Migrate(databaseURL, directory)
@@ -49,7 +57,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 2 || users != 0 {
+	if version != 3 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
@@ -97,8 +105,8 @@ func TestAIUsageRetentionMigrationBackfillsAndClampsOldWriters(t *testing.T) {
 	insertUsage := func(operationID string, retainUntil time.Time) {
 		t.Helper()
 		if _, insertErr := pool.Exec(ctx, `INSERT INTO ai_usage_events
-(operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
-VALUES($1,$2,'goal_refine','accepted','fake','test','goal-v2',$3,$4)`,
+(operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
+VALUES($1,$2,'goal_refine','succeeded','fake','test','goal-v2',$3,$3,$4)`,
 			operationID, userID, acceptedAt, retainUntil); insertErr != nil {
 			t.Fatal(insertErr)
 		}
@@ -142,6 +150,186 @@ VALUES($1,$2,'goal_refine','accepted','fake','test','goal-v2',$3,$4)`,
 	insertUsage(afterDownID, wantLegacy)
 	if got := readDeadline(afterDownID); !got.Equal(wantLegacy) {
 		t.Fatalf("down left clamp active: deadline = %s, want %s", got, wantLegacy)
+	}
+	executeMigrationScript(t, pool, up)
+	installed = true
+}
+
+func TestAIUsageSettlementExposureMigrationBackfillsLegacyRowsAndGuardsOldAccountDelete(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	directory := filepath.Join("..", "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(directory, "000003_ai_usage_settlement_exposure.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile(filepath.Join(directory, "000003_ai_usage_settlement_exposure.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := true
+	t.Cleanup(func() {
+		if !installed {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM users`)
+			executeMigrationScript(t, pool, up)
+		}
+	})
+	executeMigrationScript(t, pool, down)
+	installed = false
+
+	ctx := context.Background()
+	acceptedAt := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	month := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	const (
+		userID       = "10000000-0000-7000-8000-000000000031"
+		draftID      = "20000000-0000-7000-8000-000000000031"
+		legacyID     = "30000000-0000-7000-8000-000000000031"
+		legacyKey    = "40000000-0000-7000-8000-000000000031"
+		finalizedID  = "30000000-0000-7000-8000-000000000032"
+		oldWriterID  = "30000000-0000-7000-8000-000000000033"
+		oldWriterKey = "40000000-0000-7000-8000-000000000033"
+	)
+	if _, err = pool.Exec(ctx, `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, acceptedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO goal_drafts(id,user_id,draft_type,body,created_at,updated_at)
+VALUES($1,$2,'creation','migration exposure',$3,$3)`, draftID, userID, acceptedAt); err != nil {
+		t.Fatal(err)
+	}
+	insertRunningGeneration := func(operationID, key string) {
+		t.Helper()
+		if _, insertErr := pool.Exec(ctx, `INSERT INTO ai_generations
+(id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
+ provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,lease_expires_at,started_at)
+VALUES($1,$2,'goal_refine','running',$3,0,$4,$5,'migration exposure','fake','test','goal-v2',$6,0.12345678,$7,$8)`,
+			operationID, userID, draftID, key, "hash-"+operationID, month, acceptedAt.Add(time.Hour), acceptedAt); insertErr != nil {
+			t.Fatal(insertErr)
+		}
+	}
+	insertLegacyUsage := func(operationID string) {
+		t.Helper()
+		if _, insertErr := pool.Exec(ctx, `INSERT INTO ai_usage_events
+(operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
+VALUES($1,$2,'goal_refine','accepted','fake','test','goal-v2',$3,$4)`,
+			operationID, userID, acceptedAt, acceptedAt.Add(24*time.Hour)); insertErr != nil {
+			t.Fatal(insertErr)
+		}
+	}
+	insertRunningGeneration(legacyID, legacyKey)
+	insertLegacyUsage(legacyID)
+	if _, err = pool.Exec(ctx, `INSERT INTO ai_usage_events
+(operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
+VALUES($1,$2,'goal_refine','succeeded','fake','test','goal-v2',$3,$3,$4)`,
+		finalizedID, userID, acceptedAt, acceptedAt.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	executeMigrationScript(t, pool, up)
+	installed = true
+	var gotMonth time.Time
+	var gotReservation string
+	if err = pool.QueryRow(ctx, `SELECT settlement_budget_month_utc,settlement_reservation_cost_usd::text
+FROM ai_usage_events WHERE operation_id=$1`, legacyID).Scan(&gotMonth, &gotReservation); err != nil {
+		t.Fatal(err)
+	}
+	if !gotMonth.Equal(month) || gotReservation != "0.12345678" {
+		t.Fatalf("backfilled exposure = %s/%s, want %s/0.12345678", gotMonth, gotReservation, month)
+	}
+	var finalizedMetadataCleared, constraintValidated bool
+	if err = pool.QueryRow(ctx, `SELECT
+(SELECT settlement_budget_month_utc IS NULL AND settlement_reservation_cost_usd IS NULL
+ FROM ai_usage_events WHERE operation_id=$1),
+(SELECT convalidated FROM pg_constraint WHERE conname='ai_usage_events_settlement_exposure')`, finalizedID).Scan(
+		&finalizedMetadataCleared, &constraintValidated); err != nil {
+		t.Fatal(err)
+	}
+	if !finalizedMetadataCleared || !constraintValidated {
+		t.Fatalf("finalized metadata cleared/constraint validated = %t/%t", finalizedMetadataCleared, constraintValidated)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE ai_generations SET status='failed',budget_reserved_cost_usd=0,
+failure_code='provider_error',lease_expires_at=NULL,finished_at=$2 WHERE id=$1`, legacyID, acceptedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE ai_usage_events SET status='failed',provider_usage_finalized_at=$2 WHERE operation_id=$1`, legacyID, acceptedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT settlement_budget_month_utc IS NULL AND settlement_reservation_cost_usd IS NULL
+FROM ai_usage_events WHERE operation_id=$1`, legacyID).Scan(&finalizedMetadataCleared); err != nil || !finalizedMetadataCleared {
+		t.Fatalf("legacy finalizer metadata clear = %t, error %v", finalizedMetadataCleared, err)
+	}
+
+	insertRunningGeneration(oldWriterID, oldWriterKey)
+	insertLegacyUsage(oldWriterID)
+	if err = pool.QueryRow(ctx, `SELECT settlement_budget_month_utc,settlement_reservation_cost_usd::text
+FROM ai_usage_events WHERE operation_id=$1`, oldWriterID).Scan(&gotMonth, &gotReservation); err != nil {
+		t.Fatal(err)
+	}
+	if !gotMonth.Equal(month) || gotReservation != "0.12345678" {
+		t.Fatalf("old writer exposure = %s/%s", gotMonth, gotReservation)
+	}
+	_, mutationErr := pool.Exec(ctx, `UPDATE ai_usage_events SET settlement_reservation_cost_usd=0.2 WHERE operation_id=$1`, oldWriterID)
+	assertPostgresSQLState(t, mutationErr, "23514")
+	if _, err = pool.Exec(ctx, `UPDATE ai_generations SET status='failed',budget_reserved_cost_usd=0,
+failure_code='lease_expired',lease_expires_at=NULL,finished_at=$2 WHERE id=$1`, oldWriterID, acceptedAt); err != nil {
+		t.Fatal(err)
+	}
+	_, mutationErr = pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, userID)
+	assertPostgresSQLState(t, mutationErr, "23514")
+
+	executeMigrationScript(t, pool, down)
+	installed = false
+	if _, err = pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, userID); err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, up)
+	installed = true
+}
+
+func TestAIUsageSettlementExposureMigrationRejectsUnrecoverableRowsAtomically(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	directory := filepath.Join("..", "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(directory, "000003_ai_usage_settlement_exposure.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile(filepath.Join(directory, "000003_ai_usage_settlement_exposure.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := true
+	t.Cleanup(func() {
+		if !installed {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM users`)
+			executeMigrationScript(t, pool, up)
+		}
+	})
+	executeMigrationScript(t, pool, down)
+	installed = false
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	const userID = "10000000-0000-7000-8000-000000000041"
+	if _, err = pool.Exec(ctx, `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO ai_usage_events
+(operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
+VALUES('30000000-0000-7000-8000-000000000041',$1,'goal_refine','failed','fake','test','goal-v2',$2,$3)`,
+		userID, now, now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScriptExpectSQLState(t, pool, up, "23514")
+	var columns int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
+WHERE table_schema='public' AND table_name='ai_usage_events'
+  AND column_name IN ('settlement_budget_month_utc','settlement_reservation_cost_usd')`).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 0 {
+		t.Fatalf("settlement columns after failed migration = %d, want 0", columns)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, userID); err != nil {
+		t.Fatal(err)
 	}
 	executeMigrationScript(t, pool, up)
 	installed = true
@@ -230,5 +418,37 @@ func executeMigrationScript(t *testing.T, pool *pgxpool.Pool, script []byte) {
 		if result.Err != nil {
 			t.Fatal(result.Err)
 		}
+	}
+}
+
+func executeMigrationScriptExpectSQLState(t *testing.T, pool *pgxpool.Pool, script []byte, wantCode string) {
+	t.Helper()
+	ctx := context.Background()
+	connection, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, execErr := connection.Conn().PgConn().Exec(ctx, string(script)).ReadAll()
+	if execErr == nil {
+		for _, result := range results {
+			if result.Err != nil {
+				execErr = result.Err
+				break
+			}
+		}
+	}
+	_, rollbackErr := connection.Exec(ctx, `ROLLBACK`)
+	connection.Release()
+	assertPostgresSQLState(t, execErr, wantCode)
+	if rollbackErr != nil {
+		t.Fatalf("rollback failed migration: %v", rollbackErr)
+	}
+}
+
+func assertPostgresSQLState(t *testing.T, err error, wantCode string) {
+	t.Helper()
+	var postgresError *pgconn.PgError
+	if !errors.As(err, &postgresError) || postgresError.Code != wantCode {
+		t.Fatalf("PostgreSQL error = %v, want SQLSTATE %s", err, wantCode)
 	}
 }

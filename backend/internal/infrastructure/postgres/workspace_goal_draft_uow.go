@@ -388,7 +388,7 @@ func (transaction *workspaceGoalDraftTx) LockExpiredGenerations(
 	userID string,
 	now time.Time,
 ) ([]workspace.ExpiredGeneration, error) {
-	rows, err := transaction.tx.Query(ctx, `SELECT id,budget_reserved_cost_usd::text FROM ai_generations
+	rows, err := transaction.tx.Query(ctx, `SELECT id,budget_month_utc,budget_reserved_cost_usd::text FROM ai_generations
 WHERE user_id=$1 AND status='running' AND lease_expires_at<=$2 ORDER BY id FOR UPDATE`, mustUUID(userID), now)
 	if err != nil {
 		return nil, err
@@ -397,7 +397,7 @@ WHERE user_id=$1 AND status='running' AND lease_expires_at<=$2 ORDER BY id FOR U
 	items := []workspace.ExpiredGeneration{}
 	for rows.Next() {
 		var item workspace.ExpiredGeneration
-		if err = rows.Scan(&item.ID, &item.ReservedCostUSD); err != nil {
+		if err = rows.Scan(&item.ID, &item.BudgetMonthUtc, &item.ReservedCostUSD); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -460,9 +460,16 @@ WHERE id=$1 AND status='running' AND budget_reserved_cost_usd=$3::numeric`, must
 	return command.RowsAffected(), nil
 }
 
-func (transaction *workspaceGoalDraftTx) ExpireUsageCAS(ctx context.Context, generationID string) (int64, error) {
+func (transaction *workspaceGoalDraftTx) ExpireUsageCAS(
+	ctx context.Context,
+	generationID string,
+	budgetMonth time.Time,
+	reservationCostUSD string,
+) (int64, error) {
 	command, err := transaction.tx.Exec(ctx, `UPDATE ai_usage_events SET status='failed'
-WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL`, mustUUID(generationID))
+WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL
+  AND settlement_budget_month_utc=$2 AND settlement_reservation_cost_usd=$3::numeric`,
+		mustUUID(generationID), budgetMonth, reservationCostUSD)
 	if err != nil {
 		return 0, err
 	}
@@ -559,10 +566,11 @@ func (transaction *workspaceGoalDraftTx) InsertAcceptedUsage(
 	record workspace.AIUsageRecord,
 ) (int64, error) {
 	command, err := transaction.tx.Exec(ctx, `INSERT INTO ai_usage_events
-(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
-VALUES($1,$2,$3,$4,'accepted',$5,$6,$7,$8,$9)`, mustUUID(record.OperationID), mustUUID(record.UserID),
+(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until,
+ settlement_budget_month_utc,settlement_reservation_cost_usd)
+VALUES($1,$2,$3,$4,'accepted',$5,$6,$7,$8,$9,$10,$11::numeric)`, mustUUID(record.OperationID), mustUUID(record.UserID),
 		nullableUUID(record.GoalID), record.Operation, record.Provider, record.Model, record.PromptVersion,
-		record.AcceptedAt, record.QuotaRetainUntil)
+		record.AcceptedAt, record.QuotaRetainUntil, record.SettlementBudgetMonthUtc, record.SettlementReservationCostUSD)
 	if err != nil {
 		return 0, err
 	}
@@ -644,9 +652,12 @@ func (transaction *workspaceGoalDraftTx) FinalizeUsageCAS(
 	settlement workspace.AIUsageSettlement,
 ) (int64, error) {
 	command, err := transaction.tx.Exec(ctx, `UPDATE ai_usage_events SET status=$2,input_tokens=$3,output_tokens=$4,
-estimated_cost_usd=$5::numeric,provider_usage_finalized_at=$6
-WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL`, mustUUID(settlement.OperationID),
-		settlement.Status, settlement.InputTokens, settlement.OutputTokens, settlement.EstimatedCostUSD, settlement.FinalizedAt)
+estimated_cost_usd=$5::numeric,provider_usage_finalized_at=$6,
+settlement_budget_month_utc=NULL,settlement_reservation_cost_usd=NULL
+WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL
+  AND settlement_budget_month_utc=$7 AND settlement_reservation_cost_usd=$8::numeric`, mustUUID(settlement.OperationID),
+		settlement.Status, settlement.InputTokens, settlement.OutputTokens, settlement.EstimatedCostUSD, settlement.FinalizedAt,
+		settlement.ExpectedBudgetMonthUtc, settlement.ExpectedReservationCostUSD)
 	if err != nil {
 		return 0, err
 	}
@@ -675,12 +686,23 @@ func (transaction *workspaceGoalDraftTx) LockUsage(
 	userID string,
 ) (workspace.AIUsageState, error) {
 	var state workspace.AIUsageState
-	err := transaction.tx.QueryRow(ctx, `SELECT accepted_at,provider_usage_finalized_at FROM ai_usage_events
+	var settlementMonth pgtype.Date
+	var settlementReservation pgtype.Text
+	err := transaction.tx.QueryRow(ctx, `SELECT accepted_at,provider_usage_finalized_at,
+settlement_budget_month_utc,settlement_reservation_cost_usd::text FROM ai_usage_events
 WHERE operation_id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(generationID), mustUUID(userID)).Scan(
-		&state.AcceptedAt, &state.FinalizedAt,
+		&state.AcceptedAt, &state.FinalizedAt, &settlementMonth, &settlementReservation,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspace.AIUsageState{}, workspace.ErrNotFound
+	}
+	if err == nil {
+		if settlementMonth.Valid {
+			state.SettlementBudgetMonthUtc = settlementMonth.Time
+		}
+		if settlementReservation.Valid {
+			state.SettlementReservationCostUSD = settlementReservation.String
+		}
 	}
 	return state, err
 }
@@ -704,9 +726,12 @@ func (transaction *workspaceGoalDraftTx) FinalizeLateUsageCAS(
 	settlement workspace.AIUsageSettlement,
 ) (int64, error) {
 	command, err := transaction.tx.Exec(ctx, `UPDATE ai_usage_events SET status=$2,input_tokens=$3,output_tokens=$4,
-estimated_cost_usd=$5::numeric,provider_usage_finalized_at=$6
-WHERE operation_id=$1 AND provider_usage_finalized_at IS NULL`, mustUUID(settlement.OperationID), settlement.Status,
-		settlement.InputTokens, settlement.OutputTokens, settlement.EstimatedCostUSD, settlement.FinalizedAt)
+estimated_cost_usd=$5::numeric,provider_usage_finalized_at=$6,
+settlement_budget_month_utc=NULL,settlement_reservation_cost_usd=NULL
+WHERE operation_id=$1 AND provider_usage_finalized_at IS NULL
+  AND settlement_budget_month_utc=$7 AND settlement_reservation_cost_usd=$8::numeric`, mustUUID(settlement.OperationID),
+		settlement.Status, settlement.InputTokens, settlement.OutputTokens, settlement.EstimatedCostUSD, settlement.FinalizedAt,
+		settlement.ExpectedBudgetMonthUtc, settlement.ExpectedReservationCostUSD)
 	if err != nil {
 		return 0, err
 	}

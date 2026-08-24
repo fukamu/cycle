@@ -13,7 +13,10 @@ import (
 	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
-var goalDraftTestNow = time.Date(2026, time.August, 23, 1, 2, 3, 0, time.UTC)
+var (
+	goalDraftTestNow   = time.Date(2026, time.August, 23, 1, 2, 3, 0, time.UTC)
+	goalDraftTestMonth = time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+)
 
 const (
 	goalDraftTestUserID       = "10000000-0000-7000-8000-000000000001"
@@ -118,6 +121,8 @@ type goalDraftFakeTx struct {
 	generationSettlement AIGenerationSettlement
 	usageSettlement      AIUsageSettlement
 	adoptRecord          AdoptDraftRecord
+	expireUsageMonth     time.Time
+	expireUsageReserved  string
 }
 
 func (tx *goalDraftFakeTx) record(name string) error {
@@ -296,7 +301,9 @@ func (tx *goalDraftFakeTx) ExpireGenerationCAS(_ context.Context, generationID, 
 	return rows, err
 }
 
-func (tx *goalDraftFakeTx) ExpireUsageCAS(context.Context, string) (int64, error) {
+func (tx *goalDraftFakeTx) ExpireUsageCAS(_ context.Context, _ string, month time.Time, reservation string) (int64, error) {
+	tx.expireUsageMonth = month
+	tx.expireUsageReserved = reservation
 	return tx.mutation("expire_usage")
 }
 
@@ -759,6 +766,8 @@ func TestGoalDraftUseCasesBeginRefineOwnsQuotaRateBudgetAndPersistence(t *testin
 	if snapshot.GenerationID != goalDraftTestGenerationID ||
 		tx.generationRecord.ReservedCostUSD != "0.10000000" ||
 		tx.usageRecord.Operation != goalRefineOperation ||
+		!tx.usageRecord.SettlementBudgetMonthUtc.Equal(goalDraftTestMonth) ||
+		tx.usageRecord.SettlementReservationCostUSD != "0.10000000" ||
 		!tx.rollingAcceptedAfter.Equal(goalDraftTestNow.Add(-24*time.Hour)) ||
 		!tx.usageRecord.QuotaRetainUntil.Equal(goalDraftTestNow.Add(24*time.Hour+15*time.Minute)) {
 		t.Fatalf("snapshot/generation/usage = %#v / %#v / %#v", snapshot, tx.generationRecord, tx.usageRecord)
@@ -777,8 +786,10 @@ func TestGoalDraftUseCasesBeginRefineOwnsQuotaRateBudgetAndPersistence(t *testin
 
 func TestGoalDraftUseCasesExpiredRecoveryRequiresExactCAS(t *testing.T) {
 	tx := &goalDraftFakeTx{
-		draft:    creationDraft("期限切れ回復", 0),
-		expired:  []ExpiredGeneration{{ID: goalDraftTestGenerationID, ReservedCostUSD: "0.10000000"}},
+		draft: creationDraft("期限切れ回復", 0),
+		expired: []ExpiredGeneration{{
+			ID: goalDraftTestGenerationID, BudgetMonthUtc: goalDraftTestMonth, ReservedCostUSD: "0.10000000",
+		}},
 		monthly:  []MonthlyReservation{{MonthUtc: goalDraftTestNow, AmountUSD: "0.10000000"}},
 		affected: map[string]int64{"release_expired_budget": 0},
 	}
@@ -804,7 +815,9 @@ func TestGoalDraftUseCasesExpiredSameKeyReplayCommitsTerminalRecovery(t *testing
 		refineReplay: &GoalRefineReplayState{
 			GenerationID: goalDraftTestGenerationID, InputHash: goalRefineRequestHash(input), Status: aiStatusRunning,
 		},
-		expired: []ExpiredGeneration{{ID: goalDraftTestGenerationID, ReservedCostUSD: "0.10000000"}},
+		expired: []ExpiredGeneration{{
+			ID: goalDraftTestGenerationID, BudgetMonthUtc: goalDraftTestMonth, ReservedCostUSD: "0.10000000",
+		}},
 		monthly: []MonthlyReservation{{
 			MonthUtc: goalDraftTestNow, AmountUSD: "0.10000000",
 		}},
@@ -818,7 +831,8 @@ func TestGoalDraftUseCasesExpiredSameKeyReplayCommitsTerminalRecovery(t *testing
 		"lock_user", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
 		"release_expired_budget", "expire_generation", "expire_usage", "find_refine_replay",
 	}
-	if !reflect.DeepEqual(tx.trace, want) || tx.refineReplay.Status != aiStatusFailed {
+	if !reflect.DeepEqual(tx.trace, want) || tx.refineReplay.Status != aiStatusFailed ||
+		!tx.expireUsageMonth.Equal(goalDraftTestMonth) || tx.expireUsageReserved != "0.10000000" {
 		t.Fatalf("trace/replay = %v / %#v", tx.trace, tx.refineReplay)
 	}
 }
@@ -875,7 +889,9 @@ func TestGoalDraftUseCasesFinishRefineUsesOrderedExactSettlement(t *testing.T) {
 	}
 	if response.Suggestion != "提案" || !response.ContextChanged ||
 		tx.generationSettlement.EstimatedCostUSD != "0.30000000" ||
-		tx.usageSettlement.EstimatedCostUSD != "0.30000000" {
+		tx.usageSettlement.EstimatedCostUSD != "0.30000000" ||
+		!tx.usageSettlement.ExpectedBudgetMonthUtc.Equal(goalDraftTestNow) ||
+		tx.usageSettlement.ExpectedReservationCostUSD != "0.10000000" {
 		t.Fatalf("response/settlement = %#v / %#v / %#v", response, tx.generationSettlement, tx.usageSettlement)
 	}
 	want := []string{
@@ -922,7 +938,10 @@ func TestGoalDraftUseCasesFinishShapeMismatchRollsBackWithoutLateUsageSettlement
 func TestGoalDraftUseCasesFinishLateUsageCommitsBeforeNotFound(t *testing.T) {
 	tx := &goalDraftFakeTx{
 		usageLocator: &AIUsageLocator{UserID: goalDraftTestUserID, AcceptedAt: goalDraftTestNow},
-		usageState:   AIUsageState{AcceptedAt: goalDraftTestNow},
+		usageState: AIUsageState{
+			AcceptedAt: goalDraftTestNow, SettlementBudgetMonthUtc: goalDraftTestMonth,
+			SettlementReservationCostUSD: "0.10000000",
+		},
 	}
 	useCases, uow := newGoalDraftTestUseCases(tx)
 	_, err := useCases.FinishGoalRefine(context.Background(), AISnapshot{
@@ -936,7 +955,9 @@ func TestGoalDraftUseCasesFinishLateUsageCommitsBeforeNotFound(t *testing.T) {
 		"ensure_budget_month", "add_late_actual_cost", "finalize_late_usage",
 	}
 	if !reflect.DeepEqual(tx.trace, want) || uow.committed != 1 ||
-		tx.usageSettlement.EstimatedCostUSD != "0.10000000" {
+		tx.usageSettlement.EstimatedCostUSD != "0.10000000" ||
+		!tx.usageSettlement.ExpectedBudgetMonthUtc.Equal(goalDraftTestMonth) ||
+		tx.usageSettlement.ExpectedReservationCostUSD != "0.10000000" {
 		t.Fatalf("trace/transaction/settlement = %v / %#v / %#v", tx.trace, uow, tx.usageSettlement)
 	}
 }

@@ -498,7 +498,8 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 			OperationID: input.GenerationID, UserID: input.UserID, GoalID: goalID,
 			Operation: goalRefineOperation, Provider: useCases.settings.Provider, Model: useCases.settings.Model,
 			PromptVersion: useCases.settings.GoalPromptVersion, AcceptedAt: input.Now,
-			QuotaRetainUntil: AIUsageQuotaRetainUntil(input.Now),
+			QuotaRetainUntil: AIUsageQuotaRetainUntil(input.Now), SettlementBudgetMonthUtc: month,
+			SettlementReservationCostUSD: reservation,
 		})
 		if reserveErr != nil {
 			return reserveErr
@@ -615,7 +616,8 @@ func (useCases *GoalDraftUseCases) FinishGoalRefine(ctx context.Context, snapsho
 			return settleErr
 		}
 		rows, settleErr = tx.FinalizeUsageCAS(ctx, AIUsageSettlement{
-			OperationID: snapshot.GenerationID, Status: status, InputTokens: result.InputTokens,
+			OperationID: snapshot.GenerationID, ExpectedBudgetMonthUtc: generation.BudgetMonthUtc,
+			ExpectedReservationCostUSD: generation.ReservedCostUSD, Status: status, InputTokens: result.InputTokens,
 			OutputTokens: result.OutputTokens, EstimatedCostUSD: cost, FinalizedAt: now,
 		})
 		if settleErr != nil {
@@ -752,7 +754,7 @@ func (useCases *GoalDraftUseCases) recoverExpiredAI(ctx context.Context, tx Goal
 		if expireErr = requireRows("expire AI generation", rows, 1); expireErr != nil {
 			return expireErr
 		}
-		rows, expireErr = tx.ExpireUsageCAS(ctx, item.ID)
+		rows, expireErr = tx.ExpireUsageCAS(ctx, item.ID, item.BudgetMonthUtc, item.ReservedCostUSD)
 		if expireErr != nil {
 			return expireErr
 		}
@@ -827,7 +829,10 @@ func (useCases *GoalDraftUseCases) settleLateUsage(
 	if err != nil || usage.FinalizedAt != nil {
 		return err
 	}
-	month := time.Date(usage.AcceptedAt.UTC().Year(), usage.AcceptedAt.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+	if usage.SettlementBudgetMonthUtc.IsZero() || usage.SettlementReservationCostUSD == "" {
+		return invariantError("late AI usage settlement exposure is missing")
+	}
+	month := usage.SettlementBudgetMonthUtc
 	if err = tx.EnsureBudgetMonth(ctx, month, now); err != nil {
 		return err
 	}
@@ -844,7 +849,8 @@ func (useCases *GoalDraftUseCases) settleLateUsage(
 		status = aiStatusFailed
 	}
 	rows, err = tx.FinalizeLateUsageCAS(ctx, AIUsageSettlement{
-		OperationID: generationID, Status: status, InputTokens: result.InputTokens,
+		OperationID: generationID, ExpectedBudgetMonthUtc: month,
+		ExpectedReservationCostUSD: usage.SettlementReservationCostUSD, Status: status, InputTokens: result.InputTokens,
 		OutputTokens: result.OutputTokens, EstimatedCostUSD: cost, FinalizedAt: now,
 	})
 	if err != nil {

@@ -104,21 +104,23 @@ func main() {
 		RateHashKey: []byte(settings.Session.RateLimitHMACSecret), AIPerUserMinute: settings.RateLimit.AIPerUserMinute,
 		AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute, AIPerIPMinute: settings.RateLimit.AIPerIPMinute,
 	})
-	workspaceService := workspace.NewService(workspaceStore, workspaceStore, aiProvider, system.Clock{}, random, workspace.Settings{
-		MaxProgressingGoals: settings.Goals.MaxProgressingGoals, Provider: settings.AI.Provider,
-		RollingLimit: settings.AI.MaxGenerationsPerUser24h, MonthlyBudgetUSD: settings.AI.MonthlyBudgetUSD,
-		ReservationUSD: goalRefineReservationUSD, LeaseDuration: settings.AI.LeaseDuration,
-		RateHashKey: []byte(settings.Session.RateLimitHMACSecret), AIPerUserMinute: settings.RateLimit.AIPerUserMinute,
-		AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute, AIPerIPMinute: settings.RateLimit.AIPerIPMinute,
-		MaxProviderAttempts: settings.AI.MaxProviderAttempts,
-		MaxRetryBackoff:     settings.AI.MaxRetryBackoff, FinalizationGrace: settings.AI.FinalizationGrace, Model: settings.AI.Model,
-		MaxInputTokens: settings.AI.MaxInputTokens, GoalRefineMaxOutputTokens: settings.AI.GoalRefineMaxOutputTokens,
-		ActionMaxOutputTokens: settings.AI.ActionMaxOutputTokens, MaxContextCycles: settings.AI.MaxContextCycles,
-		GoalRefineInstructions: promptSet.GoalRefine, ActionGenerateInstructions: promptSet.ActionGenerate,
-		ActionRefineInstructions: promptSet.ActionRefine, TokenCounter: tokenCounter,
-		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
-		RefinePromptVersion: settings.AI.RefinePromptVersion, AIObserver: metrics,
-	})
+	workspaceService := workspace.NewService(workspaceStore, workspaceStore, workspaceStore, workspaceStore,
+		aiProvider, system.Clock{}, random, workspace.Settings{
+			MaxProgressingGoals: settings.Goals.MaxProgressingGoals, Provider: settings.AI.Provider,
+			CursorSigningKey: []byte(settings.Session.CursorSigningSecret),
+			RollingLimit:     settings.AI.MaxGenerationsPerUser24h, MonthlyBudgetUSD: settings.AI.MonthlyBudgetUSD,
+			ReservationUSD: goalRefineReservationUSD, LeaseDuration: settings.AI.LeaseDuration,
+			RateHashKey: []byte(settings.Session.RateLimitHMACSecret), AIPerUserMinute: settings.RateLimit.AIPerUserMinute,
+			AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute, AIPerIPMinute: settings.RateLimit.AIPerIPMinute,
+			MaxProviderAttempts: settings.AI.MaxProviderAttempts,
+			MaxRetryBackoff:     settings.AI.MaxRetryBackoff, FinalizationGrace: settings.AI.FinalizationGrace, Model: settings.AI.Model,
+			MaxInputTokens: settings.AI.MaxInputTokens, GoalRefineMaxOutputTokens: settings.AI.GoalRefineMaxOutputTokens,
+			ActionMaxOutputTokens: settings.AI.ActionMaxOutputTokens, MaxContextCycles: settings.AI.MaxContextCycles,
+			GoalRefineInstructions: promptSet.GoalRefine, ActionGenerateInstructions: promptSet.ActionGenerate,
+			ActionRefineInstructions: promptSet.ActionRefine, TokenCounter: tokenCounter,
+			GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
+			RefinePromptVersion: settings.AI.RefinePromptVersion, AIObserver: metrics,
+		})
 	var googleVerifier account.GoogleVerifier = googleidentity.NewVerifier(settings.Google.WebClientID)
 	if settings.App.Environment == "test" {
 		googleVerifier = googleidentity.FakeVerifier{}

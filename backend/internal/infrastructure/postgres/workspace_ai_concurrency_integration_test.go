@@ -496,6 +496,8 @@ content_revision=content_revision+1,plan_revision=plan_revision+1,updated_at=$2 
 		finished              bool
 		usageStatus           string
 		usageFinalized        bool
+		settlementMonth       time.Time
+		settlementReservation string
 		budgetReserved        float64
 		rateCount             int
 		generationCount       int
@@ -509,12 +511,15 @@ content_revision=content_revision+1,plan_revision=plan_revision+1,updated_at=$2 
 (SELECT finished_at IS NOT NULL FROM ai_generations WHERE id=$1),
 (SELECT status FROM ai_usage_events WHERE operation_id=$1),
 (SELECT provider_usage_finalized_at IS NOT NULL FROM ai_usage_events WHERE operation_id=$1),
+(SELECT settlement_budget_month_utc FROM ai_usage_events WHERE operation_id=$1),
+(SELECT settlement_reservation_cost_usd::text FROM ai_usage_events WHERE operation_id=$1),
 (SELECT reserved_cost_usd FROM ai_budget_monthly WHERE month_utc=$2),
 (SELECT count(*) FROM abuse_rate_buckets),
 (SELECT count(*) FROM ai_generations),
 (SELECT count(*) FROM ai_usage_events)`, expiredSnapshot.GenerationID, month).Scan(
 		&generationStatus, &generationFailure, &generationReservation, &leaseCleared, &finished,
-		&usageStatus, &usageFinalized, &budgetReserved, &rateCount, &generationCount, &usageCount,
+		&usageStatus, &usageFinalized, &settlementMonth, &settlementReservation,
+		&budgetReserved, &rateCount, &generationCount, &usageCount,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +528,8 @@ content_revision=content_revision+1,plan_revision=plan_revision+1,updated_at=$2 
 		t.Fatalf("expired generation = status %s, failure %s, reserved %.8f, leaseCleared %t, finished %t",
 			generationStatus, generationFailure, generationReservation, leaseCleared, finished)
 	}
-	if usageStatus != "failed" || usageFinalized || !approximatelyEqual(budgetReserved, 0) ||
+	if usageStatus != "failed" || usageFinalized || !settlementMonth.Equal(month) ||
+		settlementReservation != "0.01000000" || !approximatelyEqual(budgetReserved, 0) ||
 		rateCount != 0 || generationCount != 1 || usageCount != 1 {
 		t.Fatalf("expired replay state = usage %s/finalized=%t, Budget %.8f, rate/generation/usage counts %d/%d/%d",
 			usageStatus, usageFinalized, budgetReserved, rateCount, generationCount, usageCount)
@@ -569,7 +575,7 @@ func isExpiredRecoveryGenerationLock(sql string) bool {
 func isGoalDeleteGenerationLock(sql string) bool {
 	normalized := normalizeAIConcurrencySQL(sql)
 	return strings.Contains(normalized, "from ai_generations") &&
-		strings.Contains(normalized, "where goal_id=$1 and status='running'") &&
+		strings.Contains(normalized, "where user_id=$1 and goal_id=$2 and status='running'") &&
 		strings.Contains(normalized, "order by id for update")
 }
 
@@ -619,14 +625,14 @@ WHERE month_utc=$1`, time.Date(now.UTC().Year(), now.UTC().Month(), 1, 0, 0, 0, 
 		t.Fatal(err)
 	}
 
-	err := store.DeleteGoal(
+	err := executeGoalDeleteUseCase(
+		store,
 		context.Background(),
 		userID,
 		fixture.goalID,
 		true,
 		started.Goal.Revision,
 		"84000000-0000-7000-8000-000000000001",
-		"delete-zero-row-budget-release",
 		now.Add(2*time.Minute),
 	)
 	if err == nil {
@@ -776,14 +782,14 @@ VALUES($1,$2,$3,'action_generate','accepted',$4,$5,$6,$7,$8)`,
 	}
 
 	deleteKey := "87000000-0000-7000-8000-000000000001"
-	if err := store.DeleteGoal(
+	if err := executeGoalDeleteUseCase(
+		store,
 		context.Background(),
 		userID,
 		fixture.goalID,
 		true,
 		started.Goal.Revision,
 		deleteKey,
-		"delete-three-exact-decimal-reservations",
 		now.Add(2*time.Minute),
 	); err != nil {
 		t.Fatalf("DeleteGoal with three exact 0.1 reservations: %v", err)
@@ -1560,14 +1566,14 @@ func TestGoalDeleteLateProviderCallbacksSettleUsageExactlyOnce(t *testing.T) {
 	deleteCalls := make(chan error, 1)
 	deleteCtx := context.WithValue(ctx, aiConcurrencyCommandContextKey{}, aiConcurrencyGoalDelete)
 	go func() {
-		deleteCalls <- store.DeleteGoal(
+		deleteCalls <- executeGoalDeleteUseCase(
+			store,
 			deleteCtx,
 			userID,
 			fixture.goalID,
 			true,
 			started.Goal.Revision,
 			deleteKey,
-			"delete-overlapping-parallel-late-results",
 			now.Add(2*time.Minute),
 		)
 	}()
@@ -1660,6 +1666,7 @@ func TestGoalDeleteLateProviderCallbacksSettleUsageExactlyOnce(t *testing.T) {
 		outputTokens    int64
 		usageCost       float64
 		usageFinalized  bool
+		exposureCleared bool
 		contentDeleted  bool
 		goalDetached    bool
 		receiptCount    int
@@ -1675,6 +1682,8 @@ func TestGoalDeleteLateProviderCallbacksSettleUsageExactlyOnce(t *testing.T) {
 (SELECT output_tokens FROM ai_usage_events WHERE operation_id=$2),
 (SELECT estimated_cost_usd FROM ai_usage_events WHERE operation_id=$2),
 (SELECT provider_usage_finalized_at IS NOT NULL FROM ai_usage_events WHERE operation_id=$2),
+(SELECT settlement_budget_month_utc IS NULL AND settlement_reservation_cost_usd IS NULL
+ FROM ai_usage_events WHERE operation_id=$2),
 (SELECT content_deleted FROM ai_usage_events WHERE operation_id=$2),
 (SELECT goal_id IS NULL FROM ai_usage_events WHERE operation_id=$2),
 (SELECT count(*) FROM goal_delete_receipts WHERE user_id=$3 AND idempotency_key=$4),
@@ -1684,14 +1693,14 @@ func TestGoalDeleteLateProviderCallbacksSettleUsageExactlyOnce(t *testing.T) {
 		fixture.goalID, snapshot.GenerationID, userID, deleteKey, time.Date(now.UTC().Year(), now.UTC().Month(), 1, 0, 0, 0, 0, time.UTC),
 	).Scan(
 		&goalCount, &generationCount, &usageStatus, &inputTokens, &outputTokens, &usageCost,
-		&usageFinalized, &contentDeleted, &goalDetached, &receiptCount,
+		&usageFinalized, &exposureCleared, &contentDeleted, &goalDetached, &receiptCount,
 		&budgetReserved, &budgetActual, &unattributed,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if goalCount != 0 || generationCount != 0 || usageStatus != "succeeded" ||
 		inputTokens != result.InputTokens || outputTokens != result.OutputTokens ||
-		!approximatelyEqual(usageCost, result.CostUSD) || !usageFinalized || !contentDeleted || !goalDetached {
+		!approximatelyEqual(usageCost, result.CostUSD) || !usageFinalized || !exposureCleared || !contentDeleted || !goalDetached {
 		t.Fatalf("late usage state = goal/gen %d/%d, status %s, tokens %d/%d, cost %.8f, finalized/deleted/detached %t/%t/%t",
 			goalCount, generationCount, usageStatus, inputTokens, outputTokens, usageCost, usageFinalized, contentDeleted, goalDetached)
 	}

@@ -17,6 +17,7 @@ import (
 
 type Settings struct {
 	MaxProgressingGoals        int
+	CursorSigningKey           []byte
 	Provider                   string
 	RollingLimit               int
 	MonthlyBudgetUSD           float64
@@ -47,6 +48,7 @@ type Settings struct {
 type Service struct {
 	store        Store
 	goalDraft    *GoalDraftUseCases
+	goals        *GoalUseCases
 	entitlements EntitlementPolicy
 	provider     AIProvider
 	clock        ports.Clock
@@ -54,7 +56,16 @@ type Service struct {
 	settings     Settings
 }
 
-func NewService(store Store, goalDraftUOW GoalDraftUnitOfWork, provider AIProvider, clock ports.Clock, ids ports.IDGenerator, settings Settings) *Service {
+func NewService(
+	store Store,
+	goalDraftUOW GoalDraftUnitOfWork,
+	goalQueries GoalQueryRepository,
+	goalUOW GoalUnitOfWork,
+	provider AIProvider,
+	clock ports.Clock,
+	ids ports.IDGenerator,
+	settings Settings,
+) *Service {
 	entitlements := NewStaticEntitlementPolicy(Entitlements{
 		MaxProgressingGoals:       settings.MaxProgressingGoals,
 		MaxAIOperationsPer24Hours: settings.RollingLimit,
@@ -69,7 +80,11 @@ func NewService(store Store, goalDraftUOW GoalDraftUnitOfWork, provider AIProvid
 		RateHashKey: settings.RateHashKey, AIPerUserMinute: settings.AIPerUserMinute,
 		AIPerSessionMinute: settings.AIPerSessionMinute, AIPerIPMinute: settings.AIPerIPMinute,
 	})
-	return &Service{store: store, goalDraft: goalDraft, entitlements: entitlements, provider: provider, clock: clock, ids: ids, settings: settings}
+	goals := NewGoalUseCases(goalQueries, goalUOW, clock, GoalUseCaseSettings{
+		CursorSigningKey: settings.CursorSigningKey,
+	})
+	return &Service{store: store, goalDraft: goalDraft, goals: goals, entitlements: entitlements,
+		provider: provider, clock: clock, ids: ids, settings: settings}
 }
 
 func (service *Service) Home(ctx context.Context, userID string) (HomeView, error) {
@@ -104,11 +119,11 @@ func (service *Service) StartGoal(ctx context.Context, userID, draftID, operatio
 }
 
 func (service *Service) ListGoals(ctx context.Context, userID, scope, cursor string, limit int) (GoalPage, error) {
-	return service.store.ListGoals(ctx, userID, scope, cursor, limit)
+	return service.goals.ListGoals(ctx, userID, scope, cursor, limit)
 }
 
 func (service *Service) GetGoal(ctx context.Context, userID, goalID string) (GoalView, error) {
-	view, err := service.store.GetGoal(ctx, userID, goalID)
+	view, err := service.goals.GetGoal(ctx, userID, goalID)
 	return view, resourceNotFound(err, ErrGoalNotFound)
 }
 
@@ -157,12 +172,9 @@ func (service *Service) Terminate(ctx context.Context, input TerminateInput) (Te
 }
 
 func (service *Service) DeleteGoal(ctx context.Context, userID, goalID string, confirmed bool, expectedRevision int64, idempotencyKey string) error {
-	return resourceNotFound(service.store.DeleteGoal(ctx, userID, goalID, confirmed, expectedRevision, idempotencyKey,
-		hashRequest(struct {
-			GoalID    string `json:"goalId"`
-			Confirmed bool   `json:"confirmed"`
-			Revision  int64  `json:"revision"`
-		}{goalID, confirmed, expectedRevision}), service.clock.Now().UTC()), ErrGoalNotFound)
+	return resourceNotFound(service.goals.DeleteGoal(
+		ctx, userID, goalID, confirmed, expectedRevision, idempotencyKey,
+	), ErrGoalNotFound)
 }
 
 func (service *Service) ListCycles(ctx context.Context, userID, goalID, cursor string, limit int) (CyclePage, error) {

@@ -139,53 +139,103 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 		return err
 	}
 
-	type generationReservation struct {
-		id pgtype.UUID
+	type generationExposure struct {
+		id          string
+		month       time.Time
+		reservation string
 	}
-	generationRows, err := tx.Query(ctx, `SELECT id
+	generationRows, err := tx.Query(ctx, `SELECT id,budget_month_utc,budget_reserved_cost_usd::text
 FROM ai_generations WHERE user_id=$1 AND status='running' ORDER BY id FOR UPDATE`, userUUID)
 	if err != nil {
 		return err
 	}
-	generationReservations := make([]generationReservation, 0)
+	generationExposures := make([]generationExposure, 0)
+	generationByID := make(map[string]generationExposure)
 	for generationRows.Next() {
-		var generation generationReservation
-		if err = generationRows.Scan(&generation.id); err != nil {
+		var generation generationExposure
+		if err = generationRows.Scan(&generation.id, &generation.month, &generation.reservation); err != nil {
 			generationRows.Close()
 			return err
 		}
-		generationReservations = append(generationReservations, generation)
+		generationExposures = append(generationExposures, generation)
+		generationByID[generation.id] = generation
 	}
 	generationRows.Close()
 	if err = generationRows.Err(); err != nil {
 		return err
 	}
-	type monthlyReservation struct {
-		month  time.Time
-		amount pgtype.Numeric
+	type releasedUsageExposure struct {
+		operationID string
+		month       time.Time
+		reservation string
 	}
-	reservationRows, err := tx.Query(ctx, `SELECT budget_month_utc,SUM(budget_reserved_cost_usd)
-FROM ai_generations WHERE user_id=$1 AND status='running'
-GROUP BY budget_month_utc ORDER BY budget_month_utc`, userUUID)
+	usageRows, err := tx.Query(ctx, `SELECT operation_id,settlement_budget_month_utc,
+settlement_reservation_cost_usd::text FROM ai_usage_events
+WHERE user_id=$1 AND provider_usage_finalized_at IS NULL ORDER BY operation_id FOR UPDATE`, userUUID)
 	if err != nil {
 		return err
 	}
-	monthlyReservations := make([]monthlyReservation, 0)
-	for reservationRows.Next() {
-		var reservation monthlyReservation
-		if err = reservationRows.Scan(&reservation.month, &reservation.amount); err != nil {
-			reservationRows.Close()
+	releasedUsageExposures := make([]releasedUsageExposure, 0)
+	for usageRows.Next() {
+		var usage releasedUsageExposure
+		if err = usageRows.Scan(&usage.operationID, &usage.month, &usage.reservation); err != nil {
+			usageRows.Close()
 			return err
 		}
-		monthlyReservations = append(monthlyReservations, reservation)
+		if generation, running := generationByID[usage.operationID]; running {
+			if !generation.month.Equal(usage.month) || generation.reservation != usage.reservation {
+				usageRows.Close()
+				return errors.New("account delete running AI settlement exposure invariant failed")
+			}
+			continue
+		}
+		releasedUsageExposures = append(releasedUsageExposures, usage)
 	}
-	reservationRows.Close()
-	if err = reservationRows.Err(); err != nil {
+	usageRows.Close()
+	if err = usageRows.Err(); err != nil {
 		return err
 	}
-	for _, generation := range generationReservations {
+	type monthlyExposure struct {
+		month             time.Time
+		reservedToRelease string
+		unattributedToAdd string
+	}
+	exposureRows, err := tx.Query(ctx, `WITH exposures AS (
+  SELECT budget_month_utc AS month_utc,budget_reserved_cost_usd AS reserved_to_release,
+         budget_reserved_cost_usd AS unattributed_to_add
+  FROM ai_generations
+  WHERE user_id=$1 AND status='running'
+  UNION ALL
+  SELECT usage.settlement_budget_month_utc,0::numeric,usage.settlement_reservation_cost_usd
+  FROM ai_usage_events AS usage
+  WHERE usage.user_id=$1 AND usage.provider_usage_finalized_at IS NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM ai_generations AS generation
+      WHERE generation.id=usage.operation_id AND generation.user_id=usage.user_id AND generation.status='running'
+    )
+)
+SELECT month_utc,SUM(reserved_to_release)::text,SUM(unattributed_to_add)::text
+FROM exposures GROUP BY month_utc ORDER BY month_utc`, userUUID)
+	if err != nil {
+		return err
+	}
+	monthlyExposures := make([]monthlyExposure, 0)
+	for exposureRows.Next() {
+		var exposure monthlyExposure
+		if err = exposureRows.Scan(&exposure.month, &exposure.reservedToRelease, &exposure.unattributedToAdd); err != nil {
+			exposureRows.Close()
+			return err
+		}
+		monthlyExposures = append(monthlyExposures, exposure)
+	}
+	exposureRows.Close()
+	if err = exposureRows.Err(); err != nil {
+		return err
+	}
+	for _, generation := range generationExposures {
 		command, updateErr := tx.Exec(ctx, `UPDATE ai_generations SET budget_reserved_cost_usd=0
-WHERE user_id=$1 AND id=$2 AND status='running'`, userUUID, generation.id)
+WHERE user_id=$1 AND id=$2 AND status='running' AND budget_month_utc=$3
+  AND budget_reserved_cost_usd=$4::numeric`, userUUID, mustUUID(generation.id), generation.month, generation.reservation)
 		if updateErr != nil {
 			return updateErr
 		}
@@ -193,17 +243,33 @@ WHERE user_id=$1 AND id=$2 AND status='running'`, userUUID, generation.id)
 			return errors.New("account delete generation reservation invariant failed")
 		}
 	}
-	for _, reservation := range monthlyReservations {
+	for _, exposure := range monthlyExposures {
 		command, updateErr := tx.Exec(ctx, `UPDATE ai_budget_monthly SET
 reserved_cost_usd=reserved_cost_usd-$2,
-unattributed_cost_usd=unattributed_cost_usd+$2,
-updated_at=$3
-WHERE month_utc=$1 AND reserved_cost_usd >= $2`, reservation.month, reservation.amount, now)
+unattributed_cost_usd=unattributed_cost_usd+$3,
+updated_at=$4
+WHERE month_utc=$1 AND reserved_cost_usd >= $2::numeric`, exposure.month, exposure.reservedToRelease,
+			exposure.unattributedToAdd, now)
 		if updateErr != nil {
 			return updateErr
 		}
 		if command.RowsAffected() != 1 {
-			return errors.New("account delete budget reservation invariant failed")
+			return errors.New("account delete budget settlement exposure invariant failed")
+		}
+	}
+	for _, usage := range releasedUsageExposures {
+		command, deleteErr := tx.Exec(ctx, `DELETE FROM ai_usage_events AS usage
+WHERE usage.user_id=$1 AND usage.operation_id=$2 AND usage.provider_usage_finalized_at IS NULL
+  AND usage.settlement_budget_month_utc=$3 AND usage.settlement_reservation_cost_usd=$4::numeric
+  AND NOT EXISTS (
+    SELECT 1 FROM ai_generations AS generation
+    WHERE generation.id=usage.operation_id AND generation.user_id=usage.user_id AND generation.status='running'
+  )`, userUUID, mustUUID(usage.operationID), usage.month, usage.reservation)
+		if deleteErr != nil {
+			return deleteErr
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("account delete released AI usage exposure invariant failed")
 		}
 	}
 	command, err := tx.Exec(ctx, `DELETE FROM users WHERE id=$1`, userUUID)

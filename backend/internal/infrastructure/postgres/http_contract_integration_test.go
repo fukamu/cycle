@@ -144,8 +144,9 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 		t.Fatal(err)
 	}
 	provider := &contractRejectProvider{}
-	service := workspace.NewService(store, store, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
+	service := workspace.NewService(store, store, store, store, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
 		MaxProgressingGoals: 2,
+		CursorSigningKey:    []byte("test-cursor-key"),
 		MaxProviderAttempts: 1,
 	})
 	router := newContractIntegrationRouter(pool, service)
@@ -155,7 +156,7 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeGoal, err := store.GetGoal(context.Background(), ownerID, fixtures[0].goalID)
+	beforeGoal, err := executeGoalGetUseCase(store, context.Background(), ownerID, fixtures[0].goalID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +235,7 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterGoal, err := store.GetGoal(context.Background(), ownerID, fixtures[0].goalID)
+	afterGoal, err := executeGoalGetUseCase(store, context.Background(), ownerID, fixtures[0].goalID, now)
 	if err != nil {
 		t.Fatal(err)
 	}

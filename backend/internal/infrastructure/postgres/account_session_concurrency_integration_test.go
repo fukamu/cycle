@@ -466,6 +466,8 @@ func accountDeleteQueryLabel(data pgx.TraceQueryStartData) string {
 		return "cycle-lock"
 	case strings.Contains(normalized, "from ai_generations") && strings.Contains(normalized, "order by id for update"):
 		return "generation-lock"
+	case strings.Contains(normalized, "from ai_usage_events") && strings.Contains(normalized, "order by operation_id for update"):
+		return "usage-lock"
 	case strings.Contains(normalized, "update ai_generations set") && strings.Contains(normalized, "budget_reserved_cost_usd=0"):
 		return "generation-zero"
 	case strings.Contains(normalized, "update ai_budget_monthly set"):
@@ -611,6 +613,7 @@ func TestAccountRepositoryDeleteAccountUsesGlobalLockOrderAndTransfersReservatio
 
 	wantOrder := []string{
 		"user-lock", "goal-lock", "draft-lock", "cycle-lock", "generation-lock",
+		"usage-lock",
 		"generation-zero", "generation-zero",
 		"budget:2026-08-01", "budget:2026-09-01", "user-delete",
 	}
@@ -760,7 +763,7 @@ func newAccountSessionTracedPool(t *testing.T, pool *pgxpool.Pool, tracer pgx.Qu
 func normalizeAccountSessionSQL(sql string) string {
 	return strings.ToLower(strings.Join(strings.Fields(sql), " "))
 }
-func TestAccountRepositoryDeleteAccountAggregatesSameMonthReservationsWithDatabaseNumericPrecision(t *testing.T) {
+func TestAccountRepositoryDeleteAccountPartitionsRunningAndReleasedExposureWithDatabaseNumericPrecision(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	now := integrationNow()
@@ -824,6 +827,12 @@ VALUES
 		now, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(context.Background(), `DELETE FROM ai_generations WHERE id=$1`, refineID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE ai_budget_monthly SET reserved_cost_usd=0.2 WHERE month_utc=$1`, month); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := NewAccountRepository(pool).DeleteAccount(context.Background(), user.ID(userID), now.Add(2*time.Minute)); err != nil {
 		t.Fatalf("DeleteAccount with three same-month 0.1 reservations error = %v", err)
@@ -848,6 +857,7 @@ type accountDeleteAICommand uint8
 
 const (
 	accountDeleteAIRunningDelete accountDeleteAICommand = iota + 1
+	accountDeleteAIReleasedDelete
 	accountDeleteAILateFinish
 )
 
@@ -879,6 +889,10 @@ func (barrier *accountDeleteAIBarrier) TraceQueryStart(ctx context.Context, conn
 	switch ctx.Value(accountDeleteAICommandContextKey{}) {
 	case accountDeleteAIRunningDelete:
 		if isAccountDeleteAIRunningGenerationLock(data.SQL) {
+			return context.WithValue(ctx, accountDeleteAIQueryContextKey{}, accountDeleteAIQuery{pid: connection.PgConn().PID()})
+		}
+	case accountDeleteAIReleasedDelete:
+		if isAccountDeleteAIUnfinalizedUsageLock(data.SQL) {
 			return context.WithValue(ctx, accountDeleteAIQueryContextKey{}, accountDeleteAIQuery{pid: connection.PgConn().PID()})
 		}
 	case accountDeleteAILateFinish:
@@ -922,9 +936,16 @@ func (barrier *accountDeleteAIBarrier) release() {
 
 func isAccountDeleteAIRunningGenerationLock(sql string) bool {
 	normalized := normalizeAccountSessionSQL(sql)
-	return strings.Contains(normalized, "select id from ai_generations") &&
+	return strings.Contains(normalized, "from ai_generations") &&
 		strings.Contains(normalized, "where user_id=$1 and status='running'") &&
 		strings.Contains(normalized, "order by id for update")
+}
+
+func isAccountDeleteAIUnfinalizedUsageLock(sql string) bool {
+	normalized := normalizeAccountSessionSQL(sql)
+	return strings.Contains(normalized, "from ai_usage_events") &&
+		strings.Contains(normalized, "provider_usage_finalized_at is null") &&
+		strings.Contains(normalized, "order by operation_id for update")
 }
 
 type accountDeleteAIFinishCall struct {
@@ -1077,6 +1098,130 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	if reserved != 0 || actual != initialActual || unattributed != settings.ReservationUSD {
 		t.Fatalf("post-race budget reserved/actual/unattributed = %.8f/%.8f/%.8f, want 0/%.8f/%.8f",
 			reserved, actual, unattributed, initialActual, settings.ReservationUSD)
+	}
+}
+
+func TestAccountRepositoryDeleteAccountWinsAgainstReleasedUsageLateFinalization(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const userID = "10000000-0000-7000-8000-000000000001"
+	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at)
+VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	settings := accountDeleteAISettings()
+	seedStore := NewWorkspaceStore(pool, settings)
+	fixture := progressingGoalFixtures()[0]
+	startProgressingGoal(t, seedStore, userID, fixture, 2, now)
+	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',
+content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, fixture.cycleID); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := seedStore.BeginActionAI(context.Background(), workspace.ActionAIInput{
+		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
+		Operation: "action_generate", ExpectedContentRevision: 3,
+		IdempotencyKey: "82000000-0000-7000-8000-000000000001",
+		GenerationID:   "83000000-0000-7000-8000-000000000001",
+		Now:            now.Add(time.Minute),
+	}, accountDeleteAIContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	month := time.Date(now.UTC().Year(), now.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+	releaseTx, err := pool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = releaseTx.Exec(context.Background(), `UPDATE ai_budget_monthly
+SET reserved_cost_usd=reserved_cost_usd-$2 WHERE month_utc=$1`, month, settings.ReservationUSD); err != nil {
+		_ = releaseTx.Rollback(context.Background())
+		t.Fatal(err)
+	}
+	if _, err = releaseTx.Exec(context.Background(), `UPDATE ai_generations SET status='failed',failure_code='goal_deleted',
+budget_reserved_cost_usd=0,lease_expires_at=NULL,finished_at=$2 WHERE id=$1`, snapshot.GenerationID, now.Add(2*time.Minute)); err != nil {
+		_ = releaseTx.Rollback(context.Background())
+		t.Fatal(err)
+	}
+	if _, err = releaseTx.Exec(context.Background(), `UPDATE ai_usage_events
+SET status='failed',goal_id=NULL,content_deleted=true WHERE operation_id=$1`, snapshot.GenerationID); err != nil {
+		_ = releaseTx.Rollback(context.Background())
+		t.Fatal(err)
+	}
+	if err = releaseTx.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	barrier := newAccountDeleteAIBarrier()
+	tracedPool := newAccountSessionTracedPool(t, pool, barrier)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer func() {
+		barrier.release()
+		cancel()
+	}()
+	deleteCalls := make(chan accountDeleteCall, 1)
+	deleteCtx := context.WithValue(ctx, accountDeleteAICommandContextKey{}, accountDeleteAIReleasedDelete)
+	go func() {
+		deleteCalls <- accountDeleteCall{err: NewAccountRepository(tracedPool).DeleteAccount(deleteCtx, user.ID(userID), now.Add(3*time.Minute))}
+	}()
+	var deletePID uint32
+	select {
+	case deletePID = <-barrier.deleteAfterGenerationLock:
+	case traceErr := <-barrier.traceErrors:
+		t.Fatalf("Account Delete released Usage barrier error: %v", traceErr)
+	case call := <-deleteCalls:
+		t.Fatalf("DeleteAccount returned before its released Usage barrier: %v", call.err)
+	case <-ctx.Done():
+		t.Fatalf("DeleteAccount did not lock released Usage: %v", ctx.Err())
+	}
+
+	result := workspace.AIProviderResult{
+		Output: "削除後には適用しない行動", InputTokens: 12, OutputTokens: 5,
+		CostUSD: 0.004, Attempts: 1, ProviderRequestID: "provider-after-released-account-delete",
+	}
+	finishCalls := make(chan accountDeleteAIFinishCall, 1)
+	finishCtx := context.WithValue(ctx, accountDeleteAICommandContextKey{}, accountDeleteAILateFinish)
+	store := NewWorkspaceStore(tracedPool, settings)
+	go func() {
+		response, callErr := store.FinishActionAI(finishCtx, snapshot, result, nil, now.Add(4*time.Minute))
+		finishCalls <- accountDeleteAIFinishCall{response: response, err: callErr}
+	}()
+	var finishPID uint32
+	select {
+	case finishPID = <-barrier.finishUserLock:
+	case call := <-finishCalls:
+		t.Fatalf("late finalization returned before User lock: response=%#v error=%v", call.response, call.err)
+	case <-ctx.Done():
+		t.Fatalf("late finalization did not issue User lock: %v", ctx.Err())
+	}
+	if err = waitForBlockedBackend(ctx, pool, finishPID, deletePID); err != nil {
+		t.Fatalf("late finalization did not wait for Account Delete: %v", err)
+	}
+	barrier.release()
+	deleteCall := <-deleteCalls
+	finishCall := <-finishCalls
+	if deleteCall.err != nil {
+		t.Fatalf("DeleteAccount error = %v", deleteCall.err)
+	}
+	if !errors.Is(finishCall.err, workspace.ErrNotFound) {
+		t.Fatalf("late finalization error = %v, want %v", finishCall.err, workspace.ErrNotFound)
+	}
+	var users, generations, usages int
+	var reserved, actual, unattributed string
+	if err = pool.QueryRow(context.Background(), `SELECT
+(SELECT count(*) FROM users WHERE id=$1),
+(SELECT count(*) FROM ai_generations WHERE id=$2),
+(SELECT count(*) FROM ai_usage_events WHERE operation_id=$2),
+(SELECT reserved_cost_usd::text FROM ai_budget_monthly WHERE month_utc=$3),
+(SELECT actual_cost_usd::text FROM ai_budget_monthly WHERE month_utc=$3),
+(SELECT unattributed_cost_usd::text FROM ai_budget_monthly WHERE month_utc=$3)`,
+		userID, snapshot.GenerationID, month).Scan(&users, &generations, &usages, &reserved, &actual, &unattributed); err != nil {
+		t.Fatal(err)
+	}
+	if users != 0 || generations != 0 || usages != 0 || reserved != "0.00000000" ||
+		actual != "0.00000000" || unattributed != "0.10000000" {
+		t.Fatalf("post-race user/gen/usage/budget = %d/%d/%d %s/%s/%s", users, generations, usages,
+			reserved, actual, unattributed)
 	}
 }
 

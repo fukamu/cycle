@@ -218,9 +218,11 @@ VALUES($1,$2,$3,'running',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO ai_usage_events
-(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
-VALUES($1,$2,$3,$4,'accepted',$5,$6,$7,$8,$9)`, mustUUID(generationID), mustUUID(userID), goalArg,
-		operation, store.settings.Provider, store.settings.Model, promptVersion, now, workspace.AIUsageQuotaRetainUntil(now))
+(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until,
+ settlement_budget_month_utc,settlement_reservation_cost_usd)
+VALUES($1,$2,$3,$4,'accepted',$5,$6,$7,$8,$9,$10,$11)`, mustUUID(generationID), mustUUID(userID), goalArg,
+		operation, store.settings.Provider, store.settings.Model, promptVersion, now, workspace.AIUsageQuotaRetainUntil(now),
+		month, store.settings.ReservationUSD)
 	return err
 }
 
@@ -488,9 +490,10 @@ actual_cost_usd=actual_cost_usd+$3,updated_at=$4 WHERE month_utc=$1 AND reserved
 		return errors.New("AI budget reservation invariant violated during settlement")
 	}
 	command, err = tx.Exec(ctx, `UPDATE ai_usage_events SET status=$2,input_tokens=$3,output_tokens=$4,estimated_cost_usd=$5,
-provider_usage_finalized_at=$6
-WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL`,
-		mustUUID(generationID), status, result.InputTokens, result.OutputTokens, result.CostUSD, now)
+provider_usage_finalized_at=$6,settlement_budget_month_utc=NULL,settlement_reservation_cost_usd=NULL
+WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL
+  AND settlement_budget_month_utc=$7 AND settlement_reservation_cost_usd=$8`,
+		mustUUID(generationID), status, result.InputTokens, result.OutputTokens, result.CostUSD, now, month, reserved)
 	if err != nil {
 		return err
 	}
@@ -519,15 +522,22 @@ WHERE operation_id=$1`, mustUUID(generationID)).Scan(&userID, &acceptedAt, &fina
 	if err != nil {
 		return err
 	}
-	err = tx.QueryRow(ctx, `SELECT accepted_at,provider_usage_finalized_at FROM ai_usage_events
-WHERE operation_id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(generationID), mustUUID(userID)).Scan(&acceptedAt, &finalizedAt)
+	var settlementMonth pgtype.Date
+	var settlementReservation pgtype.Text
+	err = tx.QueryRow(ctx, `SELECT accepted_at,provider_usage_finalized_at,
+settlement_budget_month_utc,settlement_reservation_cost_usd::text FROM ai_usage_events
+WHERE operation_id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(generationID), mustUUID(userID)).Scan(
+		&acceptedAt, &finalizedAt, &settlementMonth, &settlementReservation)
 	if errors.Is(err, pgx.ErrNoRows) || finalizedAt != nil {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	month := time.Date(acceptedAt.UTC().Year(), acceptedAt.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+	if !settlementMonth.Valid || !settlementReservation.Valid {
+		return errors.New("AI late usage settlement exposure is missing")
+	}
+	month := settlementMonth.Time
 	if _, err = tx.Exec(ctx, `INSERT INTO ai_budget_monthly(month_utc,reserved_cost_usd,actual_cost_usd,unattributed_cost_usd,updated_at)
 VALUES($1,0,0,0,$2) ON CONFLICT(month_utc) DO NOTHING`, month, now); err != nil {
 		return err
@@ -545,8 +555,10 @@ VALUES($1,0,0,0,$2) ON CONFLICT(month_utc) DO NOTHING`, month, now); err != nil 
 		status = "failed"
 	}
 	command, err = tx.Exec(ctx, `UPDATE ai_usage_events SET status=$2,input_tokens=$3,output_tokens=$4,estimated_cost_usd=$5,
-provider_usage_finalized_at=$6 WHERE operation_id=$1 AND provider_usage_finalized_at IS NULL`, mustUUID(generationID), status,
-		result.InputTokens, result.OutputTokens, result.CostUSD, now)
+provider_usage_finalized_at=$6,settlement_budget_month_utc=NULL,settlement_reservation_cost_usd=NULL
+WHERE operation_id=$1 AND provider_usage_finalized_at IS NULL
+  AND settlement_budget_month_utc=$7 AND settlement_reservation_cost_usd=$8::numeric`, mustUUID(generationID), status,
+		result.InputTokens, result.OutputTokens, result.CostUSD, now, month, settlementReservation.String)
 	if err != nil {
 		return err
 	}
@@ -655,19 +667,20 @@ RETURNING request_count`, check.scope, mac.Sum(nil), window, window.Add(2*time.M
 }
 
 func (store *WorkspaceStore) recoverExpiredAI(ctx context.Context, tx pgx.Tx, userID string, now time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT id,budget_reserved_cost_usd::text FROM ai_generations
+	rows, err := tx.Query(ctx, `SELECT id,budget_month_utc,budget_reserved_cost_usd::text FROM ai_generations
 WHERE user_id=$1 AND status='running' AND lease_expires_at<=$2 ORDER BY id FOR UPDATE`, mustUUID(userID), now)
 	if err != nil {
 		return err
 	}
 	type expired struct {
 		id       string
+		month    time.Time
 		reserved string
 	}
 	items := []expired{}
 	for rows.Next() {
 		var item expired
-		if err = rows.Scan(&item.id, &item.reserved); err != nil {
+		if err = rows.Scan(&item.id, &item.month, &item.reserved); err != nil {
 			rows.Close()
 			return err
 		}
@@ -733,7 +746,9 @@ WHERE id=$1 AND status='running' AND budget_reserved_cost_usd=$3::numeric`, must
 			return errors.New("AI generation lease recovery CAS invariant violated")
 		}
 		command, updateErr = tx.Exec(ctx, `UPDATE ai_usage_events SET status='failed'
-WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL`, mustUUID(item.id))
+WHERE operation_id=$1 AND status='accepted' AND provider_usage_finalized_at IS NULL
+  AND settlement_budget_month_utc=$2 AND settlement_reservation_cost_usd=$3::numeric`,
+			mustUUID(item.id), item.month, item.reserved)
 		if updateErr != nil {
 			return updateErr
 		}

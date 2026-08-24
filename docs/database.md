@@ -9,7 +9,11 @@
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
 - Baseline schema: `000001_fukamu_cycle_baseline.up.sql`。未リリース・空DB・既存環境互換不要という明示承認に基づき、初期Schemaの80/200文字制約とUUID v7制約を直接含む1 migrationへrebaseline済みであり、今後編集しません。
-- 現在のschema head: `000002_ai_usage_retention_margin.up.sql`。AI Usage期限を受理時刻の24時間15分後へ正規化し、migration-first切替中の旧Applicationによる24時間値もtriggerで同じ期限へ補正します。
+- 現在のschema head: `000003_ai_usage_settlement_exposure.up.sql`。Provider usage未確定中だけ元reservationの月と上限額をAI Usageへ保持し、finalization時にclearします。`000002_ai_usage_retention_margin.up.sql`の24時間15分物理保持期限と24時間Quota windowは変更しません。
+
+`000003`は既存のprovider-unfinalized Usageを、same-user/same-operationのreconstructableなrunning AIGenerationからexact backfillします。対応Generationがない、owner/operationが一致しない、または元の月/額を復元できないrowが1件でもあればmigration全体をSQLSTATE `23514`でfail-closedにし、default値や現在の設定値から推測しません。
+
+Migration-first切替中、旧Application writerがmetadataを送らないINSERTはDB triggerがrunning Generationからexact補完し、旧finalizerが`provider_usage_finalized_at`だけを更新した場合は同triggerがmetadataをclearします。未確定中のpair変更、不完全なpair、Generationとの不一致は拒否します。Usageのowner Userとlogical operation IDの変更も全lifecycleで拒否します。旧Account Deleteがrunning Generationを失った未確定Usageを削除しようとする場合はUser delete guardがTransaction全体を拒否し、新Application切替後の再試行でunattributed costへ移送してから削除します。
 
 Migration runnerは `DATABASE_URL` と、任意の `MIGRATIONS_DIR`（default `migrations`）だけを読み、未適用のup migrationを順番に適用します。適用履歴はDBの `schema_migrations` で管理されます。
 
@@ -24,6 +28,8 @@ Migration runnerは、正常に適用した各fileについて`migration_version
 5. Repository rootで`./scripts/invoke-sqlc.sh compile generate`を実行し、生成差分をcommitする。実行環境の選択は[`development.md`](development.md)を参照する。
 6. 空のtest DBと、可能ならproduction相当データ量のcopyではない匿名化fixtureでupを検証する。downはローカルの破棄可能DBでのみ検証する。
 7. backward incompatibleな変更は一度に行わず、expand → application切替 → contractを複数releaseに分ける。
+
+AI Usage settlement migration testは、exact backfill、復元不能rowの全体rollback、旧writer補完、旧finalizer clear、CHECK/immutability違反、旧Account Delete guard、新Account Delete後のUser削除を検証します。
 
 この完了済みrebaselineを再実行・再編集してはいけません。今後はMigration番号の変更、適用済みfileの書き換え、別branchで同じ番号を使うことを禁止し、適用済みmigrationの訂正は新しいmigrationで行います。
 

@@ -39,12 +39,19 @@ VALUES($1,$2,'creation','保持境界を検証する目標',3,$3,$3)`, draftID, 
 		{"30000000-0000-7000-8000-000000000004", "40000000-0000-7000-8000-000000000004", now.Add(-workspace.AIUsageRetentionDuration - time.Minute), nil},
 	}
 	for _, fixture := range fixtures {
+		budgetMonth := time.Date(fixture.acceptedAt.UTC().Year(), fixture.acceptedAt.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
 		if _, err := pool.Exec(ctx, `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,failure_code,started_at,finished_at)
 VALUES($1,$2,'goal_refine','failed',$3,3,$4,$5,'保持境界を検証する目標','fake','test','goal-v2',$6,0,'provider_error',$7,$7)`,
 			fixture.generationID, userID, draftID, fixture.idempotencyID, "hash-"+fixture.generationID,
-			fixture.acceptedAt.Format("2006-01-02"), fixture.acceptedAt); err != nil {
+			budgetMonth, fixture.acceptedAt); err != nil {
 			t.Fatal(err)
+		}
+		if fixture.finalizedAt == nil {
+			if _, err := pool.Exec(ctx, `UPDATE ai_generations SET status='running',failure_code=NULL,
+lease_expires_at=$2,finished_at=NULL WHERE id=$1`, fixture.generationID, now.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if _, err := pool.Exec(ctx, `INSERT INTO ai_usage_events
 (operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
@@ -52,6 +59,12 @@ VALUES($1,$2,'goal_refine','failed','fake','test','goal-v2',$3,$4,$5)`,
 			fixture.generationID, userID, fixture.acceptedAt, fixture.finalizedAt,
 			workspace.AIUsageQuotaRetainUntil(fixture.acceptedAt)); err != nil {
 			t.Fatal(err)
+		}
+		if fixture.finalizedAt == nil {
+			if _, err := pool.Exec(ctx, `UPDATE ai_generations SET status='failed',failure_code='provider_error',
+lease_expires_at=NULL,finished_at=$2 WHERE id=$1`, fixture.generationID, now); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 
@@ -160,14 +173,19 @@ WHERE id=$1`, fixture.cycleID, test.action); err != nil {
 			}, passthroughAIContext); err != nil {
 				t.Fatal(err)
 			}
-			var storedAcceptedAt, retainUntil time.Time
-			if err := pool.QueryRow(ctx, `SELECT accepted_at,quota_retain_until FROM ai_usage_events WHERE operation_id=$1`,
-				test.generationID).Scan(&storedAcceptedAt, &retainUntil); err != nil {
+			var storedAcceptedAt, retainUntil, settlementMonth time.Time
+			var settlementReservation string
+			if err := pool.QueryRow(ctx, `SELECT accepted_at,quota_retain_until,settlement_budget_month_utc,
+settlement_reservation_cost_usd::text FROM ai_usage_events WHERE operation_id=$1`,
+				test.generationID).Scan(&storedAcceptedAt, &retainUntil, &settlementMonth, &settlementReservation); err != nil {
 				t.Fatal(err)
 			}
-			if !storedAcceptedAt.Equal(acceptedAt) || !retainUntil.Equal(workspace.AIUsageQuotaRetainUntil(acceptedAt)) {
-				t.Fatalf("accepted/retain = %s/%s, want %s/%s", storedAcceptedAt, retainUntil,
-					acceptedAt, workspace.AIUsageQuotaRetainUntil(acceptedAt))
+			wantMonth := time.Date(acceptedAt.UTC().Year(), acceptedAt.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+			if !storedAcceptedAt.Equal(acceptedAt) || !retainUntil.Equal(workspace.AIUsageQuotaRetainUntil(acceptedAt)) ||
+				!settlementMonth.Equal(wantMonth) || settlementReservation != "0.01000000" {
+				t.Fatalf("accepted/retain/exposure = %s/%s/%s/%s, want %s/%s/%s/0.01000000", storedAcceptedAt,
+					retainUntil, settlementMonth, settlementReservation, acceptedAt,
+					workspace.AIUsageQuotaRetainUntil(acceptedAt), wantMonth)
 			}
 		})
 	}

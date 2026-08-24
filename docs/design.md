@@ -1074,7 +1074,7 @@ Frontend confirmationは、Draftに変更がある場合に次を明示する。
 | Completed Cycle | No | Goal Delete / Account Delete |
 | Canceled Cycle | No | Goal Delete / Account Delete |
 | AI Generation content | No | Draft / Goal / Account delete |
-| AI Usage Event | No | Account delete / retention cleanup |
+| AI Usage Event | User向けNo。内部lifecycle CASのみ | Account delete / retention cleanup |
 
 
 ---
@@ -1251,8 +1251,8 @@ Quota判定とUser単位利用分析の最小record。AIGeneration contentとは
 
 | Field | Type | Required | Rule |
 |---|---|---:|---|
-| operationId | AIOperationID | Yes | PK。AIGenerationと同じlogical IDだがFKにしない |
-| userId | UserID | Yes | Account Deleteでcascade |
+| operationId | AIOperationID | Yes | PK。AIGenerationと同じlogical IDだがFKにせず、lifecycle中はimmutable |
+| userId | UserID | Yes | lifecycle中はimmutable。Account Deleteでcascade |
 | goalId | GoalID | No | Goal Delete時にnoneへredact可能 |
 | operationType | enum | Yes | 3種 |
 | status | `accepted` / `succeeded` / `failed` | Yes | quotaはaccepted時点で消費 |
@@ -1264,6 +1264,8 @@ Quota判定とUser単位利用分析の最小record。AIGeneration contentとは
 | outputTokens | int64 | No | final usage |
 | estimatedCostUsd | decimal | No | final cost |
 | providerUsageFinalizedAt | Instant | No | Provider attemptsのUsage/Costを集計済みであることを示す。CASにより二重計上を防ぐ |
+| settlementBudgetMonthUtc | LocalDate | Provider usage未確定時 | 元reservationの対象月。本文を含まず、未確定中はimmutable |
+| settlementReservationCostUsd | decimal | Provider usage未確定時 | 元の最大reservation額。本文を含まず、未確定中はimmutableかつ0以上 |
 | quotaRetainUntil | Instant | Yes | `acceptedAt + 24時間 + 15分`。24時間はQuota集計窓、15分は物理削除だけを遅らせる固定safety margin |
 | contentDeleted | bool | Yes | Goal/Draft content削除済みを示す |
 
@@ -1273,9 +1275,11 @@ Content deletion時:
 - `now < quotaRetainUntil`なら、`contentDeleted=true`として本文なしのAIUsageEventを保持する。Goal Deleteでは`goalId=NULL`へredactする。
 - `now >= quotaRetainUntil`かつ`providerUsageFinalizedAt IS NOT NULL`なら、他の運用Retention理由がないAIUsageEventを同じTransactionで削除する。
 - `providerUsageFinalizedAt IS NULL`なら期限到達後も削除せず、遅延結果をcontent-freeなUsage/Costへ一度だけsettleする。Late settlement TransactionではUsage/Costだけを確定し、その時点ですでに期限到達済みのrecordは次回の期限cleanupで削除する。
+- `providerUsageFinalizedAt IS NULL`の間はsettlement metadataの完全なpairを保持する。通常・lateのfinalization成功CASはUsage/Costと月次budgetをexactly onceでsettleし、同じTransactionでpairをNULLへclearする。Lease expiryによるfailed化だけではclearしない。
 - 別のdurableなno-in-flight証明を導入するまでは、Generationがterminalまたは削除済みであることだけを削除根拠にしない。
 - Creation Draft abandonまたはGoal Review terminalでは、対応するAIGenerationを削除する。保持対象のAIUsageEventは`contentDeleted=true`へ更新し、Goalが存在するReview terminalでは`goalId`を維持してよい。
 - Goal/Cycle/Draft/Prompt/AI source・output本文は保持しない。
+- Goal DeleteでAIGenerationが削除された後も、未確定AIUsageEventは元reservation exposureを保持する。settlement metadataはGoal識別子や本文を含めず、外部APIとQuota判定へ公開しない。
 - User quotaは`goalId`の有無に関係なくUser単位でcountする。
 - Account Deleteは個人単位recordを全削除するため、この物理保持期限の例外とする。
 
@@ -1665,12 +1669,24 @@ CREATE TABLE ai_usage_events (
     output_tokens BIGINT NULL,
     estimated_cost_usd NUMERIC(14,8) NULL,
     provider_usage_finalized_at TIMESTAMPTZ NULL,
+    settlement_budget_month_utc DATE NULL,
+    settlement_reservation_cost_usd NUMERIC(14,8) NULL,
     quota_retain_until TIMESTAMPTZ NOT NULL,
     content_deleted BOOLEAN NOT NULL DEFAULT FALSE,
     CHECK (input_tokens IS NULL OR input_tokens >= 0),
     CHECK (output_tokens IS NULL OR output_tokens >= 0),
     CHECK (estimated_cost_usd IS NULL OR estimated_cost_usd >= 0),
-    CHECK (quota_retain_until - accepted_at = INTERVAL '24 hours 15 minutes')
+    CHECK (quota_retain_until - accepted_at = INTERVAL '24 hours 15 minutes'),
+    CHECK (
+      (provider_usage_finalized_at IS NULL
+       AND settlement_budget_month_utc IS NOT NULL
+       AND settlement_reservation_cost_usd IS NOT NULL
+       AND settlement_reservation_cost_usd >= 0)
+      OR
+      (provider_usage_finalized_at IS NOT NULL
+       AND settlement_budget_month_utc IS NULL
+       AND settlement_reservation_cost_usd IS NULL)
+    )
 );
 CREATE INDEX idx_ai_usage_user_rolling
     ON ai_usage_events(user_id, accepted_at DESC);
@@ -1725,9 +1741,10 @@ DB constraintだけでは完全に表現できない次のInvariantはApplicatio
 - Creation DraftをTargetとするGoal Refineは`goal_id/goal_version_id`がnone、Review DraftをTargetとするGoal RefineはDraftと同じ`goal_id/base_goal_version_id`を持つ。
 - AIGeneration `context_cycle_ids`はすべて同一User・同一Goalに属する。
 - Provider call開始をacceptedするTransactionでは、各AIGenerationと同じlogical operation IDのAIUsageEventをexactly 1件insertする。以後はlifecycleを分離し、Goal/Draft content deletionでAIGenerationだけが先に削除され得る一方、`quotaRetainUntil`到達後かつProvider usage確定済みの期限cleanupでAIUsageEventだけが先に削除され得る。
+- AI開始TransactionはGenerationの`budget_month_utc`と開始時の`budget_reserved_cost_usd`をUsage settlement metadataへexact copyする。未確定中のpairは不変であり、Generation側reservationを解放・0化しても元の値を維持する。
 - `AIUsageEvent.goal_id`が非NULLなら、そのGoalは同じ`user_id`に属する。Goal Delete時は`goal_id=NULL`へ更新する。
-- AIUsageEventとAIGenerationは同一logical operation IDを使うが、Goal Delete lifecycleのためFKで密結合しない。
-- 通常のAI terminal処理では`AIUsageEvent.provider_usage_finalized_at`を必ず設定する。例外は、Goal Deleteがin-flight Provider callを先に削除し、遅延結果のcontent-free settlementを待つ期間だけである。
+- AIUsageEventとAIGenerationは同一logical operation IDを使うが、Goal Delete lifecycleのためFKで密結合しない。AIUsageEventの`operation_id`と`user_id`はinsert後に変更しない。
+- Provider usage未確定状態は、Goal DeleteによるGeneration削除、lease expiry recovery、またはdetached finalization未完了の間に残り得る。Provider usage確定CASはsettlement metadataも同時にclearする。
 
 ## 16.4 Text length defense-in-depth
 
@@ -1823,6 +1840,8 @@ erDiagram
       timestamptz accepted_at
       text status
       timestamptz provider_usage_finalized_at
+      date settlement_budget_month_utc
+      numeric settlement_reservation_cost_usd
       boolean content_deleted
     }
     AI_BUDGET_MONTHLY {
@@ -2077,18 +2096,18 @@ Goal Deleteは状態に関係なく可能である。
 
 Transaction:
 
-1. User `FOR UPDATE`。
-2. 既存Goal Delete receiptを確認。同Key同hashなら204。
-3. Goal `FOR UPDATE`。owner / expectedGoalRevisionを検証。
-4. 配下Review Draft、Cycle、running AIGenerationをそれぞれUUID昇順でlockし、Generationの後に対象`ai_budget_monthly`を月昇順でlockする。
-5. running AIのreservationはDBの`NUMERIC`として月ごとに合算する。`budget_reserved_cost_usd > 0`の月は同額を`reserved_cost_usd`から一度だけ減算し、Generation側reservationを0へする。Generationは`failed / goal_deleted`へterminal化し、AIUsageEventは`failed`・`content_deleted=true`へ更新する。Provider callがin-flightなら`provider_usage_finalized_at`は未設定のまま残す。Budget、各Generation、各running UsageのCASはexactly one rowを要求し、0-rowならdelete・receiptを含むTransaction全体をrollbackする。
-6. Goalに紐づくAIUsageEvent:
+1. `confirmed=true`をTransaction開始前に検証する。
+2. User `FOR UPDATE`。
+3. expiryを問わず既存Goal Delete receiptを検索する。同KeyでGoalまたはrequest hashが異なれば期限切れでも`IDEMPOTENCY_KEY_REUSED`。同Goal/hashかつ未期限切れなら204 replay、期限切れなら通常処理へ進む。
+4. Goal `FOR UPDATE`。owner / expectedGoalRevisionを検証。
+5. 配下Review Draft、Cycle、running AIGenerationをそれぞれUUID昇順でlockし、重複・非昇順をinvariant errorとする。
+6. running AI reservationをDB `NUMERIC`で月ごとに集計し、対象`ai_budget_monthly`を月昇順でlockする。`budget_reserved_cost_usd > 0`の月は同額を`reserved_cost_usd`から一度だけ減算する。
+7. 各Generationを`failed / goal_deleted`・reservation 0へterminal化し、対応する未確定accepted AIUsageEventを`failed`・`content_deleted=true`・`goal_id=NULL`へexact one-row CASする。Usage欠落、Budget/Generation/Usageの0-rowはTransaction全体をrollbackする。Provider callがin-flightならsettlement metadataと`provider_usage_finalized_at=NULL`を維持する。
+8. running UsageのCAS後、Goalにまだ紐づく残りのAIUsageEventをUUID昇順でlockし、同じcaptured `now`でpartitionする:
    - `now < quota_retain_until`: `goal_id=NULL`, `content_deleted=true`として保持。
    - `now >= quota_retain_until`かつ`provider_usage_finalized_at IS NOT NULL`: delete。
    - `provider_usage_finalized_at IS NULL`: `goal_id=NULL`, `content_deleted=true`として保持し、late settlementを許可する。将来別のdurableなno-in-flight証明を導入するまではdeleteしない。
-7. Goalをdelete。FK cascadeでVersions / Drafts / Cycles / AIGeneration contentを削除。
-8. GoalDeleteReceiptをinsert。
-9. commit。
+9. Goal revision条件付きdelete、GoalDeleteReceipt insertを各exact one-row CASし、commitする。FK cascadeでVersions / Drafts / Cycles / AIGeneration contentを削除する。
 
 Guarantee:
 
@@ -2739,6 +2758,10 @@ Ordering:
 - `history`: `terminal_at DESC, id DESC`
 - `all`: progressing first、その後terminal。API内部では2queryを避けるためstable sort keyを構成してよい。
 
+Cursorのbase64url decode、HMAC検証、scope/keyset validation、limit default/max、`limit + 1`取得、page shaping、`nextCursor`生成はApplication Use Caseが所有する。Cursorはscope、進行中/terminal category、実効sort time、Goal IDを含み、別scopeでの再利用は`INVALID_CURSOR`とする。認証User IDをCursorから取得しない。
+
+Infrastructure queryは署名済みCursorや`GoalPage`を扱わず、Applicationが検証・decodeしたscope、keyset、`fetchLimit`だけをowner-scoped queryとして受け取る。
+
 Response:
 
 ```json
@@ -2813,6 +2836,8 @@ type GoalCurrentWork =
 ```
 
 BackendがGoal statusと一致するcurrent workを構築できない場合は`INTERNAL_ERROR`とinvariant metricを記録する。これにより直接URLの`/goals/:goalId`でも追加の全Cycle検索なしに適切なworkspaceへ遷移できる。
+
+Owner-scoped query結果のGoal statusと`currentWork` discriminated unionの整合検証はApplicationが所有する。Infrastructure row mappingは不可能な組合せを別状態へ補正しない。
 
 Errors: `404 GOAL_NOT_FOUND`。
 
@@ -3628,11 +3653,14 @@ Validation:
 Transaction:
 
 1. Userを`FOR UPDATE`。
-2. User配下のGoal / Draft / Cycle / running AIGenerationをglobal lock orderでlockする。同一種別の子rowはUUID昇順、budget rowは月昇順とする。
-3. running AI reservationをDBの`NUMERIC`として月ごとに合算し、月次budget rowの`reserved_cost_usd`から一度だけ減算する。同額を`unattributed_cost_usd`へ移し、各Generation側reservationを0へする。各Generationと各月budgetのCASはexactly one rowを要求し、0-rowならUser deleteを行わずTransaction全体をrollbackする。Account Delete後はUser単位のsettlement receiptを保持しないため、最大予約額を保守的なCostとしてbudget計算へ残す。
-4. `DELETE FROM users WHERE id=?`。
-5. FK cascadeでGoals / Drafts / Versions / Cycles / AIGeneration / AIUsage / AuthIdentity / Sessions / Delete receiptsを削除。
-6. commit後Session Cookieをexpire。
+2. User配下のGoal / Draft / Cycle / running AIGenerationをglobal lock orderでlockし、Provider usage未確定のAIUsageEventをoperation IDのUUID昇順でlockする。同一種別の子rowはUUID昇順、budget rowは月昇順とする。
+3. 次の2集合をoperation IDで重複なく構成し、DB `NUMERIC`で月ごとに集計する。
+   - running Generation: Generationのreservationを`reserved_cost_usd`から減算し、同額を`unattributed_cost_usd`へ加算する。
+   - same-user/same-operationのrunning Generationを持たない未確定Usage: settlement metadataの元reservationを`unattributed_cost_usd`へ加算する。reservationはGoal Deleteまたはlease recoveryで解放済みなので再減算しない。
+4. 対応Usageが存在するrunning Generationはmonth/amountの完全一致を検証する。重複、metadata欠落・不一致、非昇順、Budget/Generation/UsageのCAS不一致はUser deleteを行わずTransaction全体をrollbackする。running GenerationにUsageが欠けてもGeneration reservation自体は安全側に移送する。
+5. running Generationを持たない未確定Usageをexpected metadata pair付きでexact deleteし、最後に`DELETE FROM users WHERE id=?`を実行する。
+6. FK cascadeでGoals / Drafts / Versions / Cycles / AIGeneration / 残るAIUsage / AuthIdentity / Sessions / Delete receiptsを削除する。
+7. commit後Session Cookieをexpireする。
 
 Response: `204 No Content`。
 
@@ -3644,6 +3672,10 @@ Errors:
 - `500 ACCOUNT_DELETE_FAILED`
 
 Failure時はUserを削除済み扱いにせず、Transaction rollbackで全Dataを維持する。Provider call中にDeleteがcommitした後でAI responseが戻っても、finalizationはUser / Goal / Cycleの存在を再確認し、Dataを再作成しない。Account Delete Transactionですでに最大予約額を`unattributed_cost_usd`へ移しているため、遅延結果はApplication budgetへ再加算せず破棄し、Reservationも再減算しない。Provider側の利用明細を月次Reconciliationの権威ある請求記録として、保守的計上との差を運用確認する。
+
+Callbackが先ならactual cost計上とsettlement metadata clearが完了しているため、Account DeleteはそのUsageをunattributedへ移さない。Account Deleteが先なら最大reservation exposureをunattributedへ移してUsageを削除し、後続callbackはUser/Usageを再作成せずno-opとする。
+
+Migration-first切替中の旧Applicationは、running Generationを失った未確定Usage exposureを移送できない。その状態だけはDBのUser delete guardがSQLSTATE `23514`でTransactionをfail-closedにし、新Application切替後の再試行で精算して削除する。通常のAccount Deleteとpartial deleteは妨げない。
 
 Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除する。個人を特定しないaggregate monthly budget / metrics、およびUserへ再関連付けできない`unattributed_cost_usd`は保持可能。この方式は稀なin-flight削除時にApplication budgetを最大予約額まで過大計上し得るが、個人単位receiptを残さず費用上限を過小評価しないことを優先する。
 
@@ -3799,10 +3831,12 @@ Web Lockは同一origin内の協調境界であり、BackendのExpected User gua
 
 ```go
 type GoalRepository interface {
-    FindOwnedGoal(ctx context.Context, userID user.ID, goalID goal.ID) (goal.Goal, error)
-    ListOwnedGoals(ctx context.Context, userID user.ID, q GoalListQuery) (GoalPage, error)
+    QueryGoal(ctx context.Context, userID user.ID, goalID goal.ID) (GoalView, error)
+    QueryGoalRows(ctx context.Context, q GoalListQuery) ([]GoalQueryRow, error)
 }
 ```
+
+`GoalListQuery`はApplicationが検証・decodeしたowner User、scope、keyset、`fetchLimit`だけを含み、RepositoryはCursor署名やpage shapingを所有しない。
 
 `FindGoalByID(goalID)`のようなowner scopeなしmethodをApplication向けinterfaceへ公開しない。
 
@@ -4177,10 +4211,12 @@ DomainはDB、HTTP、AI、Clockを直接呼ばない。
 - Authorization scope
 - Transaction orchestration
 - Row lock order
+- Cursor署名/scope/keyset validationとpage shaping
 - Entitlement check
 - AI context construction
 - Cost/rate policy
 - Idempotency replay
+- Goal DeleteのRetention partitionとexact affected-row invariant
 - Domain / Infrastructure error mapping
 
 ## 30.5 Infrastructure responsibilities
@@ -4298,6 +4334,8 @@ User
 ```
 
 同一種別複数rowはUUIDまたは月の昇順でlockする。例外は本書へ理由を記録し、Concurrency Integration Testを追加する。
+
+Goal Deleteはrunning Provider callを安全にdetachするため、User→Goal→Draft→Cycle→running AIGeneration→Budget月→各running Usage CAS→残りのGoal Usageの順とする。Goal Delete対late callbackのConcurrency Integration Testでこの例外を固定する。
 
 AI開始時のBudget→rate bucket物理lock順と、User rolling quota→rate limit→service budgetの判定順の分離は§18.1を正本とする。
 
@@ -4494,6 +4532,8 @@ leaseSeconds >
 複数のexpired GenerationはUUID昇順でlockし、reservationはDBの`NUMERIC`として月ごとに合算してBudgetを月昇順で更新する。各Generation / Usage terminal CASと各月Budget更新はexactly one rowを要求し、0-rowなら新AI reservationを含むTransaction全体をrollbackする。
 
 同じGoal Draft / Cycleのrunning unique constraintを解除し、再試行可能にする。Lease切れだけでProvider callが実際に課金されなかったとは断定しない。後からusageが判明した場合は、AIUsageEventの`provider_usage_finalized_at IS NULL`をCAS条件として、個人本文を伴わないToken/Costと月次actual costへ一度だけ反映する。Late settlementではreservationを再減算しない。
+
+Lease expiryはProvider usage確定ではないためsettlement metadataを維持する。後続のlate finalization成功CASだけがmetadataをclearする。
 
 ---
 
@@ -4944,6 +4984,7 @@ Quota判定に必要な最小情報は`AIUsageEvent`へ保持する。Goal Delet
 - `goal_id=NULL`
 - `content_deleted=true`
 - operation type / status / acceptedAt / token / costは保持可
+- Provider usage未確定中だけ、元reservationの月/上限額settlement metadataを保持可
 - Goal、Cycle、Prompt本文、AI outputは保持しない
 - `quota_retain_until`到達後かつ`provider_usage_finalized_at IS NOT NULL`で、他の運用Retention理由がなければcleanup対象。未確定recordは期限を問わずskipする
 
@@ -4958,7 +4999,7 @@ monthly_ai_budget_usd: 100
 warning_thresholds: [0.5, 0.8]
 ```
 
-Provider call前に`ai_budget_monthly`を`FOR UPDATE`し、logical operationの最大Costをreserveする。Budget使用量は`actual_cost_usd + unattributed_cost_usd + reserved_cost_usd`で評価する。`unattributed_cost_usd`はAccount Delete中のin-flight operationなど、User単位recordを削除するため正確なlate settlementを保持しないCostの保守的計上である。
+Provider call前に`ai_budget_monthly`を`FOR UPDATE`し、logical operationの最大Costをreserveする。Budget使用量は`actual_cost_usd + unattributed_cost_usd + reserved_cost_usd`で評価する。`unattributed_cost_usd`はAccount Delete中のrunning Generation reservationと、Generationを失ったprovider-unfinalized Usage exposureなど、User単位recordを削除するため正確なlate settlementを保持しないCostの保守的計上である。
 
 ```text
 maxAttemptCost = maxProviderAttempts ×
@@ -4982,11 +5023,15 @@ if usage.providerUsageFinalizedAt is null:
     actualCost += measuredEstimatedCost
     usage.tokens/cost = measured usage
     usage.providerUsageFinalizedAt = now
+    usage.settlementBudgetMonthUtc = null
+    usage.settlementReservationCostUsd = null
 else:
     no-op  # retryによる二重settlementを防止
 ```
 
-Goal DeleteがGenerationを先に削除したlate pathでは、content-freeなAIUsageEventだけをlockする。`providerUsageFinalizedAt IS NULL`ならToken/Costと`actualCost`を一度だけ更新し、Delete時に解放済みのreservationは触らない。このlate pathはUsageを削除せず、確定後に§38.2のcleanup対象へ移す。Account DeleteではAIUsageEvent自体を削除し、Delete Transactionでreservationを`unattributedCost`へ保守的に移すため、late resultはbudgetへ再計上しない。
+Goal DeleteがGenerationを先に削除したlate pathでは、content-freeなAIUsageEventだけをlockする。`providerUsageFinalizedAt IS NULL`ならToken/Costと`actualCost`を一度だけ更新し、Delete時に解放済みのreservationは触らず、同じCASでsettlement metadataをclearする。このlate pathはUsageを削除せず、確定後に§38.2のcleanup対象へ移す。
+
+Account Deleteはrunning Generation reservationと、Generationを失った未確定Usage exposureをoperation単位で排他的に集計する。前者はreservedからunattributedへ移し、後者はreservedを再減算せずunattributedだけを増やす。AIUsageEvent自体を削除するため、後続late resultはbudgetへ再計上しない。
 
 Provider failureでもusageが返ったattemptはactual costへ加算する。Reservationはconcurrent requestによるbudget overshootを防ぐための上限確保であり、実Costではない。`providerUsageFinalizedAt`は、成功/失敗のHTTP response retryやdetached cleanup retryが同一Costを二重加算しないためのsettlement CASである。
 
@@ -5245,6 +5290,7 @@ Goal、Goal Draft、Goal Version、P/D/C/A、Goal Refine source/outputは、仕�
 - Frame名やsort orderはServer enum / switchで固定SQLを選ぶ。
 - User inputをSQL identifierとして文字列連結しない。
 - Cursor payloadはsignature検証・parse・range validation後にparameter化する。
+- 署名が正しくても別scopeのCursorは拒否し、Cursor由来値はApplication validation後だけowner-scoped queryへ渡す。
 
 ## 41.7 Secret management
 
@@ -5304,9 +5350,13 @@ Goal Aggregate DeleteはContent deletion Use Caseであり、次を同一Transac
 
 物理保持期限`quotaRetainUntil`前のAIUsageEvent、および期限到達後もProvider usage未確定のAIUsageEventは、本文なし・Goal ID redactedで保持する。Delete後のlate AI responseはGoal/Cycle/Draftを再作成せず、Usage/Costだけを一度settleする。
 
+未確定中だけ保持するsettlement metadataは元reservationの月と上限額に限り、Goal/Cycle/Draft IDや本文を含めない。
+
 ## 41.10 Account Delete
 
 User row hard deleteとFK cascadeで、Goal、Draft、Version、Cycle、AI content、AI Usage、AuthIdentity、Sessionを削除する。個人を特定しないaggregate monthly budget / metricsは保持可能。
+
+削除前にrunning Generation reservationとGenerationを失ったprovider-unfinalized Usage exposureを重複なく`unattributed_cost_usd`へ移す。移送不能な旧Application経路はDB guardでTransaction全体をfail-closedにし、partial deleteしない。
 
 Serverの`204`をcommit境界とし、Frontendは次の順序を守る。
 
@@ -5955,7 +6005,7 @@ Goal / Version / Cycle / Review / AI Usageは強いtransactional consistencyを�
 12. **System Fontを採用する。** 初期表示と可読性が良い一方、OS間のBrand一貫性は弱い。MVPの入力UXを優先する。
 13. **Goal Historyをtimeline read modelで作る。** Generic CRUD listより専用queryが増えるが、Version変更地点とCycleを一貫して表示できる。
 14. **Goal Aggregate DeleteをCompleted/Canceledの唯一の個別Goal削除経路とする。** 履歴がまとめて消える強い操作だが、UserのData deletion権利とAggregate整合性を両立する。
-15. **AI Cost settlementをUsage EventのCASで冪等化する。** FieldとTransactionが増えるが、Goal Deleteやcleanupとの競合でreservation/actual costを二重計上しない。Account Delete中のin-flight operationは個人単位receiptを残さず最大予約額を`unattributed_cost_usd`へ移すため、稀に過大計上する代わりにPrivacyとbudget安全性を優先する。
+15. **AI Cost settlementをUsage EventのCASで冪等化する。** FieldとTransactionが増えるが、Goal Deleteやcleanupとの競合でreservation/actual costを二重計上しない。Account Delete中のrunning GenerationまたはGenerationを失ったprovider-unfinalized Usage exposureは、個人単位receiptを残さず最大予約額を`unattributed_cost_usd`へ重複なく移すため、稀に過大計上する代わりにPrivacyとbudget安全性を優先する。
 16. **空Database向けBaselineを初期Schemaとする。** 不明な変換Ruleを実装せずDomain Invariantを明確に開始できる一方、別SchemaからのData変換が必要になった場合は本書へ専用Ruleを追加する必要がある。
 
 ---
@@ -6142,6 +6192,8 @@ Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpa
 | GH-08 | cross-user Goal/Cycle | 404 |
 | GH-09 | cycle version reference | historical Goal body correct |
 | GH-10 | terminal Goal after Review Draft discard | discarded Draftをtimelineへ表示しない |
+| GH-11 | 別scope Cursor再利用 | `INVALID_CURSOR` |
+| GH-12 | status/currentWork不整合 | `INTERNAL_ERROR`、補正しない |
 
 ## 48.11 Goal Refine tests
 
@@ -6238,6 +6290,10 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 | Q-17 | Account Delete中のrunning AI | reservationをunattributed costへ一度だけ移し、late resultは再計上しない |
 | Q-18 | Progressing Goal 2件で一方のquotaを消費後、他方からAI実行 | Goal別に増枠せずUser rolling quotaで拒否 |
 | Q-19 | accepted AI operation | Quota countは24時間、`quotaRetainUntil`はacceptedAtから24時間15分 |
+| Q-20 | normal/late finalization | settlement metadataを同じCASでclear |
+| Q-21 | lease expiry | settlement metadata維持、late settlementで一度だけclear |
+| Q-22 | Goal Delete後→Account Delete→callback | orphan Usage exposureをunattributedへ一度だけ移しcallbackはno-op |
+| Q-23 | callback→Account Delete | actualだけを計上しunattributed重複なし |
 
 ## 48.16 Goal Delete tests
 
@@ -6260,6 +6316,8 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 | GD-14 | cross-user delete | 404 |
 | GD-15 | revision conflict | Goal維持 |
 | GD-16 | Browser cache | 204後だけclear |
+| GD-17 | 非昇順/重複lock row、各CAS 0-row | Transaction全体rollback |
+| GD-18 | expiry済みDelete receipt key reuse | Goal/hashが異なれば`IDEMPOTENCY_KEY_REUSED` |
 
 ## 48.17 Auth / authorization tests
 
@@ -6286,6 +6344,9 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 - `confirmed=false`拒否。
 - User、Goals、Drafts、Versions、Cycles、AIGeneration、Usage、Identity、Session削除。
 - running AI reservationを`unattributed_cost_usd`へ一度だけ移す。
+- running Generationを失った未確定Usageもsettlement metadataから移送し、running集合とoperation IDで重複計上しない。
+- callback-firstではactualだけ、Account-delete-firstでは最大reservation exposureだけを計上する。
+- metadata欠落・不一致、CAS不一致、旧Application guard拒否ではUserを削除せずrollbackする。
 - late AI responseがUser/Goalを再作成せず、Application budgetへ二重計上しない。
 - aggregate monthly budget/anonymous metrics保持。
 - Transaction失敗でUser Data全維持。

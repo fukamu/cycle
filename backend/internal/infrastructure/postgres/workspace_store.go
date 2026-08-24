@@ -50,7 +50,7 @@ review_draft.id,trigger_cycle.id,trigger_cycle.sequence_number,
 (CASE WHEN g.status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END)::smallint AS category,
 CASE WHEN g.status IN ('active_cycle','goal_review') THEN g.updated_at ELSE g.terminal_at END AS sort_time
 FROM goals g
-JOIN goal_versions gv ON gv.goal_id=g.id AND gv.version_number=g.current_version_number
+LEFT JOIN goal_versions gv ON gv.goal_id=g.id AND gv.version_number=g.current_version_number
 LEFT JOIN pdca_cycles active_cycle
   ON active_cycle.user_id=g.user_id AND active_cycle.goal_id=g.id AND active_cycle.status='active'
 LEFT JOIN goal_drafts review_draft
@@ -110,75 +110,8 @@ FROM goal_drafts WHERE id=$1 AND user_id=$2`, mustUUID(draftID), mustUUID(userID
 	return view, nil
 }
 
-func (store *WorkspaceStore) ListGoals(ctx context.Context, userID, scope, encodedCursor string, limit int) (workspace.GoalPage, error) {
-	if scope == "" {
-		scope = "all"
-	}
-	if scope != "all" && scope != "progressing" && scope != "history" {
-		return workspace.GoalPage{}, workspace.ErrInvalidCursor
-	}
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 50 {
-		limit = 50
-	}
-	cursor, err := store.decodeCursor(encodedCursor, scope)
-	if err != nil {
-		return workspace.GoalPage{}, err
-	}
-	var cursorCategory any
-	if cursor.Category != nil {
-		cursorCategory = *cursor.Category
-	}
-	var cursorID any
-	if cursor.ID != "" {
-		cursorID = cursor.ID
-	}
-	rows, err := store.pool.Query(ctx, goalViewQuery+`
-WHERE g.user_id=$1
-AND ($2='all' OR ($2='progressing' AND g.status IN ('active_cycle','goal_review')) OR ($2='history' AND g.status IN ('achieved','ended')))
-AND ($3::smallint IS NULL
-  OR CASE WHEN g.status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END > $3
-  OR (CASE WHEN g.status IN ('active_cycle','goal_review') THEN 0 ELSE 1 END = $3
-    AND (CASE WHEN g.status IN ('active_cycle','goal_review') THEN g.updated_at ELSE g.terminal_at END,g.id)<($4,$5::uuid)))
-ORDER BY category ASC,sort_time DESC,g.id DESC LIMIT $6`, mustUUID(userID), scope, cursorCategory, cursor.Time, cursorID, limit+1)
-	if err != nil {
-		return workspace.GoalPage{}, err
-	}
-	var found []goalViewRow
-	for rows.Next() {
-		item, scanErr := scanGoalView(rows)
-		if scanErr != nil {
-			rows.Close()
-			return workspace.GoalPage{}, scanErr
-		}
-		found = append(found, item)
-	}
-	rowErr := rows.Err()
-	rows.Close()
-	if rowErr != nil {
-		return workspace.GoalPage{}, rowErr
-	}
-	page := workspace.GoalPage{Items: []workspace.GoalView{}}
-	if len(found) > limit {
-		last := found[limit-1]
-		next := store.encodeCursor(cursorPayload{Scope: scope, Category: &last.Category, Time: &last.SortTime, ID: last.View.ID})
-		page.NextCursor = &next
-		found = found[:limit]
-	}
-	for _, item := range found {
-		page.Items = append(page.Items, item.View)
-	}
-	return page, nil
-}
-
-func (store *WorkspaceStore) GetGoal(ctx context.Context, userID, goalID string) (workspace.GoalView, error) {
-	return getGoalView(ctx, store.pool, userID, goalID)
-}
-
 func (store *WorkspaceStore) GetReview(ctx context.Context, userID, goalID string) (workspace.ReviewView, error) {
-	view, err := store.GetGoal(ctx, userID, goalID)
+	view, err := getGoalView(ctx, store.pool, userID, goalID)
 	if err != nil {
 		return workspace.ReviewView{}, err
 	}
@@ -292,13 +225,16 @@ type goalViewRow struct {
 
 func scanGoalView(scanner rowScanner) (goalViewRow, error) {
 	var result goalViewRow
+	var currentVersionID pgtype.UUID
+	var currentVersionNumber pgtype.Int4
+	var currentVersionBody pgtype.Text
+	var currentVersionCreatedAt pgtype.Timestamptz
 	var activeCycleID, reviewDraftID, triggerCycleID pgtype.UUID
 	var activeCycleSequence, triggerCycleSequence pgtype.Int4
 	err := scanner.Scan(
 		&result.View.ID, &result.View.Status, &result.View.Revision, &result.View.NextCycleSequenceNumber,
 		&result.View.CreatedAt, &result.View.TerminalAt,
-		&result.View.CurrentVersion.ID, &result.View.CurrentVersion.VersionNumber, &result.View.CurrentVersion.Body,
-		&result.View.CurrentVersion.CreatedAt, &result.View.CycleCount,
+		&currentVersionID, &currentVersionNumber, &currentVersionBody, &currentVersionCreatedAt, &result.View.CycleCount,
 		&activeCycleID, &activeCycleSequence,
 		&reviewDraftID, &triggerCycleID, &triggerCycleSequence,
 		&result.Category, &result.SortTime,
@@ -306,10 +242,23 @@ func scanGoalView(scanner rowScanner) (goalViewRow, error) {
 	if err != nil {
 		return goalViewRow{}, err
 	}
+	if !currentVersionID.Valid || !currentVersionNumber.Valid || !currentVersionBody.Valid || !currentVersionCreatedAt.Valid {
+		return goalViewRow{}, fmt.Errorf("%w: Goal current Version is missing", workspace.ErrGoalPersistenceInvariant)
+	}
+	result.View.CurrentVersion = workspace.GoalVersionView{
+		ID:            uuidString(currentVersionID),
+		VersionNumber: currentVersionNumber.Int32,
+		Body:          currentVersionBody.String,
+		CreatedAt:     currentVersionCreatedAt.Time,
+	}
+	hasActive := activeCycleID.Valid || activeCycleSequence.Valid
+	activeComplete := activeCycleID.Valid && activeCycleSequence.Valid
+	hasReview := reviewDraftID.Valid || triggerCycleID.Valid || triggerCycleSequence.Valid
+	reviewComplete := reviewDraftID.Valid && triggerCycleID.Valid && triggerCycleSequence.Valid
 	switch result.View.Status {
 	case goal.StatusActiveCycle:
-		if !activeCycleID.Valid || !activeCycleSequence.Valid {
-			return goalViewRow{}, fmt.Errorf("active goal invariant: current cycle missing")
+		if !activeComplete || hasReview {
+			return goalViewRow{}, fmt.Errorf("%w: active Goal current work invalid", workspace.ErrGoalPersistenceInvariant)
 		}
 		result.View.CurrentWork = &workspace.CurrentWorkView{
 			Kind:                "active_cycle",
@@ -317,8 +266,8 @@ func scanGoalView(scanner rowScanner) (goalViewRow, error) {
 			CycleSequenceNumber: activeCycleSequence.Int32,
 		}
 	case goal.StatusGoalReview:
-		if !reviewDraftID.Valid || !triggerCycleID.Valid || !triggerCycleSequence.Valid {
-			return goalViewRow{}, fmt.Errorf("review goal invariant: current review missing")
+		if hasActive || !reviewComplete {
+			return goalViewRow{}, fmt.Errorf("%w: review Goal current work invalid", workspace.ErrGoalPersistenceInvariant)
 		}
 		result.View.CurrentWork = &workspace.CurrentWorkView{
 			Kind:                       "goal_review",
@@ -326,6 +275,12 @@ func scanGoalView(scanner rowScanner) (goalViewRow, error) {
 			TriggerCycleID:             uuidString(triggerCycleID),
 			TriggerCycleSequenceNumber: triggerCycleSequence.Int32,
 		}
+	case goal.StatusAchieved, goal.StatusEnded:
+		if hasActive || hasReview {
+			return goalViewRow{}, fmt.Errorf("%w: terminal Goal current work exists", workspace.ErrGoalPersistenceInvariant)
+		}
+	default:
+		return goalViewRow{}, fmt.Errorf("%w: invalid Goal status", workspace.ErrGoalPersistenceInvariant)
 	}
 	return result, nil
 }

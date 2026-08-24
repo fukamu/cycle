@@ -199,8 +199,8 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_usage_events
-(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
-VALUES($1,$2,$3,'action_generate','accepted','fake','test','action-generate-v1',$4,$5)`,
+(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
+VALUES($1,$2,$3,'action_generate','succeeded','fake','test','action-generate-v1',$4,$4,$5)`,
 		"81000000-0000-7000-8000-000000000001", userID, fixtures[0].goalID, now, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'request-hash',$5,$5)`, []any{cycleID, userI
 	}
 
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	page, err := store.ListGoals(context.Background(), userID, "all", "", 20)
+	page, err := executeGoalListUseCase(store, context.Background(), userID, "all", "", 20, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,14 +387,14 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'active-hash',$5,$5)`, []any{activeCycle, us
 	}
 
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	first, err := store.ListGoals(context.Background(), userID, "all", "", 2)
+	first, err := executeGoalListUseCase(store, context.Background(), userID, "all", "", 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(first.Items) != 2 || first.Items[0].ID != activeGoalID || first.Items[1].ID != latestGoalID || first.NextCursor == nil {
 		t.Fatalf("first page = %#v", first)
 	}
-	second, err := store.ListGoals(context.Background(), userID, "all", *first.NextCursor, 2)
+	second, err := executeGoalListUseCase(store, context.Background(), userID, "all", *first.NextCursor, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}

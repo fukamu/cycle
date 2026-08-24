@@ -404,12 +404,9 @@ type AIContextSelector func(context.Context, AISnapshot) (AISnapshot, error)
 type Store interface {
 	Home(context.Context, string, int) (HomeView, error)
 	GetDraft(context.Context, string, string) (DraftView, error)
-	ListGoals(context.Context, string, string, string, int) (GoalPage, error)
-	GetGoal(context.Context, string, string) (GoalView, error)
 	GetReview(context.Context, string, string) (ReviewView, error)
 	ContinueReview(context.Context, ContinueReviewInput) (ContinueReviewResult, error)
 	Terminate(context.Context, TerminateInput) (TerminateResult, error)
-	DeleteGoal(context.Context, string, string, bool, int64, string, string, time.Time) error
 	ListCycles(context.Context, string, string, string, int) (CyclePage, error)
 	GetCycle(context.Context, string, string, string) (CycleView, error)
 	SaveFrame(context.Context, SaveFrameInput) (SaveFrameResult, error)
