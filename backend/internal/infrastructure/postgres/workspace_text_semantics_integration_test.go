@@ -52,13 +52,13 @@ func TestWorkspaceTextSemanticsUseCodePointsAndPreserveNormalizedWhitespace(t *t
 	}
 
 	frameAtLimit := strings.Repeat("🌱", cycle.MaxFrameCodePoints)
-	if _, err = store.SaveFrame(context.Background(), workspace.SaveFrameInput{
+	if _, err = executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		Frame: cycle.FramePlan, Content: frameAtLimit + "🌱", ExpectedFrameRevision: 0, Now: now.Add(3 * time.Minute),
 	}); !errors.Is(err, cycle.ErrFrameTextTooLong) {
 		t.Fatalf("201-code-point Frame error = %v, want %v", err, cycle.ErrFrameTextTooLong)
 	}
-	frameSaved, err := store.SaveFrame(context.Background(), workspace.SaveFrameInput{
+	frameSaved, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		Frame: cycle.FramePlan, Content: frameAtLimit, ExpectedFrameRevision: 0, Now: now.Add(3 * time.Minute),
 	})
@@ -78,7 +78,7 @@ func TestWorkspaceTextSemanticsUseCodePointsAndPreserveNormalizedWhitespace(t *t
 
 	const rawFrame = "  P\r\nD\rA \t"
 	const normalizedFrame = "  P\nD\nA \t"
-	frameSaved, err = store.SaveFrame(context.Background(), workspace.SaveFrameInput{
+	frameSaved, err = executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		Frame: cycle.FramePlan, Content: rawFrame, ExpectedFrameRevision: frameSaved.FrameRevision, Now: now.Add(4 * time.Minute),
 	})
@@ -128,7 +128,7 @@ func TestWorkspaceContinueReviewUsesNormalizedExactBodyComparison(t *testing.T) 
 		thirdCycleID       = "41000000-0000-7000-8000-000000000032"
 	)
 
-	firstReview, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+	firstReview, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: firstReviewDraftID,
 		OperationID: firstCompleteID, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
 		RequestHash: "m7-first-complete", Now: now.Add(2 * time.Minute),
@@ -158,7 +158,7 @@ func TestWorkspaceContinueReviewUsesNormalizedExactBodyComparison(t *testing.T) 
 	}
 
 	saveAllAutosaveFrames(t, store, fixture.goalID, secondCycleID, now.Add(5*time.Minute))
-	secondReview, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+	secondReview, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: secondCycleID, ReviewDraftID: secondReviewID,
 		OperationID: secondCompleteID, ExpectedGoalRevision: firstContinued.Goal.Revision, ExpectedContentRevision: 4,
 		RequestHash: "m7-second-complete", Now: now.Add(6 * time.Minute),

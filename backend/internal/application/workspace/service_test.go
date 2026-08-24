@@ -207,7 +207,7 @@ func TestGoalRefineReplayPreservesOriginalResponseMetadata(t *testing.T) {
 	}
 	store := &replayOnlyStore{}
 	provider := &scriptedProvider{}
-	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, nil, nil, provider, replayTestClock{}, replayTestIDs{}, Settings{})
+	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, nil, nil, nil, nil, provider, replayTestClock{}, replayTestIDs{}, Settings{})
 
 	response, err := service.RefineGoal(context.Background(), input)
 	if err != nil {
@@ -233,7 +233,7 @@ func TestActionReplayPreservesOriginalContextChanged(t *testing.T) {
 		ReplayedActionRevision:  3,
 	}}
 	provider := &scriptedProvider{}
-	service := NewService(store, serviceTestGoalDraftUOW{}, nil, nil, provider, replayTestClock{}, replayTestIDs{}, Settings{})
+	service := NewService(store, serviceTestGoalDraftUOW{}, nil, nil, nil, nil, provider, replayTestClock{}, replayTestIDs{}, Settings{})
 
 	response, err := service.RunActionAI(context.Background(), ActionAIInput{Operation: "action_refine"})
 	if err != nil {
@@ -285,7 +285,7 @@ func (tx *saveReviewLeaseTx) SaveDraftCAS(_ context.Context, draft goal.Draft, e
 func TestSaveReviewForwardsExpectedDraftGeneration(t *testing.T) {
 	store := &saveReviewLeaseStore{}
 	tx := &saveReviewLeaseTx{}
-	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, nil, nil, nil, replayTestClock{}, nil, Settings{})
+	service := NewService(store, serviceTestGoalDraftUOW{tx: tx}, nil, nil, nil, nil, nil, replayTestClock{}, nil, Settings{})
 	const (
 		userID        = "10000000-0000-7000-8000-000000000001"
 		goalID        = "20000000-0000-7000-8000-000000000001"

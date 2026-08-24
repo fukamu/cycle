@@ -407,10 +407,6 @@ type Store interface {
 	GetReview(context.Context, string, string) (ReviewView, error)
 	ContinueReview(context.Context, ContinueReviewInput) (ContinueReviewResult, error)
 	Terminate(context.Context, TerminateInput) (TerminateResult, error)
-	ListCycles(context.Context, string, string, string, int) (CyclePage, error)
-	GetCycle(context.Context, string, string, string) (CycleView, error)
-	SaveFrame(context.Context, SaveFrameInput) (SaveFrameResult, error)
-	CompleteCycle(context.Context, CompleteCycleInput) (CompleteCycleResult, error)
 	BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error)
 	FinishActionAI(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
 }

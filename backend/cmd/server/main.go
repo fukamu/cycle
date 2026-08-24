@@ -97,14 +97,14 @@ func main() {
 	goalRefineReservationUSD := maximumAIReservationUSD(settings.AI.MaxInputTokens, settings.AI.GoalRefineMaxOutputTokens, settings.AI.MaxProviderAttempts,
 		settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
 	workspaceStore := postgres.NewWorkspaceStore(pool, postgres.WorkspaceStoreSettings{
-		CursorSigningKey: []byte(settings.Session.CursorSigningSecret), Provider: settings.AI.Provider, Model: settings.AI.Model,
+		Provider: settings.AI.Provider, Model: settings.AI.Model,
 		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
 		RefinePromptVersion: settings.AI.RefinePromptVersion, RollingLimit: settings.AI.MaxGenerationsPerUser24h,
 		MonthlyBudgetUSD: settings.AI.MonthlyBudgetUSD, ReservationUSD: actionReservationUSD, LeaseDuration: settings.AI.LeaseDuration,
 		RateHashKey: []byte(settings.Session.RateLimitHMACSecret), AIPerUserMinute: settings.RateLimit.AIPerUserMinute,
 		AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute, AIPerIPMinute: settings.RateLimit.AIPerIPMinute,
 	})
-	workspaceService := workspace.NewService(workspaceStore, workspaceStore, workspaceStore, workspaceStore,
+	workspaceService := workspace.NewService(workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore,
 		aiProvider, system.Clock{}, random, workspace.Settings{
 			MaxProgressingGoals: settings.Goals.MaxProgressingGoals, Provider: settings.AI.Provider,
 			CursorSigningKey: []byte(settings.Session.CursorSigningSecret),

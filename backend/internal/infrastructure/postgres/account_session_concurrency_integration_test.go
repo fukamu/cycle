@@ -518,7 +518,7 @@ VALUES($1,$2,$2,$2)`, fixture.userID, now); err != nil {
 		t.Fatal(err)
 	}
 	goalFixture := progressingGoalFixtures()[0]
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	startProgressingGoal(t, store, fixture.userID, goalFixture, 2, now)
 	const pendingDraftID = "12000000-0000-7000-8000-000000000001"
 	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), fixture.userID, pendingDraftID, "保留中の目標", now.Add(time.Minute)); err != nil {
@@ -780,7 +780,7 @@ VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
 	goalFixtures := progressingGoalFixtures()[:2]
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	for _, fixture := range goalFixtures {
 		startProgressingGoal(t, store, userID, fixture, 2, now)
 	}
@@ -955,7 +955,6 @@ type accountDeleteAIFinishCall struct {
 
 func accountDeleteAISettings() WorkspaceStoreSettings {
 	return WorkspaceStoreSettings{
-		CursorSigningKey:      []byte("test-cursor-key"),
 		Provider:              "fake",
 		Model:                 "test",
 		GoalPromptVersion:     "goal-refine-v1",

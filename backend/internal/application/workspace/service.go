@@ -49,6 +49,7 @@ type Service struct {
 	store        Store
 	goalDraft    *GoalDraftUseCases
 	goals        *GoalUseCases
+	cycles       *CycleUseCases
 	entitlements EntitlementPolicy
 	provider     AIProvider
 	clock        ports.Clock
@@ -61,6 +62,8 @@ func NewService(
 	goalDraftUOW GoalDraftUnitOfWork,
 	goalQueries GoalQueryRepository,
 	goalUOW GoalUnitOfWork,
+	cycleQueries CycleQueryRepository,
+	cycleUOW CycleUnitOfWork,
 	provider AIProvider,
 	clock ports.Clock,
 	ids ports.IDGenerator,
@@ -83,7 +86,10 @@ func NewService(
 	goals := NewGoalUseCases(goalQueries, goalUOW, clock, GoalUseCaseSettings{
 		CursorSigningKey: settings.CursorSigningKey,
 	})
-	return &Service{store: store, goalDraft: goalDraft, goals: goals, entitlements: entitlements,
+	cycles := NewCycleUseCases(cycleQueries, cycleUOW, clock, ids, CycleUseCaseSettings{
+		CursorSigningKey: settings.CursorSigningKey,
+	})
+	return &Service{store: store, goalDraft: goalDraft, goals: goals, cycles: cycles, entitlements: entitlements,
 		provider: provider, clock: clock, ids: ids, settings: settings}
 }
 
@@ -178,35 +184,22 @@ func (service *Service) DeleteGoal(ctx context.Context, userID, goalID string, c
 }
 
 func (service *Service) ListCycles(ctx context.Context, userID, goalID, cursor string, limit int) (CyclePage, error) {
-	page, err := service.store.ListCycles(ctx, userID, goalID, cursor, limit)
+	page, err := service.cycles.ListCycles(ctx, userID, goalID, cursor, limit)
 	return page, resourceNotFound(err, ErrGoalNotFound)
 }
 
 func (service *Service) GetCycle(ctx context.Context, userID, goalID, cycleID string) (CycleView, error) {
-	view, err := service.store.GetCycle(ctx, userID, goalID, cycleID)
+	view, err := service.cycles.GetCycle(ctx, userID, goalID, cycleID)
 	return view, resourceNotFound(err, ErrCycleNotFound)
 }
 
 func (service *Service) SaveFrame(ctx context.Context, input SaveFrameInput) (SaveFrameResult, error) {
-	input.Now = service.clock.Now().UTC()
-	result, err := service.store.SaveFrame(ctx, input)
+	result, err := service.cycles.SaveFrame(ctx, input)
 	return result, resourceNotFound(err, ErrCycleNotFound)
 }
 
 func (service *Service) CompleteCycle(ctx context.Context, input CompleteCycleInput) (CompleteCycleResult, error) {
-	draftID, err := service.ids.NewID()
-	if err != nil {
-		return CompleteCycleResult{}, err
-	}
-	input.ReviewDraftID = draftID
-	input.Now = service.clock.Now().UTC()
-	input.RequestHash = hashRequest(struct {
-		GoalID          string `json:"goalId"`
-		CycleID         string `json:"cycleId"`
-		GoalRevision    int64  `json:"goalRevision"`
-		ContentRevision int64  `json:"contentRevision"`
-	}{input.GoalID, input.CycleID, input.ExpectedGoalRevision, input.ExpectedContentRevision})
-	result, err := service.store.CompleteCycle(ctx, input)
+	result, err := service.cycles.CompleteCycle(ctx, input)
 	return result, resourceNotFound(err, ErrCycleNotFound)
 }
 

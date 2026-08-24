@@ -212,6 +212,14 @@ func errorDetails(err error) map[string]any {
 	if errors.As(err, &aiRunning) && aiRunning.GenerationID != "" {
 		return map[string]any{"generationId": aiRunning.GenerationID}
 	}
+	var incomplete *workspace.CycleCompletionIncompleteError
+	if errors.As(err, &incomplete) {
+		missingFrames := make([]string, len(incomplete.MissingFrames))
+		for index, frame := range incomplete.MissingFrames {
+			missingFrames[index] = string(frame)
+		}
+		return map[string]any{"missingFrames": missingFrames}
+	}
 	return nil
 }
 

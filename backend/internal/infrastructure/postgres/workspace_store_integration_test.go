@@ -27,7 +27,7 @@ func TestWorkspaceStoreEnforcesConfigurableProgressingGoalBoundary(t *testing.T)
 			if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 				t.Fatal(err)
 			}
-			store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+			store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 			fixtures := progressingGoalFixtures()
 			for index := 0; index < test.limit; index++ {
 				startProgressingGoal(t, store, userID, fixtures[index], test.limit, now.Add(time.Duration(index)*time.Minute))
@@ -91,7 +91,7 @@ func TestWorkspaceStoreHomeOrdersProgressingGoalsByCreationTime(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	fixtures := progressingGoalFixtures()
 	for index := 0; index < 3; index++ {
 		startProgressingGoal(t, store, userID, fixtures[index], 3, now.Add(time.Duration(index)*time.Minute))
@@ -122,7 +122,7 @@ func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	fixtures := progressingGoalFixtures()
 	first := startProgressingGoal(t, store, userID, fixtures[0], 2, now)
 	startProgressingGoal(t, store, userID, fixtures[1], 2, now.Add(time.Minute))
@@ -185,7 +185,6 @@ func TestWorkspaceStoreSharesAIQuotaWithoutMixingContextAcrossProgressingGoals(t
 		t.Fatal(err)
 	}
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{
-		CursorSigningKey:      []byte("test-cursor-key"),
 		Provider:              "fake",
 		Model:                 "test",
 		GeneratePromptVersion: "action-generate-v1",
@@ -296,7 +295,7 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'request-hash',$5,$5)`, []any{cycleID, userI
 		}
 	}
 
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	page, err := executeGoalListUseCase(store, context.Background(), userID, "all", "", 20, now)
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +307,7 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'request-hash',$5,$5)`, []any{cycleID, userI
 		t.Fatalf("next cursor = %q, want nil", *page.NextCursor)
 	}
 
-	cycles, err := store.ListCycles(context.Background(), userID, goalID, "", 20)
+	cycles, err := executeCycleListUseCase(store, context.Background(), userID, goalID, "", 20, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +331,7 @@ func TestWorkspaceStoreDuplicateCreationDraftReturnsExistingIdentifier(t *testin
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, firstDraft, "", now); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +385,7 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'active-hash',$5,$5)`, []any{activeCycle, us
 		}
 	}
 
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	first, err := executeGoalListUseCase(store, context.Background(), userID, "all", "", 2, now)
 	if err != nil {
 		t.Fatal(err)
@@ -430,7 +429,7 @@ func TestWorkspaceCommandReplayConvergesAfterLaterStateTransition(t *testing.T) 
 VALUES($1,$2,'creation','目標本文',$3,$3)`, draftID, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	startInput := workspace.StartGoalInput{
 		UserID: userID, DraftID: draftID, OperationID: startOperation, ExpectedDraftRevision: 0,
 		RequestHash: "start-hash", GoalID: goalID, VersionID: versionID, CycleID: cycleID, Now: now,
@@ -494,7 +493,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 		OperationID: completeOperation, ExpectedGoalRevision: 0, ExpectedContentRevision: 4,
 		RequestHash: "complete-hash", Now: now.Add(time.Minute),
 	}
-	if _, err = store.CompleteCycle(context.Background(), completeInput); err != nil {
+	if _, err = executeCycleCompleteUseCase(store, context.Background(), completeInput); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.GetDraft(context.Background(), userID, reviewDraftID); !errors.Is(err, workspace.ErrDraftTypeMismatch) {
@@ -507,7 +506,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	completeReplay, err := store.CompleteCycle(context.Background(), completeInput)
+	completeReplay, err := executeCycleCompleteUseCase(store, context.Background(), completeInput)
 	if err != nil || completeReplay.Replay == nil || !completeReplay.Replay.Replayed {
 		t.Fatalf("complete replay = %#v, error = %v", completeReplay, err)
 	}
@@ -543,7 +542,7 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,$5,'元の目標','改善した�
 		generationID, userID, draftID, idempotencyKey, goalRefineRequestHashFixture(refineInput), now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_usage_events
 (operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
 VALUES($1,$2,'goal_refine','succeeded','fake','test','goal-refine-v1',$3,$3,$4)`,
@@ -589,7 +588,6 @@ func TestReviewGoalAIResolvesDraftByGoalInsideTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{
-		CursorSigningKey:  []byte("test-cursor-key"),
 		Provider:          "fake",
 		Model:             "test",
 		GoalPromptVersion: "goal-refine-v1",
@@ -605,7 +603,7 @@ func TestReviewGoalAIResolvesDraftByGoalInsideTransaction(t *testing.T) {
 content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revision=1 WHERE id=$1`, fixture.cycleID); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: reviewDraftID,
 		OperationID: completeOperation, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
 		RequestHash: "complete-review-ai", Now: now.Add(time.Minute),
@@ -666,7 +664,7 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改�
 		generationID, userID, draftID, idempotencyKey, now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	adopted, err := executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(time.Minute))
 	if err != nil || adopted.Revision != 1 || adopted.Replayed {
 		t.Fatalf("adopted = %#v, error = %v", adopted, err)
@@ -708,7 +706,7 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改�
 		generationID, userID, draftID, idempotencyKey, now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	if _, err := executeGoalDraftSaveUseCase(store, context.Background(), userID, draftID, "一時的な変更", 0, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}

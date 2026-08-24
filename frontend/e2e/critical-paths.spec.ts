@@ -671,7 +671,7 @@ test("cross-user draft, goal, cycle, and delete access is rejected", async ({
       outsider,
       { path: `/api/v1/goals/${goalId}/cycles/${cycleId}` },
       404,
-      "CYCLE_NOT_FOUND",
+      "GOAL_NOT_FOUND",
     );
 
     await expectAPIError(
@@ -686,7 +686,7 @@ test("cross-user draft, goal, cycle, and delete access is rejected", async ({
         },
       },
       404,
-      "CYCLE_NOT_FOUND",
+      "GOAL_NOT_FOUND",
     );
     await expectAPIError(
       outsider,

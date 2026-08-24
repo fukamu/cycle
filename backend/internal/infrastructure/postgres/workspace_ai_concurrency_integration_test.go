@@ -372,7 +372,6 @@ type aiResponseCall struct {
 
 func aiConcurrencySettings() WorkspaceStoreSettings {
 	return WorkspaceStoreSettings{
-		CursorSigningKey:      []byte("test-cursor-key"),
 		Provider:              "fake",
 		Model:                 "test",
 		GoalPromptVersion:     "goal-refine-v1",
@@ -939,7 +938,7 @@ func TestReviewGoalRefineAndSaveUseGoalBeforeDraftLockOrder(t *testing.T) {
 content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revision=1 WHERE id=$1`, fixture.cycleID); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := seedStore.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+	completed, err := executeCycleCompleteUseCase(seedStore, context.Background(), workspace.CompleteCycleInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		ReviewDraftID:           "61000000-0000-7000-8000-000000000001",
 		OperationID:             "62000000-0000-7000-8000-000000000001",
@@ -1050,7 +1049,7 @@ func TestBeginGoalRefineReviewStaleDraftUsesReviewRevisionConflict(t *testing.T)
 content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revision=1 WHERE id=$1`, fixture.cycleID); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		ReviewDraftID:           "61000000-0000-7000-8000-000000000001",
 		OperationID:             "62000000-0000-7000-8000-000000000001",

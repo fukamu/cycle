@@ -22,19 +22,12 @@ func TestWorkspaceTransitionCommandsFollowGlobalLockOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertWorkspaceLockCallsInOrder(t, file, "CompleteCycle",
-		"lockUser",
-		"loadGoalForUpdate",
-		"loadCycleForUpdate",
-	)
 	assertWorkspaceLockCallsInOrder(t, file, "Terminate",
 		"lockUser",
 		"loadGoalForUpdate",
 		"loadCycleForUpdate",
 	)
-	assertCompleteReplayChecksSurroundUserLock(t, file)
 	assertTerminateReplayCheckFollowsUserLock(t, file)
-	assertReadCommittedTransaction(t, file, "CompleteCycle")
 	assertReadCommittedTransaction(t, file, "Terminate")
 	assertUserUpdateLockHelper(t, accountFile)
 	assertOwnerScopedGoalLockHelper(t, file)
@@ -147,23 +140,6 @@ func assertOwnerScopedCycleLockHelper(t *testing.T, file *ast.File) {
 	query := workspaceLockQueryLiterals(function)
 	if !strings.Contains(query, "FROM pdca_cycles WHERE id=$1 AND goal_id=$2 AND user_id=$3 FOR UPDATE") {
 		t.Fatalf("loadCycleForUpdate must lock the owner-scoped Cycle row; query literals = %q", query)
-	}
-}
-
-func assertCompleteReplayChecksSurroundUserLock(t *testing.T, file *ast.File) {
-	t.Helper()
-
-	function := findWorkspaceLockFunction(t, file, "CompleteCycle")
-	receipts := directWorkspaceCallPositions(function, "loadCompleteCycleReplayReceipt")
-	userLocks := directWorkspaceCallPositions(function, "lockUser")
-	goalLocks := directWorkspaceCallPositions(function, "loadGoalForUpdate")
-	replays := directWorkspaceCallPositions(function, "buildCompleteCycleReplay")
-	if len(receipts) != 2 || len(userLocks) != 1 || len(goalLocks) != 1 || len(replays) != 1 {
-		t.Fatalf("CompleteCycle receipt/user/goal/replay call counts = %d/%d/%d/%d, want 2/1/1/1",
-			len(receipts), len(userLocks), len(goalLocks), len(replays))
-	}
-	if !(receipts[0] < userLocks[0] && userLocks[0] < receipts[1] && receipts[1] < goalLocks[0] && goalLocks[0] < replays[0]) {
-		t.Fatal("CompleteCycle must classify the receipt before User lock, recheck after User lock, and build replay payload after Goal lock")
 	}
 }
 

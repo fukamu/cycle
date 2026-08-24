@@ -45,14 +45,14 @@ func TestWorkspaceSaveFrameTreatsSamePersistedContentWithStaleRevisionAsNoOp(t *
 	startProgressingGoal(t, store, autosaveTestUserID, fixture, 2, now)
 
 	savedAt := now.Add(time.Minute)
-	saved, err := store.SaveFrame(context.Background(), workspace.SaveFrameInput{
+	saved, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		Frame: cycle.FramePlan, Content: "保存済みPlan", ExpectedFrameRevision: 0, Now: savedAt,
 	})
 	if err != nil || saved.FrameRevision != 1 || saved.ContentRevision != 1 {
 		t.Fatalf("save = %#v, error = %v", saved, err)
 	}
-	replayed, err := store.SaveFrame(context.Background(), workspace.SaveFrameInput{
+	replayed, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		Frame: cycle.FramePlan, Content: saved.Content, ExpectedFrameRevision: 0, Now: now.Add(2 * time.Minute),
 	})
@@ -60,7 +60,7 @@ func TestWorkspaceSaveFrameTreatsSamePersistedContentWithStaleRevisionAsNoOp(t *
 		replayed.ContentRevision != saved.ContentRevision || !replayed.SavedAt.Equal(savedAt) {
 		t.Fatalf("stale same-content save = %#v, error = %v", replayed, err)
 	}
-	persisted, err := store.GetCycle(context.Background(), autosaveTestUserID, fixture.goalID, fixture.cycleID)
+	persisted, err := executeCycleGetUseCase(store, context.Background(), autosaveTestUserID, fixture.goalID, fixture.cycleID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestWorkspaceSaveFrameTreatsSamePersistedContentWithStaleRevisionAsNoOp(t *
 		persisted.ContentRevision != saved.ContentRevision || !persistedUpdatedAt.Equal(savedAt) {
 		t.Fatalf("persisted cycle after stale same-content save = %#v, updatedAt = %s, want content/frameRevision/contentRevision/updatedAt from %#v", persisted, persistedUpdatedAt, saved)
 	}
-	if _, err = store.SaveFrame(context.Background(), workspace.SaveFrameInput{
+	if _, err = executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		Frame: cycle.FramePlan, Content: "異なるPlan", ExpectedFrameRevision: 0, Now: now.Add(2 * time.Minute),
 	}); err != cycle.ErrRevisionConflict {
@@ -85,7 +85,7 @@ func TestWorkspaceSaveReviewTreatsSamePersistedBodyWithStaleRevisionAsNoOp(t *te
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, store, autosaveTestUserID, fixture, 2, now)
 	for _, frame := range []cycle.Frame{cycle.FramePlan, cycle.FrameDo, cycle.FrameCheck, cycle.FrameAction} {
-		if _, err := store.SaveFrame(context.Background(), workspace.SaveFrameInput{
+		if _, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 			UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0, Now: now.Add(time.Minute),
 		}); err != nil {
@@ -96,7 +96,7 @@ func TestWorkspaceSaveReviewTreatsSamePersistedBodyWithStaleRevisionAsNoOp(t *te
 		reviewDraftID = "61000000-0000-7000-8000-000000000010"
 		completeID    = "71000000-0000-7000-8000-000000000010"
 	)
-	completed, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: reviewDraftID,
 		OperationID: completeID, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
 		RequestHash: "m6-autosave-complete", Now: now.Add(2 * time.Minute),
@@ -141,7 +141,7 @@ func TestWorkspaceSaveReviewRejectsSupersededDraftGeneration(t *testing.T) {
 		secondCompleteID    = "71000000-0000-7000-8000-000000000021"
 	)
 
-	firstReview, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+	firstReview, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: firstReviewDraftID,
 		OperationID: firstCompleteID, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
 		RequestHash: "m6-first-complete", Now: now.Add(2 * time.Minute),
@@ -158,7 +158,7 @@ func TestWorkspaceSaveReviewRejectsSupersededDraftGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	saveAllAutosaveFrames(t, store, fixture.goalID, secondCycleID, now.Add(4*time.Minute))
-	secondReview, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+	secondReview, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: secondCycleID, ReviewDraftID: secondReviewDraftID,
 		OperationID: secondCompleteID, ExpectedGoalRevision: continued.Goal.Revision, ExpectedContentRevision: 4,
 		RequestHash: "m6-second-complete", Now: now.Add(5 * time.Minute),
@@ -219,7 +219,7 @@ func TestWorkspaceSaveReviewRejectsSupersededDraftGeneration(t *testing.T) {
 func saveAllAutosaveFrames(t *testing.T, store *WorkspaceStore, goalID, cycleID string, now time.Time) {
 	t.Helper()
 	for _, frame := range []cycle.Frame{cycle.FramePlan, cycle.FrameDo, cycle.FrameCheck, cycle.FrameAction} {
-		if _, err := store.SaveFrame(context.Background(), workspace.SaveFrameInput{
+		if _, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 			UserID: autosaveTestUserID, GoalID: goalID, CycleID: cycleID,
 			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0, Now: now,
 		}); err != nil {
@@ -236,5 +236,5 @@ func newAutosaveTestStore(t *testing.T) (*WorkspaceStore, time.Time) {
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, autosaveTestUserID, now); err != nil {
 		t.Fatal(err)
 	}
-	return NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")}), now
+	return NewWorkspaceStore(pool, WorkspaceStoreSettings{}), now
 }

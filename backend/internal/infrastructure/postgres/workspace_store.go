@@ -2,13 +2,8 @@ package postgres
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,7 +16,6 @@ import (
 )
 
 type WorkspaceStoreSettings struct {
-	CursorSigningKey      []byte
 	Provider              string
 	Model                 string
 	GoalPromptVersion     string
@@ -131,82 +125,12 @@ FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND draft_type='review'`, mustU
 	}
 	trigger, err := getCycleView(ctx, store.pool, userID, goalID, *draft.ReviewCycleID)
 	if err != nil {
-		if errors.Is(err, workspace.ErrNotFound) {
+		if errors.Is(err, workspace.ErrNotFound) || errors.Is(err, workspace.ErrCycleNotFound) {
 			return workspace.ReviewView{}, workspace.ErrGoalReviewInvariant
 		}
 		return workspace.ReviewView{}, err
 	}
 	return workspace.ReviewView{Goal: view, ReviewDraft: draft, TriggerCycle: trigger}, nil
-}
-
-func (store *WorkspaceStore) ListCycles(ctx context.Context, userID, goalID, encodedCursor string, limit int) (workspace.CyclePage, error) {
-	var goalExists bool
-	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM goals WHERE id=$1 AND user_id=$2)`, mustUUID(goalID), mustUUID(userID)).Scan(&goalExists); err != nil {
-		return workspace.CyclePage{}, err
-	}
-	if !goalExists {
-		return workspace.CyclePage{}, workspace.ErrNotFound
-	}
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 50 {
-		limit = 50
-	}
-	cursor, err := store.decodeCursor(encodedCursor, "cycles:"+goalID)
-	if err != nil {
-		return workspace.CyclePage{}, err
-	}
-	sequence := int32(0)
-	if cursor.Sequence != nil {
-		sequence = *cursor.Sequence
-	}
-	var cursorID any
-	if cursor.ID != "" {
-		cursorID = cursor.ID
-	}
-	rows, err := store.pool.Query(ctx, `SELECT c.id,c.sequence_number,c.status,c.started_at,c.completed_at,c.canceled_at,
-gv.id,gv.version_number,gv.body,gv.created_at,
-CASE WHEN char_length(c.plan)>120 THEN left(c.plan,120)||'…' ELSE c.plan END
-FROM pdca_cycles c
-JOIN goal_versions gv ON gv.id=c.goal_version_id AND gv.goal_id=c.goal_id
-WHERE c.user_id=$1 AND c.goal_id=$2
-AND ($3::integer=0 OR (c.sequence_number,c.id)<($3,$4::uuid))
-ORDER BY c.sequence_number DESC,c.id DESC LIMIT $5`, mustUUID(userID), mustUUID(goalID), sequence, cursorID, limit+1)
-	if err != nil {
-		return workspace.CyclePage{}, err
-	}
-	var found []workspace.CycleSummary
-	for rows.Next() {
-		var item workspace.CycleSummary
-		if err = rows.Scan(
-			&item.ID, &item.SequenceNumber, &item.Status, &item.StartedAt, &item.CompletedAt, &item.CanceledAt,
-			&item.GoalVersion.ID, &item.GoalVersion.VersionNumber, &item.GoalVersion.Body, &item.GoalVersion.CreatedAt,
-			&item.PlanPreview,
-		); err != nil {
-			rows.Close()
-			return workspace.CyclePage{}, err
-		}
-		found = append(found, item)
-	}
-	rowErr := rows.Err()
-	rows.Close()
-	if rowErr != nil {
-		return workspace.CyclePage{}, rowErr
-	}
-	page := workspace.CyclePage{Items: []workspace.CycleSummary{}}
-	if len(found) > limit {
-		last := found[limit-1]
-		next := store.encodeCursor(cursorPayload{Scope: "cycles:" + goalID, Sequence: &last.SequenceNumber, ID: last.ID})
-		page.NextCursor = &next
-		found = found[:limit]
-	}
-	page.Items = append(page.Items, found...)
-	return page, nil
-}
-
-func (store *WorkspaceStore) GetCycle(ctx context.Context, userID, goalID, cycleID string) (workspace.CycleView, error) {
-	return getCycleView(ctx, store.pool, userID, goalID, cycleID)
 }
 
 type rowQuerier interface {
@@ -298,22 +222,7 @@ WHERE g.id=$1 AND g.user_id=$2`, mustUUID(goalID), mustUUID(userID)))
 }
 
 func getCycleView(ctx context.Context, query rowQuerier, userID, goalID, cycleID string) (workspace.CycleView, error) {
-	var view workspace.CycleView
-	err := query.QueryRow(ctx, `SELECT c.id,c.goal_id,c.sequence_number,c.status,c.started_at,c.completed_at,c.canceled_at,c.cancellation_reason,
-c.plan,c.do_text,c.check_text,c.action,c.content_revision,c.plan_revision,c.do_revision,c.check_revision,c.action_revision,
-gv.id,gv.version_number,gv.body,gv.created_at
-FROM pdca_cycles c
-JOIN goals g ON g.id=c.goal_id AND g.user_id=c.user_id
-JOIN goal_versions gv ON gv.id=c.goal_version_id AND gv.goal_id=c.goal_id
-WHERE c.id=$1 AND c.goal_id=$2 AND c.user_id=$3`, mustUUID(cycleID), mustUUID(goalID), mustUUID(userID)).Scan(
-		&view.ID, &view.GoalID, &view.SequenceNumber, &view.Status, &view.StartedAt, &view.CompletedAt, &view.CanceledAt, &view.CancellationReason,
-		&view.Plan, &view.Do, &view.Check, &view.Action, &view.ContentRevision,
-		&view.FrameRevisions.Plan, &view.FrameRevisions.Do, &view.FrameRevisions.Check, &view.FrameRevisions.Action,
-		&view.GoalVersion.ID, &view.GoalVersion.VersionNumber, &view.GoalVersion.Body, &view.GoalVersion.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return workspace.CycleView{}, workspace.ErrNotFound
-	}
-	return view, err
+	return queryCycleView(ctx, query, userID, goalID, cycleID)
 }
 
 func scanDraft(row pgx.Row) (workspace.DraftView, error) {
@@ -324,42 +233,6 @@ func scanDraft(row pgx.Row) (workspace.DraftView, error) {
 		return workspace.DraftView{}, workspace.ErrNotFound
 	}
 	return view, err
-}
-
-type cursorPayload struct {
-	Scope    string     `json:"scope"`
-	Category *int16     `json:"category,omitempty"`
-	Time     *time.Time `json:"time,omitempty"`
-	Sequence *int32     `json:"sequence,omitempty"`
-	ID       string     `json:"id,omitempty"`
-}
-
-func (store *WorkspaceStore) encodeCursor(payload cursorPayload) string {
-	body, _ := json.Marshal(payload)
-	mac := hmac.New(sha256.New, store.settings.CursorSigningKey)
-	_, _ = mac.Write(body)
-	return base64.RawURLEncoding.EncodeToString(append(body, mac.Sum(nil)...))
-}
-
-func (store *WorkspaceStore) decodeCursor(encoded, scope string) (cursorPayload, error) {
-	if strings.TrimSpace(encoded) == "" {
-		return cursorPayload{Scope: scope}, nil
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil || len(raw) <= sha256.Size {
-		return cursorPayload{}, workspace.ErrInvalidCursor
-	}
-	body, signature := raw[:len(raw)-sha256.Size], raw[len(raw)-sha256.Size:]
-	mac := hmac.New(sha256.New, store.settings.CursorSigningKey)
-	_, _ = mac.Write(body)
-	if !hmac.Equal(signature, mac.Sum(nil)) {
-		return cursorPayload{}, workspace.ErrInvalidCursor
-	}
-	var payload cursorPayload
-	if json.Unmarshal(body, &payload) != nil || payload.Scope != scope {
-		return cursorPayload{}, workspace.ErrInvalidCursor
-	}
-	return payload, nil
 }
 
 func rollback(ctx context.Context, tx pgx.Tx) { _ = tx.Rollback(ctx) }

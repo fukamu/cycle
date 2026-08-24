@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -75,8 +77,11 @@ func (barrier *completeTerminateLockBarrier) release() {
 
 func isCompletePostCycleLockQuery(sql string) bool {
 	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
-	return strings.Contains(normalized, "select exists(select 1 from ai_generations") &&
-		strings.Contains(normalized, "where cycle_id=$1") &&
+	return strings.Contains(normalized, "select exists(") &&
+		strings.Contains(normalized, "select 1 from ai_generations") &&
+		strings.Contains(normalized, "where user_id=$1") &&
+		strings.Contains(normalized, "goal_id=$2") &&
+		strings.Contains(normalized, "cycle_id=$3") &&
 		strings.Contains(normalized, "status='running'")
 }
 
@@ -110,33 +115,47 @@ type completeReplayAttemptTraceState struct {
 	lookupStarts   atomic.Uint32
 	initialPID     atomic.Uint32
 	postLockLookup chan completeReplayLookupObservation
+	leader         bool
 }
 
 type completeReplayBarrier struct {
 	initialLookupsDone   chan struct{}
 	releaseInitialLookup chan struct{}
+	releaseFollower      chan struct{}
 	traceErrors          chan error
 	initialLookupEnds    atomic.Uint32
 	releaseOnce          sync.Once
+	releaseFollowerOnce  sync.Once
 }
 
 func newCompleteReplayBarrier() *completeReplayBarrier {
 	return &completeReplayBarrier{
 		initialLookupsDone:   make(chan struct{}),
 		releaseInitialLookup: make(chan struct{}),
+		releaseFollower:      make(chan struct{}),
 		traceErrors:          make(chan error, 2),
 	}
 }
 
-func newCompleteReplayAttemptTraceState() *completeReplayAttemptTraceState {
+func newCompleteReplayAttemptTraceState(leader bool) *completeReplayAttemptTraceState {
 	return &completeReplayAttemptTraceState{
 		postLockLookup: make(chan completeReplayLookupObservation, 1),
+		leader:         leader,
 	}
 }
 
 func (barrier *completeReplayBarrier) TraceQueryStart(ctx context.Context, connection *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	state, ok := ctx.Value(completeReplayAttemptContextKey{}).(*completeReplayAttemptTraceState)
-	if !ok || !isCompleteReplayLookupQuery(data.SQL) {
+	if !ok {
+		return ctx
+	}
+	if isUserLockQuery(data.SQL) && !state.leader {
+		select {
+		case <-barrier.releaseFollower:
+		case <-ctx.Done():
+		}
+	}
+	if !isCompleteReplayLookupQuery(data.SQL) {
 		return ctx
 	}
 	ordinal := state.lookupStarts.Add(1)
@@ -147,6 +166,9 @@ func (barrier *completeReplayBarrier) TraceQueryStart(ctx context.Context, conne
 	pid := connection.PgConn().PID()
 	if ordinal == 1 {
 		state.initialPID.Store(pid)
+	}
+	if ordinal == 2 && state.leader {
+		barrier.releaseFollowerOnce.Do(func() { close(barrier.releaseFollower) })
 	}
 	return context.WithValue(ctx, completeReplayLookupContextKey{}, completeReplayLookupTrace{
 		state: state, ordinal: ordinal, pid: pid,
@@ -197,6 +219,23 @@ func isCompleteReplayLookupQuery(sql string) bool {
 		strings.Contains(normalized, "where user_id=$1 and completion_operation_id=$2")
 }
 
+func completeCycleCanonicalHashForTest(t *testing.T, input workspace.CompleteCycleInput) string {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		GoalID          string `json:"goalId"`
+		CycleID         string `json:"cycleId"`
+		GoalRevision    int64  `json:"goalRevision"`
+		ContentRevision int64  `json:"contentRevision"`
+	}{
+		GoalID: input.GoalID, CycleID: input.CycleID,
+		GoalRevision: input.ExpectedGoalRevision, ContentRevision: input.ExpectedContentRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(body))
+}
+
 type concurrentCompleteCycleCall struct {
 	input  workspace.CompleteCycleInput
 	result workspace.CompleteCycleResult
@@ -212,7 +251,7 @@ func TestWorkspaceStoreCompleteCycleAndTerminateUseGoalBeforeCycleLockOrder(t *t
 		t.Fatal(err)
 	}
 
-	settings := WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")}
+	settings := WorkspaceStoreSettings{}
 	seedStore := NewWorkspaceStore(pool, settings)
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, seedStore, userID, fixture, 2, now)
@@ -259,7 +298,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	completeCalls := make(chan completeCycleCall, 1)
 	completeCtx := context.WithValue(ctx, lockOrderCommandContextKey{}, lockOrderComplete)
 	go func() {
-		result, callErr := store.CompleteCycle(completeCtx, completeInput)
+		result, callErr := executeCycleCompleteUseCase(store, completeCtx, completeInput)
 		completeCalls <- completeCycleCall{result: result, err: callErr}
 	}()
 
@@ -311,7 +350,8 @@ func TestWorkspaceStoreConcurrentCompleteCyclePreservesUserScopedReplayContract(
 	tests := []struct {
 		name           string
 		fixtureIndexes [2]int
-		requestHashes  [2]string
+		callerHashes   [2]string
+		contentOffsets [2]int64
 		wantSuccesses  int
 		wantFresh      int
 		wantReplayed   int
@@ -320,19 +360,20 @@ func TestWorkspaceStoreConcurrentCompleteCyclePreservesUserScopedReplayContract(
 		{
 			name:           "same request on the same Goal",
 			fixtureIndexes: [2]int{0, 0},
-			requestHashes:  [2]string{"same-complete-hash", "same-complete-hash"},
+			callerHashes:   [2]string{"same-complete-hash", "same-complete-hash"},
 			wantSuccesses:  2, wantFresh: 1, wantReplayed: 1,
 		},
 		{
-			name:           "different request on the same Goal",
+			name:           "different canonical request on the same Goal",
 			fixtureIndexes: [2]int{0, 0},
-			requestHashes:  [2]string{"first-complete-hash", "second-complete-hash"},
+			callerHashes:   [2]string{"ignored-first-hash", "ignored-second-hash"},
+			contentOffsets: [2]int64{0, 1},
 			wantSuccesses:  1, wantFresh: 1, wantKeyReuse: 1,
 		},
 		{
 			name:           "same operation on different Goals",
 			fixtureIndexes: [2]int{0, 1},
-			requestHashes:  [2]string{"first-goal-complete-hash", "second-goal-complete-hash"},
+			callerHashes:   [2]string{"first-goal-complete-hash", "second-goal-complete-hash"},
 			wantSuccesses:  1, wantFresh: 1, wantKeyReuse: 1,
 		},
 	}
@@ -350,7 +391,7 @@ func TestWorkspaceStoreConcurrentCompleteCyclePreservesUserScopedReplayContract(
 				t.Fatal(err)
 			}
 
-			settings := WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")}
+			settings := WorkspaceStoreSettings{}
 			seedStore := NewWorkspaceStore(pool, settings)
 			fixtures := progressingGoalFixtures()
 			startedByFixture := make(map[int]workspace.StartGoalResult)
@@ -405,8 +446,8 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 					ReviewDraftID:           reviewDraftIDs[attempt],
 					OperationID:             operationID,
 					ExpectedGoalRevision:    started.Goal.Revision,
-					ExpectedContentRevision: 4,
-					RequestHash:             test.requestHashes[attempt],
+					ExpectedContentRevision: 4 + test.contentOffsets[attempt],
+					RequestHash:             test.callerHashes[attempt],
 					Now:                     now.Add(time.Duration(attempt+10) * time.Minute),
 				}
 			}
@@ -416,11 +457,11 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 			attemptStates := make([]*completeReplayAttemptTraceState, len(inputs))
 			for attempt := range inputs {
 				input := inputs[attempt]
-				state := newCompleteReplayAttemptTraceState()
+				state := newCompleteReplayAttemptTraceState(attempt == 0)
 				attemptStates[attempt] = state
 				attemptCtx := context.WithValue(ctx, completeReplayAttemptContextKey{}, state)
 				go func() {
-					result, callErr := store.CompleteCycle(attemptCtx, input)
+					result, callErr := executeCycleCompleteUseCase(store, attemptCtx, input)
 					calls <- concurrentCompleteCycleCall{input: input, result: result, err: callErr}
 				}()
 			}
@@ -534,10 +575,11 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 WHERE user_id=$1 AND completion_operation_id=$2`, userID, operationID).Scan(&storedGoalID, &storedCycleID, &storedHash); err != nil {
 				t.Fatal(err)
 			}
-			if storedGoalID != freshCall.input.GoalID || storedCycleID != freshCall.input.CycleID || storedHash != freshCall.input.RequestHash {
-				t.Fatalf("stored completion = %s/%s/%s, fresh call = %s/%s/%s",
+			expectedHash := completeCycleCanonicalHashForTest(t, freshCall.input)
+			if storedGoalID != freshCall.input.GoalID || storedCycleID != freshCall.input.CycleID || storedHash != expectedHash {
+				t.Fatalf("stored completion = %s/%s/%s, fresh call target/hash = %s/%s/%s",
 					storedGoalID, storedCycleID, storedHash,
-					freshCall.input.GoalID, freshCall.input.CycleID, freshCall.input.RequestHash)
+					freshCall.input.GoalID, freshCall.input.CycleID, expectedHash)
 			}
 			var completedCycles, reviewGoals, reviewDrafts int
 			if err = pool.QueryRow(ctx, `SELECT
@@ -566,7 +608,7 @@ func TestWorkspaceStoreTerminatePreservesUserScopedReplayContract(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	settings := WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")}
+	settings := WorkspaceStoreSettings{}
 	store := NewWorkspaceStore(pool, settings)
 	fixtures := progressingGoalFixtures()
 	first := startProgressingGoal(t, store, userID, fixtures[0], 2, now)

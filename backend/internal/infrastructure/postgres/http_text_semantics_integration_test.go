@@ -19,8 +19,8 @@ func TestWorkspaceHTTPTextSemanticsUseCodePointsAndNormalizeNewlines(t *testing.
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	now := integrationNow()
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	service := workspace.NewService(store, store, store, store, &contractRejectProvider{}, contractIntegrationClock{now: now}, system.RandomGenerator{}, workspace.Settings{
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	service := workspace.NewService(store, store, store, store, store, store, &contractRejectProvider{}, contractIntegrationClock{now: now}, system.RandomGenerator{}, workspace.Settings{
 		MaxProgressingGoals: 2,
 		CursorSigningKey:    []byte("test-cursor-key"),
 		MaxProviderAttempts: 1,
@@ -120,7 +120,7 @@ func TestWorkspaceHTTPTextSemanticsUseCodePointsAndNormalizeNewlines(t *testing.
 	assertPersistedTextSemanticsValue(t, pool, `SELECT plan FROM pdca_cycles WHERE id=$1`, fixture.cycleID, normalizedFrame)
 
 	for _, frame := range []cycle.Frame{cycle.FrameDo, cycle.FrameCheck, cycle.FrameAction} {
-		if _, err := store.SaveFrame(context.Background(), workspace.SaveFrameInput{
+		if _, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 			UserID: client.userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0, Now: now.Add(2 * time.Minute),
 		}); err != nil {
@@ -131,7 +131,7 @@ func TestWorkspaceHTTPTextSemanticsUseCodePointsAndNormalizeNewlines(t *testing.
 		reviewDraftID = "61000000-0000-7000-8000-000000000071"
 		completeID    = "71000000-0000-7000-8000-000000000071"
 	)
-	completed, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
+	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: client.userID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: reviewDraftID,
 		OperationID: completeID, ExpectedGoalRevision: started.Goal.Revision,
 		ExpectedContentRevision: normalizedFrameResult.ContentRevision + 3,

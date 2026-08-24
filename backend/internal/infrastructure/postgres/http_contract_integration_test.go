@@ -137,14 +137,14 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 		t.Fatal(err)
 	}
 
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	fixtures := progressingGoalFixtures()
 	active := startProgressingGoal(t, store, ownerID, fixtures[0], 2, now)
 	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), ownerID, fixtures[1].draftID, "所有者だけの下書き", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	provider := &contractRejectProvider{}
-	service := workspace.NewService(store, store, store, store, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
+	service := workspace.NewService(store, store, store, store, store, store, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
 		MaxProgressingGoals: 2,
 		CursorSigningKey:    []byte("test-cursor-key"),
 		MaxProviderAttempts: 1,
@@ -160,7 +160,7 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeCycle, err := store.GetCycle(context.Background(), ownerID, fixtures[0].goalID, fixtures[0].cycleID)
+	beforeCycle, err := executeCycleGetUseCase(store, context.Background(), ownerID, fixtures[0].goalID, fixtures[0].cycleID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,11 +208,11 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 		{"terminate goal", http.MethodPost, "/api/v1/goals/" + fixtures[0].goalID + "/termination", fmt.Sprintf(`{"operationId":%q,"outcome":"ended","expectedGoalRevision":0,"expectedState":"active_cycle","activeCycleId":%q,"expectedCycleContentRevision":0}`, newOperation(), fixtures[0].cycleID), "", "GOAL_NOT_FOUND"},
 		{"delete goal", http.MethodDelete, "/api/v1/goals/" + fixtures[0].goalID, `{"confirmed":true,"expectedGoalRevision":0}`, newOperation(), "GOAL_NOT_FOUND"},
 		{"list cycles", http.MethodGet, "/api/v1/goals/" + fixtures[0].goalID + "/cycles", "", "", "GOAL_NOT_FOUND"},
-		{"get cycle", http.MethodGet, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[0].cycleID, "", "", "CYCLE_NOT_FOUND"},
-		{"save frame", http.MethodPatch, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[0].cycleID + "/frames/plan", `{"content":"外部更新","expectedFrameRevision":0}`, "", "CYCLE_NOT_FOUND"},
+		{"get cycle", http.MethodGet, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[0].cycleID, "", "", "GOAL_NOT_FOUND"},
+		{"save frame", http.MethodPatch, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[0].cycleID + "/frames/plan", `{"content":"外部更新","expectedFrameRevision":0}`, "", "GOAL_NOT_FOUND"},
 		{"generate action", http.MethodPost, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[0].cycleID + "/actions/generate", `{"expectedContentRevision":0,"confirmReplace":false}`, newOperation(), "CYCLE_NOT_FOUND"},
 		{"refine action", http.MethodPost, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[0].cycleID + "/actions/refine", `{"expectedContentRevision":0}`, newOperation(), "CYCLE_NOT_FOUND"},
-		{"complete cycle", http.MethodPost, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[0].cycleID + "/complete", fmt.Sprintf(`{"operationId":%q,"expectedGoalRevision":0,"expectedContentRevision":0}`, newOperation()), "", "CYCLE_NOT_FOUND"},
+		{"complete cycle", http.MethodPost, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[0].cycleID + "/complete", fmt.Sprintf(`{"operationId":%q,"expectedGoalRevision":0,"expectedContentRevision":0}`, newOperation()), "", "GOAL_NOT_FOUND"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -239,7 +239,7 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterCycle, err := store.GetCycle(context.Background(), ownerID, fixtures[0].goalID, fixtures[0].cycleID)
+	afterCycle, err := executeCycleGetUseCase(store, context.Background(), ownerID, fixtures[0].goalID, fixtures[0].cycleID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,6 +253,101 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 	}
 	if active.Goal.ID != fixtures[0].goalID || active.Cycle.ID != fixtures[0].cycleID {
 		t.Fatalf("fixture changed unexpectedly: %#v", active)
+	}
+}
+
+func TestWorkspaceHTTPCycleHierarchyReturnsCycleNotFoundForOwnedGoalMismatch(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
+	provider := &contractRejectProvider{}
+	service := workspace.NewService(store, store, store, store, store, store, provider,
+		contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
+			MaxProgressingGoals: 2,
+			CursorSigningKey:    []byte("test-cursor-key"),
+			MaxProviderAttempts: 1,
+		})
+	router := newContractIntegrationRouter(pool, service)
+	owner := bootstrapContractClient(t, router, "0198c20b-7b95-7000-8000-000000000004")
+	fixtures := progressingGoalFixtures()
+	first := startProgressingGoal(t, store, owner.userID, fixtures[0], 2, now)
+	_ = startProgressingGoal(t, store, owner.userID, fixtures[1], 2, now.Add(time.Minute))
+	beforeCounts := readOwnerWorkspaceCounts(t, pool, owner.userID)
+	beforeFirstGoal, err := executeGoalGetUseCase(store, context.Background(), owner.userID, fixtures[0].goalID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeSecondGoal, err := executeGoalGetUseCase(store, context.Background(), owner.userID, fixtures[1].goalID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeFirstCycle, err := executeCycleGetUseCase(store, context.Background(), owner.userID, fixtures[0].goalID, fixtures[0].cycleID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeSecondCycle, err := executeCycleGetUseCase(store, context.Background(), owner.userID, fixtures[1].goalID, fixtures[1].cycleID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	operationID, err := (system.RandomGenerator{}).NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"get cycle", http.MethodGet, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[1].cycleID, ""},
+		{"save frame", http.MethodPatch, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[1].cycleID + "/frames/plan", `{"content":"外部更新","expectedFrameRevision":0}`},
+		{"complete cycle with stale Goal revision", http.MethodPost, "/api/v1/goals/" + fixtures[0].goalID + "/cycles/" + fixtures[1].cycleID + "/complete", fmt.Sprintf(`{"operationId":%q,"expectedGoalRevision":%d,"expectedContentRevision":0}`, operationID, first.Goal.Revision+1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := performContractAuthorized(router, owner, test.method, test.path, test.body, "")
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+			var envelope struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || envelope.Error.Code != "CYCLE_NOT_FOUND" {
+				t.Fatalf("error envelope = %#v, decode error = %v", envelope, err)
+			}
+		})
+	}
+	if afterCounts := readOwnerWorkspaceCounts(t, pool, owner.userID); afterCounts != beforeCounts {
+		t.Fatalf("owner state changed: before=%#v after=%#v", beforeCounts, afterCounts)
+	}
+	afterFirstGoal, err := executeGoalGetUseCase(store, context.Background(), owner.userID, fixtures[0].goalID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterSecondGoal, err := executeGoalGetUseCase(store, context.Background(), owner.userID, fixtures[1].goalID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterFirstCycle, err := executeCycleGetUseCase(store, context.Background(), owner.userID, fixtures[0].goalID, fixtures[0].cycleID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterSecondCycle, err := executeCycleGetUseCase(store, context.Background(), owner.userID, fixtures[1].goalID, fixtures[1].cycleID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(beforeFirstGoal, afterFirstGoal) || !reflect.DeepEqual(beforeSecondGoal, afterSecondGoal) ||
+		!reflect.DeepEqual(beforeFirstCycle, afterFirstCycle) || !reflect.DeepEqual(beforeSecondCycle, afterSecondCycle) {
+		t.Fatalf("owned Goal/Cycle mismatch changed state\nbefore: %#v / %#v / %#v / %#v\nafter: %#v / %#v / %#v / %#v",
+			beforeFirstGoal, beforeSecondGoal, beforeFirstCycle, beforeSecondCycle,
+			afterFirstGoal, afterSecondGoal, afterFirstCycle, afterSecondCycle)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider calls = %d", provider.calls)
 	}
 }
 

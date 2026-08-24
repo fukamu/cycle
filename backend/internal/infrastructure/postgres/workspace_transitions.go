@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -13,69 +12,6 @@ import (
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
-
-func (store *WorkspaceStore) SaveFrame(ctx context.Context, input workspace.SaveFrameInput) (result workspace.SaveFrameResult, err error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return result, err
-	}
-	defer rollback(ctx, tx)
-	var goalStatus goal.Status
-	if err = tx.QueryRow(ctx, `SELECT status FROM goals WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(input.GoalID), mustUUID(input.UserID)).Scan(&goalStatus); errors.Is(err, pgx.ErrNoRows) {
-		return result, workspace.ErrNotFound
-	} else if err != nil {
-		return result, err
-	}
-	if goalStatus != goal.StatusActiveCycle {
-		return result, workspace.ErrGoalStateConflict
-	}
-	current, err := loadCycleForUpdate(ctx, tx, input.UserID, input.GoalID, input.CycleID)
-	if err != nil {
-		return result, err
-	}
-	var aiRunning bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ai_generations WHERE cycle_id=$1 AND status='running')`, mustUUID(input.CycleID)).Scan(&aiRunning); err != nil {
-		return result, err
-	}
-	saved, err := cycle.SaveFrame(current, input.Frame, input.Content, input.ExpectedFrameRevision, aiRunning, input.Now)
-	if err != nil {
-		return result, err
-	}
-	if !saved.NoOp {
-		column, revisionColumn := "", ""
-		switch input.Frame {
-		case cycle.FramePlan:
-			column, revisionColumn = "plan", "plan_revision"
-		case cycle.FrameDo:
-			column, revisionColumn = "do_text", "do_revision"
-		case cycle.FrameCheck:
-			column, revisionColumn = "check_text", "check_revision"
-		case cycle.FrameAction:
-			column, revisionColumn = "action", "action_revision"
-		default:
-			return result, cycle.ErrInvalidFrame
-		}
-		query := fmt.Sprintf(`UPDATE pdca_cycles SET %s=$2,%s=%s+1,content_revision=content_revision+1,
-action_user_modified_after_ai=CASE WHEN $3='action' AND action_last_ai_applied_content_revision IS NOT NULL THEN true ELSE action_user_modified_after_ai END,
-updated_at=$4 WHERE id=$1`, column, revisionColumn, revisionColumn)
-		if _, err = tx.Exec(ctx, query, mustUUID(input.CycleID), saved.Content, string(input.Frame), input.Now); err != nil {
-			return result, err
-		}
-	}
-	updated, err := getCycleView(ctx, tx, input.UserID, input.GoalID, input.CycleID)
-	if err != nil {
-		return result, err
-	}
-	result = workspace.SaveFrameResult{
-		CycleID: updated.ID, Frame: input.Frame, Content: updatedFrame(updated, input.Frame),
-		FrameRevision: updatedRevision(updated, input.Frame), ContentRevision: updated.ContentRevision, SavedAt: input.Now,
-	}
-	if saved.NoOp {
-		result.SavedAt = current.UpdatedAt
-	}
-	err = tx.Commit(ctx)
-	return result, err
-}
 
 type lockedGoalState struct {
 	status   goal.Status
@@ -98,53 +34,6 @@ WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(goalID), mustUUID(userID)).Scan
 	return current, nil
 }
 
-type completeCycleReplayReceipt struct {
-	goalID  string
-	cycleID string
-}
-
-func loadCompleteCycleReplayReceipt(ctx context.Context, tx pgx.Tx, input workspace.CompleteCycleInput) (receipt completeCycleReplayReceipt, found bool, err error) {
-	var replayGoalID, replayCycleID, replayHash string
-	err = tx.QueryRow(ctx, `SELECT goal_id,id,completion_request_hash FROM pdca_cycles
-WHERE user_id=$1 AND completion_operation_id=$2`, mustUUID(input.UserID), mustUUID(input.OperationID)).Scan(&replayGoalID, &replayCycleID, &replayHash)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return receipt, false, nil
-	}
-	if err != nil {
-		return receipt, false, err
-	}
-	if replayGoalID != input.GoalID || replayCycleID != input.CycleID || replayHash != input.RequestHash {
-		return receipt, true, workspace.ErrIdempotencyKeyReused
-	}
-	return completeCycleReplayReceipt{goalID: replayGoalID, cycleID: replayCycleID}, true, nil
-}
-
-func buildCompleteCycleReplay(ctx context.Context, tx pgx.Tx, input workspace.CompleteCycleInput, receipt completeCycleReplayReceipt) (result workspace.CompleteCycleResult, err error) {
-	result.Goal, err = getGoalView(ctx, tx, input.UserID, receipt.goalID)
-	if err != nil {
-		return result, err
-	}
-	result.CompletedCycle, err = getCycleView(ctx, tx, input.UserID, receipt.goalID, receipt.cycleID)
-	if err != nil {
-		return result, err
-	}
-	result.ReviewDraft, err = scanDraft(tx.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
-FROM goal_drafts WHERE user_id=$1 AND goal_id=$2 AND review_cycle_id=$3 AND draft_type='review'`, mustUUID(input.UserID), mustUUID(receipt.goalID), mustUUID(receipt.cycleID)))
-	if err != nil {
-		if errors.Is(err, workspace.ErrNotFound) {
-			result.Replay = &workspace.CommandReplayResponse{
-				Replayed: true, Operation: "complete_cycle",
-				ResourceIDs:      workspace.CommandReplayResourceIDs{GoalID: receipt.goalID, CycleID: receipt.cycleID},
-				CurrentGoalState: result.Goal.Status, CurrentWorkspace: result.Goal.CurrentWork,
-			}
-			return result, nil
-		}
-		return result, err
-	}
-	result.Replayed = true
-	return result, nil
-}
-
 func loadTerminateReplay(ctx context.Context, tx pgx.Tx, input workspace.TerminateInput) (result workspace.TerminateResult, found bool, err error) {
 	var replayGoalID, replayHash string
 	err = tx.QueryRow(ctx, `SELECT id,terminal_request_hash FROM goals
@@ -164,93 +53,6 @@ WHERE user_id=$1 AND terminal_operation_id=$2`, mustUUID(input.UserID), mustUUID
 	}
 	result.Replayed = true
 	return result, true, nil
-}
-
-func (store *WorkspaceStore) CompleteCycle(ctx context.Context, input workspace.CompleteCycleInput) (result workspace.CompleteCycleResult, err error) {
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return result, err
-	}
-	defer rollback(ctx, tx)
-	if _, _, err = loadCompleteCycleReplayReceipt(ctx, tx, input); err != nil {
-		return result, err
-	}
-	if err = lockUser(ctx, tx, user.ID(input.UserID)); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return result, workspace.ErrNotFound
-		}
-		return result, err
-	}
-	receipt, replayed, err := loadCompleteCycleReplayReceipt(ctx, tx, input)
-	if err != nil {
-		return result, err
-	}
-	lockedGoal, err := loadGoalForUpdate(ctx, tx, input.UserID, input.GoalID)
-	if err != nil {
-		return result, err
-	}
-	if replayed {
-		result, err = buildCompleteCycleReplay(ctx, tx, input, receipt)
-		if err != nil {
-			return result, err
-		}
-		return result, tx.Commit(ctx)
-	}
-	goalView, err := getGoalView(ctx, tx, input.UserID, input.GoalID)
-	if err != nil {
-		return result, err
-	}
-	if lockedGoal.status != goal.StatusActiveCycle || lockedGoal.revision != input.ExpectedGoalRevision {
-		return result, workspace.ErrGoalStateConflict
-	}
-	current, err := loadCycleForUpdate(ctx, tx, input.UserID, input.GoalID, input.CycleID)
-	if err != nil {
-		return result, err
-	}
-	if current.CompletionOperationID != nil {
-		if *current.CompletionOperationID != input.OperationID || current.CompletionRequestHash == nil || *current.CompletionRequestHash != input.RequestHash {
-			return result, workspace.ErrIdempotencyKeyReused
-		}
-	}
-	var aiRunning bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ai_generations WHERE cycle_id=$1 AND status='running')`, mustUUID(input.CycleID)).Scan(&aiRunning); err != nil {
-		return result, err
-	}
-	completed, err := cycle.Complete(current, input.OperationID, input.RequestHash, input.ExpectedContentRevision, aiRunning, input.Now)
-	if err != nil {
-		return result, err
-	}
-	_, err = tx.Exec(ctx, `UPDATE pdca_cycles SET status='completed',completed_at=$2,completion_operation_id=$3,
-completion_request_hash=$4,updated_at=$2 WHERE id=$1`, mustUUID(input.CycleID), input.Now, mustUUID(input.OperationID), input.RequestHash)
-	if err != nil {
-		return result, err
-	}
-	_, err = tx.Exec(ctx, `INSERT INTO goal_drafts
-(id,user_id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,created_at,updated_at)
-VALUES($1,$2,'review',$3,$4,$5,$6,0,$7,$7)`, mustUUID(input.ReviewDraftID), mustUUID(input.UserID), mustUUID(input.GoalID), mustUUID(current.GoalVersionID), mustUUID(input.CycleID), goalView.CurrentVersion.Body, input.Now)
-	if err != nil {
-		return result, err
-	}
-	_, err = tx.Exec(ctx, `UPDATE goals SET status='goal_review',revision=revision+1,updated_at=$2
-WHERE id=$1`, mustUUID(input.GoalID), input.Now)
-	if err != nil {
-		return result, err
-	}
-	_ = completed
-	result.CompletedCycle, err = getCycleView(ctx, tx, input.UserID, input.GoalID, input.CycleID)
-	if err != nil {
-		return result, err
-	}
-	result.Goal, err = getGoalView(ctx, tx, input.UserID, input.GoalID)
-	if err != nil {
-		return result, err
-	}
-	result.ReviewDraft, err = scanDraft(tx.QueryRow(ctx, `SELECT id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at FROM goal_drafts WHERE id=$1`, mustUUID(input.ReviewDraftID)))
-	if err != nil {
-		return result, err
-	}
-	err = tx.Commit(ctx)
-	return result, err
 }
 
 func (store *WorkspaceStore) ContinueReview(ctx context.Context, input workspace.ContinueReviewInput) (result workspace.ContinueReviewResult, err error) {
@@ -483,36 +285,6 @@ FROM pdca_cycles WHERE id=$1 AND goal_id=$2 AND user_id=$3 FOR UPDATE`, mustUUID
 		return cycle.PDCACycle{}, workspace.ErrNotFound
 	}
 	return current, err
-}
-
-func updatedFrame(view workspace.CycleView, frame cycle.Frame) string {
-	switch frame {
-	case cycle.FramePlan:
-		return view.Plan
-	case cycle.FrameDo:
-		return view.Do
-	case cycle.FrameCheck:
-		return view.Check
-	case cycle.FrameAction:
-		return view.Action
-	default:
-		return ""
-	}
-}
-
-func updatedRevision(view workspace.CycleView, frame cycle.Frame) int64 {
-	switch frame {
-	case cycle.FramePlan:
-		return view.FrameRevisions.Plan
-	case cycle.FrameDo:
-		return view.FrameRevisions.Do
-	case cycle.FrameCheck:
-		return view.FrameRevisions.Check
-	case cycle.FrameAction:
-		return view.FrameRevisions.Action
-	default:
-		return -1
-	}
 }
 
 func normalizeNewlines(value string) string {
