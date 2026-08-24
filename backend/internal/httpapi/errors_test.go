@@ -161,6 +161,7 @@ func TestClassifyErrorMatchesPublicStatusCodeMatrix(t *testing.T) {
 		{"AI budget", workspace.ErrAIBudget, 503, "AI_SERVICE_BUDGET_EXCEEDED"},
 		{"AI invalid response", workspace.ErrAIInvalidResponse, 502, "AI_INVALID_RESPONSE"},
 		{"AI timeout", workspace.ErrAIProviderTimeout, 504, "AI_PROVIDER_TIMEOUT"},
+		{"AI rejected", workspace.ErrAIProviderRejected, 503, "AI_PROVIDER_UNAVAILABLE"},
 		{"AI unavailable", workspace.ErrAIProviderUnavailable, 503, "AI_PROVIDER_UNAVAILABLE"},
 		{"idempotency reuse", workspace.ErrIdempotencyKeyReused, 409, "IDEMPOTENCY_KEY_REUSED"},
 		{"invalid cursor", workspace.ErrInvalidCursor, 400, "INVALID_CURSOR"},

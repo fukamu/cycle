@@ -27,7 +27,7 @@ test("deployment contract is the exact repository handoff classification", () =>
   assert.equal(contract.version, 1);
   assert.equal(backend.fixed.length, 5);
   assert.deepEqual(backend.omitted, ["STATIC_DIR"]);
-  assert.equal(backend.githubVariables.length, 34);
+  assert.equal(backend.githubVariables.length, 35);
   assert.deepEqual(backend.derived, { AI_PRICING_MODEL: "AI_MODEL" });
   assert.equal(backend.secrets.length, 8);
 
@@ -256,6 +256,20 @@ test("current workflow rejects whitespace-only required input", () => {
     result.status,
     0,
     "Validate required deployment inputs accepted whitespace-only AI_MODEL",
+  );
+});
+
+test("current workflow rejects whitespace-only reasoning effort", () => {
+  const result = runWorkflowValidation({ AI_REASONING_EFFORT: " \t " });
+  assert.equal(
+    result.error,
+    undefined,
+    "workflow validator command did not run",
+  );
+  assert.notEqual(
+    result.status,
+    0,
+    "Validate required deployment inputs accepted whitespace-only AI_REASONING_EFFORT",
   );
 });
 

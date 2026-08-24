@@ -182,6 +182,7 @@ OpenAI:
 - Staging専用keyをGitHub secret `OPENAI_API_KEY`へ登録する。
 - Provider側spend/rate limitとApplication budgetを両方設定する。
 - `AI_MODEL`と`AI_PRICING_MODEL`はworkflowが同じ値に揃える。Deploy日の公式token単価を確認してGitHub variablesへ設定する。
+- `AI_REASONING_EFFORT`の初期値は`medium`とし、GPT-5.6の`none` / `low` / `medium` / `high` / `xhigh` / `max`だけを許可する。変更時は§49の評価を通し、ProductionではGitHub variableへ明示してからdeployする。
 
 ## 6. Cloudflare application deploy token
 
@@ -221,6 +222,7 @@ SESSION_ACTIVITY_TOUCH_MINUTES
 ANONYMOUS_BOOTSTRAP_TTL_MINUTES
 MAX_PROGRESSING_GOALS
 AI_MODEL
+AI_REASONING_EFFORT
 AI_MAX_INPUT_TOKENS
 AI_GOAL_REFINE_MAX_OUTPUT_TOKENS
 AI_ACTION_MAX_OUTPUT_TOKENS

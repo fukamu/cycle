@@ -85,7 +85,7 @@ func main() {
 	var goalRefiner workspace.GoalRefiner = aiprovider.Fake{}
 	var actionGenerator workspace.ActionGenerator = aiprovider.Fake{}
 	if settings.AI.APIKey != "" {
-		provider := aiprovider.NewOpenAI(settings.AI.APIKey, settings.AI.Model, settings.AI.Timeout, settings.AI.ActionMaxOutputTokens,
+		provider := aiprovider.NewOpenAI(settings.AI.APIKey, settings.AI.Model, settings.AI.ReasoningEffort, settings.AI.Timeout, settings.AI.ActionMaxOutputTokens,
 			settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
 		goalRefiner = provider
 		actionGenerator = provider

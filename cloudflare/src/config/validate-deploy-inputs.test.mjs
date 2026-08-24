@@ -35,6 +35,10 @@ test("deployment validator trims required inputs for presence", () => {
     validateDeploymentInputs(validEnvironment({ AI_MODEL: " \t " })),
     [{ code: "MISSING_REQUIRED_INPUT", key: "AI_MODEL" }],
   );
+  assert.deepEqual(
+    validateDeploymentInputs(validEnvironment({ AI_REASONING_EFFORT: " \t " })),
+    [{ code: "MISSING_REQUIRED_INPUT", key: "AI_REASONING_EFFORT" }],
+  );
 });
 
 test("deployment validator derives every required input from the contract", () => {

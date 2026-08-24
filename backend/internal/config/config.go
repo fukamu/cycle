@@ -59,6 +59,7 @@ type AIConfig struct {
 	APIKey                    string
 	Provider                  string
 	Model                     string
+	ReasoningEffort           string
 	MaxInputTokens            int
 	GoalRefineMaxOutputTokens int
 	ActionMaxOutputTokens     int
@@ -138,6 +139,7 @@ func Load(lookup LookupEnv) (Config, error) {
 			APIKey:                    reader.stringValue("OPENAI_API_KEY", ""),
 			Provider:                  reader.stringValue("AI_PROVIDER", "openai"),
 			Model:                     reader.stringValue("AI_MODEL", "gpt-5.6-luna"),
+			ReasoningEffort:           reader.stringValue("AI_REASONING_EFFORT", "medium"),
 			MaxInputTokens:            reader.intValue("AI_MAX_INPUT_TOKENS", 12000),
 			GoalRefineMaxOutputTokens: reader.intValue("AI_GOAL_REFINE_MAX_OUTPUT_TOKENS", 400),
 			ActionMaxOutputTokens:     reader.intValue("AI_ACTION_MAX_OUTPUT_TOKENS", 800),
@@ -224,6 +226,9 @@ func (config Config) Validate() error {
 	}
 	if config.AI.Provider != "openai" {
 		problems = append(problems, "AI_PROVIDER must be openai")
+	}
+	if !isGPT56ReasoningEffort(config.AI.ReasoningEffort) {
+		problems = append(problems, "AI_REASONING_EFFORT must be none, low, medium, high, xhigh, or max")
 	}
 	if config.AI.Model == "" || config.AI.MaxInputTokens <= 0 || config.AI.GoalRefineMaxOutputTokens <= 0 || config.AI.ActionMaxOutputTokens <= 0 || config.AI.MaxContextCycles < 1 || config.AI.MaxContextCycles > 10 || config.AI.Timeout <= 0 {
 		problems = append(problems, "AI model, token budgets, context cycle limit (1..10), and timeout are invalid")
@@ -411,6 +416,15 @@ func (reader *envReader) addError(key string, err error) {
 
 func isFinite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func isGPT56ReasoningEffort(value string) bool {
+	switch value {
+	case "none", "low", "medium", "high", "xhigh", "max":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseURL(raw string) (*url.URL, error) {

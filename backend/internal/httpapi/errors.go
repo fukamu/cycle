@@ -158,7 +158,7 @@ func classifyError(err error) (int, string, string) {
 		return 502, "AI_INVALID_RESPONSE", "AIの応答を確認できませんでした。"
 	case errors.Is(err, workspace.ErrAIProviderTimeout):
 		return 504, "AI_PROVIDER_TIMEOUT", "AI処理が時間内に完了しませんでした。"
-	case errors.Is(err, workspace.ErrAIProviderUnavailable):
+	case errors.Is(err, workspace.ErrAIProviderRejected), errors.Is(err, workspace.ErrAIProviderUnavailable):
 		return 503, "AI_PROVIDER_UNAVAILABLE", "AIサービスに接続できません。"
 	case errors.Is(err, workspace.ErrIdempotencyKeyReused):
 		return 409, "IDEMPOTENCY_KEY_REUSED", "同じ操作IDを別の内容には使用できません。"

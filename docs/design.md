@@ -4427,7 +4427,7 @@ Provider transport、Structured Output decoding、token usage抽出、provider e
 - Tools: web search、file search、computer use、code interpreter等を有効化しない
 - User識別: raw Application User IDを送らず、必要なabuse signalはHMAC pseudonymを利用する
 
-Model名、reasoning effort、timeout、attempt数はConfigurationとし、codeへ固定しない。Model変更は§49の日本語AI quality evaluationを通過してから行う。
+Model名、reasoning effort、timeout、attempt数はConfigurationとし、codeへ固定しない。Modelまたはreasoning effortの変更は§49の日本語AI quality evaluationを通過してから行う。
 
 ## 32.4 Logical operation lifecycle
 
@@ -5857,6 +5857,7 @@ goals:
 ai:
   provider: openai
   model: gpt-5.6-luna
+  reasoning_effort: medium
   max_input_tokens: 12000
   goal_refine_max_output_tokens: 400
   action_max_output_tokens: 800
@@ -5901,6 +5902,7 @@ Non-secret configurationの概念名:
 APP_ENV
 PUBLIC_ORIGIN
 AI_MODEL
+AI_REASONING_EFFORT
 AI_PRICING_MODEL
 AI_PRICE_INPUT_USD_PER_MILLION
 AI_PRICE_OUTPUT_USD_PER_MILLION

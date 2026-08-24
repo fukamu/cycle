@@ -13,6 +13,7 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 )
@@ -20,6 +21,7 @@ import (
 type OpenAI struct {
 	client          openai.Client
 	model           openai.ResponsesModel
+	reasoningEffort shared.ReasoningEffort
 	maxOutputTokens int64
 	inputPrice      float64
 	outputPrice     float64
@@ -30,12 +32,12 @@ var (
 	_ workspace.ActionGenerator = (*OpenAI)(nil)
 )
 
-func NewOpenAI(apiKey, model string, timeout time.Duration, maxOutputTokens int, inputUSDPerMillion, outputUSDPerMillion float64) *OpenAI {
+func NewOpenAI(apiKey, model, reasoningEffort string, timeout time.Duration, maxOutputTokens int, inputUSDPerMillion, outputUSDPerMillion float64) *OpenAI {
 	client := openai.NewClient(
 		option.WithAPIKey(apiKey), option.WithMaxRetries(0),
 		option.WithHTTPClient(&http.Client{Timeout: timeout}),
 	)
-	return &OpenAI{client: client, model: openai.ResponsesModel(model), maxOutputTokens: int64(maxOutputTokens), inputPrice: inputUSDPerMillion, outputPrice: outputUSDPerMillion}
+	return &OpenAI{client: client, model: openai.ResponsesModel(model), reasoningEffort: shared.ReasoningEffort(reasoningEffort), maxOutputTokens: int64(maxOutputTokens), inputPrice: inputUSDPerMillion, outputPrice: outputUSDPerMillion}
 }
 
 func (provider *OpenAI) RefineGoal(ctx context.Context, input workspace.RefineGoalAIInput) (workspace.GoalRefineAIResult, workspace.AIUsage, error) {
@@ -98,21 +100,47 @@ func (provider *OpenAI) execute(ctx context.Context, instructions string, maxOut
 	if maxOutputTokens <= 0 {
 		maxOutputTokens = provider.maxOutputTokens
 	}
+	var httpResponse *http.Response
 	response, err := provider.client.Responses.New(ctx, responses.ResponseNewParams{
 		Model: provider.model, Instructions: openai.String(instructions),
 		Input:           responses.ResponseNewParamsInputUnion{OfString: openai.String(string(content))},
 		MaxOutputTokens: openai.Int(maxOutputTokens), Store: openai.Bool(false),
-		Text: responses.ResponseTextConfigParam{Format: format, Verbosity: responses.ResponseTextConfigVerbosityLow},
-	})
+		Reasoning: shared.ReasoningParam{Effort: provider.reasoningEffort},
+		Text:      responses.ResponseTextConfigParam{Format: format, Verbosity: responses.ResponseTextConfigVerbosityLow},
+	}, option.WithResponseInto(&httpResponse))
+	providerRequestID := openAIRequestID(httpResponse)
 	if err != nil {
-		return "", workspace.AIUsage{}, mapOpenAIError(err)
+		usage := workspace.AIUsage{ProviderRequestID: providerRequestID}
+		mappedErr := mapOpenAIError(err, httpResponse)
+		if errors.Is(mappedErr, context.Canceled) || errors.Is(mappedErr, workspace.ErrAIProviderTimeout) {
+			return "", usage, mappedErr
+		}
+		if httpResponse != nil && httpResponse.StatusCode >= http.StatusOK && httpResponse.StatusCode < http.StatusMultipleChoices {
+			return "", usage, workspace.ErrAIInvalidResponse
+		}
+		return "", usage, mappedErr
+	}
+	if response == nil || !response.JSON.Usage.Valid() ||
+		!response.Usage.JSON.InputTokens.Valid() || !response.Usage.JSON.OutputTokens.Valid() ||
+		response.Usage.InputTokens < 0 || response.Usage.OutputTokens < 0 {
+		return "", workspace.AIUsage{ProviderRequestID: providerRequestID}, workspace.ErrAIInvalidResponse
 	}
 	usage := workspace.AIUsage{
 		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
-		ProviderRequestID: response.ID,
+		ProviderRequestID: providerRequestID,
 	}
 	usage.CostUSD = (float64(usage.InputTokens)*provider.inputPrice + float64(usage.OutputTokens)*provider.outputPrice) / 1_000_000
+	if response.Status != responses.ResponseStatusCompleted {
+		return "", usage, workspace.ErrAIInvalidResponse
+	}
 	return response.OutputText(), usage, nil
+}
+
+func openAIRequestID(response *http.Response) string {
+	if response == nil {
+		return ""
+	}
+	return response.Header.Get("x-request-id")
 }
 
 func goalRefineContract() responseContract {
@@ -193,13 +221,32 @@ func decodeStrict(raw string, destination any) error {
 	return nil
 }
 
-func mapOpenAIError(err error) error {
+func mapOpenAIError(err error, response *http.Response) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return workspace.ErrAIProviderTimeout
 	}
 	var networkError net.Error
 	if errors.As(err, &networkError) && networkError.Timeout() {
 		return workspace.ErrAIProviderTimeout
+	}
+	statusCode := 0
+	if response != nil {
+		statusCode = response.StatusCode
+	} else {
+		var apiError *openai.Error
+		if errors.As(err, &apiError) {
+			statusCode = apiError.StatusCode
+		}
+	}
+	if statusCode != 0 {
+		if statusCode == http.StatusTooManyRequests ||
+			(statusCode >= http.StatusInternalServerError && statusCode <= 599) {
+			return workspace.ErrAIProviderUnavailable
+		}
+		return workspace.ErrAIProviderRejected
 	}
 	return workspace.ErrAIProviderUnavailable
 }

@@ -142,7 +142,6 @@ func TestExecuteAIRetriesProviderUnavailableWithoutValidationReinforcement(t *te
 }
 
 func TestExecuteAIStopsAfterOneAttemptForNonRetryableFailuresAndCancellation(t *testing.T) {
-	nonRetryableErr := errors.New("non-retryable provider failure")
 	tests := []struct {
 		name          string
 		providerError error
@@ -150,7 +149,7 @@ func TestExecuteAIStopsAfterOneAttemptForNonRetryableFailuresAndCancellation(t *
 		wantError     error
 	}{
 		{name: "provider timeout", providerError: ErrAIProviderTimeout, wantError: ErrAIProviderTimeout},
-		{name: "non-retryable provider error", providerError: nonRetryableErr, wantError: nonRetryableErr},
+		{name: "non-retryable provider error", providerError: ErrAIProviderRejected, wantError: ErrAIProviderRejected},
 		{
 			name: "context cancellation before retry", providerError: ErrAIProviderUnavailable,
 			cancelContext: true, wantError: context.Canceled,

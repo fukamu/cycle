@@ -18,6 +18,9 @@ func TestLoadDevelopmentConfig(t *testing.T) {
 	if config.AI.GoalPromptVersion != "goal-refine-v2" || config.AI.GeneratePromptVersion != "action-generate-v2" || config.AI.RefinePromptVersion != "action-refine-v2" {
 		t.Fatalf("AI prompt defaults = %#v", config.AI)
 	}
+	if config.AI.ReasoningEffort != "medium" {
+		t.Fatalf("ReasoningEffort = %q, want medium", config.AI.ReasoningEffort)
+	}
 	if config.Database.MaxOpenConns != 10 {
 		t.Fatalf("MaxOpenConns = %d", config.Database.MaxOpenConns)
 	}
@@ -76,6 +79,38 @@ func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
 	environment["AI_PRICE_OUTPUT_USD_PER_MILLION"] = "1"
 	if _, err := Load(mapLookup(environment)); err != nil {
 		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadAcceptsSupportedReasoningEfforts(t *testing.T) {
+	t.Parallel()
+
+	for _, effort := range []string{"none", "low", "medium", "high", "xhigh", "max"} {
+		t.Run(effort, func(t *testing.T) {
+			t.Parallel()
+			environment := validEnvironment()
+			environment["AI_REASONING_EFFORT"] = effort
+			config, err := Load(mapLookup(environment))
+			if err != nil || config.AI.ReasoningEffort != effort {
+				t.Fatalf("Load() = %#v, %v", config.AI, err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnsupportedReasoningEffort(t *testing.T) {
+	t.Parallel()
+
+	for name, effort := range map[string]string{"empty": "", "unsupported minimal": "minimal", "invalid case": "MEDIUM"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			environment := validEnvironment()
+			environment["AI_REASONING_EFFORT"] = effort
+			_, err := Load(mapLookup(environment))
+			if err == nil || !strings.Contains(err.Error(), "AI_REASONING_EFFORT") {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
 	}
 }
 

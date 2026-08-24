@@ -43,6 +43,7 @@ var (
 	ErrAIUserLimit                   = errors.New("AI user rolling limit exceeded")
 	ErrAIRateLimit                   = errors.New("AI rate limit exceeded")
 	ErrAIBudget                      = errors.New("AI service budget exceeded")
+	ErrAIProviderRejected            = errors.New("AI provider rejected request")
 	ErrAIProviderUnavailable         = errors.New("AI provider unavailable")
 	ErrAIProviderTimeout             = errors.New("AI provider timeout")
 	ErrAIInvalidResponse             = errors.New("AI invalid response")

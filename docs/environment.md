@@ -57,6 +57,7 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | `OPENAI_API_KEY` | OpenAI auth | Production profile必須 | **secret**、GitHub secret |
 | `AI_PROVIDER` | `openai` | `openai`のみ | Container code固定 |
 | `AI_MODEL` | model、`gpt-5.6-luna` | quality gate通過済み、price modelと一致 | GitHub variable |
+| `AI_REASONING_EFFORT` | reasoning effort、初期値`medium` | GPT-5.6は`none` / `low` / `medium` / `high` / `xhigh` / `max`。変更時は§49の評価必須 | GitHub variable。Productionでは明示必須 |
 | `AI_MAX_INPUT_TOKENS` | input max、`12000` | positive | GitHub variable |
 | `AI_GOAL_REFINE_MAX_OUTPUT_TOKENS` | Goal Refine output max、`400` | positive | GitHub variable |
 | `AI_ACTION_MAX_OUTPUT_TOKENS` | Action AI output max、`800` | positive | GitHub variable |
@@ -188,6 +189,7 @@ SESSION_ACTIVITY_TOUCH_MINUTES
 ANONYMOUS_BOOTSTRAP_TTL_MINUTES
 MAX_PROGRESSING_GOALS
 AI_MODEL
+AI_REASONING_EFFORT
 AI_MAX_INPUT_TOKENS
 AI_GOAL_REFINE_MAX_OUTPUT_TOKENS
 AI_ACTION_MAX_OUTPUT_TOKENS

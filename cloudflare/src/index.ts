@@ -63,6 +63,10 @@ export class Backend extends Container {
     OPENAI_API_KEY: required("OPENAI_API_KEY", env.OPENAI_API_KEY),
     AI_PROVIDER: "openai",
     AI_MODEL: required("AI_MODEL", env.AI_MODEL),
+    AI_REASONING_EFFORT: required(
+      "AI_REASONING_EFFORT",
+      env.AI_REASONING_EFFORT,
+    ),
     AI_MAX_INPUT_TOKENS: required(
       "AI_MAX_INPUT_TOKENS",
       env.AI_MAX_INPUT_TOKENS,
