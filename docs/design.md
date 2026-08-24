@@ -5312,6 +5312,7 @@ Secret対象:
 DATABASE_URL
 DATABASE_MIGRATION_URL
 OPENAI_API_KEY
+OTEL_EXPORTER_OTLP_HEADERS
 SESSION_TOKEN_PEPPER
 CSRF_TOKEN_PEPPER
 BOOTSTRAP_ID_PEPPER
@@ -5408,6 +5409,10 @@ IndexedDBはXSSに対する暗号化境界ではない。
 - Raw User IDを長期logの相関Keyにしない。
 - API request、DB transaction、OpenAI requestを`request_id` / `trace_id` / `ai_generation_id`で関連付ける。
 
+Backendのtraceとmetricはvendor-neutralなOTLP/HTTP exporterで送信し、resource attributeは`service.name=fukamu-cycle-backend`だけに固定する。Development / Testは外部endpointを受け付けずin-memory exporterを使用する。Production profileはnon-secretのendpointとsecretのheader credentialを両方必須とし、静的に不正な設定では起動しない。Backend sampler、metric export interval、exporter retryはpinned SDK defaultを使用し、未承認のoverrideを設けない。Collectorの一時障害はApplication requestまたはreadinessを失敗させず、非同期のbounded retry後に本文・credentialを含まない固定diagnosticをstructured logへ残す。正常終了時はHTTP requestのdrain後にtrace / metric providerをflushする。
+
+OTLP endpoint / header credential ownerと実値、pinned SDK defaultのsampler / export volumeのStaging受入はStagingの運用判断である。Retention、dashboard、alert threshold、notification、on-callはProductionの運用判断である。承認前の値をexample、code default、Staging値から推測して適用しない。
+
 ## 42.2 Structured log fields
 
 Allowed:
@@ -5421,7 +5426,9 @@ route_template
 method
 status_code
 latency_ms
+error_class
 error_code
+failure_count
 operation
 goal_state_from
 goal_state_to
@@ -5455,6 +5462,7 @@ Google ID token / Email
 Session / CSRF token
 Turnstile token
 OpenAI key
+OTLP export header / credential
 Database URL
 raw IP
 long-lived raw User ID
@@ -5913,6 +5921,7 @@ Non-secret configurationの概念名:
 ```text
 APP_ENV
 PUBLIC_ORIGIN
+OTEL_EXPORTER_OTLP_ENDPOINT
 AI_MODEL
 AI_REASONING_EFFORT
 AI_PRICING_MODEL
@@ -5930,6 +5939,7 @@ Secretの概念名:
 ```text
 DATABASE_URL
 OPENAI_API_KEY
+OTEL_EXPORTER_OTLP_HEADERS
 SESSION_TOKEN_PEPPER
 CSRF_TOKEN_PEPPER
 BOOTSTRAP_ID_PEPPER
@@ -5949,6 +5959,7 @@ DATABASE_MIGRATION_URL
 Processを起動しない条件:
 
 - Public originがabsolute HTTPS URLでない（local除く）。
+- Development / TestでOTLP endpointまたはheaderが設定されている、Productionでどちらかが欠落・静的に不正、またはこの2変数以外の`OTEL_*`が設定されている。
 - Token / quota / timeoutが0以下。
 - warning thresholdが0..1外または昇順でない。
 - AI modelに対応するpriceがない。

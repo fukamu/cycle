@@ -18,6 +18,7 @@
 | 症状                                   | 原因候補                                        | 確認方法                                                           | 解決方法                                                                     |
 | -------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
 | Backendが`invalid configuration`で終了 | `.env`未読込、必須secretが短い/空、値format不正 | error messageの変数名; `[[ -n ${APP_ENV:-} ]]`                     | Backend terminalで`source ./scripts/import-env.sh`。`.env.example`を基に値を修正 |
+| BackendがOTLP設定で終了                | Development / Testへendpoint/headerを設定、Productionで欠落・静的不正、または未承認の`OTEL_*`を継承 | errorの変数名だけを確認し、header値は表示しない | Localではendpoint/headerを空にし、全profileでこの2変数以外の`OTEL_*`をprocess環境から除く。Productionは承認済みendpoint variableとheader secretだけを設定する |
 | Port 8080/5173が使用中                 | 以前のserverが残っている                        | `ss --tcp --listening --numeric --process`                          | 所有processを確認して停止。無関係なprocessをkillしない                       |
 | FrontendからAPI 404/connection refused | Backend未起動、Vite以外のorigin、proxy不一致    | Browser Network; `curl --fail http://localhost:8080/healthz`        | Backendを起動し、開発時は`http://localhost:5173`を使う                       |
 | Production相当buildで画面404           | `STATIC_DIR`不正、`dist`未build                 | `test -f frontend/dist/index.html`; Backend startup env             | `pnpm --filter fukamu-cycle-frontend run build`後にabsolute `STATIC_DIR`を設定       |
@@ -67,7 +68,7 @@
 | Terraform Apply preflightで停止   | actor/approver不一致、誤ったPlan run ID、artifact期限切れ、mainが進んだ | repository variable、Plan run、errorのSHA | 指定owner本人が成功Planのrun IDを入力する。stale/expiredなら最新mainでPlanを再作成し、approvalを迂回しない |
 | Terraform Applyがapproval待ち     | optional Required reviewer gateが有効 | Apply runの`Review deployments` | Plan logを確認し、指定ownerがApprove/Rejectする。7日を超えたら新しいPlanを使う |
 | Deployが開始しない                | Apply失敗、Apply metadataなし、mainが進んだ、workflow disabled | ActionsのApply/Deploy conclusion、errorのSHA | 最新mainのCI→Plan→Applyを成功させる。Terraform変更をmanual Deployで迂回しない |
-| Variable validationで停止         | `staging` Environment input未設定/誤origin | errorに出た変数名 | [`deployment.md`](deployment.md) input sheetで値を決めて設定。仮値禁止 |
+| Variable validationで停止         | `staging` Environment input未設定、OTLP endpoint/header欠落、誤origin | errorに出た変数名だけを確認し、secret値は表示しない | [`deployment.md`](deployment.md) input sheetで値を決めて設定。仮値禁止。Migration前に停止済み |
 | Migration stepで停止              | Neon direct URL/branch/SQL error | workflowのmigration step、Neon state | Wrangler deploy前に停止済み。DB runbookに従い原因解消、force/resetしない |
 | Wrangler deployで停止             | Cloudflare token権限、Workers Paid、config/container build error | Wrangler log、Cloudflare deployment | account/zone/plan/token scopeを確認し、CI dry-runとの差を修正 |
 | Custom domainが作れない           | 同名DNS record、zone未Active、token zone権限不足 | DNS records、zone status、Wrangler error | 既存recordの所有用途を確認。不要と確認できたrecordだけ除去して再deploy |
@@ -75,5 +76,6 @@
 | Static assetsだけ404              | `frontend/dist`未build、assets path/config不一致 | workflow build、Wrangler assets output | Frontend build後にWrangler deploy。Worker/API routingとは分けて確認 |
 | Deploy後に5xx増加                 | 新deployment/config/schema incompatibility | version別Workers Logs/Traces、直前SHA | 旧versionとschema互換なら直前commitを再deploy。互換でなければroll-forward |
 | Logs/tracesが見えない             | Wrangler observability設定、sampling、Dashboard filter | `wrangler.jsonc`、対象Worker/version | 対象version/filterを確認。Secret/本文を追加logして回避しない |
+| Backend OTLP exportが届かない     | Collector停止、endpoint不一致、header credential失効 | 固定error class、集約`failure_count`、provider statusを確認し、`/readyz`をcollector probeに使わない | Requestとstructured logsを継続して切り分ける。Credential漏洩時はexport停止、revoke / rotate、provider側retention / deletionを確認 |
 
 Production障害では秘密値やuser本文を共有せず、[`operations.md`](operations.md) のincident手順へ移行してください。

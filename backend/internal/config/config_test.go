@@ -27,6 +27,37 @@ func TestLoadDevelopmentConfig(t *testing.T) {
 	if config.Goals.MaxProgressingGoals != 2 {
 		t.Fatalf("MaxProgressingGoals = %d, want free limit 2", config.Goals.MaxProgressingGoals)
 	}
+	if config.Telemetry.OTLPEndpoint != "" || config.Telemetry.OTLPHeaders != "" {
+		t.Fatalf("development telemetry = %#v, want in-memory defaults", config.Telemetry)
+	}
+}
+
+func TestLoadRequiresProductionTelemetryConfigurationWithoutExposingHeaders(t *testing.T) {
+	t.Parallel()
+
+	environment := validEnvironment()
+	environment["APP_ENV"] = "production"
+	environment["PUBLIC_ORIGIN"] = "https://cycle.staging.fukamu.matoruru.com"
+	environment["OPENAI_API_KEY"] = "test-openai-key"
+	environment["GOOGLE_WEB_CLIENT_ID"] = "test.apps.googleusercontent.com"
+	environment["TURNSTILE_ENABLED"] = "true"
+	environment["TURNSTILE_SECRET_KEY"] = "test-turnstile-secret"
+	environment["AI_PRICE_INPUT_USD_PER_MILLION"] = "1"
+	environment["AI_PRICE_OUTPUT_USD_PER_MILLION"] = "1"
+	_, err := Load(mapLookup(environment))
+	if err == nil || !strings.Contains(err.Error(), "OTEL_EXPORTER_OTLP_ENDPOINT") || !strings.Contains(err.Error(), "OTEL_EXPORTER_OTLP_HEADERS") {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	const headerCanary = "authorization=test-only-header-canary"
+	environment["OTEL_EXPORTER_OTLP_HEADERS"] = headerCanary
+	_, err = Load(mapLookup(environment))
+	if err == nil || !strings.Contains(err.Error(), "OTEL_EXPORTER_OTLP_ENDPOINT") || strings.Contains(err.Error(), "OTEL_EXPORTER_OTLP_HEADERS") {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if strings.Contains(err.Error(), headerCanary) {
+		t.Fatal("Load() error exposed OTEL_EXPORTER_OTLP_HEADERS")
+	}
 }
 
 func TestLoadAcceptsPaidProgressingGoalBoundary(t *testing.T) {
@@ -77,8 +108,14 @@ func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
 	environment["TURNSTILE_SECRET_KEY"] = "test-turnstile-secret"
 	environment["AI_PRICE_INPUT_USD_PER_MILLION"] = "1"
 	environment["AI_PRICE_OUTPUT_USD_PER_MILLION"] = "1"
-	if _, err := Load(mapLookup(environment)); err != nil {
+	environment["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://telemetry.example.test"
+	environment["OTEL_EXPORTER_OTLP_HEADERS"] = "authorization=Bearer%20test-only"
+	config, err := Load(mapLookup(environment))
+	if err != nil {
 		t.Fatalf("Load() error = %v", err)
+	}
+	if config.Telemetry.OTLPEndpoint != environment["OTEL_EXPORTER_OTLP_ENDPOINT"] || config.Telemetry.OTLPHeaders != environment["OTEL_EXPORTER_OTLP_HEADERS"] {
+		t.Fatalf("Telemetry = %#v", config.Telemetry)
 	}
 }
 

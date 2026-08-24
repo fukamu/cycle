@@ -63,6 +63,7 @@ Worker/ContainerをTerraformとWranglerの両方で管理しません。Applicat
 | Google | Staging専用Web Client ID、authorized origin |
 | Turnstile | widget site key、secret owner、hostname/action |
 | OpenAI | project/key owner、model、確認日、token単価、provider spend/rate limit |
+| Telemetry | OTLP/HTTP collector endpoint、header credential owner、pinned SDK defaultのsampler / export volumeのStaging受入、Production retention、dashboard、alert、notification、on-call |
 | App controls | AI monthly budget、rolling/rate limit、tester、公開期間、任意のApplication紹介導線をStagingで公開するか |
 | Operations | Terraform Apply approver、logs/traces確認者、cost確認、teardown/継続判断日 |
 
@@ -195,6 +196,7 @@ GitHub `staging` Environment secrets:
 - `NEON_DATABASE_URL`
 - `NEON_MIGRATION_DATABASE_URL`
 - `OPENAI_API_KEY`
+- `OTEL_EXPORTER_OTLP_HEADERS`
 - `SESSION_TOKEN_PEPPER`
 - `CSRF_TOKEN_PEPPER`
 - `BOOTSTRAP_ID_PEPPER`
@@ -210,6 +212,7 @@ GitHub Environment `staging`を作り、deployment branchを`main`だけに制�
 
 ```text
 PUBLIC_ORIGIN=https://cycle.staging.fukamu.matoruru.com
+OTEL_EXPORTER_OTLP_ENDPOINT
 BETA_ADMISSION_MODE=off
 GOOGLE_WEB_CLIENT_ID
 TURNSTILE_SITE_KEY
@@ -248,7 +251,9 @@ RATE_AI_PER_SESSION_MINUTE
 RATE_AI_PER_IP_MINUTE
 ```
 
-Workflowは [`deployment-contract.json`](../config/deployment-contract.json) から導出した必須入力、固定Staging origin、任意紹介URLを検証し、Closed BetaはWorker runtimeと同じparserで検証します。続けてBackendのtyped config、prompt version、tokenizerをDB・外部APIへ接続せず検査し、いずれかが不正ならmigration前に停止します。Example/defaultは運用承認値ではありません。Stagingで一時Admissionを検証するときだけ [`closed-beta-admission.md`](closed-beta-admission.md) に従い、`BETA_ADMISSION_MODE=closed`、TTL、Allowlist、Cookie keyを同じdeployへ設定します。
+Workflowは [`deployment-contract.json`](../config/deployment-contract.json) から導出した必須入力、固定Staging origin、任意紹介URLを検証し、Closed BetaはWorker runtimeと同じparserで検証します。続けてBackendのtyped config、telemetry endpoint/header、prompt version、tokenizerをDB・外部APIへ接続せず検査し、いずれかが不正ならmigration前に停止します。Example/defaultは運用承認値ではありません。Stagingで一時Admissionを検証するときだけ [`closed-beta-admission.md`](closed-beta-admission.md) に従い、`BETA_ADMISSION_MODE=closed`、TTL、Allowlist、Cookie keyを同じdeployへ設定します。
+
+OTLP endpoint / credential ownerと実値は未決です。Operations ownerがpinned SDK defaultのsampler / export volumeをStagingで受入れ、`OTEL_EXPORTER_OTLP_ENDPOINT`をvariable、`OTEL_EXPORTER_OTLP_HEADERS`をsecretへ登録するまでStaging deployを実行しません。Endpointへcredentialを埋め込まず、header値をissue、CLI argument、workflow logへ出しません。Retention、dashboard、alert、notification、on-callの未決事項はProduction release前に別途解消します。
 
 Application紹介導線は任意です。Stagingで意図して公開する場合だけ`APP_REFERRAL_URL=https://cycle.fukamu.com/`を追加します。未設定ならFrontend Componentは表示されません。Workflowは空値またはこの固定Production root URLだけを許可し、共有payloadにはUser Dataを含めません。
 
@@ -291,7 +296,8 @@ Custom domainは [`cloudflare/wrangler.jsonc`](../cloudflare/wrangler.jsonc) の
 - Browserでcertificate/mixed-content/CSP errorがない。
 - Anonymous bootstrapがTurnstile hostname/action検証を通る。
 - Google login/upgrade、save、AI generate/refine、account deletionを検証dataで最小回数確認する。
-- Workers Logs/Tracesにsecret、PDCA本文、email、raw user ID/IP、raw Turnstile tokenがない。
+- Workers Logs/TracesとOTLP payloadにsecret、PDCA本文、email、raw user ID/IP、raw Turnstile tokenがない。
+- Backendの実span / metricが承認済みcollectorへ到達し、固定`service.name`を持つ。Collector障害中も`/readyz`と代表Application requestが影響を受けない。
 - Neon connections/latency、Container cold start、5xx、AI usage/costが承認済みlimit内。
 - `cycle.staging.fukamu.matoruru.com`以外のhostnameと`workers.dev`から利用できない。
 
@@ -304,6 +310,8 @@ Application rollback:
 1. Cloudflare Dashboardで対象deployment、Container rollout、logsを確認する。
 2. Schemaが旧codeと互換な場合だけ、直前の成功した`Deploy Staging` workflow runを再実行する。Manual dispatchはcurrent main HEADだけを対象とする。
 3. Schemaに関係する場合は[`database.md`](database.md)のmigration-first/expand-contract規則に従う。DB resetや既存migration編集で復旧しない。
+
+OTLP collector障害だけを理由にApplicationをrollbackせず、bounded retry後の固定diagnosticとWorkers Logsを使って切り分けます。Exporter composition自体に新version固有の障害がある場合はstructured logsを維持できる直前versionへ戻します。Header credential漏洩が疑われる場合はexportを止め、provider側credentialをrotate / revokeし、必要なprovider-side telemetry削除手順を実行します。
 
 Terraform recovery:
 

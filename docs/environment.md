@@ -33,6 +33,8 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 |---|---|---|---|
 | `APP_ENV` | profile、`development` | Stagingは`production`固定 | Container only、Worker code固定 |
 | `PUBLIC_ORIGIN` | canonical origin、`http://localhost:5173` | schemeとhostだけを指定し、credentials、path、末尾slash、query、fragmentは禁止。Production profileはHTTPS | server only、GitHub variable |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP base endpoint、空 | Development / Testは空。Production profileはcredentialを含まないabsolute HTTPS URLを必須とし、userinfo、query、fragmentを禁止。pathは許可 | server only、GitHub variable |
+| `OTEL_EXPORTER_OTLP_HEADERS` | OTLP request header、空 | Development / Testは空。Production profileはcomma-separated `key=value` header listを必須とする。Value内のcomma / spaceはpercent-encodeする。`Content-Type` / `Content-Length` / `Content-Encoding`を含むexporter・transport管理header、case-insensitive duplicate、decode後の空・control文字・`;`を拒否し、値をerror / logへ出さない | **secret**、GitHub secret |
 | `HTTP_ADDRESS` | listen、`:8080` | non-empty | Container only、Worker code固定 |
 | `STATIC_DIR` | GoによるSPA配信、空 | Cloudflareでは不要 | Local/legacy container only |
 | `DATABASE_URL` | PostgreSQL URL | `postgres`または`postgresql` scheme、host、database名を必須とし、全環境で設定 | **secret**、local `.env` / Staging `NEON_DATABASE_URL` pooled URL |
@@ -49,6 +51,8 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | `SESSION_ACTIVITY_TOUCH_MINUTES` | activity更新間隔、`15` | positive | GitHub variable |
 | `ANONYMOUS_BOOTSTRAP_TTL_MINUTES` | bootstrap idempotency TTL、`10` | positive | GitHub variable |
 | `MAX_PROGRESSING_GOALS` | 同時進行Goal上限、Free `2` | positive。Paid entitlementは`3`以上 | GitHub variable |
+
+OTLP endpoint、header credential ownerと実値は未決です。使用するpinned SDK defaultのsampler / export volumeをStagingで受入確認するまでStaging deployを行いません。Stagingは`APP_ENV=production`のため両方を必須とし、未設定または不正ならdeploy workflowのBackend config検証がmigration前に停止します。Collectorの到達可否はstartup、`/readyz`、Application requestの成否へ含めません。
 
 ## AI / authentication / abuse prevention
 
@@ -163,6 +167,7 @@ CLOUDFLARE_API_TOKEN
 NEON_DATABASE_URL
 NEON_MIGRATION_DATABASE_URL
 OPENAI_API_KEY
+OTEL_EXPORTER_OTLP_HEADERS
 SESSION_TOKEN_PEPPER
 CSRF_TOKEN_PEPPER
 BOOTSTRAP_ID_PEPPER
@@ -177,6 +182,7 @@ Variables:
 
 ```text
 PUBLIC_ORIGIN
+OTEL_EXPORTER_OTLP_ENDPOINT
 BETA_ADMISSION_MODE
 GOOGLE_WEB_CLIENT_ID
 TURNSTILE_SITE_KEY
@@ -214,6 +220,8 @@ RATE_AI_PER_USER_MINUTE
 RATE_AI_PER_SESSION_MINUTE
 RATE_AI_PER_IP_MINUTE
 ```
+
+Stagingの`OTEL_EXPORTER_OTLP_ENDPOINT`と`OTEL_EXPORTER_OTLP_HEADERS`は、Operations ownerがcollector、credential ownerとpinned SDK defaultのsampler / export volumeを承認するまで設定せず、live deployを行いません。この2変数以外の`OTEL_*`は未承認のSDK overrideとして全profileで拒否します。Headerはephemeral secrets fileだけを経由してWorker Secretへ渡し、endpoint、workflow log、errorへcredentialを混在させません。Retention、dashboard、alert、notification、on-callの決定はProduction release blockerとして[`operations.md`](operations.md)で管理します。
 
 Staging deploy workflowはGitHub Environmentで`BETA_ADMISSION_MODE`が未設定の場合に明示的な`off`をWorkerへ渡します。Worker binding自体の欠落や未知のmodeは設定不備として新規利用開始をfail-closedにします。`closed`へ変更する場合だけ`BETA_ADMISSION_COOKIE_TTL_DAYS`と`BETA_INVITES`も追加し、上記のCookie key secretと同じdeployで反映します。
 

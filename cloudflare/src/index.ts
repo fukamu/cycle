@@ -19,6 +19,14 @@ export class Backend extends Container {
     APP_ENV: "production",
     HTTP_ADDRESS: ":8080",
     PUBLIC_ORIGIN: required("PUBLIC_ORIGIN", env.PUBLIC_ORIGIN),
+    OTEL_EXPORTER_OTLP_ENDPOINT: required(
+      "OTEL_EXPORTER_OTLP_ENDPOINT",
+      env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    ),
+    OTEL_EXPORTER_OTLP_HEADERS: required(
+      "OTEL_EXPORTER_OTLP_HEADERS",
+      env.OTEL_EXPORTER_OTLP_HEADERS,
+    ),
     DATABASE_URL: required("DATABASE_URL", env.DATABASE_URL),
     DB_MAX_OPEN_CONNS: required("DB_MAX_OPEN_CONNS", env.DB_MAX_OPEN_CONNS),
     DB_MAX_IDLE_CONNS: required("DB_MAX_IDLE_CONNS", env.DB_MAX_IDLE_CONNS),

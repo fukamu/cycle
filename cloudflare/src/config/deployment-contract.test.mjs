@@ -21,15 +21,26 @@ const validationStep = extractStep(
 );
 const validationCommand = extractRunCommand(validationStep);
 const validationRequiredKeys = requiredInputNames(contract);
+const stepScopedBackendSecrets = ["OTEL_EXPORTER_OTLP_HEADERS"];
 
 test("deployment contract is the exact repository handoff classification", () => {
   const { backend, closedBeta, deploy, frontend } = contract;
   assert.equal(contract.version, 1);
   assert.equal(backend.fixed.length, 5);
   assert.deepEqual(backend.omitted, ["STATIC_DIR"]);
-  assert.equal(backend.githubVariables.length, 35);
+  assert.equal(backend.githubVariables.length, 36);
   assert.deepEqual(backend.derived, { AI_PRICING_MODEL: "AI_MODEL" });
-  assert.equal(backend.secrets.length, 8);
+  assert.equal(backend.secrets.length, 9);
+  assert.equal(
+    backend.githubVariables.includes("OTEL_EXPORTER_OTLP_ENDPOINT"),
+    true,
+  );
+  assert.equal(backend.secrets.includes("OTEL_EXPORTER_OTLP_HEADERS"), true);
+  assert.equal(backend.secrets.includes("OTEL_EXPORTER_OTLP_ENDPOINT"), false);
+  assert.equal(
+    backend.githubVariables.includes("OTEL_EXPORTER_OTLP_HEADERS"),
+    false,
+  );
 
   const backendKeys = [
     ...backend.fixed,
@@ -115,7 +126,9 @@ test("deployment contract is the exact repository handoff classification", () =>
 
   const workflowSecretMappings = expressionMappings(jobEnvironment, "secrets");
   const expectedSecretTargets = unique([
-    ...backend.secrets,
+    ...backend.secrets.filter(
+      (name) => !stepScopedBackendSecrets.includes(name),
+    ),
     ...deploy.requiredOnly,
     ...closedBeta.conditionalSecrets,
   ]);
@@ -136,6 +149,9 @@ test("deployment contract is the exact repository handoff classification", () =>
     "deployment contract/workflow required inputs",
   );
   assert.equal(validationCommand, "node ./scripts/validate-deploy-inputs.mjs");
+  assert.deepEqual(secretStepMappings(validationStep), {
+    OTEL_EXPORTER_OTLP_HEADERS: "OTEL_EXPORTER_OTLP_HEADERS",
+  });
   assert.doesNotMatch(validationStep, /run:\s*\|/);
   assert.doesNotMatch(
     validationStep,
@@ -172,6 +188,9 @@ test("deployment contract is the exact repository handoff classification", () =>
     matches(secretFileStep, /names\.push\("([A-Z][A-Z0-9_]*)"\)/g),
     "deployment contract/workflow conditional Worker secrets",
   );
+  assert.deepEqual(secretStepMappings(secretFileStep), {
+    OTEL_EXPORTER_OTLP_HEADERS: "OTEL_EXPORTER_OTLP_HEADERS",
+  });
 
   const frontendExampleKeys = matches(
     readRepositoryFile("frontend/.env.example"),
@@ -207,7 +226,12 @@ test("deployment contract is the exact repository handoff classification", () =>
     backendValidationStep,
   );
   assertExactSet(
-    [...backend.fixed, ...backend.omitted, ...Object.keys(backend.derived)],
+    [
+      ...backend.fixed,
+      ...backend.omitted,
+      ...Object.keys(backend.derived),
+      ...stepScopedBackendSecrets,
+    ],
     Object.keys(backendValidationEnvironment),
     "deployment contract/configcheck fixed and derived inputs",
   );
@@ -219,6 +243,10 @@ test("deployment contract is the exact repository handoff classification", () =>
     AI_PRICING_MODEL: {
       kind: "environment",
       value: backend.derived.AI_PRICING_MODEL,
+    },
+    OTEL_EXPORTER_OTLP_HEADERS: {
+      kind: "secret",
+      value: "OTEL_EXPORTER_OTLP_HEADERS",
     },
     TURNSTILE_ENABLED: { kind: "literal", value: "true" },
     TURNSTILE_EXPECTED_ACTION: {
@@ -237,6 +265,17 @@ test("deployment contract is the exact repository handoff classification", () =>
     stringLiteralMappings(indexEnvBody),
     backendValidationFixedLiterals,
     "Container and configcheck fixed literal inputs",
+  );
+  assert.deepEqual(secretStepMappings(backendValidationStep), {
+    OTEL_EXPORTER_OTLP_HEADERS: "OTEL_EXPORTER_OTLP_HEADERS",
+  });
+  assert.equal(
+    matches(
+      workflow,
+      /^          OTEL_EXPORTER_OTLP_HEADERS: \$\{\{ secrets\.OTEL_EXPORTER_OTLP_HEADERS \}\}$/gm,
+    ).length,
+    3,
+    "OTLP header credential must be exposed to exactly the three required steps",
   );
   assert.ok(
     workflow.indexOf("      - name: Validate Backend runtime configuration\n") <
@@ -390,6 +429,14 @@ function stepEnvironmentMappings(step) {
   const block = between(step, "        env:\n", "        run:");
   const result = {};
   for (const line of block.split("\n")) {
+    const secret =
+      /^          ([A-Z][A-Z0-9_]*): \$\{\{ secrets\.([A-Z][A-Z0-9_]*) \}\}$/.exec(
+        line,
+      );
+    if (secret) {
+      result[secret[1]] = { kind: "secret", value: secret[2] };
+      continue;
+    }
     const mapped =
       /^          ([A-Z][A-Z0-9_]*): \$\{\{ env\.([A-Z][A-Z0-9_]*) \}\}$/.exec(
         line,
@@ -410,6 +457,14 @@ function stepEnvironmentMappings(step) {
     };
   }
   return result;
+}
+
+function secretStepMappings(step) {
+  return Object.fromEntries(
+    Object.entries(stepEnvironmentMappings(step))
+      .filter(([, mapping]) => mapping.kind === "secret")
+      .map(([name, mapping]) => [name, mapping.value]),
+  );
 }
 
 function stringLiteralMappings(source) {

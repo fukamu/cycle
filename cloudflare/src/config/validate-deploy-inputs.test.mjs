@@ -39,6 +39,18 @@ test("deployment validator trims required inputs for presence", () => {
     validateDeploymentInputs(validEnvironment({ AI_REASONING_EFFORT: " \t " })),
     [{ code: "MISSING_REQUIRED_INPUT", key: "AI_REASONING_EFFORT" }],
   );
+  assert.deepEqual(
+    validateDeploymentInputs(
+      validEnvironment({ OTEL_EXPORTER_OTLP_ENDPOINT: " \t " }),
+    ),
+    [{ code: "MISSING_REQUIRED_INPUT", key: "OTEL_EXPORTER_OTLP_ENDPOINT" }],
+  );
+  assert.deepEqual(
+    validateDeploymentInputs(
+      validEnvironment({ OTEL_EXPORTER_OTLP_HEADERS: " \t " }),
+    ),
+    [{ code: "MISSING_REQUIRED_INPUT", key: "OTEL_EXPORTER_OTLP_HEADERS" }],
+  );
 });
 
 test("deployment validator derives every required input from the contract", () => {

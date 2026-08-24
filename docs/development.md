@@ -47,7 +47,7 @@ Terminalを解放したまま起動する場合は`--detached`を使い、終了
 ./scripts/local-app.sh --down
 ```
 
-このprofileは`APP_ENV=development`、空の`OPENAI_API_KEY`、無効なTurnstile、未設定のGoogle Client IDで起動します。AIは決定的なFake Adapterを使用し、Google連携以外のGoal/Cycle/Review操作を外部credentialなしで確認できます。これは手動の実機確認環境であり、format、lint、typecheck、unit/integration test、E2E、Terraform、Wranglerの品質checkを代替しません。
+このprofileは`APP_ENV=development`、空の`OPENAI_API_KEY`、無効なTurnstile、未設定のGoogle Client IDで起動します。Telemetryはin-memory exporterを使い、`OTEL_EXPORTER_OTLP_ENDPOINT`と`OTEL_EXPORTER_OTLP_HEADERS`を設定せず、外部collectorへ送信しません。AIは決定的なFake Adapterを使用し、Google連携以外のGoal/Cycle/Review操作を外部credentialなしで確認できます。これは手動の実機確認環境であり、format、lint、typecheck、unit/integration test、E2E、Terraform、Wranglerの品質checkを代替しません。
 
 ## 初回セットアップ
 
@@ -212,6 +212,6 @@ Pull request CIはGitHubのmerge refをcheckoutして全checkを実行し、成�
 
 ## 開発終了時
 
-各serverを `Ctrl+C` で停止します。Docker DBも止める場合は `docker stop fukamu-cycle-postgres` を実行します。containerをstopしてもDBデータは保持されます。
+各serverを `Ctrl+C` で停止します。BackendはHTTP requestをdrainした後にin-memory trace / metric providerをflushします。Docker DBも止める場合は `docker stop fukamu-cycle-postgres` を実行します。containerをstopしてもDBデータは保持されます。
 
 問題が解決しない場合は [`troubleshooting.md`](troubleshooting.md) を参照してください。

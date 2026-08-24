@@ -8,6 +8,7 @@ import (
 	"github.com/fukamu/cycle/backend/internal/ai/prompts"
 	"github.com/fukamu/cycle/backend/internal/config"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/aiprovider"
+	"github.com/fukamu/cycle/backend/internal/infrastructure/observability"
 )
 
 const (
@@ -24,9 +25,20 @@ func main() {
 }
 
 func checkConfiguration() error {
-	settings, err := config.Load(os.LookupEnv)
+	return checkConfigurationWithLookup(os.LookupEnv)
+}
+
+func checkConfigurationWithLookup(lookup config.LookupEnv) error {
+	settings, err := config.Load(lookup)
 	if err != nil {
 		return errors.New("configuration invalid")
+	}
+	if err := observability.ValidateSettings(observability.Settings{
+		Environment: settings.App.Environment,
+		Endpoint:    settings.Telemetry.OTLPEndpoint,
+		Headers:     settings.Telemetry.OTLPHeaders,
+	}); err != nil {
+		return errors.New("telemetry configuration invalid")
 	}
 	if _, err := prompts.Resolve(prompts.Versions{
 		GoalRefine:     settings.AI.GoalPromptVersion,

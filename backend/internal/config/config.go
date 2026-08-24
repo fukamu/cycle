@@ -16,6 +16,7 @@ type LookupEnv func(string) (string, bool)
 
 type Config struct {
 	App       AppConfig
+	Telemetry TelemetryConfig
 	Database  DatabaseConfig
 	Session   SessionConfig
 	Goals     GoalConfig
@@ -30,6 +31,11 @@ type AppConfig struct {
 	PublicOrigin *url.URL
 	HTTPAddress  string
 	StaticDir    string
+}
+
+type TelemetryConfig struct {
+	OTLPEndpoint string
+	OTLPHeaders  string
 }
 
 type DatabaseConfig struct {
@@ -116,6 +122,10 @@ func Load(lookup LookupEnv) (Config, error) {
 			PublicOrigin: publicOrigin,
 			HTTPAddress:  reader.stringValue("HTTP_ADDRESS", ":8080"),
 			StaticDir:    reader.stringValue("STATIC_DIR", ""),
+		},
+		Telemetry: TelemetryConfig{
+			OTLPEndpoint: reader.stringValue("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+			OTLPHeaders:  reader.stringValue("OTEL_EXPORTER_OTLP_HEADERS", ""),
 		},
 		Database: DatabaseConfig{
 			URL:             reader.stringValue("DATABASE_URL", ""),
@@ -273,6 +283,12 @@ func (config Config) Validate() error {
 		problems = append(problems, "TURNSTILE_EXPECTED_ACTION is required")
 	}
 	if config.App.Environment == "production" {
+		if strings.TrimSpace(config.Telemetry.OTLPEndpoint) == "" {
+			problems = append(problems, "OTEL_EXPORTER_OTLP_ENDPOINT is required in production")
+		}
+		if strings.TrimSpace(config.Telemetry.OTLPHeaders) == "" {
+			problems = append(problems, "OTEL_EXPORTER_OTLP_HEADERS is required in production")
+		}
 		if config.AI.APIKey == "" {
 			problems = append(problems, "OPENAI_API_KEY is required in production")
 		}

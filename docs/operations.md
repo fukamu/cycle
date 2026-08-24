@@ -8,9 +8,10 @@
 - Cloudflare automatic tracesを5% sample、logsを100% sampleで有効化
 - Go `slog` JSONにrequest ID、trace ID、route template、method、status、latencyを記録
 - Application metric eventをstructured logとして出力
+- Backend trace / metricをvendor-neutralなOTLP/HTTPでexport
 - `/healthz` と `/readyz`
 
-Dashboard、alert policy、notification channel、uptime monitorはまだIaC化されていません。導入済みとみなさず、初回Production前にthreshold、通知先、所有者を決定します。Cloudflare Analytics/Logs、Neon Monitoring、OpenAI usageを横断して確認します。
+OTLP endpoint / header credential ownerと実値は未決です。使用するpinned SDK defaultのsampler / export volumeをStagingで受入確認し、接続先とcredential ownerを承認するまでStaging deployを行いません。Retention、dashboard、alert policy、notification channel、uptime monitor、on-callはProduction release blockerとして別途所有者と値を決定します。Cloudflareの5% trace / 100% log設定は変更せず、Cloudflare Analytics/Logs、Neon Monitoring、OpenAI usageを横断して確認します。Collector障害はApplication requestやreadinessを失敗させず、bounded retry後の固定diagnosticをWorkers Logsへ出します。Process終了時はHTTP requestをdrainしてからtrace / metric providerをflushします。
 
 ## Health check
 
@@ -20,7 +21,7 @@ curl --fail --silent --show-error 'https://cycle.staging.fukamu.matoruru.com/rea
 ```
 
 - `/healthz`: WorkerからContainer processへ到達できる。DBや外部APIは呼ばない。
-- `/readyz`: startup configはvalidation済みで、DB pingが成功する。OpenAI/Google/Turnstileは毎回呼ばない。
+- `/readyz`: startup configはvalidation済みで、DB pingが成功する。OpenAI/Google/Turnstile/OTLP collectorは毎回呼ばない。
 
 Healthだけで機能正常を断定せず、5xx、latency、Container cold start、Neon connections、代表操作も確認します。
 
@@ -28,7 +29,7 @@ Healthだけで機能正常を断定せず、5xx、latency、Container cold star
 
 1. commit SHA、Terraform Plan/Apply runとapprover、Cloudflare deployment/version、Container rollout、migration workflow runをrelease記録へ残す。
 2. `/healthz`と`/readyz`が継続して200。
-3. Workers Logs/Tracesでstartup、DB connection、5xxが増えていない。
+3. Workers Logs/Tracesでstartup、DB connection、5xx、telemetry export failureが増えておらず、Backend span / metricが承認済みcollectorへ到達する。
 4. 匿名session、Goal Draft autosave、Goal開始、P/D/C/A autosave、Cycle完了後に次CycleではなくGoal Reviewが開くことを検証dataで確認。
 5. Reviewから目標維持/更新で次Cycleを開始でき、Goal TimelineでVersion markerとCompleted/Canceled CycleがGoal単位に表示されることを確認。
 6. Google login、Turnstile、Goal Refine、Action Generate/Refineを最小回数確認し、provider error/spendも確認。
@@ -39,6 +40,8 @@ Production userの本文、email、token、raw user ID/IPを確認用logへ追�
 ## Logs / error investigation
 
 Cloudflare DashboardでWorker `fukamu-cycle-staging`、deploy時刻/version、Containerを絞り、`severity`、`error_class`、`error_code`、request/trace IDを確認します。PDCA本文、prompt/output、session/CSRF token、Google credential、email、raw user ID/IP、raw Turnstile tokenを検索・記録・転記しません。
+
+OTLP export failureでは固定のerror classと集約`failure_count`だけを確認し、endpoint、header、export payload、provider raw responseをlogへ追加しません。Collector停止中も`/healthz` / `/readyz`と代表操作が正常ならApplication障害と混同せず、structured logsで観測を継続します。
 
 必要な調査結果は時刻、version、route template、status、error class/code、集約eventで残します。Neon/OpenAI/Google/Turnstileのdashboardを確認するときもcredential値を表示しません。
 
@@ -87,11 +90,12 @@ Cloudflare DashboardでWorker `fukamu-cycle-staging`、deploy時刻/version、Co
 ## Environment / secret rotation
 
 1. [`environment.md`](environment.md)でserver/client、secret/public、validation、影響を確認。
-2. Application値はGitHub `staging` Environment、Terraform/R2 credentialはrepository secretsで用途別にrotateする。Apply approver変更はrepository variableとEnvironment Required reviewerを同時に更新する。
+2. Application値はGitHub `staging` Environment、Terraform/R2 credentialはrepository secretsで用途別にrotateする。OTLP header credentialは同Environment secretとprovider側を同時にrotateし、endpoint variableへcredentialを移さない。Apply approver変更はrepository variableとEnvironment Required reviewerを同時に更新する。
 3. 変更理由、時刻、所有者、失効確認を記録する。値自体は記録しない。
 4. `VITE_`対応値がある場合はFrontendを必ずrebuildする。
 5. main CIからPlan/承認付きApply/`Deploy Staging`を通し、healthと代表操作を確認する。Application値だけの変更で再buildが必要な場合はmain HEADから`Deploy Staging`をmanual dispatchする。
 6. Pepper変更は既存session/tokenへ影響するため、移行影響の確認なしにrotateしない。
+7. OTLP credentialまたはtelemetry payloadの漏洩が疑われる場合はexportを停止し、credentialをrevoke / rotateして、provider側retention / deletion手順と影響範囲を確認する。
 
 ## Rollback decision
 

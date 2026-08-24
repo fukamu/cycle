@@ -11,6 +11,7 @@
     "omitted": ["STATIC_DIR"],
     "githubVariables": [
       "PUBLIC_ORIGIN",
+      "OTEL_EXPORTER_OTLP_ENDPOINT",
       "DB_MAX_OPEN_CONNS",
       "DB_MAX_IDLE_CONNS",
       "DB_CONN_MAX_LIFETIME_MINUTES",
@@ -51,6 +52,7 @@
     },
     "secrets": [
       "DATABASE_URL",
+      "OTEL_EXPORTER_OTLP_HEADERS",
       "SESSION_TOKEN_PEPPER",
       "CSRF_TOKEN_PEPPER",
       "BOOTSTRAP_ID_PEPPER",

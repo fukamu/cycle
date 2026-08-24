@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
@@ -17,6 +20,7 @@ import (
 const (
 	authenticatedUserIDHeader = "X-Fukamu-Authenticated-User-ID"
 	expectedUserIDHeader      = "X-Fukamu-Expected-User-ID"
+	httpTracerName            = "fukamu-cycle/http"
 )
 
 type contextKey string
@@ -25,6 +29,27 @@ const (
 	requestIDContextKey contextKey = "request_id"
 	sessionContextKey   contextKey = "authenticated_session"
 )
+
+func (server *api) traceMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		provider := server.dependencies.TracerProvider
+		if provider == nil {
+			provider = otel.GetTracerProvider()
+		}
+		ctx := request.Context()
+		extracted := propagation.TraceContext{}.Extract(ctx, propagation.HeaderCarrier(request.Header))
+		parent := trace.SpanContextFromContext(extracted)
+		if parent.IsValid() {
+			parent = trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID: parent.TraceID(), TraceFlags: parent.TraceFlags(), SpanID: parent.SpanID(), Remote: true,
+			})
+			ctx = trace.ContextWithRemoteSpanContext(ctx, parent)
+		}
+		ctx, span := provider.Tracer(httpTracerName).Start(ctx, "http.request", trace.WithSpanKind(trace.SpanKindServer))
+		defer span.End()
+		next.ServeHTTP(writer, request.WithContext(ctx))
+	})
+}
 
 func (server *api) requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -68,6 +93,24 @@ type statusRecorder struct {
 	status int
 }
 
+func normalizedHTTPMethod(method string) string {
+	switch method {
+	case http.MethodConnect, http.MethodDelete, http.MethodGet, http.MethodHead, http.MethodOptions,
+		http.MethodPatch, http.MethodPost, http.MethodPut, http.MethodTrace:
+		return method
+	default:
+		return "OTHER"
+	}
+}
+
+func routeTemplate(request *http.Request) string {
+	route := chi.RouteContext(request.Context()).RoutePattern()
+	if route == "" {
+		return "unmatched"
+	}
+	return route
+}
+
 func (recorder *statusRecorder) WriteHeader(status int) {
 	recorder.status = status
 	recorder.ResponseWriter.WriteHeader(status)
@@ -79,13 +122,18 @@ func (server *api) requestLogMiddleware(next http.Handler) http.Handler {
 		recorder := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
 		next.ServeHTTP(recorder, request)
 		duration := time.Since(started)
-		route := chi.RouteContext(request.Context()).RoutePattern()
-		if route == "" {
-			route = "unmatched"
-		}
+		route := routeTemplate(request)
+		method := normalizedHTTPMethod(request.Method)
 		span := trace.SpanFromContext(request.Context())
-		span.SetName(request.Method + " " + route)
-		span.SetAttributes(attribute.String("http.route", route), attribute.Int("http.response.status_code", recorder.status))
+		span.SetName(method + " " + route)
+		span.SetAttributes(
+			attribute.String("http.request.method", method),
+			attribute.String("http.route", route),
+			attribute.Int("http.response.status_code", recorder.status),
+		)
+		if recorder.status >= http.StatusInternalServerError {
+			span.SetStatus(codes.Error, http.StatusText(recorder.status))
+		}
 		if server.dependencies.Metrics != nil {
 			server.dependencies.Metrics.ObserveHTTP(request.Context(), route, recorder.status, duration)
 		}
@@ -96,7 +144,7 @@ func (server *api) requestLogMiddleware(next http.Handler) http.Handler {
 			slog.String("request_id", requestID(request.Context())),
 			slog.String("trace_id", span.SpanContext().TraceID().String()),
 			slog.String("route_template", route),
-			slog.String("method", request.Method),
+			slog.String("method", method),
 			slog.Int("status_code", recorder.status),
 			slog.Int64("latency_ms", duration.Milliseconds()),
 		)

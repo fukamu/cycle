@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
@@ -62,17 +62,18 @@ type Metrics interface {
 }
 
 type Dependencies struct {
-	Sessions     SessionService
-	Workspace    WorkspaceService
-	Account      AccountService
-	RequestIDs   ports.IDGenerator
-	PublicOrigin string
-	Ready        func(context.Context) error
-	Logger       *slog.Logger
-	Production   bool
-	TrustProxy   bool
-	StaticDir    string
-	Metrics      Metrics
+	Sessions       SessionService
+	Workspace      WorkspaceService
+	Account        AccountService
+	RequestIDs     ports.IDGenerator
+	PublicOrigin   string
+	Ready          func(context.Context) error
+	Logger         *slog.Logger
+	Production     bool
+	TrustProxy     bool
+	StaticDir      string
+	Metrics        Metrics
+	TracerProvider trace.TracerProvider
 }
 
 type api struct {
@@ -83,7 +84,7 @@ type api struct {
 func NewRouter(dependencies Dependencies) http.Handler {
 	server := &api{dependencies: dependencies, validate: newRequestValidator()}
 	router := chi.NewRouter()
-	router.Use(server.requestIDMiddleware, server.requestLogMiddleware, server.securityHeaders)
+	router.Use(server.traceMiddleware, server.requestIDMiddleware, server.requestLogMiddleware, server.securityHeaders)
 	router.Get("/healthz", healthHandler)
 	router.Get("/readyz", server.readyHandler)
 	if dependencies.Sessions != nil && dependencies.Workspace != nil {
@@ -130,7 +131,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	if dependencies.StaticDir != "" {
 		router.Handle("/*", newSPAHandler(dependencies.StaticDir))
 	}
-	return otelhttp.NewHandler(router, "http.request")
+	return router
 }
 
 func newRequestValidator() *validator.Validate {

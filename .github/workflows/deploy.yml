@@ -88,6 +88,7 @@ jobs:
     env:
       COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
       PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
       BETA_ADMISSION_MODE: ${{ vars.BETA_ADMISSION_MODE || 'off' }}
       BETA_ADMISSION_COOKIE_TTL_DAYS: ${{ vars.BETA_ADMISSION_COOKIE_TTL_DAYS }}
       BETA_INVITES: ${{ vars.BETA_INVITES }}
@@ -173,6 +174,8 @@ jobs:
           cache-dependency-path: backend/go.sum
 
       - name: Validate required deployment inputs
+        env:
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
         run: node ./scripts/validate-deploy-inputs.mjs
 
       - name: Install JavaScript dependencies
@@ -194,6 +197,7 @@ jobs:
           STATIC_DIR: ""
           AI_PROVIDER: openai
           AI_PRICING_MODEL: ${{ env.AI_MODEL }}
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
           TURNSTILE_ENABLED: "true"
           TURNSTILE_EXPECTED_ACTION: anonymous_bootstrap
         run: go run ./cmd/configcheck
@@ -209,12 +213,13 @@ jobs:
         shell: bash
         env:
           SECRETS_FILE: ${{ runner.temp }}/fukamu-cycle-worker-secrets.json
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
         run: |
           node - <<'NODE'
           const fs = require("node:fs");
           const names = [
-            "DATABASE_URL", "SESSION_TOKEN_PEPPER", "CSRF_TOKEN_PEPPER", "BOOTSTRAP_ID_PEPPER",
-            "RATE_LIMIT_HMAC_SECRET", "CURSOR_SIGNING_SECRET", "OPENAI_API_KEY", "TURNSTILE_SECRET_KEY",
+            "DATABASE_URL", "OTEL_EXPORTER_OTLP_HEADERS", "SESSION_TOKEN_PEPPER", "CSRF_TOKEN_PEPPER",
+            "BOOTSTRAP_ID_PEPPER", "RATE_LIMIT_HMAC_SECRET", "CURSOR_SIGNING_SECRET", "OPENAI_API_KEY", "TURNSTILE_SECRET_KEY",
           ];
           if (process.env.BETA_ADMISSION_COOKIE_KEY) names.push("BETA_ADMISSION_COOKIE_KEY");
           const values = Object.fromEntries(names.map((name) => [name, process.env[name]]));
@@ -226,7 +231,8 @@ jobs:
         run: |
           set -euo pipefail
           variable_names=(
-            PUBLIC_ORIGIN BETA_ADMISSION_MODE DB_MAX_OPEN_CONNS DB_MAX_IDLE_CONNS DB_CONN_MAX_LIFETIME_MINUTES
+            PUBLIC_ORIGIN OTEL_EXPORTER_OTLP_ENDPOINT BETA_ADMISSION_MODE DB_MAX_OPEN_CONNS
+            DB_MAX_IDLE_CONNS DB_CONN_MAX_LIFETIME_MINUTES
             SESSION_IDLE_DAYS SESSION_ABSOLUTE_DAYS SESSION_ACTIVITY_TOUCH_MINUTES
             ANONYMOUS_BOOTSTRAP_TTL_MINUTES MAX_PROGRESSING_GOALS AI_MODEL AI_REASONING_EFFORT
             AI_MAX_INPUT_TOKENS

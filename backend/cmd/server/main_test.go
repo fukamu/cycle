@@ -1,9 +1,113 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"log/slog"
 	"math"
+	"strings"
 	"testing"
+	"time"
 )
+
+type recordingTelemetryShutdown struct {
+	calls       int
+	hasDeadline bool
+	err         error
+}
+
+func (runtime *recordingTelemetryShutdown) Shutdown(ctx context.Context) error {
+	runtime.calls++
+	_, runtime.hasDeadline = ctx.Deadline()
+	return runtime.err
+}
+
+func TestTelemetryShutdownIsBoundedExactlyOnceAndLogsNoRawError(t *testing.T) {
+	const errorCanary = "TELEMETRY_SECRET_ERROR_CANARY"
+	runtime := &recordingTelemetryShutdown{err: errors.New(errorCanary)}
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	shutdown := newTelemetryShutdown(runtime, logger, 50*time.Millisecond)
+
+	first := shutdown()
+	second := shutdown()
+	if !errors.Is(first, runtime.err) || !errors.Is(second, runtime.err) {
+		t.Fatalf("shutdown errors = %v / %v", first, second)
+	}
+	if runtime.calls != 1 || !runtime.hasDeadline {
+		t.Fatalf("Shutdown calls/deadline = %d/%v", runtime.calls, runtime.hasDeadline)
+	}
+	if got := output.String(); !strings.Contains(got, "telemetry_shutdown_failed") || strings.Contains(got, errorCanary) {
+		t.Fatalf("shutdown log is unsafe or missing stable class: %s", got)
+	}
+}
+
+func TestCleanupServerResourcesFlushesTelemetryBeforeClosingPool(t *testing.T) {
+	var events []string
+	cleanupServerResources(
+		func() error {
+			events = append(events, "telemetry")
+			return errors.New("collector unavailable")
+		},
+		func() { events = append(events, "pool") },
+		true,
+	)
+	if got := strings.Join(events, ","); got != "telemetry,pool" {
+		t.Fatalf("cleanup order = %q, want telemetry,pool", got)
+	}
+}
+
+func TestCleanupServerResourcesSkipsPoolCloseAfterHTTPDrainFailure(t *testing.T) {
+	var events []string
+	cleanupServerResources(
+		func() error {
+			events = append(events, "telemetry")
+			return nil
+		},
+		func() { events = append(events, "pool") },
+		false,
+	)
+	if got := strings.Join(events, ","); got != "telemetry" {
+		t.Fatalf("cleanup events = %q, want bounded telemetry cleanup only", got)
+	}
+}
+
+func TestRunDoesNotCallOSExitBeforeDeferredCleanup(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run *ast.FuncDecl
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Name.Name == "run" {
+			run = function
+			break
+		}
+	}
+	if run == nil {
+		t.Fatal("run function is missing")
+	}
+	ast.Inspect(run.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		identifier, identifierOK := selector.X.(*ast.Ident)
+		if ok && identifierOK && identifier.Name == "os" && selector.Sel.Name == "Exit" {
+			t.Error("run must return so deferred telemetry shutdown always executes; os.Exit is only allowed in main")
+		}
+		return true
+	})
+}
 
 func TestMaximumAIReservationUSDUsesOperationOutputLimit(t *testing.T) {
 	t.Parallel()

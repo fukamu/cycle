@@ -9,10 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 )
@@ -33,15 +31,6 @@ type AIObservation struct {
 	CurrentTruncated  bool
 	BudgetUsageRatio  float64
 	Duration          time.Duration
-}
-
-// Setup enables W3C trace propagation. Cloudflare automatically records the
-// Worker-to-Container request trace, while the Go service emits structured
-// application events to stdout for Workers Logs.
-func Setup() {
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{}, propagation.Baggage{},
-	))
 }
 
 type Metrics struct {
@@ -69,8 +58,11 @@ type Metrics struct {
 	warningThresholds    []float64
 }
 
-func NewMetrics(logger *slog.Logger, warningThresholds []float64) (*Metrics, error) {
-	meter := otel.Meter("fukamu-cycle")
+func NewMetrics(provider metric.MeterProvider, logger *slog.Logger, warningThresholds []float64) (*Metrics, error) {
+	if provider == nil {
+		return nil, fmt.Errorf("telemetry meter provider is required")
+	}
+	meter := provider.Meter(metricScopeName)
 	result := Metrics{logger: logger, warningThresholds: append([]float64(nil), warningThresholds...)}
 	var err error
 	if result.httpRequests, err = meter.Int64Counter("http_requests_total"); err != nil {

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
@@ -13,11 +12,10 @@ import (
 func TestMetricsExposeRequiredInstruments(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	otel.SetMeterProvider(provider)
 	t.Cleanup(func() {
 		_ = provider.Shutdown(context.Background())
 	})
-	metrics, err := NewMetrics(nil, []float64{0.5, 0.8})
+	metrics, err := NewMetrics(provider, nil, []float64{0.5, 0.8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,8 +41,15 @@ func TestMetricsExposeRequiredInstruments(t *testing.T) {
 	}
 	names := make(map[string]bool)
 	for _, scope := range collected.ScopeMetrics {
+		if scope.Scope.Name != metricScopeName {
+			t.Errorf("metric scope = %q, want %q", scope.Scope.Name, metricScopeName)
+		}
 		for _, measurement := range scope.Metrics {
 			names[measurement.Name] = true
+			sanitized, ok := sanitizeMetric(measurement)
+			if !ok || sanitized.Name != measurement.Name {
+				t.Errorf("metric %q was silently dropped or renamed by the export sanitizer", measurement.Name)
+			}
 		}
 	}
 	for _, required := range []string{
