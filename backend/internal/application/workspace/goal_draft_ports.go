@@ -81,7 +81,7 @@ type GoalDraftTx interface {
 	CountProgressingGoals(context.Context, string) (int, error)
 	InsertInitialGoal(context.Context, goal.Goal) (int64, error)
 	InsertInitialVersion(context.Context, goal.Version) (int64, error)
-	InsertInitialCycle(context.Context, cycle.PDCACycle) (int64, error)
+	TryInsertInitialCycleClaim(context.Context, cycle.PDCACycle) (int64, error)
 	AttachDraftGenerations(context.Context, string, string, []string, string, string) (int64, error)
 	AttachUsageToGoal(context.Context, string, []string, string) (int64, error)
 	LoadGoalView(context.Context, string, string) (GoalView, error)

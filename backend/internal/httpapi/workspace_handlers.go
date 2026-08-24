@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,15 +59,54 @@ type completeCycleRequest struct {
 	ExpectedGoalRevision    int64  `json:"expectedGoalRevision" validate:"gte=0"`
 	ExpectedContentRevision int64  `json:"expectedContentRevision" validate:"gte=0"`
 }
-type terminateGoalRequest struct {
-	OperationID                  string      `json:"operationId" validate:"required,uuid_v7"`
-	Outcome                      goal.Status `json:"outcome" validate:"required,oneof=achieved ended"`
-	ExpectedGoalRevision         int64       `json:"expectedGoalRevision" validate:"gte=0"`
-	ExpectedState                goal.Status `json:"expectedState" validate:"required,oneof=active_cycle goal_review"`
-	ActiveCycleID                string      `json:"activeCycleId,omitempty" validate:"omitempty,uuid_v7"`
-	ExpectedCycleContentRevision *int64      `json:"expectedCycleContentRevision,omitempty" validate:"omitempty,gte=0"`
-	ConfirmDiscardReviewDraft    bool        `json:"confirmDiscardReviewDraft,omitempty"`
+type optionalJSONField[T any] struct {
+	Value   T
+	Present bool
+	Null    bool
 }
+
+func (field *optionalJSONField[T]) UnmarshalJSON(data []byte) error {
+	field.Present = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		field.Null = true
+		return nil
+	}
+	return json.Unmarshal(data, &field.Value)
+}
+
+type terminateGoalRequest struct {
+	OperationID                  string                    `json:"operationId" validate:"required,uuid_v7"`
+	Outcome                      goal.Status               `json:"outcome" validate:"required"`
+	ExpectedGoalRevision         *int64                    `json:"expectedGoalRevision" validate:"required,gte=0"`
+	ExpectedState                goal.Status               `json:"expectedState" validate:"required"`
+	ActiveCycleID                optionalJSONField[string] `json:"activeCycleId"`
+	ExpectedCycleContentRevision optionalJSONField[int64]  `json:"expectedCycleContentRevision"`
+	ConfirmDiscardReviewDraft    optionalJSONField[bool]   `json:"confirmDiscardReviewDraft"`
+}
+
+func (input terminateGoalRequest) variant() (string, *int64, bool, error) {
+	switch input.ExpectedState {
+	case goal.StatusActiveCycle:
+		if !input.ActiveCycleID.Present || input.ActiveCycleID.Null ||
+			!isCanonicalUUIDv7(input.ActiveCycleID.Value) ||
+			!input.ExpectedCycleContentRevision.Present || input.ExpectedCycleContentRevision.Null ||
+			input.ExpectedCycleContentRevision.Value < 0 ||
+			input.ConfirmDiscardReviewDraft.Present {
+			return "", nil, false, errRequestValidation
+		}
+		revision := input.ExpectedCycleContentRevision.Value
+		return input.ActiveCycleID.Value, &revision, false, nil
+	case goal.StatusGoalReview:
+		if input.ActiveCycleID.Present || input.ExpectedCycleContentRevision.Present ||
+			!input.ConfirmDiscardReviewDraft.Present || input.ConfirmDiscardReviewDraft.Null {
+			return "", nil, false, errRequestValidation
+		}
+		return "", nil, input.ConfirmDiscardReviewDraft.Value, nil
+	default:
+		return "", nil, false, errRequestValidation
+	}
+}
+
 type deleteGoalRequest struct {
 	Confirmed            bool  `json:"confirmed"`
 	ExpectedGoalRevision int64 `json:"expectedGoalRevision" validate:"gte=0"`
@@ -276,11 +317,20 @@ func (server *api) terminateGoal(writer http.ResponseWriter, request *http.Reque
 		server.writeError(writer, request, err, nil)
 		return
 	}
+	if input.Outcome != goal.StatusAchieved && input.Outcome != goal.StatusEnded {
+		server.writeError(writer, request, workspace.ErrInvalidGoalOutcome, nil)
+		return
+	}
+	activeCycleID, expectedCycleContentRevision, confirmDiscardReviewDraft, err := input.variant()
+	if err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
 	view, err := server.dependencies.Workspace.Terminate(request.Context(), workspace.TerminateInput{
 		UserID: currentUserID(request), GoalID: chi.URLParam(request, "goalId"), OperationID: input.OperationID,
-		Outcome: input.Outcome, ExpectedGoalRevision: input.ExpectedGoalRevision, ExpectedState: input.ExpectedState,
-		ActiveCycleID: input.ActiveCycleID, ExpectedCycleContentRevision: input.ExpectedCycleContentRevision,
-		ConfirmDiscardReviewDraft: input.ConfirmDiscardReviewDraft,
+		Outcome: input.Outcome, ExpectedGoalRevision: *input.ExpectedGoalRevision, ExpectedState: input.ExpectedState,
+		ActiveCycleID: activeCycleID, ExpectedCycleContentRevision: expectedCycleContentRevision,
+		ConfirmDiscardReviewDraft: confirmDiscardReviewDraft,
 	})
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalTerminationFailed), nil)

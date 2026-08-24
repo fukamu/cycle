@@ -598,9 +598,23 @@ test("goal review termination discards an unversioned change explicitly", async 
   await page.getByRole("button", { name: "目標を達成として終了" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText(
-    "この変更案は、次のサイクルを開始しないため保存されません",
+    "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません",
   );
   await dialog.getByRole("button", { name: "目標を達成" }).click();
+  await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
+});
+
+test("goal review termination explicitly covers cross-tab changes without local edits", async ({
+  page,
+}) => {
+  await createAndCompleteGoal(page);
+  await page.getByRole("button", { name: "目標を終了" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText(
+    "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません",
+  );
+  await expect(dialog).toContainText("現在の目標のまま終了します");
+  await dialog.getByRole("button", { name: "目標を終了" }).click();
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });
 

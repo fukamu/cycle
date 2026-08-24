@@ -85,6 +85,7 @@ type contractWorkspaceStub struct {
 	saveReview  func(context.Context, string, string, string, string, int64) (workspace.DraftView, error)
 	saveFrame   func(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
 	refineGoal  func(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
+	terminate   func(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error)
 }
 
 func (stub *contractWorkspaceStub) Home(ctx context.Context, userID string) (workspace.HomeView, error) {
@@ -134,6 +135,13 @@ func (stub *contractWorkspaceStub) RefineGoal(ctx context.Context, input workspa
 		panic("unexpected RefineGoal call")
 	}
 	return stub.refineGoal(ctx, input)
+}
+
+func (stub *contractWorkspaceStub) Terminate(ctx context.Context, input workspace.TerminateInput) (workspace.TerminateResult, error) {
+	if stub.terminate == nil {
+		panic("unexpected Terminate call")
+	}
+	return stub.terminate(ctx, input)
 }
 
 type contractAccountStub struct {
@@ -668,6 +676,113 @@ func TestAutosaveRevisionConflictsHaveStableHTTPContract(t *testing.T) {
 			"/api/v1/goals/"+contractGoalID+"/cycles/"+contractCycleID+"/frames/plan",
 			`{"content":"local plan","expectedFrameRevision":7}`, addContractAuthentication)
 		assertContractError(t, response, http.StatusConflict, "CYCLE_REVISION_CONFLICT", nil)
+	})
+}
+
+func TestGoalTerminationDiscriminatedUnionHTTPContract(t *testing.T) {
+	const path = "/api/v1/goals/" + contractGoalID + "/termination"
+
+	t.Run("active cycle variant", func(t *testing.T) {
+		cycleRevision := int64(5)
+		want := workspace.TerminateInput{
+			UserID: contractUserID, GoalID: contractGoalID, OperationID: contractOperationID,
+			Outcome: "achieved", ExpectedGoalRevision: 3, ExpectedState: "active_cycle",
+			ActiveCycleID: contractCycleID, ExpectedCycleContentRevision: &cycleRevision,
+		}
+		spaces := &contractWorkspaceStub{terminate: func(_ context.Context, input workspace.TerminateInput) (workspace.TerminateResult, error) {
+			if !reflect.DeepEqual(input, want) {
+				t.Fatalf("Terminate input = %#v, want %#v", input, want)
+			}
+			return workspace.TerminateResult{}, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, path,
+			`{"operationId":"`+contractOperationID+`","outcome":"achieved","expectedGoalRevision":3,"expectedState":"active_cycle","activeCycleId":"`+contractCycleID+`","expectedCycleContentRevision":5}`,
+			addContractAuthentication)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("goal review variant preserves false confirmation", func(t *testing.T) {
+		want := workspace.TerminateInput{
+			UserID: contractUserID, GoalID: contractGoalID, OperationID: contractOperationID,
+			Outcome: "ended", ExpectedGoalRevision: 7, ExpectedState: "goal_review",
+			ConfirmDiscardReviewDraft: false,
+		}
+		spaces := &contractWorkspaceStub{terminate: func(_ context.Context, input workspace.TerminateInput) (workspace.TerminateResult, error) {
+			if !reflect.DeepEqual(input, want) {
+				t.Fatalf("Terminate input = %#v, want %#v", input, want)
+			}
+			return workspace.TerminateResult{}, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, path,
+			`{"operationId":"`+contractOperationID+`","outcome":"ended","expectedGoalRevision":7,"expectedState":"goal_review","confirmDiscardReviewDraft":false}`,
+			addContractAuthentication)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	validActivePrefix := `{"operationId":"` + contractOperationID + `","outcome":"achieved","expectedGoalRevision":3,"expectedState":"active_cycle"`
+	validReviewPrefix := `{"operationId":"` + contractOperationID + `","outcome":"ended","expectedGoalRevision":3,"expectedState":"goal_review"`
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "missing expected goal revision", body: `{"operationId":"` + contractOperationID + `","outcome":"ended","expectedState":"goal_review","confirmDiscardReviewDraft":false}`},
+		{name: "null expected goal revision", body: `{"operationId":"` + contractOperationID + `","outcome":"ended","expectedGoalRevision":null,"expectedState":"goal_review","confirmDiscardReviewDraft":false}`},
+		{name: "negative expected goal revision", body: `{"operationId":"` + contractOperationID + `","outcome":"ended","expectedGoalRevision":-1,"expectedState":"goal_review","confirmDiscardReviewDraft":false}`},
+		{name: "unknown expected state", body: `{"operationId":"` + contractOperationID + `","outcome":"ended","expectedGoalRevision":3,"expectedState":"paused","confirmDiscardReviewDraft":false}`},
+		{name: "expected state wrong type", body: `{"operationId":"` + contractOperationID + `","outcome":"ended","expectedGoalRevision":3,"expectedState":1,"confirmDiscardReviewDraft":false}`},
+		{name: "active missing cycle id", body: validActivePrefix + `,"expectedCycleContentRevision":5}`},
+		{name: "active null cycle id", body: validActivePrefix + `,"activeCycleId":null,"expectedCycleContentRevision":5}`},
+		{name: "active cycle id wrong type", body: validActivePrefix + `,"activeCycleId":1,"expectedCycleContentRevision":5}`},
+		{name: "active non UUIDv7 cycle id", body: validActivePrefix + `,"activeCycleId":"123e4567-e89b-42d3-a456-426614174000","expectedCycleContentRevision":5}`},
+		{name: "active missing cycle revision", body: validActivePrefix + `,"activeCycleId":"` + contractCycleID + `"}`},
+		{name: "active null cycle revision", body: validActivePrefix + `,"activeCycleId":"` + contractCycleID + `","expectedCycleContentRevision":null}`},
+		{name: "active cycle revision wrong type", body: validActivePrefix + `,"activeCycleId":"` + contractCycleID + `","expectedCycleContentRevision":"5"}`},
+		{name: "active negative cycle revision", body: validActivePrefix + `,"activeCycleId":"` + contractCycleID + `","expectedCycleContentRevision":-1}`},
+		{name: "active includes review confirmation", body: validActivePrefix + `,"activeCycleId":"` + contractCycleID + `","expectedCycleContentRevision":5,"confirmDiscardReviewDraft":false}`},
+		{name: "active includes null review confirmation", body: validActivePrefix + `,"activeCycleId":"` + contractCycleID + `","expectedCycleContentRevision":5,"confirmDiscardReviewDraft":null}`},
+		{name: "review missing confirmation", body: validReviewPrefix + `}`},
+		{name: "review null confirmation", body: validReviewPrefix + `,"confirmDiscardReviewDraft":null}`},
+		{name: "review confirmation wrong type", body: validReviewPrefix + `,"confirmDiscardReviewDraft":"false"}`},
+		{name: "review includes active cycle id", body: validReviewPrefix + `,"activeCycleId":"` + contractCycleID + `","confirmDiscardReviewDraft":false}`},
+		{name: "review includes null active cycle id", body: validReviewPrefix + `,"activeCycleId":null,"confirmDiscardReviewDraft":false}`},
+		{name: "review includes cycle revision", body: validReviewPrefix + `,"expectedCycleContentRevision":5,"confirmDiscardReviewDraft":false}`},
+		{name: "review includes null cycle revision", body: validReviewPrefix + `,"expectedCycleContentRevision":null,"confirmDiscardReviewDraft":false}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			spaces := &contractWorkspaceStub{terminate: func(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error) {
+				calls++
+				return workspace.TerminateResult{}, nil
+			}}
+			response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+				http.MethodPost, path, test.body, addContractAuthentication)
+			assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
+			if calls != 0 {
+				t.Fatalf("Terminate calls = %d, want 0", calls)
+			}
+		})
+	}
+
+	t.Run("invalid outcome retains stable semantic error", func(t *testing.T) {
+		calls := 0
+		spaces := &contractWorkspaceStub{terminate: func(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error) {
+			calls++
+			return workspace.TerminateResult{}, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, path,
+			`{"operationId":"`+contractOperationID+`","outcome":"paused","expectedGoalRevision":3,"expectedState":"active_cycle","activeCycleId":"`+contractCycleID+`","expectedCycleContentRevision":5}`,
+			addContractAuthentication)
+		assertContractError(t, response, http.StatusBadRequest, "INVALID_GOAL_OUTCOME", nil)
+		if calls != 0 {
+			t.Fatalf("Terminate calls = %d, want 0", calls)
+		}
 	})
 }
 

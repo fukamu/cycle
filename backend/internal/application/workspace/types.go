@@ -26,6 +26,7 @@ var (
 	ErrGoalStateConflict             = errors.New("goal state conflict")
 	ErrGoalAlreadyTerminal           = errors.New("goal already terminal")
 	ErrInvalidGoalOutcome            = errors.New("invalid goal outcome")
+	ErrInvalidTerminationRequest     = errors.New("invalid goal termination request")
 	ErrDeleteConfirmation            = errors.New("goal delete confirmation required")
 	ErrDeleteConflict                = errors.New("goal delete conflict")
 	ErrDiscardConfirmation           = errors.New("review discard confirmation required")
@@ -405,8 +406,6 @@ type Store interface {
 	Home(context.Context, string, int) (HomeView, error)
 	GetDraft(context.Context, string, string) (DraftView, error)
 	GetReview(context.Context, string, string) (ReviewView, error)
-	ContinueReview(context.Context, ContinueReviewInput) (ContinueReviewResult, error)
-	Terminate(context.Context, TerminateInput) (TerminateResult, error)
 	BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error)
 	FinishActionAI(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
 }

@@ -580,20 +580,15 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             void terminate(outcome);
           }}
         >
-          {changed ? (
-            <>
-              <p>この変更案は、次のサイクルを開始しないため保存されません。</p>
-              <p>
-                現在の目標のまま
-                {confirmation.outcome === "achieved"
-                  ? "達成として終了"
-                  : "終了"}
-                します。
-              </p>
-            </>
-          ) : (
-            <p>次のサイクルを開始せず、現在の目標を終了します。</p>
-          )}
+          <p>
+            このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal
+            Versionとして保存されません。
+          </p>
+          <p>
+            現在の目標のまま
+            {confirmation.outcome === "achieved" ? "達成として終了" : "終了"}
+            します。
+          </p>
         </ConfirmationDialog>
       )}
       {confirmation?.kind === "delete" && (

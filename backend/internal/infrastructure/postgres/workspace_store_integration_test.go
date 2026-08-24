@@ -148,7 +148,7 @@ func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
 	}()
 	go func() {
 		<-startBarrier
-		_, err := store.Terminate(context.Background(), terminateInput)
+		_, err := executeTerminateGoalUseCase(store, context.Background(), terminateInput)
 		terminateResult <- err
 	}()
 	close(startBarrier)
@@ -416,7 +416,6 @@ func TestWorkspaceCommandReplayConvergesAfterLaterStateTransition(t *testing.T) 
 		startOperation    = "50000000-0000-7000-8000-000000000001"
 		reviewDraftID     = "60000000-0000-7000-8000-000000000001"
 		completeOperation = "70000000-0000-7000-8000-000000000001"
-		nextVersionID     = "80000000-0000-7000-8000-000000000001"
 		nextCycleID       = "90000000-0000-7000-8000-000000000001"
 		continueOperation = "a0000000-0000-7000-8000-000000000001"
 		generationID      = "b0000000-0000-7000-8000-000000000001"
@@ -499,9 +498,9 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	if _, err = store.GetDraft(context.Background(), userID, reviewDraftID); !errors.Is(err, workspace.ErrDraftTypeMismatch) {
 		t.Fatalf("review draft read through creation endpoint error = %v", err)
 	}
-	if _, err = store.ContinueReview(context.Background(), workspace.ContinueReviewInput{
+	if _, err = executeContinueReviewUseCase(store, context.Background(), workspace.ContinueReviewInput{
 		UserID: userID, GoalID: goalID, OperationID: continueOperation, ExpectedGoalRevision: 1,
-		ExpectedDraftRevision: 0, RequestHash: "continue-hash", VersionID: nextVersionID,
+		ExpectedDraftRevision: 0, RequestHash: "continue-hash",
 		CycleID: nextCycleID, Now: now.Add(2 * time.Minute),
 	}); err != nil {
 		t.Fatal(err)

@@ -20,7 +20,7 @@ func TestWorkspaceHTTPTextSemanticsUseCodePointsAndNormalizeNewlines(t *testing.
 	resetDatabase(t, pool)
 	now := integrationNow()
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
-	service := workspace.NewService(store, store, store, store, store, store, &contractRejectProvider{}, contractIntegrationClock{now: now}, system.RandomGenerator{}, workspace.Settings{
+	service := workspace.NewService(store, store, store, store, store, store, store, &contractRejectProvider{}, contractIntegrationClock{now: now}, system.RandomGenerator{}, workspace.Settings{
 		MaxProgressingGoals: 2,
 		CursorSigningKey:    []byte("test-cursor-key"),
 		MaxProviderAttempts: 1,

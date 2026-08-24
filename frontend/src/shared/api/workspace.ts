@@ -302,25 +302,32 @@ export const terminateGoal = (
   expectedState: "active_cycle" | "goal_review",
   options: CommandRequestOptions,
   active?: { id: string; revision: number },
-) =>
-  requestAuthenticatedJSON(
+) => {
+  const common = {
+    operationId: options.operationId,
+    outcome,
+    expectedGoalRevision,
+    expectedState,
+  };
+  const body =
+    expectedState === "active_cycle"
+      ? {
+          ...common,
+          activeCycleId: active?.id,
+          expectedCycleContentRevision: active?.revision,
+        }
+      : { ...common, confirmDiscardReviewDraft: true };
+  return requestAuthenticatedJSON(
     lease,
     `/api/v1/goals/${goalId}/termination`,
     terminateEnvelope,
     {
       method: "POST",
       csrfToken: options.csrfToken,
-      body: {
-        operationId: options.operationId,
-        outcome,
-        expectedGoalRevision,
-        expectedState,
-        activeCycleId: active?.id,
-        expectedCycleContentRevision: active?.revision,
-        confirmDiscardReviewDraft: expectedState === "goal_review",
-      },
+      body,
     },
   );
+};
 export const deleteGoal = (
   lease: AuthenticatedRequestLease,
   goalId: string,

@@ -114,6 +114,17 @@ func TestReviewComparisonNormalizesAllLineEndingsWithoutTrimming(t *testing.T) {
 	})
 }
 
+func TestReviewComparisonRequiresReviewCycleReference(t *testing.T) {
+	current, version, draft := reviewFixture(t, "目標")
+	draft.ReviewCycleID = nil
+	if _, _, err := ReviewBodyChanged(current, version, draft); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("Continue comparison error = %v, want %v", err, ErrStateConflict)
+	}
+	if _, err := ReviewDraftDiffersFromVersion(current, version, draft); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("discard comparison error = %v, want %v", err, ErrStateConflict)
+	}
+}
+
 func TestReviewChangedBodyCreatesImmutableNextVersion(t *testing.T) {
 	current, version, draft := reviewFixture(t, "元の目標")
 	draft.Body = "変更した目標"

@@ -211,6 +211,52 @@ describe("goal-scoped workspace API", () => {
     },
   );
 
+  it("serializes Goal termination as a state-specific request", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new TypeError("response lost"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      terminateGoal(lease, goalId, "ended", 1, "active_cycle", commandOptions, {
+        id: cycleId,
+        revision: 4,
+      }),
+    ).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      terminateGoal(
+        lease,
+        goalId,
+        "achieved",
+        2,
+        "goal_review",
+        commandOptions,
+      ),
+    ).rejects.toBeInstanceOf(TypeError);
+
+    const activeRequest = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    );
+    expect(activeRequest).toEqual({
+      operationId: suppliedOperationId,
+      outcome: "ended",
+      expectedGoalRevision: 1,
+      expectedState: "active_cycle",
+      activeCycleId: cycleId,
+      expectedCycleContentRevision: 4,
+    });
+
+    const reviewRequest = JSON.parse(
+      String(fetchMock.mock.calls[1]?.[1]?.body),
+    );
+    expect(reviewRequest).toEqual({
+      operationId: suppliedOperationId,
+      outcome: "achieved",
+      expectedGoalRevision: 2,
+      expectedState: "goal_review",
+      confirmDiscardReviewDraft: true,
+    });
+  });
   it("saves a frame through the nested goal/cycle route with CSRF", async () => {
     const response = {
       cycleId,

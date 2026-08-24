@@ -66,7 +66,7 @@ func (server *api) writeError(writer http.ResponseWriter, request *http.Request,
 
 func classifyError(err error) (int, string, string) {
 	switch {
-	case errors.Is(err, errRequestValidation):
+	case errors.Is(err, errRequestValidation), errors.Is(err, workspace.ErrInvalidTerminationRequest):
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
 	case errors.Is(err, appsession.ErrSessionMissing):
 		return 401, "SESSION_MISSING", "セッションがありません。"

@@ -314,7 +314,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	terminateCalls := make(chan terminateGoalCall, 1)
 	terminateCtx := context.WithValue(ctx, lockOrderCommandContextKey{}, lockOrderTerminate)
 	go func() {
-		result, callErr := store.Terminate(terminateCtx, terminateInput)
+		result, callErr := executeTerminateGoalUseCase(store, terminateCtx, terminateInput)
 		terminateCalls <- terminateGoalCall{result: result, err: callErr}
 	}()
 
@@ -621,26 +621,28 @@ func TestWorkspaceStoreTerminatePreservesUserScopedReplayContract(t *testing.T) 
 		ActiveCycleID: fixtures[0].cycleID, ExpectedCycleContentRevision: &cycleRevision,
 		RequestHash: "first-goal-terminate-hash", Now: now.Add(10 * time.Minute),
 	}
-	result, err := store.Terminate(context.Background(), firstInput)
+	result, err := executeTerminateGoalUseCase(store, context.Background(), firstInput)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Replayed || result.Goal.ID != fixtures[0].goalID || result.Goal.Status != goal.StatusEnded {
 		t.Fatalf("first terminate result = %#v", result)
 	}
-	replay, err := store.Terminate(context.Background(), firstInput)
-	if err != nil || !replay.Replayed || replay.Goal.ID != fixtures[0].goalID || replay.Goal.Status != goal.StatusEnded {
+	replay, err := executeTerminateGoalUseCase(store, context.Background(), firstInput)
+	if err != nil || !replay.Replayed || replay.Goal.ID != fixtures[0].goalID || replay.Goal.Status != goal.StatusEnded ||
+		replay.CanceledCycle == nil || replay.CanceledCycle.ID != fixtures[0].cycleID ||
+		replay.CanceledCycle.Status != cycle.StatusCanceled {
 		t.Fatalf("same-request terminate replay = %#v, error = %v", replay, err)
 	}
 	differentHash := firstInput
-	differentHash.RequestHash = "different-terminate-hash"
-	if _, err = store.Terminate(context.Background(), differentHash); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
+	differentHash.Outcome = goal.StatusAchieved
+	if _, err = executeTerminateGoalUseCase(store, context.Background(), differentHash); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
 		t.Fatalf("same-operation different-hash terminate error = %v, want %v", err, workspace.ErrIdempotencyKeyReused)
 	}
 	differentOperation := firstInput
 	differentOperation.OperationID = "72000000-0000-7000-8000-000000000002"
 	differentOperation.RequestHash = "different-operation-terminate-hash"
-	if _, err = store.Terminate(context.Background(), differentOperation); !errors.Is(err, workspace.ErrGoalAlreadyTerminal) {
+	if _, err = executeTerminateGoalUseCase(store, context.Background(), differentOperation); !errors.Is(err, workspace.ErrGoalAlreadyTerminal) {
 		t.Fatalf("different-operation terminal Goal error = %v, want %v", err, workspace.ErrGoalAlreadyTerminal)
 	}
 
@@ -651,7 +653,7 @@ func TestWorkspaceStoreTerminatePreservesUserScopedReplayContract(t *testing.T) 
 		ActiveCycleID: fixtures[1].cycleID, ExpectedCycleContentRevision: &cycleRevision,
 		RequestHash: "second-goal-terminate-hash", Now: now.Add(20 * time.Minute),
 	}
-	if _, err = store.Terminate(context.Background(), secondInput); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
+	if _, err = executeTerminateGoalUseCase(store, context.Background(), secondInput); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
 		t.Fatalf("second Goal terminate error = %v, want %v", err, workspace.ErrIdempotencyKeyReused)
 	}
 

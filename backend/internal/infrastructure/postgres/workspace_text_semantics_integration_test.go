@@ -119,7 +119,6 @@ func TestWorkspaceContinueReviewUsesNormalizedExactBodyComparison(t *testing.T) 
 		firstReviewDraftID = "61000000-0000-7000-8000-000000000031"
 		firstCompleteID    = "71000000-0000-7000-8000-000000000031"
 		firstContinueID    = "72000000-0000-7000-8000-000000000031"
-		unusedVersionID    = "31000000-0000-7000-8000-000000000031"
 		secondCycleID      = "41000000-0000-7000-8000-000000000031"
 		secondReviewID     = "61000000-0000-7000-8000-000000000032"
 		secondCompleteID   = "71000000-0000-7000-8000-000000000032"
@@ -144,10 +143,10 @@ func TestWorkspaceContinueReviewUsesNormalizedExactBodyComparison(t *testing.T) 
 	if firstSaved.Body != fixture.body || firstSaved.Revision != firstReview.ReviewDraft.Revision {
 		t.Fatalf("newline-only Review save = %#v, want body %q and no revision increment", firstSaved, fixture.body)
 	}
-	firstContinued, err := store.ContinueReview(context.Background(), workspace.ContinueReviewInput{
+	firstContinued, err := executeContinueReviewUseCase(store, context.Background(), workspace.ContinueReviewInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, OperationID: firstContinueID,
 		ExpectedGoalRevision: firstReview.Goal.Revision, ExpectedDraftRevision: firstSaved.Revision,
-		RequestHash: "m7-first-continue", VersionID: unusedVersionID, CycleID: secondCycleID, Now: now.Add(4 * time.Minute),
+		RequestHash: "m7-first-continue", CycleID: secondCycleID, Now: now.Add(4 * time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +171,7 @@ func TestWorkspaceContinueReviewUsesNormalizedExactBodyComparison(t *testing.T) 
 	if err != nil || secondSaved.Body != changedBody || secondSaved.Revision != secondReview.ReviewDraft.Revision+1 {
 		t.Fatalf("trailing-whitespace Review save = %#v, error = %v", secondSaved, err)
 	}
-	secondContinued, err := store.ContinueReview(context.Background(), workspace.ContinueReviewInput{
+	secondContinued, err := executeContinueReviewUseCase(store, context.Background(), workspace.ContinueReviewInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, OperationID: secondContinueID,
 		ExpectedGoalRevision: secondReview.Goal.Revision, ExpectedDraftRevision: secondSaved.Revision,
 		RequestHash: "m7-second-continue", VersionID: secondVersionID, CycleID: thirdCycleID, Now: now.Add(8 * time.Minute),

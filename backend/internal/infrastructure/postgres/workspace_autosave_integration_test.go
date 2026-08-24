@@ -135,7 +135,6 @@ func TestWorkspaceSaveReviewRejectsSupersededDraftGeneration(t *testing.T) {
 		firstReviewDraftID  = "61000000-0000-7000-8000-000000000020"
 		firstCompleteID     = "71000000-0000-7000-8000-000000000020"
 		continueID          = "72000000-0000-7000-8000-000000000020"
-		secondVersionID     = "31000000-0000-7000-8000-000000000020"
 		secondCycleID       = "41000000-0000-7000-8000-000000000020"
 		secondReviewDraftID = "61000000-0000-7000-8000-000000000021"
 		secondCompleteID    = "71000000-0000-7000-8000-000000000021"
@@ -149,10 +148,10 @@ func TestWorkspaceSaveReviewRejectsSupersededDraftGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := store.ContinueReview(context.Background(), workspace.ContinueReviewInput{
+	continued, err := executeContinueReviewUseCase(store, context.Background(), workspace.ContinueReviewInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, OperationID: continueID,
 		ExpectedGoalRevision: firstReview.Goal.Revision, ExpectedDraftRevision: firstReview.ReviewDraft.Revision,
-		RequestHash: "m6-continue", VersionID: secondVersionID, CycleID: secondCycleID, Now: now.Add(3 * time.Minute),
+		RequestHash: "m6-continue", CycleID: secondCycleID, Now: now.Add(3 * time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)

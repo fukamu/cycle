@@ -90,6 +90,19 @@ func TestStableUseCaseErrorOnlyReclassifiesUnexpectedFailures(t *testing.T) {
 	}
 }
 
+func TestStableUseCaseErrorKeepsTerminationBoundaryPublic(t *testing.T) {
+	invalid := stableUseCaseError(workspace.ErrInvalidTerminationRequest, errGoalTerminationFailed)
+	status, code, _ := classifyError(invalid)
+	if status != 400 || code != "VALIDATION_ERROR" {
+		t.Fatalf("invalid termination request classified as %d/%s", status, code)
+	}
+	invariant := stableUseCaseError(workspace.ErrReviewTransitionPersistenceInvariant, errGoalTerminationFailed)
+	status, code, _ = classifyError(invariant)
+	if status != 500 || code != "GOAL_TERMINATION_FAILED" {
+		t.Fatalf("termination invariant classified as %d/%s", status, code)
+	}
+}
+
 func TestClassifyErrorMatchesPublicStatusCodeMatrix(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -98,6 +111,7 @@ func TestClassifyErrorMatchesPublicStatusCodeMatrix(t *testing.T) {
 		code   string
 	}{
 		{"request validation", errRequestValidation, 400, "VALIDATION_ERROR"},
+		{"termination request validation", workspace.ErrInvalidTerminationRequest, 400, "VALIDATION_ERROR"},
 		{"session missing", appsession.ErrSessionMissing, 401, "SESSION_MISSING"},
 		{"session identity changed", errSessionIdentityChanged, 409, "SESSION_IDENTITY_CHANGED"},
 		{"session expired", appsession.ErrSessionExpired, 401, "SESSION_EXPIRED"},

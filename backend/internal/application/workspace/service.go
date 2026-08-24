@@ -46,15 +46,16 @@ type Settings struct {
 }
 
 type Service struct {
-	store        Store
-	goalDraft    *GoalDraftUseCases
-	goals        *GoalUseCases
-	cycles       *CycleUseCases
-	entitlements EntitlementPolicy
-	provider     AIProvider
-	clock        ports.Clock
-	ids          ports.IDGenerator
-	settings     Settings
+	store             Store
+	goalDraft         *GoalDraftUseCases
+	goals             *GoalUseCases
+	cycles            *CycleUseCases
+	reviewTransitions *ReviewTransitionUseCases
+	entitlements      EntitlementPolicy
+	provider          AIProvider
+	clock             ports.Clock
+	ids               ports.IDGenerator
+	settings          Settings
 }
 
 func NewService(
@@ -64,6 +65,7 @@ func NewService(
 	goalUOW GoalUnitOfWork,
 	cycleQueries CycleQueryRepository,
 	cycleUOW CycleUnitOfWork,
+	reviewTransitionUOW ReviewTransitionUnitOfWork,
 	provider AIProvider,
 	clock ports.Clock,
 	ids ports.IDGenerator,
@@ -89,8 +91,9 @@ func NewService(
 	cycles := NewCycleUseCases(cycleQueries, cycleUOW, clock, ids, CycleUseCaseSettings{
 		CursorSigningKey: settings.CursorSigningKey,
 	})
-	return &Service{store: store, goalDraft: goalDraft, goals: goals, cycles: cycles, entitlements: entitlements,
-		provider: provider, clock: clock, ids: ids, settings: settings}
+	reviewTransitions := NewReviewTransitionUseCases(reviewTransitionUOW, clock, ids)
+	return &Service{store: store, goalDraft: goalDraft, goals: goals, cycles: cycles, reviewTransitions: reviewTransitions,
+		entitlements: entitlements, provider: provider, clock: clock, ids: ids, settings: settings}
 }
 
 func (service *Service) Home(ctx context.Context, userID string) (HomeView, error) {
@@ -144,36 +147,15 @@ func (service *Service) SaveReview(ctx context.Context, userID, goalID, expected
 }
 
 func (service *Service) ContinueReview(ctx context.Context, userID, goalID, operationID string, expectedGoalRevision, expectedDraftRevision int64) (ContinueReviewResult, error) {
-	versionID, cycleID, err := service.twoIDs()
-	if err != nil {
-		return ContinueReviewResult{}, err
-	}
-	requestHash := hashRequest(struct {
-		GoalID        string `json:"goalId"`
-		GoalRevision  int64  `json:"goalRevision"`
-		DraftRevision int64  `json:"draftRevision"`
-	}{goalID, expectedGoalRevision, expectedDraftRevision})
-	result, err := service.store.ContinueReview(ctx, ContinueReviewInput{
+	result, err := service.reviewTransitions.ContinueReview(ctx, ContinueReviewInput{
 		UserID: userID, GoalID: goalID, OperationID: operationID,
 		ExpectedGoalRevision: expectedGoalRevision, ExpectedDraftRevision: expectedDraftRevision,
-		RequestHash: requestHash, VersionID: versionID, CycleID: cycleID, Now: service.clock.Now().UTC(),
 	})
 	return result, resourceNotFound(err, ErrGoalNotFound)
 }
 
 func (service *Service) Terminate(ctx context.Context, input TerminateInput) (TerminateResult, error) {
-	if input.Outcome != goal.StatusAchieved && input.Outcome != goal.StatusEnded {
-		return TerminateResult{}, ErrInvalidGoalOutcome
-	}
-	input.Now = service.clock.Now().UTC()
-	input.RequestHash = hashRequest(struct {
-		GoalID        string      `json:"goalId"`
-		Outcome       goal.Status `json:"outcome"`
-		ExpectedState goal.Status `json:"expectedState"`
-		GoalRevision  int64       `json:"goalRevision"`
-		CycleRevision *int64      `json:"cycleRevision"`
-	}{input.GoalID, input.Outcome, input.ExpectedState, input.ExpectedGoalRevision, input.ExpectedCycleContentRevision})
-	result, err := service.store.Terminate(ctx, input)
+	result, err := service.reviewTransitions.Terminate(ctx, input)
 	return result, resourceNotFound(err, ErrGoalNotFound)
 }
 
@@ -378,28 +360,6 @@ func (service *Service) promptVersion(operation string) string {
 	default:
 		return ""
 	}
-}
-
-func (service *Service) threeIDs() (string, string, string, error) {
-	first, err := service.ids.NewID()
-	if err != nil {
-		return "", "", "", err
-	}
-	second, err := service.ids.NewID()
-	if err != nil {
-		return "", "", "", err
-	}
-	third, err := service.ids.NewID()
-	return first, second, third, err
-}
-
-func (service *Service) twoIDs() (string, string, error) {
-	first, err := service.ids.NewID()
-	if err != nil {
-		return "", "", err
-	}
-	second, err := service.ids.NewID()
-	return first, second, err
 }
 
 func hashRequest(value any) string {

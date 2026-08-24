@@ -85,6 +85,8 @@ type goalDraftFakeTx struct {
 	draft                     goal.Draft
 	target                    GoalTargetState
 	startReplay               *StartReplayState
+	startReplayAfterClaim     *StartReplayState
+	startReplayLookups        int
 	refineReplay              *GoalRefineReplayState
 	generations               []DraftGenerationState
 	usages                    []DraftUsageState
@@ -204,6 +206,10 @@ func (tx *goalDraftFakeTx) FindStartReplay(context.Context, string, string) (*St
 	if err := tx.record("find_start_replay"); err != nil {
 		return nil, err
 	}
+	tx.startReplayLookups++
+	if tx.startReplayLookups > 1 {
+		return tx.startReplayAfterClaim, nil
+	}
 	return tx.startReplay, nil
 }
 
@@ -224,7 +230,7 @@ func (tx *goalDraftFakeTx) InsertInitialVersion(_ context.Context, version goal.
 	return tx.mutation("insert_initial_version")
 }
 
-func (tx *goalDraftFakeTx) InsertInitialCycle(_ context.Context, current cycle.PDCACycle) (int64, error) {
+func (tx *goalDraftFakeTx) TryInsertInitialCycleClaim(_ context.Context, current cycle.PDCACycle) (int64, error) {
 	tx.initialCycle = current
 	return tx.mutation("insert_initial_cycle")
 }

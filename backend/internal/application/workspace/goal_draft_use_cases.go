@@ -874,11 +874,29 @@ func insertInitialAggregate(ctx context.Context, tx GoalDraftTx, aggregate goal.
 	if err = requireRows("insert initial Goal Version", rows, 1); err != nil {
 		return err
 	}
-	rows, err = tx.InsertInitialCycle(ctx, aggregate.Cycle)
+	rows, err = tx.TryInsertInitialCycleClaim(ctx, aggregate.Cycle)
 	if err != nil {
 		return err
 	}
-	return requireRows("insert initial Cycle", rows, 1)
+	if rows == 0 {
+		return classifyLostInitialCycleClaim(ctx, tx, aggregate)
+	}
+	return requireRows("insert initial Cycle claim", rows, 1)
+}
+
+func classifyLostInitialCycleClaim(ctx context.Context, tx GoalDraftTx, aggregate goal.InitialAggregate) error {
+	replay, err := tx.FindStartReplay(ctx, aggregate.Cycle.UserID, aggregate.Cycle.StartOperationID)
+	if err != nil {
+		return err
+	}
+	if replay == nil {
+		return invariantError("initial Cycle claim affected no row without a competing receipt")
+	}
+	if replay.GoalID != aggregate.Goal.ID || replay.CycleID != aggregate.Cycle.ID ||
+		replay.RequestHash != aggregate.Cycle.StartRequestHash {
+		return ErrIdempotencyKeyReused
+	}
+	return invariantError("matching Start Goal receipt appeared while its User lock was held")
 }
 
 func lockGoalRefineDraft(ctx context.Context, tx GoalDraftTx, userID, draftID, goalID string) (goal.Draft, error) {

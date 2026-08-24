@@ -144,7 +144,7 @@ func TestWorkspaceHTTPContractHidesOwnerResourcesFromAnotherSession(t *testing.T
 		t.Fatal(err)
 	}
 	provider := &contractRejectProvider{}
-	service := workspace.NewService(store, store, store, store, store, store, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
+	service := workspace.NewService(store, store, store, store, store, store, store, provider, contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
 		MaxProgressingGoals: 2,
 		CursorSigningKey:    []byte("test-cursor-key"),
 		MaxProviderAttempts: 1,
@@ -262,7 +262,7 @@ func TestWorkspaceHTTPCycleHierarchyReturnsCycleNotFoundForOwnedGoalMismatch(t *
 	now := integrationNow()
 	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{})
 	provider := &contractRejectProvider{}
-	service := workspace.NewService(store, store, store, store, store, store, provider,
+	service := workspace.NewService(store, store, store, store, store, store, store, provider,
 		contractIntegrationClock{now: now.Add(2 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
 			MaxProgressingGoals: 2,
 			CursorSigningKey:    []byte("test-cursor-key"),

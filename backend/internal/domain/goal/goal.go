@@ -176,16 +176,12 @@ func NewReviewDraft(id string, current Goal, version Version, completedCycle cyc
 }
 
 func ContinueReview(current Goal, version Version, draft Draft, versionID, cycleID, operationID, requestHash string, now time.Time) (ContinueResult, error) {
-	if current.Status != StatusGoalReview || draft.Type != DraftReview || draft.GoalID == nil || *draft.GoalID != current.ID || version.GoalID != current.ID {
-		return ContinueResult{}, ErrStateConflict
-	}
-	body, err := NormalizeText(draft.Body, false)
+	body, changed, err := ReviewBodyChanged(current, version, draft)
 	if err != nil {
 		return ContinueResult{}, err
 	}
 	selected := version
-	created := normalizeLineEndings(version.Body) != normalizeLineEndings(body)
-	if created {
+	if changed {
 		selected = Version{
 			ID: versionID, UserID: current.UserID, GoalID: current.ID,
 			VersionNumber: current.CurrentVersionNumber + 1, Body: body,
@@ -199,9 +195,45 @@ func ContinueReview(current Goal, version Version, draft Draft, versionID, cycle
 	current.Revision++
 	current.UpdatedAt = now.UTC()
 	return ContinueResult{
-		Goal: current, Version: selected, VersionCreated: created,
+		Goal: current, Version: selected, VersionCreated: changed,
 		Cycle: cycle.New(cycleID, current.UserID, current.ID, selected.ID, sequence, operationID, requestHash, now),
 	}, nil
+}
+
+// ReviewBodyChanged validates the Review aggregate references and returns the
+// normalized Draft body together with whether it differs from the immutable
+// current Version. Whitespace remains significant; only line endings are
+// normalized for comparison.
+func ReviewBodyChanged(current Goal, version Version, draft Draft) (string, bool, error) {
+	if err := validateReviewReferences(current, version, draft); err != nil {
+		return "", false, err
+	}
+	body, err := NormalizeText(draft.Body, false)
+	if err != nil {
+		return "", false, err
+	}
+	return body, normalizeLineEndings(version.Body) != normalizeLineEndings(body), nil
+}
+
+// ReviewDraftDiffersFromVersion compares a Review Draft for discard
+// confirmation. Unlike Continue Review, an empty Draft is valid here because
+// it is being discarded rather than promoted to an immutable Version.
+func ReviewDraftDiffersFromVersion(current Goal, version Version, draft Draft) (bool, error) {
+	if err := validateReviewReferences(current, version, draft); err != nil {
+		return false, err
+	}
+	return normalizeLineEndings(version.Body) != normalizeLineEndings(draft.Body), nil
+}
+
+func validateReviewReferences(current Goal, version Version, draft Draft) error {
+	if current.Status != StatusGoalReview || version.UserID != current.UserID || version.GoalID != current.ID ||
+		version.VersionNumber != current.CurrentVersionNumber || draft.UserID != current.UserID ||
+		draft.Type != DraftReview || draft.GoalID == nil || *draft.GoalID != current.ID ||
+		draft.BaseGoalVersionID == nil || *draft.BaseGoalVersionID != version.ID ||
+		draft.ReviewCycleID == nil || *draft.ReviewCycleID == "" {
+		return ErrStateConflict
+	}
+	return nil
 }
 
 func Terminate(current Goal, outcome Status, operationID, requestHash string, now time.Time) (Goal, error) {

@@ -647,6 +647,28 @@ describe("GoalReviewPage", () => {
     expect(remove).toBeEnabled();
   });
 
+  it("requires explicit Review Draft discard confirmation before terminating an unchanged review", async () => {
+    renderPage();
+    await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    const terminate = screen.getByRole("button", { name: "目標を終了" });
+    await waitFor(() => expect(terminate).toBeEnabled());
+
+    fireEvent.click(terminate);
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(
+        "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません。",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("現在の目標のまま終了します。"),
+    ).toBeInTheDocument();
+    expect(terminateGoal).not.toHaveBeenCalled();
+  });
+
   it("requires discard confirmation before terminating a dirty review", async () => {
     renderPage();
     const editor = await screen.findByRole("textbox", {
@@ -661,7 +683,7 @@ describe("GoalReviewPage", () => {
     const dialog = await screen.findByRole("dialog");
     expect(
       within(dialog).getByText(
-        "この変更案は、次のサイクルを開始しないため保存されません。",
+        "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません。",
       ),
     ).toBeInTheDocument();
     expect(

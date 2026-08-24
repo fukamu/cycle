@@ -260,10 +260,11 @@ VALUES($1,$2,$3,$4,$5,$6,$7)`, mustUUID(version.ID), mustUUID(version.UserID), m
 	return command.RowsAffected(), nil
 }
 
-func (transaction *workspaceGoalDraftTx) InsertInitialCycle(ctx context.Context, current cycle.PDCACycle) (int64, error) {
+func (transaction *workspaceGoalDraftTx) TryInsertInitialCycleClaim(ctx context.Context, current cycle.PDCACycle) (int64, error) {
 	command, err := transaction.tx.Exec(ctx, `INSERT INTO pdca_cycles
 (id,user_id,goal_id,goal_version_id,sequence_number,status,started_at,start_operation_id,start_request_hash,created_at,updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, mustUUID(current.ID), mustUUID(current.UserID), mustUUID(current.GoalID),
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+ON CONFLICT (user_id,start_operation_id) DO NOTHING`, mustUUID(current.ID), mustUUID(current.UserID), mustUUID(current.GoalID),
 		mustUUID(current.GoalVersionID), current.SequenceNumber, current.Status, current.StartedAt, mustUUID(current.StartOperationID),
 		current.StartRequestHash, current.CreatedAt, current.UpdatedAt)
 	if err != nil {

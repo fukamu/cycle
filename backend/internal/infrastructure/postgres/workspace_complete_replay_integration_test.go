@@ -165,14 +165,13 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 		OperationID:          "63000000-0000-7000-8000-000000000001",
 		ExpectedGoalRevision: completed.Goal.Revision, ExpectedDraftRevision: 0,
 		RequestHash: "continue-after-complete-replay-hash",
-		VersionID:   "64000000-0000-7000-8000-000000000001",
 		CycleID:     "65000000-0000-7000-8000-000000000001",
 		Now:         now.Add(2 * time.Minute),
 	}
 	continueCalls := make(chan continueReviewCall, 1)
 	continueCtx := context.WithValue(ctx, completeReplayContinueCommandContextKey{}, continueReviewCommand)
 	go func() {
-		result, callErr := store.ContinueReview(continueCtx, continueInput)
+		result, callErr := executeContinueReviewUseCase(store, continueCtx, continueInput)
 		continueCalls <- continueReviewCall{result: result, err: callErr}
 	}()
 

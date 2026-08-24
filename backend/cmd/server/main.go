@@ -104,7 +104,7 @@ func main() {
 		RateHashKey: []byte(settings.Session.RateLimitHMACSecret), AIPerUserMinute: settings.RateLimit.AIPerUserMinute,
 		AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute, AIPerIPMinute: settings.RateLimit.AIPerIPMinute,
 	})
-	workspaceService := workspace.NewService(workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore,
+	workspaceService := workspace.NewService(workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore,
 		aiProvider, system.Clock{}, random, workspace.Settings{
 			MaxProgressingGoals: settings.Goals.MaxProgressingGoals, Provider: settings.AI.Provider,
 			CursorSigningKey: []byte(settings.Session.CursorSigningSecret),
