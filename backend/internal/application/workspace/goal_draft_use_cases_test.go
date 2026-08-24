@@ -19,13 +19,14 @@ var (
 )
 
 const (
-	goalDraftTestUserID       = "10000000-0000-7000-8000-000000000001"
-	goalDraftTestDraftID      = "20000000-0000-7000-8000-000000000001"
-	goalDraftTestGenerationID = "30000000-0000-7000-8000-000000000001"
-	goalDraftTestGoalID       = "40000000-0000-7000-8000-000000000001"
-	goalDraftTestVersionID    = "50000000-0000-7000-8000-000000000001"
-	goalDraftTestCycleID      = "60000000-0000-7000-8000-000000000001"
-	goalDraftTestOperationID  = "70000000-0000-7000-8000-000000000001"
+	goalDraftTestUserID                     = "10000000-0000-7000-8000-000000000001"
+	goalDraftTestDraftID                    = "20000000-0000-7000-8000-000000000001"
+	goalDraftTestGenerationID               = "30000000-0000-7000-8000-000000000001"
+	goalDraftTestGoalID                     = "40000000-0000-7000-8000-000000000001"
+	goalDraftTestVersionID                  = "50000000-0000-7000-8000-000000000001"
+	goalDraftTestCycleID                    = "60000000-0000-7000-8000-000000000001"
+	goalDraftTestOperationID                = "70000000-0000-7000-8000-000000000001"
+	goalDraftTestCanonicalProviderInputHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
 type goalDraftFakeClock struct{ now time.Time }
@@ -470,6 +471,11 @@ func reviewDraft(body string, revision int64) goal.Draft {
 	return draft
 }
 
+func goalDraftTestAIContext(_ context.Context, snapshot AISnapshot) (AISnapshot, error) {
+	snapshot.CanonicalProviderInputHash = goalDraftTestCanonicalProviderInputHash
+	return snapshot, nil
+}
+
 func TestGoalDraftUseCasesCreateNormalizesAndLocksUserFirst(t *testing.T) {
 	tx := &goalDraftFakeTx{}
 	useCases, uow := newGoalDraftTestUseCases(tx, goalDraftTestDraftID)
@@ -760,16 +766,17 @@ func TestGoalDraftUseCasesStartValidatesBodyBeforeRunningAndLimit(t *testing.T) 
 func TestGoalDraftUseCasesBeginRefineOwnsQuotaRateBudgetAndPersistence(t *testing.T) {
 	tx := &goalDraftFakeTx{draft: creationDraft("改善したい目標", 3)}
 	useCases, uow := newGoalDraftTestUseCases(tx, goalDraftTestGenerationID)
-	snapshot, err := useCases.BeginGoalRefine(context.Background(), GoalRefineInput{
+	input := GoalRefineInput{
 		UserID: goalDraftTestUserID, DraftID: goalDraftTestDraftID, ExpectedDraftRevision: 3,
 		IdempotencyKey: goalDraftTestOperationID, SessionID: "session", RemoteAddress: "192.0.2.1",
-	}, func(_ context.Context, snapshot AISnapshot) (AISnapshot, error) {
-		return snapshot, nil
-	})
+	}
+	snapshot, err := useCases.BeginGoalRefine(context.Background(), input, goalDraftTestAIContext)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if snapshot.GenerationID != goalDraftTestGenerationID ||
+		tx.generationRecord.IdempotencyRequestHash != goalRefineRequestHash(input) ||
+		tx.generationRecord.CanonicalProviderInputHash != goalDraftTestCanonicalProviderInputHash ||
 		tx.generationRecord.ReservedCostUSD != "0.10000000" ||
 		tx.usageRecord.Operation != goalRefineOperation ||
 		!tx.usageRecord.SettlementBudgetMonthUtc.Equal(goalDraftTestMonth) ||
@@ -787,6 +794,27 @@ func TestGoalDraftUseCasesBeginRefineOwnsQuotaRateBudgetAndPersistence(t *testin
 	}
 	if !reflect.DeepEqual(tx.trace, want) || uow.committed != 1 {
 		t.Fatalf("trace/transaction = %v / %#v", tx.trace, uow)
+	}
+}
+
+func TestGoalDraftUseCasesRejectsMissingCanonicalHashBeforePaidSideEffects(t *testing.T) {
+	tx := &goalDraftFakeTx{draft: creationDraft("canonical hash required", 0)}
+	useCases, uow := newGoalDraftTestUseCases(tx, goalDraftTestGenerationID)
+	_, err := useCases.BeginGoalRefine(context.Background(), GoalRefineInput{
+		UserID: goalDraftTestUserID, DraftID: goalDraftTestDraftID,
+		IdempotencyKey: goalDraftTestOperationID,
+	}, func(_ context.Context, snapshot AISnapshot) (AISnapshot, error) {
+		return snapshot, nil
+	})
+	if !errors.Is(err, ErrGoalDraftPersistenceInvariant) || uow.rolledBack != 1 || uow.committed != 0 {
+		t.Fatalf("error/transaction = %v / %#v", err, uow)
+	}
+	want := []string{
+		"lock_user", "lock_draft", "lock_expired_generations", "sum_expired_reservations",
+		"find_refine_replay",
+	}
+	if !reflect.DeepEqual(tx.trace, want) {
+		t.Fatalf("trace = %v, want no paid side effects after %v", tx.trace, want)
 	}
 }
 
@@ -819,7 +847,7 @@ func TestGoalDraftUseCasesExpiredSameKeyReplayCommitsTerminalRecovery(t *testing
 	tx := &goalDraftFakeTx{
 		draft: creationDraft("期限切れsame-key", 0),
 		refineReplay: &GoalRefineReplayState{
-			GenerationID: goalDraftTestGenerationID, InputHash: goalRefineRequestHash(input), Status: aiStatusRunning,
+			GenerationID: goalDraftTestGenerationID, IdempotencyRequestHash: goalRefineRequestHash(input), Status: aiStatusRunning,
 		},
 		expired: []ExpiredGeneration{{
 			ID: goalDraftTestGenerationID, BudgetMonthUtc: goalDraftTestMonth, ReservedCostUSD: "0.10000000",
@@ -851,7 +879,7 @@ func TestGoalDraftUseCasesReplayPersistenceInvariantRollsBack(t *testing.T) {
 	tx := &goalDraftFakeTx{
 		draft: creationDraft("不正なreplay state", 0),
 		refineReplay: &GoalRefineReplayState{
-			GenerationID: goalDraftTestGenerationID, InputHash: goalRefineRequestHash(input), Status: "unknown",
+			GenerationID: goalDraftTestGenerationID, IdempotencyRequestHash: goalRefineRequestHash(input), Status: "unknown",
 		},
 	}
 	useCases, uow := newGoalDraftTestUseCases(tx, "30000000-0000-7000-8000-000000000002")
@@ -1110,9 +1138,7 @@ func TestGoalDraftUseCasesBeginUsesEntitlementRollingLimit(t *testing.T) {
 	_, err := useCases.BeginGoalRefine(context.Background(), GoalRefineInput{
 		UserID: goalDraftTestUserID, DraftID: goalDraftTestDraftID,
 		IdempotencyKey: goalDraftTestOperationID,
-	}, func(_ context.Context, snapshot AISnapshot) (AISnapshot, error) {
-		return snapshot, nil
-	})
+	}, goalDraftTestAIContext)
 	if !errors.Is(err, ErrAIUserLimit) || uow.rolledBack != 1 || policy.calls != 1 {
 		t.Fatalf("error/transaction/policy calls = %v / %#v / %d", err, uow, policy.calls)
 	}
@@ -1131,7 +1157,7 @@ func TestGoalDraftUseCasesBeginReplayBypassesEntitlementPolicy(t *testing.T) {
 	tx := &goalDraftFakeTx{
 		draft: creationDraft("replay対象", 0),
 		refineReplay: &GoalRefineReplayState{
-			GenerationID: goalDraftTestGenerationID, InputHash: goalRefineRequestHash(input),
+			GenerationID: goalDraftTestGenerationID, IdempotencyRequestHash: goalRefineRequestHash(input),
 			Status: aiStatusSucceeded, Output: &output,
 		},
 	}

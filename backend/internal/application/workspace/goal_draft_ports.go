@@ -161,13 +161,13 @@ type GoalTargetState struct {
 }
 
 type GoalRefineReplayState struct {
-	GenerationID   string
-	InputHash      string
-	Status         string
-	TargetRevision int64
-	Output         *string
-	FailureCode    string
-	ContextChanged bool
+	GenerationID           string
+	IdempotencyRequestHash string
+	Status                 string
+	TargetRevision         int64
+	Output                 *string
+	FailureCode            string
+	ContextChanged         bool
 }
 
 type ExpiredGeneration struct {
@@ -195,23 +195,24 @@ type AIBudgetState struct {
 }
 
 type GoalRefineGenerationRecord struct {
-	ID              string
-	UserID          string
-	DraftID         string
-	GoalID          string
-	GoalVersionID   string
-	TargetRevision  int64
-	IdempotencyKey  string
-	InputHash       string
-	SourceText      string
-	Provider        string
-	Model           string
-	PromptVersion   string
-	BudgetMonthUtc  time.Time
-	ReservedCostUSD string
-	LeaseExpiresAt  time.Time
-	StartedAt       time.Time
-	ContextCycleIDs []string
+	ID                         string
+	UserID                     string
+	DraftID                    string
+	GoalID                     string
+	GoalVersionID              string
+	TargetRevision             int64
+	IdempotencyKey             string
+	IdempotencyRequestHash     string
+	CanonicalProviderInputHash string
+	SourceText                 string
+	Provider                   string
+	Model                      string
+	PromptVersion              string
+	BudgetMonthUtc             time.Time
+	ReservedCostUSD            string
+	LeaseExpiresAt             time.Time
+	StartedAt                  time.Time
+	ContextCycleIDs            []string
 }
 
 type AIUsageRecord struct {

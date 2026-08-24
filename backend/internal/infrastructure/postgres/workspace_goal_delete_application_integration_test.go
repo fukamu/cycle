@@ -87,7 +87,7 @@ idempotency_key,input_hash,source_text,provider,model,prompt_version,budget_mont
 budget_reserved_cost_usd,lease_expires_at,started_at)
 VALUES($1,$2,'action_generate','running',NULL,$3,$4,$5,0,$6,$7,NULL,$8,$9,$10,$11,0,$12,$13)`,
 		operationID, userID, fixture.goalID, fixture.versionID, fixture.cycleID,
-		"8a000000-0000-7000-8000-000000000001", "goal-delete-unfinalized-usage",
+		"8a000000-0000-7000-8000-000000000001", integrationAIRequestHash,
 		settings.ActionAI.Provider, settings.ActionAI.Model, settings.ActionAI.GeneratePromptVersion, month, now.Add(time.Minute), now,
 	); err != nil {
 		t.Fatal(err)

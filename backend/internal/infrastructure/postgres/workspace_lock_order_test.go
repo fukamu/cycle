@@ -5,7 +5,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -33,8 +32,7 @@ func TestWorkspaceTransitionSharedLockHelpersRemainOwnerScoped(t *testing.T) {
 			t.Fatalf("LockUser query source = %q, want fragment %q", normalizedUserQuery, fragment)
 		}
 	}
-	assertWorkspaceQueryContains(t, transitionFile, "loadCycleForUpdate",
-		"FROM pdca_cycles WHERE id=$1 AND goal_id=$2 AND user_id=$3 FOR UPDATE")
+	assertWorkspaceCallsMethods(t, transitionFile, "loadCycleForUpdate", "New", "LockCycleForTransition")
 }
 
 func assertWorkspaceCallsMethods(t *testing.T, file *ast.File, functionName string, methods ...string) {
@@ -56,27 +54,6 @@ func assertWorkspaceCallsMethods(t *testing.T, file *ast.File, functionName stri
 		if !found[method] {
 			t.Fatalf("%s does not call %s", functionName, method)
 		}
-	}
-}
-
-func assertWorkspaceQueryContains(t *testing.T, file *ast.File, functionName, expected string) {
-	t.Helper()
-	function := findWorkspaceQueryFunction(t, file, functionName)
-	var queryParts []string
-	ast.Inspect(function.Body, func(node ast.Node) bool {
-		literal, ok := node.(*ast.BasicLit)
-		if !ok || literal.Kind != token.STRING {
-			return true
-		}
-		value, err := strconv.Unquote(literal.Value)
-		if err == nil {
-			queryParts = append(queryParts, value)
-		}
-		return true
-	})
-	query := strings.Join(strings.Fields(strings.Join(queryParts, " ")), " ")
-	if !strings.Contains(query, expected) {
-		t.Fatalf("%s query literals = %q, want %q", functionName, query, expected)
 	}
 }
 

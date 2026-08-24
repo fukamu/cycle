@@ -43,7 +43,7 @@ VALUES($1,$2,'creation','保持境界を検証する目標',3,$3,$3)`, draftID, 
 		if _, err := pool.Exec(ctx, `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,failure_code,started_at,finished_at)
 VALUES($1,$2,'goal_refine','failed',$3,3,$4,$5,'保持境界を検証する目標','fake','test','goal-v2',$6,0,'provider_error',$7,$7)`,
-			fixture.generationID, userID, draftID, fixture.idempotencyID, "hash-"+fixture.generationID,
+			fixture.generationID, userID, draftID, fixture.idempotencyID, integrationAIRequestHash,
 			budgetMonth, fixture.acceptedAt); err != nil {
 			t.Fatal(err)
 		}

@@ -366,7 +366,7 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 			return validationErr
 		}
 		input.DraftID = draft.ID
-		inputHash := goalRefineRequestHash(input)
+		requestHash := goalRefineRequestHash(input)
 		if recoveryErr := useCases.recoverExpiredAI(ctx, tx, input.UserID, input.Now); recoveryErr != nil {
 			return recoveryErr
 		}
@@ -375,7 +375,7 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 			return replayErr
 		}
 		if replay != nil {
-			replayedSnapshot, replayErr := replayGoalRefine(*replay, inputHash)
+			replayedSnapshot, replayErr := replayGoalRefine(*replay, requestHash)
 			if replayErr != nil {
 				if errors.Is(replayErr, ErrGoalDraftPersistenceInvariant) {
 					return replayErr
@@ -437,6 +437,9 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 		if isolationErr := validateGoalRefineContextSelection(candidate, snapshot); isolationErr != nil {
 			return isolationErr
 		}
+		if snapshot.CanonicalProviderInputHash == "" {
+			return invariantError("Goal Refine canonical provider input hash is missing")
+		}
 		running, runningErr := tx.HasRunningDraftGeneration(ctx, draft.ID)
 		if runningErr != nil {
 			return runningErr
@@ -484,7 +487,8 @@ func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input Go
 		rows, reserveErr = tx.InsertGoalRefineGeneration(ctx, GoalRefineGenerationRecord{
 			ID: input.GenerationID, UserID: input.UserID, DraftID: draft.ID,
 			GoalID: goalID, GoalVersionID: goalVersionID, TargetRevision: draft.Revision,
-			IdempotencyKey: input.IdempotencyKey, InputHash: inputHash, SourceText: draft.Body,
+			IdempotencyKey: input.IdempotencyKey, IdempotencyRequestHash: requestHash,
+			CanonicalProviderInputHash: snapshot.CanonicalProviderInputHash, SourceText: draft.Body,
 			Provider: useCases.settings.Provider, Model: useCases.settings.Model,
 			PromptVersion: useCases.settings.GoalPromptVersion, BudgetMonthUtc: month,
 			ReservedCostUSD: reservation, LeaseExpiresAt: input.Now.Add(useCases.settings.LeaseDuration),
@@ -971,8 +975,8 @@ func validGoalRefineSelectedText(original, selected string) bool {
 	prefix := strings.TrimSuffix(selected, truncationMarker)
 	return len(prefix) < len(original) && strings.HasPrefix(original, prefix)
 }
-func replayGoalRefine(replay GoalRefineReplayState, inputHash string) (AISnapshot, error) {
-	if replay.InputHash != inputHash {
+func replayGoalRefine(replay GoalRefineReplayState, requestHash string) (AISnapshot, error) {
+	if replay.IdempotencyRequestHash != requestHash {
 		return AISnapshot{}, ErrIdempotencyKeyReused
 	}
 	switch replay.Status {

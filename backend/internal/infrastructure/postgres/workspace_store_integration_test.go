@@ -214,6 +214,7 @@ VALUES($1,$2,$3,'action_generate','succeeded','fake','test','action-generate-v1'
 		Now:                     now.Add(2 * time.Minute),
 	}, func(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
 		selected = snapshot
+		snapshot.CanonicalProviderInputHash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 		return snapshot, nil
 	}, settings)
 	if !errors.Is(err, workspace.ErrAIUserLimit) {
@@ -616,6 +617,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 		ExpectedGoalRevision: &expectedGoalRevision, IdempotencyKey: refineIdempotency,
 		GenerationID: generationID, Now: now.Add(2 * time.Minute),
 	}, func(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
+		snapshot.CanonicalProviderInputHash = "9999999999999999999999999999999999999999999999999999999999999999"
 		return snapshot, nil
 	}, settings)
 	if err != nil {
@@ -659,7 +661,7 @@ VALUES($1,$2,'creation','元の目標',$3,$3)`, draftID, userID, now); err != ni
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
 output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,started_at,finished_at)
-VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改善した目標','fake','test','goal-refine-v1',$5,0,1,$6,$6)`,
+VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','元の目標','改善した目標','fake','test','goal-refine-v1',$5,0,1,$6,$6)`,
 		generationID, userID, draftID, idempotencyKey, now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}
@@ -701,7 +703,7 @@ VALUES($1,$2,'creation','元の目標',$3,$3)`, draftID, userID, now); err != ni
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
 output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,started_at,finished_at)
-VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改善した目標','fake','test','goal-refine-v1',$5,0,1,$6,$6)`,
+VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','元の目標','改善した目標','fake','test','goal-refine-v1',$5,0,1,$6,$6)`,
 		generationID, userID, draftID, idempotencyKey, now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}

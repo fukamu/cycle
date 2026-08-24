@@ -106,15 +106,7 @@ func (store *WorkspaceStore) GetReview(ctx context.Context, userID, goalID strin
 	return workspace.ReviewView{Goal: view, ReviewDraft: draft, TriggerCycle: trigger}, nil
 }
 
-type rowQuerier interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}
-
-type rowScanner interface {
-	Scan(...any) error
-}
-
-func getCycleView(ctx context.Context, query rowQuerier, userID, goalID, cycleID string) (workspace.CycleView, error) {
+func getCycleView(ctx context.Context, query db.DBTX, userID, goalID, cycleID string) (workspace.CycleView, error) {
 	return queryCycleView(ctx, query, userID, goalID, cycleID)
 }
 

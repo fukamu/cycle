@@ -109,8 +109,8 @@ func isAIExpiredBudgetRelease(sql string) bool {
 	normalized := normalizeAIConcurrencySQL(sql)
 	return stringsContainsAll(normalized,
 		"update ai_budget_monthly",
-		"reserved_cost_usd=reserved_cost_usd-$2",
-		"where month_utc=$1",
+		"reserved_cost_usd=reserved_cost_usd - $1",
+		"where month_utc=$3",
 	)
 }
 
@@ -118,7 +118,7 @@ func isAIBudgetMonthEnsure(sql string) bool {
 	normalized := normalizeAIConcurrencySQL(sql)
 	return stringsContainsAll(normalized,
 		"insert into ai_budget_monthly",
-		"on conflict(month_utc) do nothing",
+		"on conflict (month_utc) do nothing",
 	)
 }
 
@@ -191,7 +191,7 @@ VALUES($1,0.01,0,0,$2)`, month, now.Add(-2*time.Minute)); err != nil {
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
  provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,lease_expires_at,started_at)
-VALUES($1,$2,'goal_refine','running',$3,0,$4,'expired-request','期限切れの目標',
+VALUES($1,$2,'goal_refine','running',$3,0,$4,'abababababababababababababababababababababababababababababababab','期限切れの目標',
  'fake','test','goal-refine-v1',$5,0.01,$6,$7)`,
 		expiredGenerationID, recoveryUserID, recoveryDraftID, expiredKey, month,
 		now.Add(-time.Minute), now.Add(-2*time.Minute),

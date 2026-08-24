@@ -196,7 +196,7 @@ func TestReviewTransitionTerminatesReviewWithExactUsageRetention(t *testing.T) {
 source_text,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,failure_code,started_at,finished_at)
 VALUES($1,$2,'goal_refine','failed',$3,$4,$5,0,$6,$7,'review retention','fake','test','goal-v2',$8,0,
 'provider_error',$9,$9)`, usage.generationID, userID, reviewDraftID, fixture.goalID, fixture.versionID,
-			usage.idempotency, "hash-"+usage.generationID, month, usage.acceptedAt); err != nil {
+			usage.idempotency, integrationAIRequestHash, month, usage.acceptedAt); err != nil {
 			t.Fatal(err)
 		}
 		if usage.finalizedAt == nil {

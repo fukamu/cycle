@@ -24,63 +24,6 @@ func (q *Queries) CountProgressingGoals(ctx context.Context, userID pgtype.UUID)
 	return count, err
 }
 
-const getCreationGoalDraft = `-- name: GetCreationGoalDraft :one
-SELECT id, user_id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, created_at, updated_at
-FROM goal_drafts
-WHERE id = $1 AND user_id = $2 AND draft_type = 'creation'
-`
-
-type GetCreationGoalDraftParams struct {
-	ID     pgtype.UUID
-	UserID pgtype.UUID
-}
-
-func (q *Queries) GetCreationGoalDraft(ctx context.Context, arg GetCreationGoalDraftParams) (*GoalDraft, error) {
-	row := q.db.QueryRow(ctx, getCreationGoalDraft, arg.ID, arg.UserID)
-	var i GoalDraft
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.DraftType,
-		&i.GoalID,
-		&i.BaseGoalVersionID,
-		&i.ReviewCycleID,
-		&i.Body,
-		&i.Revision,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return &i, err
-}
-
-const getCurrentGoalVersion = `-- name: GetCurrentGoalVersion :one
-SELECT gv.id, gv.user_id, gv.goal_id, gv.version_number, gv.body, gv.created_by_operation_id, gv.created_at
-FROM goal_versions gv
-JOIN goals g ON g.id = gv.goal_id AND g.user_id = gv.user_id
-WHERE gv.goal_id = $1 AND gv.user_id = $2
-  AND gv.version_number = g.current_version_number
-`
-
-type GetCurrentGoalVersionParams struct {
-	GoalID pgtype.UUID
-	UserID pgtype.UUID
-}
-
-func (q *Queries) GetCurrentGoalVersion(ctx context.Context, arg GetCurrentGoalVersionParams) (*GoalVersion, error) {
-	row := q.db.QueryRow(ctx, getCurrentGoalVersion, arg.GoalID, arg.UserID)
-	var i GoalVersion
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.GoalID,
-		&i.VersionNumber,
-		&i.Body,
-		&i.CreatedByOperationID,
-		&i.CreatedAt,
-	)
-	return &i, err
-}
-
 const getGoalDraftByID = `-- name: GetGoalDraftByID :one
 SELECT id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, updated_at
 FROM goal_drafts
@@ -280,36 +223,6 @@ func (q *Queries) GetHomeCreationGoalDraft(ctx context.Context, userID pgtype.UU
 		&i.ReviewCycleID,
 		&i.Body,
 		&i.Revision,
-		&i.UpdatedAt,
-	)
-	return &i, err
-}
-
-const getOwnedGoal = `-- name: GetOwnedGoal :one
-SELECT id, user_id, status, current_version_number, next_cycle_sequence_number, revision, terminal_at, terminal_operation_id, terminal_request_hash, created_at, updated_at
-FROM goals
-WHERE id = $1 AND user_id = $2
-`
-
-type GetOwnedGoalParams struct {
-	ID     pgtype.UUID
-	UserID pgtype.UUID
-}
-
-func (q *Queries) GetOwnedGoal(ctx context.Context, arg GetOwnedGoalParams) (*Goal, error) {
-	row := q.db.QueryRow(ctx, getOwnedGoal, arg.ID, arg.UserID)
-	var i Goal
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.Status,
-		&i.CurrentVersionNumber,
-		&i.NextCycleSequenceNumber,
-		&i.Revision,
-		&i.TerminalAt,
-		&i.TerminalOperationID,
-		&i.TerminalRequestHash,
-		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return &i, err
@@ -570,45 +483,6 @@ func (q *Queries) ListHomeGoalViews(ctx context.Context, userID pgtype.UUID) ([]
 			&i.TriggerCycleSequenceNumber,
 			&i.Category,
 			&i.SortTime,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listProgressingGoals = `-- name: ListProgressingGoals :many
-SELECT id, user_id, status, current_version_number, next_cycle_sequence_number, revision, terminal_at, terminal_operation_id, terminal_request_hash, created_at, updated_at
-FROM goals
-WHERE user_id = $1 AND status IN ('active_cycle', 'goal_review')
-ORDER BY updated_at DESC, id DESC
-`
-
-func (q *Queries) ListProgressingGoals(ctx context.Context, userID pgtype.UUID) ([]*Goal, error) {
-	rows, err := q.db.Query(ctx, listProgressingGoals, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*Goal{}
-	for rows.Next() {
-		var i Goal
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.Status,
-			&i.CurrentVersionNumber,
-			&i.NextCycleSequenceNumber,
-			&i.Revision,
-			&i.TerminalAt,
-			&i.TerminalOperationID,
-			&i.TerminalRequestHash,
-			&i.CreatedAt,
-			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

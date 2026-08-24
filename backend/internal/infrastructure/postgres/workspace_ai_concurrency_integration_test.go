@@ -539,6 +539,7 @@ content_revision=content_revision+1,plan_revision=plan_revision+1,updated_at=$2 
 }
 
 func passthroughAIContext(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
+	snapshot.CanonicalProviderInputHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	return snapshot, nil
 }
 
@@ -589,7 +590,8 @@ func isAIUserLock(sql string) bool {
 func isAIUsageReservationInsert(sql string) bool {
 	normalized := normalizeAIConcurrencySQL(sql)
 	return strings.Contains(normalized, "insert into ai_usage_events") &&
-		strings.Contains(normalized, "values($1,$2,$3,$4,'accepted'")
+		strings.Contains(normalized, "operation_id,user_id,goal_id,operation_type,status") &&
+		strings.Contains(normalized, "values (") && strings.Contains(normalized, "'accepted'")
 }
 
 func isAbandonRunningCheck(sql string) bool {
@@ -757,7 +759,7 @@ VALUES($1,$2,'action_generate','running',NULL,$3,$4,$5,0,$6,$7,NULL,$8,$9,$10,$1
 			fixture.versionID,
 			generation.cycleID,
 			generation.idempotencyKey,
-			"seed-"+generation.id,
+			integrationAIRequestHash,
 			settings.ActionAI.Provider,
 			settings.ActionAI.Model,
 			settings.ActionAI.GeneratePromptVersion,

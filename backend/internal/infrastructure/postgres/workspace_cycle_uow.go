@@ -42,19 +42,17 @@ func (transaction *workspaceCycleTx) FindCompleteCycleReceipt(
 	ctx context.Context,
 	userID, operationID string,
 ) (*workspace.CompleteCycleReceipt, error) {
-	var receipt workspace.CompleteCycleReceipt
-	err := transaction.tx.QueryRow(ctx, `SELECT goal_id,id,completion_request_hash
-FROM pdca_cycles
-WHERE user_id=$1 AND completion_operation_id=$2`,
-		mustUUID(userID), mustUUID(operationID),
-	).Scan(&receipt.GoalID, &receipt.CycleID, &receipt.RequestHash)
+	row, err := transaction.queries.FindCompleteCycleReceipt(ctx, db.FindCompleteCycleReceiptParams{
+		UserID:      mustUUID(userID),
+		OperationID: mustUUID(operationID),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &receipt, nil
+	return completeCycleReceiptFromSQLC(row)
 }
 
 func (transaction *workspaceCycleTx) LockUser(ctx context.Context, userID string) error {
@@ -86,47 +84,18 @@ func (transaction *workspaceCycleTx) LockCycle(
 	ctx context.Context,
 	userID, goalID, cycleID string,
 ) (cycle.PDCACycle, error) {
-	var current cycle.PDCACycle
-	err := transaction.tx.QueryRow(ctx, `SELECT
-id,user_id,goal_id,goal_version_id,sequence_number,status,started_at,completed_at,canceled_at,
-cancellation_reason,plan,do_text,check_text,action,content_revision,plan_revision,do_revision,check_revision,action_revision,
-action_last_ai_applied_content_revision,action_user_modified_after_ai,start_operation_id,start_request_hash,
-completion_operation_id,completion_request_hash,created_at,updated_at
-FROM pdca_cycles
-WHERE id=$1 AND goal_id=$2 AND user_id=$3
-FOR UPDATE`, mustUUID(cycleID), mustUUID(goalID), mustUUID(userID)).Scan(
-		&current.ID,
-		&current.UserID,
-		&current.GoalID,
-		&current.GoalVersionID,
-		&current.SequenceNumber,
-		&current.Status,
-		&current.StartedAt,
-		&current.CompletedAt,
-		&current.CanceledAt,
-		&current.CancellationReason,
-		&current.Plan,
-		&current.Do,
-		&current.Check,
-		&current.Action,
-		&current.Revisions.Content,
-		&current.Revisions.Plan,
-		&current.Revisions.Do,
-		&current.Revisions.Check,
-		&current.Revisions.Action,
-		&current.ActionLastAIRevision,
-		&current.ActionModifiedAfterAI,
-		&current.StartOperationID,
-		&current.StartRequestHash,
-		&current.CompletionOperationID,
-		&current.CompletionRequestHash,
-		&current.CreatedAt,
-		&current.UpdatedAt,
-	)
+	row, err := transaction.queries.LockCycleForTransition(ctx, db.LockCycleForTransitionParams{
+		CycleID: mustUUID(cycleID),
+		GoalID:  mustUUID(goalID),
+		UserID:  mustUUID(userID),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return cycle.PDCACycle{}, workspace.ErrCycleNotFound
 	}
-	return current, err
+	if err != nil {
+		return cycle.PDCACycle{}, err
+	}
+	return cycleFromSQLC(row)
 }
 
 func (transaction *workspaceCycleTx) LoadCurrentGoalVersion(
@@ -178,12 +147,14 @@ func (transaction *workspaceCycleTx) HasRunningCycleGeneration(
 	ctx context.Context,
 	userID, goalID, cycleID string,
 ) (bool, error) {
-	var running bool
-	err := transaction.tx.QueryRow(ctx, `SELECT EXISTS(
-SELECT 1 FROM ai_generations
-WHERE user_id=$1 AND goal_id=$2 AND cycle_id=$3 AND status='running'
-)`, mustUUID(userID), mustUUID(goalID), mustUUID(cycleID)).Scan(&running)
-	return running, err
+	return transaction.queries.HasRunningCycleGenerationForTransition(
+		ctx,
+		db.HasRunningCycleGenerationForTransitionParams{
+			UserID:  mustUUID(userID),
+			GoalID:  mustUUID(goalID),
+			CycleID: mustUUID(cycleID),
+		},
+	)
 }
 
 func (transaction *workspaceCycleTx) SaveCycleFrameCAS(
@@ -195,100 +166,67 @@ func (transaction *workspaceCycleTx) SaveCycleFrameCAS(
 	if current.Revisions.Content <= 0 || current.FrameRevision(frame) != expectedFrameRevision+1 {
 		return 0, fmt.Errorf("%w: saved Cycle revision is inconsistent", workspace.ErrCyclePersistenceInvariant)
 	}
-	var (
-		command pgconnCommandTag
-		err     error
-	)
 	switch frame {
 	case cycle.FramePlan:
-		command, err = execCycleFrameCAS(
+		return transaction.queries.SaveCyclePlanCAS(
 			ctx,
-			transaction.tx,
-			`UPDATE pdca_cycles SET
-plan=$4,plan_revision=$5,content_revision=$6,updated_at=$7
-WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND status='active'
-  AND plan_revision=$8`,
-			current,
-			frame,
-			current.Plan,
-			expectedFrameRevision,
+			db.SaveCyclePlanCASParams{
+				Content:               current.Plan,
+				FrameRevision:         current.FrameRevision(frame),
+				ContentRevision:       current.Revisions.Content,
+				UpdatedAt:             timestamptz(current.UpdatedAt),
+				CycleID:               mustUUID(current.ID),
+				UserID:                mustUUID(current.UserID),
+				GoalID:                mustUUID(current.GoalID),
+				ExpectedFrameRevision: expectedFrameRevision,
+			},
 		)
 	case cycle.FrameDo:
-		command, err = execCycleFrameCAS(
+		return transaction.queries.SaveCycleDoCAS(
 			ctx,
-			transaction.tx,
-			`UPDATE pdca_cycles SET
-do_text=$4,do_revision=$5,content_revision=$6,updated_at=$7
-WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND status='active'
-  AND do_revision=$8`,
-			current,
-			frame,
-			current.Do,
-			expectedFrameRevision,
+			db.SaveCycleDoCASParams{
+				Content:               current.Do,
+				FrameRevision:         current.FrameRevision(frame),
+				ContentRevision:       current.Revisions.Content,
+				UpdatedAt:             timestamptz(current.UpdatedAt),
+				CycleID:               mustUUID(current.ID),
+				UserID:                mustUUID(current.UserID),
+				GoalID:                mustUUID(current.GoalID),
+				ExpectedFrameRevision: expectedFrameRevision,
+			},
 		)
 	case cycle.FrameCheck:
-		command, err = execCycleFrameCAS(
+		return transaction.queries.SaveCycleCheckCAS(
 			ctx,
-			transaction.tx,
-			`UPDATE pdca_cycles SET
-check_text=$4,check_revision=$5,content_revision=$6,updated_at=$7
-WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND status='active'
-  AND check_revision=$8`,
-			current,
-			frame,
-			current.Check,
-			expectedFrameRevision,
+			db.SaveCycleCheckCASParams{
+				Content:               current.Check,
+				FrameRevision:         current.FrameRevision(frame),
+				ContentRevision:       current.Revisions.Content,
+				UpdatedAt:             timestamptz(current.UpdatedAt),
+				CycleID:               mustUUID(current.ID),
+				UserID:                mustUUID(current.UserID),
+				GoalID:                mustUUID(current.GoalID),
+				ExpectedFrameRevision: expectedFrameRevision,
+			},
 		)
 	case cycle.FrameAction:
-		command, err = transaction.tx.Exec(ctx, `UPDATE pdca_cycles SET
-action=$4,action_revision=$5,content_revision=$6,
-action_user_modified_after_ai=$7,updated_at=$8
-WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND status='active'
-  AND action_revision=$9`,
-			mustUUID(current.ID),
-			mustUUID(current.UserID),
-			mustUUID(current.GoalID),
-			current.Action,
-			current.FrameRevision(frame),
-			current.Revisions.Content,
-			current.ActionModifiedAfterAI,
-			current.UpdatedAt,
-			expectedFrameRevision,
+		return transaction.queries.SaveCycleActionCAS(
+			ctx,
+			db.SaveCycleActionCASParams{
+				Content:                   current.Action,
+				FrameRevision:             current.FrameRevision(frame),
+				ContentRevision:           current.Revisions.Content,
+				ActionUserModifiedAfterAi: current.ActionModifiedAfterAI,
+				UpdatedAt:                 timestamptz(current.UpdatedAt),
+				CycleID:                   mustUUID(current.ID),
+				UserID:                    mustUUID(current.UserID),
+				GoalID:                    mustUUID(current.GoalID),
+				ExpectedFrameRevision:     expectedFrameRevision,
+			},
 		)
 	default:
 		return 0, cycle.ErrInvalidFrame
 	}
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
-}
-
-// pgconnCommandTag is the minimal result shape shared by pgx.Tx.Exec and the
-// small static frame-update helper below.
-type pgconnCommandTag interface {
-	RowsAffected() int64
-}
-
-func execCycleFrameCAS(
-	ctx context.Context,
-	tx pgx.Tx,
-	query string,
-	current cycle.PDCACycle,
-	frame cycle.Frame,
-	content string,
-	expectedFrameRevision int64,
-) (pgconnCommandTag, error) {
-	return tx.Exec(ctx, query,
-		mustUUID(current.ID),
-		mustUUID(current.UserID),
-		mustUUID(current.GoalID),
-		content,
-		current.FrameRevision(frame),
-		current.Revisions.Content,
-		current.UpdatedAt,
-		expectedFrameRevision,
-	)
 }
 
 func (transaction *workspaceCycleTx) CompleteCycleCAS(
@@ -300,23 +238,16 @@ func (transaction *workspaceCycleTx) CompleteCycleCAS(
 		completed.CompletionRequestHash == nil {
 		return 0, fmt.Errorf("%w: completed Cycle state is incomplete", workspace.ErrCyclePersistenceInvariant)
 	}
-	command, err := transaction.tx.Exec(ctx, `UPDATE pdca_cycles SET
-status='completed',completed_at=$4,completion_operation_id=$5,completion_request_hash=$6,updated_at=$7
-WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND status='active'
-  AND content_revision=$8 AND completion_operation_id IS NULL AND completion_request_hash IS NULL`,
-		mustUUID(completed.ID),
-		mustUUID(completed.UserID),
-		mustUUID(completed.GoalID),
-		*completed.CompletedAt,
-		mustUUID(*completed.CompletionOperationID),
-		*completed.CompletionRequestHash,
-		completed.UpdatedAt,
-		expectedContentRevision,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.CompleteCycleCAS(ctx, db.CompleteCycleCASParams{
+		CompletedAt:             timestamptz(*completed.CompletedAt),
+		CompletionOperationID:   mustUUID(*completed.CompletionOperationID),
+		CompletionRequestHash:   *completed.CompletionRequestHash,
+		UpdatedAt:               timestamptz(completed.UpdatedAt),
+		CycleID:                 mustUUID(completed.ID),
+		UserID:                  mustUUID(completed.UserID),
+		GoalID:                  mustUUID(completed.GoalID),
+		ExpectedContentRevision: expectedContentRevision,
+	})
 }
 
 func (transaction *workspaceCycleTx) InsertReviewDraft(

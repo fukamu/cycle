@@ -121,24 +121,25 @@ type ActionAIReplayState struct {
 }
 
 type ActionAIGenerationRecord struct {
-	ID                     string
-	UserID                 string
-	Operation              domainai.OperationType
-	GoalID                 string
-	GoalVersionID          string
-	CycleID                string
-	TargetRevision         int64
-	IdempotencyKey         string
-	IdempotencyRequestHash string
-	SourceText             *string
-	Provider               string
-	Model                  string
-	PromptVersion          string
-	BudgetMonthUtc         time.Time
-	ReservedCostUSD        string
-	LeaseExpiresAt         time.Time
-	StartedAt              time.Time
-	ContextCycleIDs        []string
+	ID                         string
+	UserID                     string
+	Operation                  domainai.OperationType
+	GoalID                     string
+	GoalVersionID              string
+	CycleID                    string
+	TargetRevision             int64
+	IdempotencyKey             string
+	IdempotencyRequestHash     string
+	CanonicalProviderInputHash string
+	SourceText                 *string
+	Provider                   string
+	Model                      string
+	PromptVersion              string
+	BudgetMonthUtc             time.Time
+	ReservedCostUSD            string
+	LeaseExpiresAt             time.Time
+	StartedAt                  time.Time
+	ContextCycleIDs            []string
 }
 
 type ActionAIGenerationKey struct {

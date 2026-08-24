@@ -45,22 +45,20 @@ func (transaction *workspaceReviewTransitionTx) FindContinueReviewReceipt(
 	ctx context.Context,
 	userID, operationID string,
 ) (*workspace.ContinueReviewReceipt, error) {
-	var receipt workspace.ContinueReviewReceipt
-	err := transaction.workspaceCycleTx.tx.QueryRow(ctx, `SELECT c.goal_id,c.id,c.start_request_hash,
-EXISTS(SELECT 1 FROM goal_versions gv
-       WHERE gv.user_id=c.user_id AND gv.goal_id=c.goal_id
-         AND gv.created_by_operation_id=c.start_operation_id)
-FROM pdca_cycles c
-WHERE c.user_id=$1 AND c.start_operation_id=$2`,
-		mustUUID(userID), mustUUID(operationID),
-	).Scan(&receipt.GoalID, &receipt.CycleID, &receipt.RequestHash, &receipt.VersionCreated)
+	row, err := transaction.workspaceCycleTx.queries.FindContinueReviewReceipt(
+		ctx,
+		db.FindContinueReviewReceiptParams{
+			UserID:      mustUUID(userID),
+			OperationID: mustUUID(operationID),
+		},
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &receipt, nil
+	return continueReviewReceiptFromSQLC(row)
 }
 
 func (transaction *workspaceReviewTransitionTx) FindGoalTerminationReceipt(
@@ -120,12 +118,13 @@ func (transaction *workspaceReviewTransitionTx) HasRunningGoalGeneration(
 	ctx context.Context,
 	userID, goalID string,
 ) (bool, error) {
-	var running bool
-	err := transaction.workspaceCycleTx.tx.QueryRow(ctx, `SELECT EXISTS(
-SELECT 1 FROM ai_generations
-WHERE user_id=$1 AND goal_id=$2 AND status='running'
-)`, mustUUID(userID), mustUUID(goalID)).Scan(&running)
-	return running, err
+	return transaction.workspaceCycleTx.queries.HasRunningGoalGenerationForReviewTransition(
+		ctx,
+		db.HasRunningGoalGenerationForReviewTransitionParams{
+			UserID: mustUUID(userID),
+			GoalID: mustUUID(goalID),
+		},
+	)
 }
 
 func (transaction *workspaceReviewTransitionTx) InsertGoalVersion(
@@ -139,26 +138,19 @@ func (transaction *workspaceReviewTransitionTx) TryInsertReviewCycleClaim(
 	ctx context.Context,
 	current cycle.PDCACycle,
 ) (int64, error) {
-	command, err := transaction.workspaceCycleTx.tx.Exec(ctx, `INSERT INTO pdca_cycles
-(id,user_id,goal_id,goal_version_id,sequence_number,status,started_at,start_operation_id,start_request_hash,created_at,updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-ON CONFLICT (user_id,start_operation_id) DO NOTHING`,
-		mustUUID(current.ID),
-		mustUUID(current.UserID),
-		mustUUID(current.GoalID),
-		mustUUID(current.GoalVersionID),
-		current.SequenceNumber,
-		current.Status,
-		current.StartedAt,
-		mustUUID(current.StartOperationID),
-		current.StartRequestHash,
-		current.CreatedAt,
-		current.UpdatedAt,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.workspaceCycleTx.queries.TryInsertCycleClaim(ctx, db.TryInsertCycleClaimParams{
+		CycleID:          mustUUID(current.ID),
+		UserID:           mustUUID(current.UserID),
+		GoalID:           mustUUID(current.GoalID),
+		GoalVersionID:    mustUUID(current.GoalVersionID),
+		SequenceNumber:   current.SequenceNumber,
+		Status:           string(current.Status),
+		StartedAt:        timestamptz(current.StartedAt),
+		StartOperationID: mustUUID(current.StartOperationID),
+		StartRequestHash: current.StartRequestHash,
+		CreatedAt:        timestamptz(current.CreatedAt),
+		UpdatedAt:        timestamptz(current.UpdatedAt),
+	})
 }
 
 func (transaction *workspaceReviewTransitionTx) ContinueGoalCAS(
@@ -183,22 +175,22 @@ func (transaction *workspaceReviewTransitionTx) CancelCycleCAS(
 	canceled cycle.PDCACycle,
 	expectedContentRevision int64,
 ) (int64, error) {
-	command, err := transaction.workspaceCycleTx.tx.Exec(ctx, `UPDATE pdca_cycles SET
-status=$4,canceled_at=$5,cancellation_reason=$6,updated_at=$7
-WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND status='active' AND content_revision=$8`,
-		mustUUID(canceled.ID),
-		mustUUID(canceled.UserID),
-		mustUUID(canceled.GoalID),
-		canceled.Status,
-		canceled.CanceledAt,
-		canceled.CancellationReason,
-		canceled.UpdatedAt,
-		expectedContentRevision,
-	)
-	if err != nil {
-		return 0, err
+	if canceled.Status != cycle.StatusCanceled || canceled.CanceledAt == nil || canceled.CancellationReason == nil {
+		return 0, fmt.Errorf(
+			"%w: canceled Cycle state is incomplete",
+			workspace.ErrReviewTransitionPersistenceInvariant,
+		)
 	}
-	return command.RowsAffected(), nil
+	return transaction.workspaceCycleTx.queries.CancelCycleCAS(ctx, db.CancelCycleCASParams{
+		Status:                  string(canceled.Status),
+		CanceledAt:              timestamptz(*canceled.CanceledAt),
+		CancellationReason:      string(*canceled.CancellationReason),
+		UpdatedAt:               timestamptz(canceled.UpdatedAt),
+		CycleID:                 mustUUID(canceled.ID),
+		UserID:                  mustUUID(canceled.UserID),
+		GoalID:                  mustUUID(canceled.GoalID),
+		ExpectedContentRevision: expectedContentRevision,
+	})
 }
 
 func (transaction *workspaceReviewTransitionTx) DeleteReviewDraftCAS(

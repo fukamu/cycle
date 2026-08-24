@@ -77,7 +77,7 @@ func (barrier *completeTerminateLockBarrier) release() {
 
 func isCompletePostCycleLockQuery(sql string) bool {
 	normalized := normalizeObservedSQL(sql)
-	return strings.Contains(normalized, "select exists(") &&
+	return (strings.Contains(normalized, "select exists(") || strings.Contains(normalized, "select exists (")) &&
 		strings.Contains(normalized, "select 1 from ai_generations") &&
 		strings.Contains(normalized, "where user_id=$1") &&
 		strings.Contains(normalized, "goal_id=$2") &&
@@ -215,7 +215,9 @@ func (barrier *completeReplayBarrier) release() {
 
 func isCompleteReplayLookupQuery(sql string) bool {
 	normalized := normalizeObservedSQL(sql)
-	return strings.Contains(normalized, "select goal_id,id,completion_request_hash from pdca_cycles") &&
+	projection := strings.Contains(normalized, "select goal_id,id,completion_request_hash from pdca_cycles") ||
+		strings.Contains(normalized, "select goal_id,id as cycle_id,completion_request_hash as request_hash from pdca_cycles")
+	return projection &&
 		strings.Contains(normalized, "where user_id=$1 and completion_operation_id=$2")
 }
 

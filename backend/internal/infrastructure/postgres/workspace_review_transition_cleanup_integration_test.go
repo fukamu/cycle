@@ -51,7 +51,7 @@ func TestReviewTransitionTerminateReviewAllowsAlreadyCleanedFinalizedUsage(t *te
 source_text,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,failure_code,started_at,finished_at)
 VALUES($1,$2,'goal_refine','failed',$3,$4,$5,0,$6,$7,'cleaned usage retention','fake','test','goal-v2',$8,0,
 'provider_error',$9,$9)`, usage.generationID, userID, reviewDraftID, fixture.goalID, fixture.versionID,
-			usage.idempotency, "hash-"+usage.generationID, month, usage.acceptedAt); err != nil {
+			usage.idempotency, integrationAIRequestHash, month, usage.acceptedAt); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `INSERT INTO ai_usage_events

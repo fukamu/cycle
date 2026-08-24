@@ -12,6 +12,8 @@ import (
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
+const actionAIUnitCanonicalProviderInputHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
 type actionAIUnitTestUOW struct {
 	tx        *actionAIUnitTestTx
 	commits   int
@@ -234,6 +236,7 @@ func newActionAIUnitUseCases(tx *actionAIUnitTestTx, now time.Time, ids *actionA
 
 func actionAIUnitSelector(_ context.Context, snapshot AISnapshot) (AISnapshot, error) {
 	snapshot.MaxOutputTokens = 800
+	snapshot.CanonicalProviderInputHash = actionAIUnitCanonicalProviderInputHash
 	if snapshot.Operation == domainai.OperationActionGenerate && snapshot.CurrentCycle != nil {
 		snapshot.CurrentCycle.Action = ""
 	}
@@ -305,9 +308,37 @@ func TestBeginActionAIOwnsLockPolicyAndExactReservationOrder(t *testing.T) {
 			UserID: input.UserID, GoalID: input.GoalID, CycleID: input.CycleID,
 			Operation: domainai.OperationActionGenerate, ExpectedContentRevision: input.ExpectedContentRevision,
 			ConfirmReplace: true, IdempotencyKey: input.IdempotencyKey,
-		}) || tx.generationRecord.SourceText != nil || tx.generationRecord.ReservedCostUSD != "0.05000000" ||
+		}) || tx.generationRecord.CanonicalProviderInputHash != actionAIUnitCanonicalProviderInputHash ||
+		tx.generationRecord.SourceText != nil || tx.generationRecord.ReservedCostUSD != "0.05000000" ||
 		tx.usageRecord.Operation != domainai.OperationActionGenerate || !tx.usageRecord.QuotaRetainUntil.Equal(AIUsageQuotaRetainUntil(now)) {
 		t.Fatalf("generation/usage = %#v / %#v", tx.generationRecord, tx.usageRecord)
+	}
+}
+
+func TestBeginActionAIRejectsMissingCanonicalHashBeforePaidSideEffects(t *testing.T) {
+	now := time.Date(2026, time.August, 24, 5, 0, 0, 0, time.UTC)
+	current := actionAIUnitFixture(now)
+	tx := &actionAIUnitTestTx{
+		target:  GoalTargetState{Status: goal.StatusActiveCycle, Revision: 4, CurrentVersionID: current.GoalVersionID, Body: "goal"},
+		current: current,
+	}
+	ids := &actionAIUnitTestIDs{value: "40000000-0000-7000-8000-000000000001"}
+	useCases, uow := newActionAIUnitUseCases(tx, now, ids)
+	_, err := useCases.BeginGenerate(context.Background(), ActionGenerateInput{
+		UserID: current.UserID, GoalID: current.GoalID, CycleID: current.ID,
+		ExpectedContentRevision: current.Revisions.Content, ConfirmReplace: true,
+		IdempotencyKey: "50000000-0000-7000-8000-000000000001",
+	}, func(_ context.Context, snapshot AISnapshot) (AISnapshot, error) {
+		snapshot.MaxOutputTokens = 800
+		snapshot.CurrentCycle.Action = ""
+		return snapshot, nil
+	})
+	if !errors.Is(err, ErrActionAIPersistenceInvariant) || uow.rollbacks != 1 || uow.commits != 0 {
+		t.Fatalf("error/transaction = %v / %#v", err, uow)
+	}
+	want := []string{"user", "replay", "goal", "cycle", "recover", "sum", "context"}
+	if !reflect.DeepEqual(tx.calls, want) || ids.calls != 0 {
+		t.Fatalf("calls/ids = %v/%d, want no paid side effects after %v", tx.calls, ids.calls, want)
 	}
 }
 

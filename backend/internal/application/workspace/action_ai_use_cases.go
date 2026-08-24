@@ -175,6 +175,9 @@ func (useCases *ActionAIUseCases) begin(
 		if isolationErr := validateActionAIContextSelection(candidate, snapshot); isolationErr != nil {
 			return isolationErr
 		}
+		if snapshot.CanonicalProviderInputHash == "" {
+			return actionAIInvariantError("Action AI canonical provider input hash is missing")
+		}
 		running, runningErr := tx.HasRunningCycleGeneration(ctx, input.UserID, input.GoalID, input.CycleID)
 		if runningErr != nil {
 			return runningErr
@@ -236,7 +239,8 @@ func (useCases *ActionAIUseCases) begin(
 			ID: input.GenerationID, UserID: input.UserID, Operation: input.Operation,
 			GoalID: input.GoalID, GoalVersionID: target.CurrentVersionID, CycleID: input.CycleID,
 			TargetRevision: current.Revisions.Content, IdempotencyKey: input.IdempotencyKey,
-			IdempotencyRequestHash: requestHash, SourceText: sourceText, Provider: useCases.settings.Provider,
+			IdempotencyRequestHash: requestHash, CanonicalProviderInputHash: snapshot.CanonicalProviderInputHash,
+			SourceText: sourceText, Provider: useCases.settings.Provider,
 			Model: useCases.settings.Model, PromptVersion: promptVersion, BudgetMonthUtc: month,
 			ReservedCostUSD: reservation, LeaseExpiresAt: input.Now.Add(useCases.settings.LeaseDuration),
 			StartedAt: input.Now, ContextCycleIDs: aiContextCycleIDs(snapshot.PastCycles),

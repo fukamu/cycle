@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fukamu/cycle/backend/internal/application/account"
@@ -472,16 +473,75 @@ func accountDeleteQueryLabel(data pgx.TraceQueryStartData) string {
 	case strings.Contains(normalized, "update ai_generations set") && strings.Contains(normalized, "budget_reserved_cost_usd=0"):
 		return "generation-zero"
 	case strings.Contains(normalized, "update ai_budget_monthly set"):
-		if len(data.Args) > 0 {
-			if month, ok := data.Args[0].(time.Time); ok {
-				return "budget:" + month.UTC().Format("2006-01-02")
-			}
+		if month, ok := accountDeleteBudgetMonth(data); ok {
+			return "budget:" + month.UTC().Format("2006-01-02")
 		}
 		return "budget"
 	case strings.Contains(normalized, "delete from users where id=$1"):
 		return "user-delete"
 	default:
 		return ""
+	}
+}
+
+func accountDeleteBudgetMonth(data pgx.TraceQueryStartData) (time.Time, bool) {
+	normalized := normalizeAccountSessionSQL(data.SQL)
+	const monthPredicate = "where month_utc=$"
+	start := strings.Index(normalized, monthPredicate)
+	if start < 0 {
+		return time.Time{}, false
+	}
+	start += len(monthPredicate)
+	end := start
+	argumentNumber := 0
+	for end < len(normalized) && normalized[end] >= '0' && normalized[end] <= '9' {
+		argumentNumber = argumentNumber*10 + int(normalized[end]-'0')
+		end++
+	}
+	if end == start || argumentNumber < 1 || argumentNumber > len(data.Args) {
+		return time.Time{}, false
+	}
+	switch month := data.Args[argumentNumber-1].(type) {
+	case time.Time:
+		return month, true
+	case pgtype.Date:
+		if !month.Valid || month.InfinityModifier != pgtype.Finite {
+			return time.Time{}, false
+		}
+		return month.Time, true
+	default:
+		return time.Time{}, false
+	}
+}
+
+func TestAccountDeleteBudgetMonthFollowsSQLPlaceholder(t *testing.T) {
+	month := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name string
+		data pgx.TraceQueryStartData
+	}{
+		{
+			name: "legacy raw SQL",
+			data: pgx.TraceQueryStartData{
+				SQL:  `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd-$2 WHERE month_utc=$1`,
+				Args: []any{month, "1.25"},
+			},
+		},
+		{
+			name: "sqlc generated SQL",
+			data: pgx.TraceQueryStartData{
+				SQL: `UPDATE ai_budget_monthly SET reserved_cost_usd=reserved_cost_usd-$1::text::numeric,
+updated_at=$3::timestamptz WHERE month_utc=$4::date`,
+				Args: []any{"1.25", "1.25", pgtype.Timestamptz{Time: month, Valid: true}, pgtype.Date{Time: month, Valid: true}},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := accountDeleteBudgetMonth(test.data)
+			if !ok || !got.Equal(month) {
+				t.Fatalf("accountDeleteBudgetMonth() = %v, %t, want %v, true", got, ok, month)
+			}
+		})
 	}
 }
 
@@ -534,7 +594,7 @@ VALUES($1,$3,0.50,$5,$6),($2,$4,0.25,$5,$6)`, fixture.august, fixture.september,
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,goal_id,goal_version_id,cycle_id,target_revision,idempotency_key,input_hash,
 provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,lease_expires_at,started_at)
-VALUES($1,$2,'action_generate','running',$3,$4,$5,0,$6,'action-input','fake','test','action-v1',$7,$8,$9,$10)`,
+VALUES($1,$2,'action_generate','running',$3,$4,$5,0,$6,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','fake','test','action-v1',$7,$8,$9,$10)`,
 		fixture.actionID, fixture.userID, goalFixture.goalID, goalFixture.versionID, goalFixture.cycleID,
 		"82000000-0000-7000-8000-000000000001", fixture.september, fixture.actionCost, now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
@@ -542,7 +602,7 @@ VALUES($1,$2,'action_generate','running',$3,$4,$5,0,$6,'action-input','fake','te
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
 provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,lease_expires_at,started_at)
-VALUES($1,$2,'goal_refine','running',$3,0,$4,'refine-input','保留中の目標','fake','test','refine-v1',$5,$6,$7,$8)`,
+VALUES($1,$2,'goal_refine','running',$3,0,$4,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','保留中の目標','fake','test','refine-v1',$5,$6,$7,$8)`,
 		fixture.refineID, fixture.userID, pendingDraftID, "82000000-0000-7000-8000-000000000002",
 		fixture.august, fixture.refineCost, now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
@@ -807,14 +867,14 @@ VALUES($1,0.3,0,0,$2)`, month, now); err != nil {
 provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,lease_expires_at,started_at)
 VALUES($1,$2,'action_generate','running',$3,$4,$5,0,$6,$7,'fake','test','action-v1',$8,$9,$10,$11)`,
 			actionIDs[index], userID, fixture.goalID, fixture.versionID, fixture.cycleID, actionKeys[index],
-			"action-input-"+actionIDs[index], month, reservation, now.Add(time.Hour), now); err != nil {
+			integrationAIRequestHash, month, reservation, now.Add(time.Hour), now); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
 provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,lease_expires_at,started_at)
-VALUES($1,$2,'goal_refine','running',$3,0,$4,'refine-input','保留中の目標','fake','test','refine-v1',$5,$6,$7,$8)`,
+VALUES($1,$2,'goal_refine','running',$3,0,$4,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','保留中の目標','fake','test','refine-v1',$5,$6,$7,$8)`,
 		refineID, userID, pendingDraftID, refineKey, month, reservation, now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
@@ -973,6 +1033,7 @@ func accountDeleteAISettings() aiIntegrationApplicationSettings {
 }
 
 func accountDeleteAIContext(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
+	snapshot.CanonicalProviderInputHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	return snapshot, nil
 }
 

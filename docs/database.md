@@ -9,7 +9,11 @@
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
 - Baseline schema: `000001_fukamu_cycle_baseline.up.sql`。未リリース・空DB・既存環境互換不要という明示承認に基づき、初期Schemaの80/200文字制約とUUID v7制約を直接含む1 migrationへrebaseline済みであり、今後編集しません。
-- 現在のschema head: `000003_ai_usage_settlement_exposure.up.sql`。Provider usage未確定中だけ元reservationの月と上限額をAI Usageへ保持し、finalization時にclearします。`000002_ai_usage_retention_margin.up.sql`の24時間15分物理保持期限と24時間Quota windowは変更しません。
+- 現在のschema head: `000004_ai_generation_hash_split.up.sql`。AI request replay identityとcanonical provider input identityを別columnへ保存し、旧`input_hash`は直前Application rollback専用aliasとして一時保持します。`000003_ai_usage_settlement_exposure.up.sql`の未確定settlement metadataと、`000002_ai_usage_retention_margin.up.sql`の24時間15分物理保持期限・24時間Quota windowは変更しません。
+
+`000004`は既存`input_hash`を`idempotency_request_hash`へexact backfillし、復元不能な`canonical_provider_input_hash`は`NULL`のまま維持します。64文字lowercase SHA-256 hexでないlegacy request hashが1件でもあればmigration全体をSQLSTATE `23514`でfail-closedにし、現在のContextやrequest hashからcanonical hashを推測しません。
+
+Migration-first切替中、旧Application writerが`input_hash`だけを送る場合はDB triggerが`idempotency_request_hash`を同値補完し、canonical hashをlegacy `NULL`として維持します。新Application writerは新しい2 fieldを送り、旧`input_hash`を送らず、triggerがrollback aliasだけを補完します。Request hash aliasの不一致、3 hash fieldの形式違反、新writerのcanonical hash欠落、保存後のhash変更は拒否します。旧aliasは新Applicationから参照せず、rollback window終了後の別contract migrationで削除します。Productionではdownを実行せず、問題はforward migrationで修復します。
 
 `000003`は既存のprovider-unfinalized Usageを、same-user/same-operationのreconstructableなrunning AIGenerationからexact backfillします。対応Generationがない、owner/operationが一致しない、または元の月/額を復元できないrowが1件でもあればmigration全体をSQLSTATE `23514`でfail-closedにし、default値や現在の設定値から推測しません。
 
@@ -29,7 +33,7 @@ Migration runnerは、正常に適用した各fileについて`migration_version
 6. 空のtest DBと、可能ならproduction相当データ量のcopyではない匿名化fixtureでupを検証する。downはローカルの破棄可能DBでのみ検証する。
 7. backward incompatibleな変更は一度に行わず、expand → application切替 → contractを複数releaseに分ける。
 
-AI Usage settlement migration testは、exact backfill、復元不能rowの全体rollback、旧writer補完、旧finalizer clear、CHECK/immutability違反、旧Account Delete guard、新Account Delete後のUser削除を検証します。
+AI Usage settlement migration testは、exact backfill、復元不能rowの全体rollback、旧writer補完、旧finalizer clear、CHECK/immutability違反、旧Account Delete guard、新Account Delete後のUser削除を検証します。AI Generation hash split migration testは、legacy backfill、復元不能canonical hashの`NULL`維持、旧・新writerのrolling互換、hash不変性、形式不正なlegacy/new hashでのatomic failure、破棄可能DBだけでのdown/re-upを検証します。
 
 この完了済みrebaselineを再実行・再編集してはいけません。今後はMigration番号の変更、適用済みfileの書き換え、別branchで同じ番号を使うことを禁止し、適用済みmigrationの訂正は新しいmigrationで行います。
 

@@ -1215,7 +1215,8 @@ AI生成本文・再現性・分析用content record。Goal Aggregate Delete対�
 | cycleId | CycleID | Action AIのみ | Goal Refineではnone |
 | targetRevision | int64 | Yes | Draft revisionまたはCycle contentRevision |
 | idempotencyKey | UUID | Yes | User/type内unique |
-| inputHash | SHA-256 hex | Yes | canonical input hash |
+| idempotencyRequestHash | 64文字lowercase SHA-256 hex | Yes | request replay identity。lifecycle中はimmutable |
+| canonicalProviderInputHash | 64文字lowercase SHA-256 hex | 新しいlogical operation | §37.7のcanonical provider input。lifecycle中はimmutable。hash分離前のlegacy recordだけnone可 |
 | sourceText | string | refine系のみ | Goal <=80 / A <=200 |
 | output | string | success時 | Goal <=80 / Action <=200 |
 | contextCycleIds | UUID[] | Yes | 同一Goal、最大10 |
@@ -1244,6 +1245,8 @@ Target invariant:
 - `goal_refine`実行中: `sourceGoalDraftId` required、`cycleId` none。Creation Draftでは`goalId/goalVersionId` none、Review Draftではrequired。
 - Goal開始またはGoal Review Continue時、Goal Refine recordを確定した`goalId/goalVersionId`へre-parentして`sourceGoalDraftId`をnoneにする。
 - Creation Draftを破棄した場合、およびGoal Reviewから`achieved` / `ended`へ進んだ場合、そのDraftに紐づくGoal Refine AIGeneration contentを削除する。AIUsageEventはQuota ruleに従って本文なしで維持する。
+- 新しいlogical operationはContext選択・必要な縮約後、Generation INSERT前に`canonicalProviderInputHash`を計算し、`idempotencyRequestHash`と別fieldへ同一Transactionで保存する。Provider call直前に同じcanonicalizationを再検証し、不一致ならcallを停止する。
+- Hash分離前のlegacy recordはexact canonical provider inputを復元できない場合がある。その場合は`canonicalProviderInputHash=none`を維持し、現在のGoal/Cycle/Promptから推測して埋めない。Replayは常に`idempotencyRequestHash`だけで判定する。
 
 ## 15.8 AIUsageEvent
 
@@ -1540,7 +1543,8 @@ CREATE TABLE ai_generations (
     cycle_id UUID NULL,
     target_revision BIGINT NOT NULL CHECK (target_revision >= 0),
     idempotency_key UUID NOT NULL,
-    input_hash TEXT NOT NULL,
+    idempotency_request_hash TEXT NOT NULL,
+    canonical_provider_input_hash TEXT NULL,
     source_text TEXT NULL,
     output TEXT NULL,
     context_cycle_ids UUID[] NOT NULL DEFAULT '{}',
@@ -1652,6 +1656,10 @@ CREATE INDEX idx_ai_generations_goal_time
     WHERE goal_id IS NOT NULL;
 CREATE INDEX idx_ai_generations_prompt_model
     ON ai_generations(prompt_version, model, started_at DESC);
+
+-- Physical expand migrationは直前Application rollback用に旧input_hashを
+-- request-hash aliasとして一時保持する。これはlogical fieldではなく、
+-- 新Applicationから参照せず、rollback window終了後のcontract migrationで削除する。
 
 CREATE TABLE ai_usage_events (
     operation_id UUID PRIMARY KEY,
@@ -4357,9 +4365,9 @@ Operation ID / Idempotency-Key replayでは、canonical requestからSHA-256 req
 | Cycle Complete | completed Cycle `completion_request_hash` |
 | Goal achieved / ended | Goal `terminal_request_hash` |
 | Goal Delete | `goal_delete_receipts.request_hash` |
-| AI logical operation | `ai_generations.input_hash` + unique Idempotency-Key |
+| AI logical operation | `ai_generations.idempotency_request_hash` + unique Idempotency-Key |
 
-DDLへ後付けの重複Columnを追加しない。§16のNormative DDLへ先に反映する。
+Request identityとcanonical provider inputを同じColumnへ保存しない。Field追加は§16のNormative Logical DDLへ先に反映し、既存値を別意味のhashとして推測変換しない。
 
 ---
 
@@ -4890,7 +4898,7 @@ Past Cycleは、Goal Version本文、status、P/D/C/Aを1つのContext unitと�
 3. 新しいCycleから1 unitずつ追加する。
 4. 次unit追加でbudget超過する場合、そのCycleとそれより古いCycleを除外する。
 5. 採用順を`contextCycleIds`へ保存する。
-6. Canonicalized inputをSHA-256し`inputHash`へ保存する。
+6. Canonicalized inputをSHA-256し`canonicalProviderInputHash`へ保存する。
 
 ## 37.5 Current input over-budget fallback
 
@@ -4921,7 +4929,7 @@ type TokenCounter interface {
 - Exact tokenizerが提供されない場合はProvider上限を超えない保守的estimateを使い、estimate methodをmetric/logへ記録する。
 - Model変更時は公式tokenizer情報と日本語fixtureで再検証する。
 
-## 37.7 Canonical input hash
+## 37.7 Canonical provider input hash
 
 Hash対象はProviderへ実際に送った論理inputであり、次を順序固定したcanonical JSONへする。
 
@@ -4934,7 +4942,11 @@ selected Context data
 contextCycleIds order
 ```
 
-Hashは再現性・重複検出用であり、本文復元には使えない。HashをUser認証やauthorizationに使用しない。
+HashはSHA-256 digestの64文字lowercase hexとする。再現性・重複検出用であり、本文復元には使えない。HashをUser認証やauthorizationに使用しない。
+
+Context選択とtoken-aware縮約を完了した後、AIGenerationを受理するTransaction内のINSERT前にhashを計算し、`canonical_provider_input_hash`へ保存する。Provider call直前に同じ論理inputから再計算し、保存済みhashと一致しなければProvider callを停止する。Idempotency replayは§31.2の`idempotency_request_hash`を使用し、このhashをrequest同一性の判定へ流用しない。
+
+Hash分離前のlegacy AIGenerationはexactな選択済みContextやrevisionを復元できないため、`canonical_provider_input_hash=NULL`を許す。Request hashや現在のmutable stateをcanonical hashとしてcopy・再計算しない。分離後に受理する新しいlogical operationではNULLを禁止する。
 
 ---
 

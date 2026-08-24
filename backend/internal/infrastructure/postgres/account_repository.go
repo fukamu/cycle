@@ -32,18 +32,16 @@ func (repository *AccountRepository) UpgradeGoogle(ctx context.Context, input ac
 	if err = lockUser(ctx, tx, input.CurrentUserID); err != nil {
 		return result, err
 	}
-	var linkedUser pgtype.UUID
-	var linkedEmail pgtype.Text
-	err = tx.QueryRow(ctx, `SELECT user_id,
-CASE WHEN email_verified_at_link IS TRUE THEN email_at_link ELSE NULL END
-FROM auth_identities
-WHERE provider='google' AND provider_subject=$1`, input.Identity.Subject).Scan(&linkedUser, &linkedEmail)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		_, err = tx.Exec(ctx, `INSERT INTO auth_identities (
-id,user_id,provider,provider_subject,email_at_link,email_verified_at_link,created_at
-) VALUES($1,$2,'google',$3,$4,$5,$6)`, mustUUID(input.IdentityID), mustUUID(string(input.CurrentUserID)),
-			input.Identity.Subject, input.Identity.Email, input.Identity.EmailVerified, input.Now)
+	linkedIdentity, findErr := queries.FindGoogleIdentityBySubject(ctx, input.Identity.Subject)
+	if errors.Is(findErr, pgx.ErrNoRows) {
+		err = queries.InsertGoogleIdentity(ctx, db.InsertGoogleIdentityParams{
+			IdentityID:          mustUUID(input.IdentityID),
+			UserID:              mustUUID(string(input.CurrentUserID)),
+			ProviderSubject:     input.Identity.Subject,
+			EmailAtLink:         input.Identity.Email,
+			EmailVerifiedAtLink: input.Identity.EmailVerified,
+			CreatedAt:           timestamptz(input.Now),
+		})
 		if err != nil {
 			if isUniqueViolation(err) {
 				return result, account.ErrGoogleIdentityLinked
@@ -51,12 +49,18 @@ id,user_id,provider,provider_subject,email_at_link,email_verified_at_link,create
 			return result, err
 		}
 		result.GoogleEmail = verifiedGoogleEmail(input.Identity)
-	case err != nil:
-		return result, err
-	case uuidString(linkedUser) != string(input.CurrentUserID):
-		return result, account.ErrGoogleIdentityLinked
-	default:
-		result.GoogleEmail = nullableText(linkedEmail)
+	} else {
+		if findErr != nil {
+			return result, findErr
+		}
+		linkedUserID, linkedEmail, mappingErr := accountGoogleIdentity(linkedIdentity)
+		if mappingErr != nil {
+			return result, mappingErr
+		}
+		if linkedUserID != string(input.CurrentUserID) {
+			return result, account.ErrGoogleIdentityLinked
+		}
+		result.GoogleEmail = linkedEmail
 	}
 	if err = queries.DeleteAnonymousBootstrapsByUser(ctx, mustUUID(string(input.CurrentUserID))); err != nil {
 		return result, err
@@ -77,20 +81,19 @@ func (repository *AccountRepository) LoginGoogle(ctx context.Context, input acco
 	}
 	defer rollbackOnError(ctx, tx, &err)
 	queries := db.New(tx)
-	var targetUser pgtype.UUID
-	var googleEmail pgtype.Text
-	err = tx.QueryRow(ctx, `SELECT user_id,
-CASE WHEN email_verified_at_link IS TRUE THEN email_at_link ELSE NULL END
-FROM auth_identities
-WHERE provider='google' AND provider_subject=$1`, input.Identity.Subject).Scan(&targetUser, &googleEmail)
-	if errors.Is(err, pgx.ErrNoRows) {
+	linkedIdentity, findErr := queries.FindGoogleIdentityBySubject(ctx, input.Identity.Subject)
+	if errors.Is(findErr, pgx.ErrNoRows) {
 		return result, account.ErrGoogleAccountNotLinked
 	}
-	if err != nil {
-		return result, err
+	if findErr != nil {
+		return result, findErr
 	}
-	result.UserID = user.ID(uuidString(targetUser))
-	result.GoogleEmail = nullableText(googleEmail)
+	targetUserID, googleEmail, mappingErr := accountGoogleIdentity(linkedIdentity)
+	if mappingErr != nil {
+		return result, mappingErr
+	}
+	result.UserID = user.ID(targetUserID)
+	result.GoogleEmail = googleEmail
 	if err = lockUser(ctx, tx, result.UserID); err != nil {
 		return result, err
 	}
@@ -129,11 +132,7 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 	if _, err = queries.LockAccountGoalDraftIDs(ctx, userUUID); err != nil {
 		return err
 	}
-	cycleRows, err := tx.Query(ctx, `SELECT id FROM pdca_cycles WHERE user_id=$1 ORDER BY id FOR UPDATE`, userUUID)
-	if err != nil {
-		return err
-	}
-	if err = consumeLockedUUIDRows(cycleRows); err != nil {
+	if _, err = queries.LockAccountCycleIDs(ctx, userUUID); err != nil {
 		return err
 	}
 
@@ -142,139 +141,137 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 		month       time.Time
 		reservation string
 	}
-	generationRows, err := tx.Query(ctx, `SELECT id,budget_month_utc,budget_reserved_cost_usd::text
-FROM ai_generations WHERE user_id=$1 AND status='running' ORDER BY id FOR UPDATE`, userUUID)
+	generationRows, err := queries.LockAccountRunningGenerationExposures(ctx, userUUID)
 	if err != nil {
 		return err
 	}
-	generationExposures := make([]generationExposure, 0)
-	generationByID := make(map[string]generationExposure)
-	for generationRows.Next() {
-		var generation generationExposure
-		if err = generationRows.Scan(&generation.id, &generation.month, &generation.reservation); err != nil {
-			generationRows.Close()
-			return err
+	generationExposures := make([]generationExposure, 0, len(generationRows))
+	generationByID := make(map[string]generationExposure, len(generationRows))
+	for _, row := range generationRows {
+		if row == nil {
+			return errors.New("account delete generation exposure row is nil")
+		}
+		generationID := uuidString(row.ID)
+		generationMonth, mappingErr := accountExposureDate(row.BudgetMonthUtc)
+		if generationID == "" || mappingErr != nil {
+			return errors.New("account delete generation exposure mapping invariant failed")
+		}
+		generation := generationExposure{
+			id: generationID, month: generationMonth, reservation: row.BudgetReservedCostUsd,
 		}
 		generationExposures = append(generationExposures, generation)
 		generationByID[generation.id] = generation
-	}
-	generationRows.Close()
-	if err = generationRows.Err(); err != nil {
-		return err
 	}
 	type releasedUsageExposure struct {
 		operationID string
 		month       time.Time
 		reservation string
 	}
-	usageRows, err := tx.Query(ctx, `SELECT operation_id,settlement_budget_month_utc,
-settlement_reservation_cost_usd::text FROM ai_usage_events
-WHERE user_id=$1 AND provider_usage_finalized_at IS NULL ORDER BY operation_id FOR UPDATE`, userUUID)
+	usageRows, err := queries.LockAccountUnfinalizedUsageExposures(ctx, userUUID)
 	if err != nil {
 		return err
 	}
-	releasedUsageExposures := make([]releasedUsageExposure, 0)
-	for usageRows.Next() {
-		var usage releasedUsageExposure
-		if err = usageRows.Scan(&usage.operationID, &usage.month, &usage.reservation); err != nil {
-			usageRows.Close()
-			return err
+	releasedUsageExposures := make([]releasedUsageExposure, 0, len(usageRows))
+	for _, row := range usageRows {
+		if row == nil {
+			return errors.New("account delete usage exposure row is nil")
+		}
+		operationID := uuidString(row.OperationID)
+		usageMonth, mappingErr := accountExposureDate(row.SettlementBudgetMonthUtc)
+		if operationID == "" || mappingErr != nil {
+			return errors.New("account delete usage exposure mapping invariant failed")
+		}
+		usage := releasedUsageExposure{
+			operationID: operationID, month: usageMonth, reservation: row.SettlementReservationCostUsd,
 		}
 		if generation, running := generationByID[usage.operationID]; running {
 			if !generation.month.Equal(usage.month) || generation.reservation != usage.reservation {
-				usageRows.Close()
 				return errors.New("account delete running AI settlement exposure invariant failed")
 			}
 			continue
 		}
 		releasedUsageExposures = append(releasedUsageExposures, usage)
 	}
-	usageRows.Close()
-	if err = usageRows.Err(); err != nil {
-		return err
-	}
 	type monthlyExposure struct {
 		month             time.Time
 		reservedToRelease string
 		unattributedToAdd string
 	}
-	exposureRows, err := tx.Query(ctx, `WITH exposures AS (
-  SELECT budget_month_utc AS month_utc,budget_reserved_cost_usd AS reserved_to_release,
-         budget_reserved_cost_usd AS unattributed_to_add
-  FROM ai_generations
-  WHERE user_id=$1 AND status='running'
-  UNION ALL
-  SELECT usage.settlement_budget_month_utc,0::numeric,usage.settlement_reservation_cost_usd
-  FROM ai_usage_events AS usage
-  WHERE usage.user_id=$1 AND usage.provider_usage_finalized_at IS NULL
-    AND NOT EXISTS (
-      SELECT 1 FROM ai_generations AS generation
-      WHERE generation.id=usage.operation_id AND generation.user_id=usage.user_id AND generation.status='running'
-    )
-)
-SELECT month_utc,SUM(reserved_to_release)::text,SUM(unattributed_to_add)::text
-FROM exposures GROUP BY month_utc ORDER BY month_utc`, userUUID)
+	exposureRows, err := queries.ListAccountMonthlyExposures(ctx, userUUID)
 	if err != nil {
 		return err
 	}
-	monthlyExposures := make([]monthlyExposure, 0)
-	for exposureRows.Next() {
-		var exposure monthlyExposure
-		if err = exposureRows.Scan(&exposure.month, &exposure.reservedToRelease, &exposure.unattributedToAdd); err != nil {
-			exposureRows.Close()
-			return err
+	monthlyExposures := make([]monthlyExposure, 0, len(exposureRows))
+	for _, row := range exposureRows {
+		if row == nil {
+			return errors.New("account delete monthly exposure row is nil")
 		}
-		monthlyExposures = append(monthlyExposures, exposure)
-	}
-	exposureRows.Close()
-	if err = exposureRows.Err(); err != nil {
-		return err
+		exposureMonth, mappingErr := accountExposureDate(row.MonthUtc)
+		if mappingErr != nil {
+			return errors.New("account delete monthly exposure mapping invariant failed")
+		}
+		monthlyExposures = append(monthlyExposures, monthlyExposure{
+			month:             exposureMonth,
+			reservedToRelease: row.ReservedToRelease,
+			unattributedToAdd: row.UnattributedToAdd,
+		})
 	}
 	for _, generation := range generationExposures {
-		command, updateErr := tx.Exec(ctx, `UPDATE ai_generations SET budget_reserved_cost_usd=0
-WHERE user_id=$1 AND id=$2 AND status='running' AND budget_month_utc=$3
-  AND budget_reserved_cost_usd=$4::numeric`, userUUID, mustUUID(generation.id), generation.month, generation.reservation)
+		rows, updateErr := queries.ReleaseAccountGenerationReservationCAS(
+			ctx,
+			db.ReleaseAccountGenerationReservationCASParams{
+				UserID:                 userUUID,
+				GenerationID:           mustUUID(generation.id),
+				ExpectedBudgetMonthUtc: accountDateParam(generation.month),
+				ExpectedReservationUsd: generation.reservation,
+			},
+		)
 		if updateErr != nil {
 			return updateErr
 		}
-		if command.RowsAffected() != 1 {
+		if rows != 1 {
 			return errors.New("account delete generation reservation invariant failed")
 		}
 	}
 	for _, exposure := range monthlyExposures {
-		command, updateErr := tx.Exec(ctx, `UPDATE ai_budget_monthly SET
-reserved_cost_usd=reserved_cost_usd-$2,
-unattributed_cost_usd=unattributed_cost_usd+$3,
-updated_at=$4
-WHERE month_utc=$1 AND reserved_cost_usd >= $2::numeric`, exposure.month, exposure.reservedToRelease,
-			exposure.unattributedToAdd, now)
+		rows, updateErr := queries.MoveAccountExposureToUnattributedCAS(
+			ctx,
+			db.MoveAccountExposureToUnattributedCASParams{
+				ReservedToRelease: exposure.reservedToRelease,
+				UnattributedToAdd: exposure.unattributedToAdd,
+				UpdatedAt:         timestamptz(now),
+				MonthUtc:          accountDateParam(exposure.month),
+			},
+		)
 		if updateErr != nil {
 			return updateErr
 		}
-		if command.RowsAffected() != 1 {
+		if rows != 1 {
 			return errors.New("account delete budget settlement exposure invariant failed")
 		}
 	}
 	for _, usage := range releasedUsageExposures {
-		command, deleteErr := tx.Exec(ctx, `DELETE FROM ai_usage_events AS usage
-WHERE usage.user_id=$1 AND usage.operation_id=$2 AND usage.provider_usage_finalized_at IS NULL
-  AND usage.settlement_budget_month_utc=$3 AND usage.settlement_reservation_cost_usd=$4::numeric
-  AND NOT EXISTS (
-    SELECT 1 FROM ai_generations AS generation
-    WHERE generation.id=usage.operation_id AND generation.user_id=usage.user_id AND generation.status='running'
-  )`, userUUID, mustUUID(usage.operationID), usage.month, usage.reservation)
+		rows, deleteErr := queries.DeleteReleasedAccountUsageExposureCAS(
+			ctx,
+			db.DeleteReleasedAccountUsageExposureCASParams{
+				UserID:                 userUUID,
+				OperationID:            mustUUID(usage.operationID),
+				ExpectedBudgetMonthUtc: accountDateParam(usage.month),
+				ExpectedReservationUsd: usage.reservation,
+			},
+		)
 		if deleteErr != nil {
 			return deleteErr
 		}
-		if command.RowsAffected() != 1 {
+		if rows != 1 {
 			return errors.New("account delete released AI usage exposure invariant failed")
 		}
 	}
-	command, err := tx.Exec(ctx, `DELETE FROM users WHERE id=$1`, userUUID)
+	rows, err := queries.DeleteAccountUserCAS(ctx, userUUID)
 	if err != nil {
 		return err
 	}
-	if command.RowsAffected() != 1 {
+	if rows != 1 {
 		return pgx.ErrNoRows
 	}
 	err = tx.Commit(ctx)
@@ -284,17 +281,6 @@ WHERE usage.user_id=$1 AND usage.operation_id=$2 AND usage.provider_usage_finali
 func lockUser(ctx context.Context, tx pgx.Tx, userID user.ID) error {
 	_, err := db.New(tx).LockUser(ctx, mustUUID(string(userID)))
 	return err
-}
-
-func consumeLockedUUIDRows(rows pgx.Rows) error {
-	defer rows.Close()
-	for rows.Next() {
-		var ignored pgtype.UUID
-		if err := rows.Scan(&ignored); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
 }
 
 func rotateSession(ctx context.Context, queries *db.Queries, currentSessionID, newSessionID string, userID user.ID, tokenHash, csrfHash []byte, now, idleExpiry, absoluteExpiry time.Time) error {
@@ -332,10 +318,44 @@ func verifiedGoogleEmail(identity account.GoogleIdentity) *string {
 	return &email
 }
 
-func nullableText(value pgtype.Text) *string {
-	if !value.Valid {
-		return nil
+func accountGoogleIdentity(row *db.FindGoogleIdentityBySubjectRow) (string, *string, error) {
+	if row == nil {
+		return "", nil, errors.New("Google identity row is nil")
 	}
-	text := value.String
-	return &text
+	userID := uuidString(row.UserID)
+	if userID == "" {
+		return "", nil, errors.New("Google identity user ID is invalid")
+	}
+	switch value := row.VerifiedEmail.(type) {
+	case nil:
+		return userID, nil, nil
+	case string:
+		email := value
+		return userID, &email, nil
+	case []byte:
+		email := string(value)
+		return userID, &email, nil
+	case pgtype.Text:
+		if !value.Valid {
+			return userID, nil, nil
+		}
+		email := value.String
+		return userID, &email, nil
+	default:
+		return "", nil, errors.New("Google identity verified email has an invalid database type")
+	}
+}
+
+func accountExposureDate(value pgtype.Date) (time.Time, error) {
+	if !value.Valid || value.InfinityModifier != pgtype.Finite {
+		return time.Time{}, errors.New("account exposure date is invalid")
+	}
+	return time.Date(value.Time.Year(), value.Time.Month(), value.Time.Day(), 0, 0, 0, 0, time.UTC), nil
+}
+
+func accountDateParam(value time.Time) pgtype.Date {
+	return pgtype.Date{
+		Time:  time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC),
+		Valid: true,
+	}
 }

@@ -294,7 +294,7 @@ func (service *Service) executeAI(ctx context.Context, snapshot *AISnapshot) (AI
 	if snapshot.MaxOutputTokens <= 0 {
 		return AIExecutionResult{}, ErrAIInputBudget
 	}
-	if err := service.setCanonicalProviderInputHash(snapshot); err != nil {
+	if err := service.verifyCanonicalProviderInputHash(snapshot); err != nil {
 		return AIExecutionResult{}, err
 	}
 

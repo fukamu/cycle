@@ -50,8 +50,14 @@ func TestSelectAIContextForUserAppliesEntitledInputAndOutputLimits(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selected.MaxOutputTokens != 321 || len(selected.PastCycles) != 0 {
-		t.Fatalf("selected entitlement limits = output %d, past %#v", selected.MaxOutputTokens, selected.PastCycles)
+	wantHash, err := service.canonicalProviderInputHash(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.MaxOutputTokens != 321 || len(selected.PastCycles) != 0 ||
+		selected.CanonicalProviderInputHash == "" || selected.CanonicalProviderInputHash != wantHash {
+		t.Fatalf("selected entitlement limits/hash = output %d, past %#v, hash %q want %q",
+			selected.MaxOutputTokens, selected.PastCycles, selected.CanonicalProviderInputHash, wantHash)
 	}
 }
 

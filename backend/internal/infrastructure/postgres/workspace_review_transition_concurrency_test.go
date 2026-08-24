@@ -129,8 +129,12 @@ func (barrier *continueContentionBarrier) releaseLeaderQuery() {
 
 func isContinueReceiptQuery(sql string) bool {
 	normalized := normalizeObservedSQL(sql)
-	return strings.Contains(normalized, "select c.goal_id,c.id,c.start_request_hash") &&
-		strings.Contains(normalized, "from pdca_cycles c") &&
+	projection := strings.Contains(normalized, "select c.goal_id,c.id,c.start_request_hash") ||
+		(strings.Contains(normalized, "select c.goal_id,c.id as cycle_id,c.start_request_hash as request_hash,exists (") &&
+			strings.Contains(normalized, ") as version_created"))
+	cycleSource := strings.Contains(normalized, "from pdca_cycles c") ||
+		strings.Contains(normalized, "from pdca_cycles as c")
+	return projection && cycleSource &&
 		strings.Contains(normalized, "where c.user_id=$1 and c.start_operation_id=$2")
 }
 

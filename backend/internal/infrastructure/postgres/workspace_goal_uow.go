@@ -122,52 +122,28 @@ func (transaction *workspaceGoalTx) LockGoalCycleIDs(
 	ctx context.Context,
 	userID, goalID string,
 ) ([]string, error) {
-	return lockGoalChildIDs(ctx, transaction.tx, `SELECT id FROM pdca_cycles
-WHERE goal_id=$1 AND user_id=$2 ORDER BY id FOR UPDATE`, goalID, userID)
-}
-
-func lockGoalChildIDs(
-	ctx context.Context,
-	tx pgx.Tx,
-	query, goalID, userID string,
-) ([]string, error) {
-	rows, err := tx.Query(ctx, query, mustUUID(goalID), mustUUID(userID))
+	rows, err := transaction.queries.LockGoalCycleIDs(ctx, db.LockGoalCycleIDsParams{
+		GoalID: mustUUID(goalID),
+		UserID: mustUUID(userID),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	ids := make([]string, 0)
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return cycleIDsFromSQLC(rows)
 }
 
 func (transaction *workspaceGoalTx) LockRunningGoalGenerations(
 	ctx context.Context,
 	userID, goalID string,
 ) ([]workspace.GoalDeleteGeneration, error) {
-	rows, err := transaction.tx.Query(ctx, `SELECT id,budget_reserved_cost_usd::text FROM ai_generations
-WHERE user_id=$1 AND goal_id=$2 AND status='running' ORDER BY id FOR UPDATE`,
-		mustUUID(userID), mustUUID(goalID),
-	)
+	rows, err := transaction.queries.LockRunningGoalGenerations(ctx, db.LockRunningGoalGenerationsParams{
+		UserID: mustUUID(userID),
+		GoalID: mustUUID(goalID),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	items := make([]workspace.GoalDeleteGeneration, 0)
-	for rows.Next() {
-		var item workspace.GoalDeleteGeneration
-		if err = rows.Scan(&item.ID, &item.ReservedCostUSD); err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
+	return goalDeleteGenerationsFromSQLC(rows)
 }
 
 func (transaction *workspaceGoalTx) SumLockedGoalReservationsByMonth(
@@ -178,25 +154,18 @@ func (transaction *workspaceGoalTx) SumLockedGoalReservationsByMonth(
 	if len(generationIDs) == 0 {
 		return []workspace.MonthlyReservation{}, nil
 	}
-	rows, err := transaction.tx.Query(ctx, `SELECT budget_month_utc,SUM(budget_reserved_cost_usd)::text
-FROM ai_generations
-WHERE user_id=$1 AND goal_id=$2 AND id=ANY($3::text[]::uuid[]) AND status='running'
-GROUP BY budget_month_utc
-HAVING SUM(budget_reserved_cost_usd)>0
-ORDER BY budget_month_utc`, mustUUID(userID), mustUUID(goalID), generationIDs)
+	rows, err := transaction.queries.SumLockedGoalReservationsByMonth(
+		ctx,
+		db.SumLockedGoalReservationsByMonthParams{
+			UserID:        mustUUID(userID),
+			GoalID:        mustUUID(goalID),
+			GenerationIds: generationIDs,
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	items := make([]workspace.MonthlyReservation, 0)
-	for rows.Next() {
-		var item workspace.MonthlyReservation
-		if err = rows.Scan(&item.MonthUtc, &item.AmountUSD); err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
+	return goalDeleteMonthlyReservationsFromSQLC(rows)
 }
 
 func (transaction *workspaceGoalTx) ReleaseGoalBudgetReservationCAS(
@@ -205,13 +174,11 @@ func (transaction *workspaceGoalTx) ReleaseGoalBudgetReservationCAS(
 	amount string,
 	now time.Time,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `UPDATE ai_budget_monthly
-SET reserved_cost_usd=reserved_cost_usd-$2::numeric,updated_at=$3
-WHERE month_utc=$1 AND reserved_cost_usd >= $2::numeric`, month, amount, now)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.ReleaseBudgetReservationCAS(ctx, db.ReleaseBudgetReservationCASParams{
+		AmountUsd: amount,
+		UpdatedAt: timestamptz(now),
+		MonthUtc:  goalDeleteDate(month),
+	})
 }
 
 func (transaction *workspaceGoalTx) TerminalizeGoalGenerationCAS(
@@ -220,60 +187,38 @@ func (transaction *workspaceGoalTx) TerminalizeGoalGenerationCAS(
 	generation workspace.GoalDeleteGeneration,
 	now time.Time,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `UPDATE ai_generations SET status='failed',failure_code='goal_deleted',
-budget_reserved_cost_usd=0,lease_expires_at=NULL,finished_at=$4
-WHERE id=$1 AND user_id=$2 AND goal_id=$3 AND status='running'
-  AND budget_reserved_cost_usd=$5::numeric`,
-		mustUUID(generation.ID), mustUUID(userID), mustUUID(goalID), now, generation.ReservedCostUSD,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.TerminalizeGoalGenerationCAS(ctx, db.TerminalizeGoalGenerationCASParams{
+		FinishedAt:             timestamptz(now),
+		GenerationID:           mustUUID(generation.ID),
+		UserID:                 mustUUID(userID),
+		GoalID:                 mustUUID(goalID),
+		ExpectedReservationUsd: generation.ReservedCostUSD,
+	})
 }
 
 func (transaction *workspaceGoalTx) FailRunningGoalUsageCAS(
 	ctx context.Context,
 	userID, goalID, operationID string,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `UPDATE ai_usage_events
-SET goal_id=NULL,status='failed',content_deleted=true
-WHERE operation_id=$1 AND user_id=$2 AND goal_id=$3
-  AND status='accepted' AND provider_usage_finalized_at IS NULL`,
-		mustUUID(operationID), mustUUID(userID), mustUUID(goalID),
-	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.FailRunningGoalUsageCAS(ctx, db.FailRunningGoalUsageCASParams{
+		OperationID: mustUUID(operationID),
+		UserID:      mustUUID(userID),
+		GoalID:      mustUUID(goalID),
+	})
 }
 
 func (transaction *workspaceGoalTx) LockGoalUsages(
 	ctx context.Context,
 	userID, goalID string,
 ) ([]workspace.GoalDeleteUsage, error) {
-	rows, err := transaction.tx.Query(ctx, `SELECT operation_id,status,quota_retain_until,provider_usage_finalized_at
-FROM ai_usage_events WHERE user_id=$1 AND goal_id=$2 ORDER BY operation_id FOR UPDATE`,
-		mustUUID(userID), mustUUID(goalID),
-	)
+	rows, err := transaction.queries.LockGoalUsages(ctx, db.LockGoalUsagesParams{
+		UserID: mustUUID(userID),
+		GoalID: mustUUID(goalID),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	items := make([]workspace.GoalDeleteUsage, 0)
-	for rows.Next() {
-		var item workspace.GoalDeleteUsage
-		var finalized pgtype.Timestamptz
-		if err = rows.Scan(&item.OperationID, &item.Status, &item.QuotaRetainUntil, &finalized); err != nil {
-			return nil, err
-		}
-		if finalized.Valid {
-			value := finalized.Time
-			item.ProviderUsageFinalizedAt = &value
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
+	return goalDeleteUsagesFromSQLC(rows)
 }
 
 func (transaction *workspaceGoalTx) RedactGoalUsagesCAS(
@@ -281,15 +226,11 @@ func (transaction *workspaceGoalTx) RedactGoalUsagesCAS(
 	userID, goalID string,
 	operationIDs []string,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `UPDATE ai_usage_events
-SET goal_id=NULL,status=CASE WHEN status='accepted' THEN 'failed' ELSE status END,content_deleted=true
-WHERE user_id=$1 AND goal_id=$2 AND operation_id=ANY($3::text[]::uuid[])`,
-		mustUUID(userID), mustUUID(goalID), operationIDs,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.RedactGoalUsagesCAS(ctx, db.RedactGoalUsagesCASParams{
+		UserID:       mustUUID(userID),
+		GoalID:       mustUUID(goalID),
+		OperationIds: operationIDs,
+	})
 }
 
 func (transaction *workspaceGoalTx) DeleteExpiredFinalizedGoalUsagesCAS(
@@ -298,15 +239,15 @@ func (transaction *workspaceGoalTx) DeleteExpiredFinalizedGoalUsagesCAS(
 	operationIDs []string,
 	now time.Time,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `DELETE FROM ai_usage_events
-WHERE user_id=$1 AND goal_id=$2 AND operation_id=ANY($3::text[]::uuid[])
-  AND quota_retain_until <= $4 AND provider_usage_finalized_at IS NOT NULL`,
-		mustUUID(userID), mustUUID(goalID), operationIDs, now,
+	return transaction.queries.DeleteExpiredFinalizedGoalUsagesCAS(
+		ctx,
+		db.DeleteExpiredFinalizedGoalUsagesCASParams{
+			UserID:       mustUUID(userID),
+			GoalID:       mustUUID(goalID),
+			OperationIds: operationIDs,
+			Now:          timestamptz(now),
+		},
 	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
 }
 
 func (transaction *workspaceGoalTx) DeleteGoalCAS(

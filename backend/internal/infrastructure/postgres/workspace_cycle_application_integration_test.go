@@ -80,23 +80,22 @@ func isCycleSaveGoalLock(sql string) bool {
 
 func isCycleFrameSaveUpdate(sql string, frame cycle.Frame) bool {
 	normalized := normalizeObservedSQL(sql)
-	if !strings.HasPrefix(normalized, "update pdca_cycles set ") ||
-		!strings.Contains(normalized, "where id=$1 and user_id=$2 and goal_id=$3 and status='active'") {
+	if !strings.HasPrefix(normalized, "update pdca_cycles set ") {
 		return false
 	}
 	switch frame {
 	case cycle.FramePlan:
-		return strings.Contains(normalized, "set plan=$4,plan_revision=$5,content_revision=$6,updated_at=$7") &&
-			strings.Contains(normalized, "and plan_revision=$8")
+		return strings.Contains(normalized, "set plan=$4,plan_revision=$5,content_revision=$6,updated_at=$7 where id=$1 and user_id=$2 and goal_id=$3 and status='active' and plan_revision=$8") ||
+			strings.Contains(normalized, "set plan=$1,plan_revision=$2,content_revision=$3,updated_at=$4 where id=$5 and user_id=$6 and goal_id=$7 and status='active' and plan_revision=$8")
 	case cycle.FrameDo:
-		return strings.Contains(normalized, "set do_text=$4,do_revision=$5,content_revision=$6,updated_at=$7") &&
-			strings.Contains(normalized, "and do_revision=$8")
+		return strings.Contains(normalized, "set do_text=$4,do_revision=$5,content_revision=$6,updated_at=$7 where id=$1 and user_id=$2 and goal_id=$3 and status='active' and do_revision=$8") ||
+			strings.Contains(normalized, "set do_text=$1,do_revision=$2,content_revision=$3,updated_at=$4 where id=$5 and user_id=$6 and goal_id=$7 and status='active' and do_revision=$8")
 	case cycle.FrameCheck:
-		return strings.Contains(normalized, "set check_text=$4,check_revision=$5,content_revision=$6,updated_at=$7") &&
-			strings.Contains(normalized, "and check_revision=$8")
+		return strings.Contains(normalized, "set check_text=$4,check_revision=$5,content_revision=$6,updated_at=$7 where id=$1 and user_id=$2 and goal_id=$3 and status='active' and check_revision=$8") ||
+			strings.Contains(normalized, "set check_text=$1,check_revision=$2,content_revision=$3,updated_at=$4 where id=$5 and user_id=$6 and goal_id=$7 and status='active' and check_revision=$8")
 	case cycle.FrameAction:
-		return strings.Contains(normalized, "set action=$4,action_revision=$5,content_revision=$6,") &&
-			strings.Contains(normalized, "and action_revision=$9")
+		return strings.Contains(normalized, "set action=$4,action_revision=$5,content_revision=$6,action_user_modified_after_ai=$7,updated_at=$8 where id=$1 and user_id=$2 and goal_id=$3 and status='active' and action_revision=$9") ||
+			strings.Contains(normalized, "set action=$1,action_revision=$2,content_revision=$3,action_user_modified_after_ai=$4,updated_at=$5 where id=$6 and user_id=$7 and goal_id=$8 and status='active' and action_revision=$9")
 	default:
 		return false
 	}

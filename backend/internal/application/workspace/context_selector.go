@@ -37,7 +37,14 @@ func (service *Service) selectAIContextForUser(userID string) AIContextSelector 
 		if snapshot.MaxOutputTokens <= 0 {
 			return AISnapshot{}, ErrAIInputBudget
 		}
-		return service.selectAIContext(ctx, snapshot, limits.MaxAIInputTokens)
+		selected, err := service.selectAIContext(ctx, snapshot, limits.MaxAIInputTokens)
+		if err != nil {
+			return AISnapshot{}, err
+		}
+		if err = service.setCanonicalProviderInputHash(&selected); err != nil {
+			return AISnapshot{}, err
+		}
+		return selected, nil
 	}
 }
 
@@ -357,13 +364,36 @@ func aiInputCycle(item AIContextCycle, includeGoalBody bool) *AIInputCycle {
 }
 
 func (service *Service) setCanonicalProviderInputHash(snapshot *AISnapshot) error {
-	selectedContext, err := service.providerLogicalInputJSON(*snapshot)
+	hash, err := service.canonicalProviderInputHash(*snapshot)
 	if err != nil {
 		return err
 	}
-	settings, err := service.aiOperationSettings(snapshot.Operation)
+	snapshot.CanonicalProviderInputHash = hash
+	return nil
+}
+
+func (service *Service) verifyCanonicalProviderInputHash(snapshot *AISnapshot) error {
+	if snapshot.CanonicalProviderInputHash == "" {
+		return ErrAIContextIsolation
+	}
+	hash, err := service.canonicalProviderInputHash(*snapshot)
 	if err != nil {
 		return err
+	}
+	if snapshot.CanonicalProviderInputHash != hash {
+		return ErrAIContextIsolation
+	}
+	return nil
+}
+
+func (service *Service) canonicalProviderInputHash(snapshot AISnapshot) (string, error) {
+	selectedContext, err := service.providerLogicalInputJSON(snapshot)
+	if err != nil {
+		return "", err
+	}
+	settings, err := service.aiOperationSettings(snapshot.Operation)
+	if err != nil {
+		return "", err
 	}
 	canonical, err := json.Marshal(struct {
 		PromptVersion      string                 `json:"promptVersion"`
@@ -378,9 +408,8 @@ func (service *Service) setCanonicalProviderInputHash(snapshot *AISnapshot) erro
 		snapshot.TargetRevision, snapshot.SourceGoalRevision, selectedContext, aiContextCycleIDs(snapshot.PastCycles),
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	digest := sha256.Sum256(canonical)
-	snapshot.CanonicalProviderInputHash = hex.EncodeToString(digest[:])
-	return nil
+	return hex.EncodeToString(digest[:]), nil
 }

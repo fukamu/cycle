@@ -61,6 +61,13 @@ func (provider *scriptedProvider) callCount() int {
 	return len(provider.goalInputs) + len(provider.generateInputs) + len(provider.refineInputs)
 }
 
+func setTestCanonicalProviderInputHash(t *testing.T, service *Service, snapshot *AISnapshot) {
+	t.Helper()
+	if err := service.setCanonicalProviderInputHash(snapshot); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExecuteAIRetriesInvalidResponseWithinOneLogicalOperation(t *testing.T) {
 	provider := &scriptedProvider{
 		goalResults: []GoalRefineAIResult{{}, {Suggestion: " goal\r\ntext "}},
@@ -80,6 +87,7 @@ func TestExecuteAIRetriesInvalidResponseWithinOneLogicalOperation(t *testing.T) 
 	snapshot := AISnapshot{
 		Operation: domainai.OperationGoalRefine, SourceText: "source", MaxOutputTokens: 400,
 	}
+	setTestCanonicalProviderInputHash(t, service, &snapshot)
 	result, err := service.executeAI(context.Background(), &snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +111,66 @@ func TestExecuteAIRetriesInvalidResponseWithinOneLogicalOperation(t *testing.T) 
 	}
 }
 
+func TestExecuteAIRejectsMissingCanonicalProviderInputHashBeforeProviderCall(t *testing.T) {
+	provider := &scriptedProvider{
+		goalResults: []GoalRefineAIResult{{Suggestion: "must not be called"}},
+		errors:      []error{nil},
+	}
+	service := &Service{
+		goalRefiner: provider,
+		settings: Settings{
+			MaxProviderAttempts: 1, Model: "test-model", GoalRefineInstructions: "goal instructions",
+			GoalPromptVersion: "goal-v2",
+		},
+	}
+	snapshot := AISnapshot{
+		Operation: domainai.OperationGoalRefine, SourceText: "missing hash", MaxOutputTokens: 400,
+	}
+
+	_, err := service.executeAI(context.Background(), &snapshot)
+	if !errors.Is(err, ErrAIContextIsolation) {
+		t.Fatalf("error = %v, want %v", err, ErrAIContextIsolation)
+	}
+	if provider.callCount() != 0 || snapshot.CanonicalProviderInputHash != "" {
+		t.Fatalf("provider calls/hash after missing hash = %d/%q", provider.callCount(), snapshot.CanonicalProviderInputHash)
+	}
+}
+
+func TestExecuteAIRejectsCanonicalProviderInputDriftBeforeProviderCall(t *testing.T) {
+	provider := &scriptedProvider{
+		goalResults: []GoalRefineAIResult{{Suggestion: "must not be called"}},
+		errors:      []error{nil},
+	}
+	service := &Service{
+		goalRefiner: provider,
+		settings: Settings{
+			MaxProviderAttempts: 1, Model: "test-model", GoalRefineInstructions: "goal instructions",
+			GoalPromptVersion: "goal-v2",
+		},
+	}
+	snapshot := AISnapshot{
+		Operation: domainai.OperationGoalRefine, TargetRevision: 3, SourceText: "persisted source",
+		MaxOutputTokens: 400,
+	}
+	if err := service.setCanonicalProviderInputHash(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	persistedHash := snapshot.CanonicalProviderInputHash
+	snapshot.SourceText = "drifted source"
+
+	_, err := service.executeAI(context.Background(), &snapshot)
+	if !errors.Is(err, ErrAIContextIsolation) {
+		t.Fatalf("error = %v, want %v", err, ErrAIContextIsolation)
+	}
+	if provider.callCount() != 0 {
+		t.Fatalf("provider calls after canonical drift = %d", provider.callCount())
+	}
+	if snapshot.CanonicalProviderInputHash != persistedHash {
+		t.Fatalf("persisted canonical hash was overwritten: got %q, want %q",
+			snapshot.CanonicalProviderInputHash, persistedHash)
+	}
+}
+
 func TestExecuteAIRetriesProviderUnavailableWithoutValidationReinforcement(t *testing.T) {
 	provider := &scriptedProvider{
 		goalResults: []GoalRefineAIResult{{}, {Suggestion: "recovered goal"}},
@@ -122,6 +190,7 @@ func TestExecuteAIRetriesProviderUnavailableWithoutValidationReinforcement(t *te
 	snapshot := AISnapshot{
 		Operation: domainai.OperationGoalRefine, SourceText: "source", MaxOutputTokens: 400,
 	}
+	setTestCanonicalProviderInputHash(t, service, &snapshot)
 
 	result, err := service.executeAI(context.Background(), &snapshot)
 	if err != nil {
@@ -180,9 +249,11 @@ func TestExecuteAIStopsAfterOneAttemptForNonRetryableFailuresAndCancellation(t *
 				ctx = canceledCtx
 			}
 
-			result, err := service.executeAI(ctx, &AISnapshot{
+			snapshot := AISnapshot{
 				Operation: domainai.OperationGoalRefine, SourceText: "source", MaxOutputTokens: 400,
-			})
+			}
+			setTestCanonicalProviderInputHash(t, service, &snapshot)
+			result, err := service.executeAI(ctx, &snapshot)
 			if !errors.Is(err, test.wantError) {
 				t.Fatalf("error = %v, want %v", err, test.wantError)
 			}
@@ -217,6 +288,7 @@ func TestExecuteAIRetriesDomainInvalidRawGoalResult(t *testing.T) {
 		},
 	}
 	snapshot := AISnapshot{Operation: domainai.OperationGoalRefine, MaxOutputTokens: 400}
+	setTestCanonicalProviderInputHash(t, service, &snapshot)
 	result, err := service.executeAI(context.Background(), &snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -255,6 +327,7 @@ func TestExecuteAIValidatesAndRendersRawGeneratedActionsWithSelectedContext(t *t
 		CurrentCycle: &AIContextCycle{ID: "cycle-2", GoalID: "goal-1", SequenceNumber: 2},
 		PastCycles:   past, MaxOutputTokens: 800,
 	}
+	setTestCanonicalProviderInputHash(t, service, &snapshot)
 	result, err := service.executeAI(context.Background(), &snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -296,6 +369,7 @@ func TestExecuteAIValidatesRawRefinedAction(t *testing.T) {
 		Operation: domainai.OperationActionRefine, MaxOutputTokens: 800,
 		CurrentCycle: &AIContextCycle{GoalID: "goal-1", Action: "action"},
 	}
+	setTestCanonicalProviderInputHash(t, service, &snapshot)
 	result, err := service.executeAI(context.Background(), &snapshot)
 	if err != nil || result.Output != " improve\naction " || len(provider.refineInputs) != 1 {
 		t.Fatalf("result/error/calls = %#v/%v/%d", result, err, len(provider.refineInputs))
@@ -410,7 +484,7 @@ func TestGoalRefineReplayPreservesOriginalResponseMetadata(t *testing.T) {
 	tx := &replayGoalDraftTx{
 		draft: goal.Draft{ID: input.DraftID, UserID: input.UserID, Type: goal.DraftCreation, Body: "元の目標", Revision: 4},
 		replay: GoalRefineReplayState{
-			GenerationID: generationID, InputHash: goalRefineRequestHash(input), Status: aiStatusSucceeded,
+			GenerationID: generationID, IdempotencyRequestHash: goalRefineRequestHash(input), Status: aiStatusSucceeded,
 			TargetRevision: 4, Output: &output, ContextChanged: true,
 		},
 	}

@@ -69,7 +69,7 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'m7-ai-text-constraints',$5,$5)`,
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,
 source_text,output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,started_at,finished_at)
-VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'m7-goal-refine',$5,$5,
+VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',$5,$5,
 'fake','test','goal-refine-v1',$6,0,$7,$7)`,
 		goalGenerationID, userID, draftID, goalIdempotencyKey, goalAtLimit, now.Format("2006-01-02"), now); err != nil {
 		t.Fatalf("insert goal_refine at 80 code points: %v", err)
@@ -87,7 +87,7 @@ VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'m7-goal-refine',$5,$5,
 	if _, err = pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,goal_id,goal_version_id,cycle_id,target_revision,idempotency_key,input_hash,
 source_text,output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,applied_at,started_at,finished_at)
-VALUES($1,$2,'action_refine','succeeded',$3,$4,$5,0,$6,'m7-action-refine',$7,$7,
+VALUES($1,$2,'action_refine','succeeded',$3,$4,$5,0,$6,'efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef',$7,$7,
 'fake','test','action-refine-v1',$8,0,$9,$9,$9)`,
 		actionGenerationID, userID, goalID, versionID, cycleID, actionIdempotency,
 		actionAtLimit, now.Format("2006-01-02"), now); err != nil {

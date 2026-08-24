@@ -23,11 +23,20 @@ func TestGoalDeleteAdaptersDoNotEmbedOwnedGoalRawSQL(t *testing.T) {
 
 	targets := map[string]map[string]bool{
 		"workspace_goal_uow.go": {
-			"FindGoalDeleteReceipt":   false,
-			"LockGoalForDelete":       false,
-			"LockGoalDraftIDs":        false,
-			"DeleteGoalCAS":           false,
-			"InsertGoalDeleteReceipt": false,
+			"FindGoalDeleteReceipt":               false,
+			"LockGoalForDelete":                   false,
+			"LockGoalDraftIDs":                    false,
+			"LockGoalCycleIDs":                    false,
+			"LockRunningGoalGenerations":          false,
+			"SumLockedGoalReservationsByMonth":    false,
+			"ReleaseGoalBudgetReservationCAS":     false,
+			"TerminalizeGoalGenerationCAS":        false,
+			"FailRunningGoalUsageCAS":             false,
+			"LockGoalUsages":                      false,
+			"RedactGoalUsagesCAS":                 false,
+			"DeleteExpiredFinalizedGoalUsagesCAS": false,
+			"DeleteGoalCAS":                       false,
+			"InsertGoalDeleteReceipt":             false,
 		},
 		"account_repository.go": {
 			"DeleteAccount": true,
@@ -82,6 +91,64 @@ func TestGoalDeleteAdaptersDoNotEmbedOwnedGoalRawSQL(t *testing.T) {
 	}
 	sort.Strings(violations)
 	t.Fatalf("Goal Delete stable SQL must live in queries/*.sql and use generated methods:\n%s", strings.Join(violations, "\n"))
+}
+
+func TestGoalDeleteAISQLPreservesOwnerLocksExactNumericAndCAS(t *testing.T) {
+	t.Parallel()
+
+	aiContents, err := os.ReadFile("queries/goal_delete_ai.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgetContents, err := os.ReadFile("queries/ai_budget.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracts := map[string]struct {
+		source    string
+		fragments []string
+	}{
+		"LockRunningGoalGenerations": {string(aiContents), []string{
+			"budget_reserved_cost_usd::text", "where user_id =", "and goal_id =", "status = 'running'",
+			"order by id", "for update",
+		}},
+		"SumLockedGoalReservationsByMonth": {string(aiContents), []string{
+			"sum(budget_reserved_cost_usd)::text", "where user_id =", "and goal_id =", "id = any",
+			"status = 'running'", "having sum(budget_reserved_cost_usd) > 0", "order by budget_month_utc",
+		}},
+		"TerminalizeGoalGenerationCAS": {string(aiContents), []string{
+			"failure_code = 'goal_deleted'", "budget_reserved_cost_usd = 0", "lease_expires_at = null",
+			"where id =", "and user_id =", "and goal_id =", "status = 'running'",
+			"budget_reserved_cost_usd = sqlc.arg(expected_reservation_usd)::text::numeric",
+		}},
+		"FailRunningGoalUsageCAS": {string(aiContents), []string{
+			"set goal_id = null", "status = 'failed'", "content_deleted = true", "where operation_id =",
+			"and user_id =", "and goal_id =", "status = 'accepted'", "provider_usage_finalized_at is null",
+		}},
+		"LockGoalUsages": {string(aiContents), []string{
+			"from ai_usage_events", "where user_id =", "and goal_id =", "order by operation_id", "for update",
+		}},
+		"RedactGoalUsagesCAS": {string(aiContents), []string{
+			"set goal_id = null", "when status = 'accepted' then 'failed'", "content_deleted = true",
+			"where user_id =", "and goal_id =", "operation_id = any",
+		}},
+		"DeleteExpiredFinalizedGoalUsagesCAS": {string(aiContents), []string{
+			"delete from ai_usage_events", "where user_id =", "and goal_id =", "operation_id = any",
+			"quota_retain_until <=", "provider_usage_finalized_at is not null",
+		}},
+		"ReleaseBudgetReservationCAS": {string(budgetContents), []string{
+			"reserved_cost_usd = reserved_cost_usd - sqlc.arg(amount_usd)::text::numeric",
+			"where month_utc =", "reserved_cost_usd >= sqlc.arg(amount_usd)::text::numeric",
+		}},
+	}
+	for name, contract := range contracts {
+		query := strings.ToLower(strings.Join(strings.Fields(goalDeleteNamedQuery(t, contract.source, name)), " "))
+		for _, fragment := range contract.fragments {
+			if !strings.Contains(query, fragment) {
+				t.Errorf("%s missing contract fragment %q", name, fragment)
+			}
+		}
+	}
 }
 
 func TestGoalDeleteSQLPreservesOwnerLocksCASAndReceiptReplay(t *testing.T) {

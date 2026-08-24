@@ -22,7 +22,8 @@ const (
 	actionAIUOWVersionOperationID = "85000000-0000-7000-8000-000000000002"
 	actionAIUOWGenerationID       = "86000000-0000-7000-8000-000000000001"
 	actionAIUOWIdempotencyKey     = "87000000-0000-7000-8000-000000000001"
-	actionAIUOWRequestHash        = "stored-idempotency-request-hash"
+	actionAIUOWRequestHash        = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	actionAIUOWCanonicalHash      = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	actionAIUOWReservation        = "0.25000000"
 )
 
@@ -475,6 +476,91 @@ WHERE month_utc=$1`, actionAIUOWMonth(now)).Scan(&budgetReserved, &budgetActual)
 	}
 }
 
+func TestActionAITxStaleUsageLocatorConvergesAfterConcurrentFinalization(t *testing.T) {
+	ctx := context.Background()
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	seedActionAIUOWTarget(t, pool, now)
+	store := NewWorkspaceStore(pool)
+	acceptActionAIUOWGeneration(t, store, now.Add(15*time.Minute))
+	deleteActionAIUOWTargetWithUnfinalizedUsage(t, pool, now.Add(time.Minute))
+
+	finalizedAt := now.Add(2 * time.Minute)
+	if err := store.WithinActionAITransaction(ctx, func(staleTx workspace.ActionAITx) error {
+		locator, err := staleTx.FindUsageLocator(ctx, actionAIUOWGenerationID)
+		if err != nil {
+			return err
+		}
+		if locator == nil || locator.FinalizedAt != nil {
+			t.Fatalf("stale usage locator = %#v", locator)
+		}
+
+		if err = store.WithinActionAITransaction(ctx, func(winnerTx workspace.ActionAITx) error {
+			if lockErr := winnerTx.LockUser(ctx, locator.UserID); lockErr != nil {
+				return lockErr
+			}
+			usage, lockErr := winnerTx.LockUsage(ctx, actionAIUOWGenerationID, locator.UserID)
+			if lockErr != nil {
+				return lockErr
+			}
+			if usage.FinalizedAt != nil || usage.SettlementReservationCostUSD != actionAIUOWReservation ||
+				!usage.SettlementBudgetMonthUtc.Equal(actionAIUOWMonth(now)) {
+				t.Fatalf("winner locked usage = %#v", usage)
+			}
+			if ensureErr := winnerTx.EnsureBudgetMonth(ctx, usage.SettlementBudgetMonthUtc, finalizedAt); ensureErr != nil {
+				return ensureErr
+			}
+			rows, addErr := winnerTx.AddLateActualCostCAS(
+				ctx, usage.SettlementBudgetMonthUtc, "0.03125000", finalizedAt,
+			)
+			if addErr != nil || rows != 1 {
+				t.Fatalf("winner AddLateActualCostCAS rows/error = %d/%v", rows, addErr)
+			}
+			rows, finalizeErr := winnerTx.FinalizeLateUsageCAS(ctx, workspace.AIUsageSettlement{
+				OperationID:                actionAIUOWGenerationID,
+				ExpectedBudgetMonthUtc:     usage.SettlementBudgetMonthUtc,
+				ExpectedReservationCostUSD: usage.SettlementReservationCostUSD,
+				Status:                     "succeeded",
+				InputTokens:                20,
+				OutputTokens:               10,
+				EstimatedCostUSD:           "0.03125000",
+				FinalizedAt:                finalizedAt,
+			})
+			if finalizeErr != nil || rows != 1 {
+				t.Fatalf("winner FinalizeLateUsageCAS rows/error = %d/%v", rows, finalizeErr)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		if err = staleTx.LockUser(ctx, locator.UserID); err != nil {
+			return err
+		}
+		usage, err := staleTx.LockUsage(ctx, actionAIUOWGenerationID, locator.UserID)
+		if err != nil {
+			return err
+		}
+		if usage.FinalizedAt == nil || !usage.FinalizedAt.Equal(finalizedAt) ||
+			!usage.SettlementBudgetMonthUtc.IsZero() || usage.SettlementReservationCostUSD != "" {
+			t.Fatalf("stale transaction locked finalized usage = %#v", usage)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var budgetActual string
+	if err := pool.QueryRow(ctx, `SELECT actual_cost_usd::text FROM ai_budget_monthly
+WHERE month_utc=$1`, actionAIUOWMonth(now)).Scan(&budgetActual); err != nil {
+		t.Fatal(err)
+	}
+	if budgetActual != "0.03125000" {
+		t.Fatalf("actual cost after stale callback convergence = %s", budgetActual)
+	}
+}
+
 func seedActionAIUOWTarget(t *testing.T, pool *pgxpool.Pool, now time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -533,23 +619,24 @@ func acceptActionAIUOWGeneration(t *testing.T, store *WorkspaceStore, leaseExpir
 			t.Fatalf("ReserveBudgetCAS rows/error = %d/%v", rows, err)
 		}
 		rows, err = tx.InsertActionAIGeneration(ctx, workspace.ActionAIGenerationRecord{
-			ID:                     actionAIUOWGenerationID,
-			UserID:                 actionAIUOWUserID,
-			Operation:              domainai.OperationActionGenerate,
-			GoalID:                 actionAIUOWGoalID,
-			GoalVersionID:          actionAIUOWVersionID,
-			CycleID:                actionAIUOWCycleID,
-			TargetRevision:         current.Revisions.Content,
-			IdempotencyKey:         actionAIUOWIdempotencyKey,
-			IdempotencyRequestHash: actionAIUOWRequestHash,
-			Provider:               "test-provider",
-			Model:                  "test-model",
-			PromptVersion:          "action-generate-v1",
-			BudgetMonthUtc:         month,
-			ReservedCostUSD:        actionAIUOWReservation,
-			LeaseExpiresAt:         leaseExpiresAt,
-			StartedAt:              now,
-			ContextCycleIDs:        []string{},
+			ID:                         actionAIUOWGenerationID,
+			UserID:                     actionAIUOWUserID,
+			Operation:                  domainai.OperationActionGenerate,
+			GoalID:                     actionAIUOWGoalID,
+			GoalVersionID:              actionAIUOWVersionID,
+			CycleID:                    actionAIUOWCycleID,
+			TargetRevision:             current.Revisions.Content,
+			IdempotencyKey:             actionAIUOWIdempotencyKey,
+			IdempotencyRequestHash:     actionAIUOWRequestHash,
+			CanonicalProviderInputHash: actionAIUOWCanonicalHash,
+			Provider:                   "test-provider",
+			Model:                      "test-model",
+			PromptVersion:              "action-generate-v1",
+			BudgetMonthUtc:             month,
+			ReservedCostUSD:            actionAIUOWReservation,
+			LeaseExpiresAt:             leaseExpiresAt,
+			StartedAt:                  now,
+			ContextCycleIDs:            []string{},
 		})
 		if err != nil || rows != 1 {
 			t.Fatalf("InsertActionAIGeneration rows/error = %d/%v", rows, err)
@@ -659,7 +746,9 @@ FROM pdca_cycles WHERE id=$1`, mustUUID(actionAIUOWCycleID)).Scan(
 		t.Fatal(err)
 	}
 	var (
+		aliasInputHash     string
 		requestHash        string
+		canonicalHash      string
 		generationStatus   string
 		generationOutput   string
 		generationReserved string
@@ -668,10 +757,11 @@ FROM pdca_cycles WHERE id=$1`, mustUUID(actionAIUOWCycleID)).Scan(
 		appliedAt          time.Time
 		leaseCleared       bool
 	)
-	if err := pool.QueryRow(ctx, `SELECT input_hash,status,output,budget_reserved_cost_usd::text,
+	if err := pool.QueryRow(ctx, `SELECT input_hash,idempotency_request_hash,canonical_provider_input_hash,
+status,output,budget_reserved_cost_usd::text,
 estimated_cost_usd::text,context_changed,applied_at,lease_expires_at IS NULL
 FROM ai_generations WHERE id=$1`, mustUUID(actionAIUOWGenerationID)).Scan(
-		&requestHash, &generationStatus, &generationOutput, &generationReserved,
+		&aliasInputHash, &requestHash, &canonicalHash, &generationStatus, &generationOutput, &generationReserved,
 		&generationCost, &contextChanged, &appliedAt, &leaseCleared,
 	); err != nil {
 		t.Fatal(err)
@@ -696,14 +786,16 @@ WHERE month_utc=$1`, actionAIUOWMonth(integrationNow())).Scan(&budgetReserved, &
 		t.Fatal(err)
 	}
 	if action != output || contentRevision != 5 || actionRevision != 2 || lastAIRevision != 5 || modified ||
-		!updatedAt.Equal(finishedAt) || requestHash != actionAIUOWRequestHash || generationStatus != "succeeded" ||
+		!updatedAt.Equal(finishedAt) || aliasInputHash != actionAIUOWRequestHash ||
+		requestHash != actionAIUOWRequestHash || canonicalHash != actionAIUOWCanonicalHash || generationStatus != "succeeded" ||
 		generationOutput != output || generationReserved != "0.00000000" || generationCost != "0.12500000" ||
 		contextChanged || !appliedAt.Equal(finishedAt) || !leaseCleared || usageStatus != "succeeded" ||
 		usageCost != "0.12500000" || !usageFinalized.Equal(finishedAt) || !exposureClear ||
 		budgetReserved != "0.00000000" || budgetActual != "0.12500000" {
-		t.Fatalf("settled state Cycle=%q/%d/%d/%d/%t/%v Generation=%s/%s/%s/%s/%s/%t/%v/%t Usage=%s/%s/%v/%t Budget=%s/%s",
+		t.Fatalf("settled state Cycle=%q/%d/%d/%d/%t/%v Hashes=%s/%s/%s Generation=%s/%s/%s/%s/%t/%v/%t Usage=%s/%s/%v/%t Budget=%s/%s",
 			action, contentRevision, actionRevision, lastAIRevision, modified, updatedAt,
-			requestHash, generationStatus, generationOutput, generationReserved, generationCost, contextChanged, appliedAt,
+			aliasInputHash, requestHash, canonicalHash,
+			generationStatus, generationOutput, generationReserved, generationCost, contextChanged, appliedAt,
 			leaseCleared, usageStatus, usageCost, usageFinalized, exposureClear, budgetReserved, budgetActual)
 	}
 }
