@@ -79,7 +79,8 @@ func (barrier *loginDeleteBarrier) release() {
 func isSessionRevokeQuery(sql string) bool {
 	normalized := normalizeAccountSessionSQL(sql)
 	return strings.Contains(normalized, "update sessions set revoked_at=") &&
-		strings.Contains(normalized, "where id=$1")
+		strings.Contains(normalized, "where id=$") &&
+		strings.Contains(normalized, "revoked_at is null")
 }
 
 type loginGoogleCall struct {
@@ -761,7 +762,7 @@ func newAccountSessionTracedPool(t *testing.T, pool *pgxpool.Pool, tracer pgx.Qu
 }
 
 func normalizeAccountSessionSQL(sql string) string {
-	return strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	return normalizeObservedSQL(sql)
 }
 func TestAccountRepositoryDeleteAccountPartitionsRunningAndReleasedExposureWithDatabaseNumericPrecision(t *testing.T) {
 	pool := integrationPool(t)

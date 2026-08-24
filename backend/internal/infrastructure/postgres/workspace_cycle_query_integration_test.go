@@ -57,7 +57,7 @@ func (barrier *cycleQuerySnapshotBarrier) release() {
 }
 
 func isCycleSnapshotSecondRead(sql string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	normalized := normalizeObservedSQL(sql)
 	return strings.Contains(normalized, " from pdca_cycles c ") &&
 		(strings.HasPrefix(normalized, "select c.id,c.sequence_number,") ||
 			strings.HasPrefix(normalized, "select c.id,c.goal_id,"))

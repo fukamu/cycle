@@ -11,6 +11,7 @@ import (
 
 	"github.com/fukamu/cycle/backend/internal/application/account"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
 
 type AccountRepository struct {
@@ -27,6 +28,7 @@ func (repository *AccountRepository) UpgradeGoogle(ctx context.Context, input ac
 		return result, err
 	}
 	defer rollbackOnError(ctx, tx, &err)
+	queries := db.New(tx)
 	if err = lockUser(ctx, tx, input.CurrentUserID); err != nil {
 		return result, err
 	}
@@ -56,10 +58,10 @@ id,user_id,provider,provider_subject,email_at_link,email_verified_at_link,create
 	default:
 		result.GoogleEmail = nullableText(linkedEmail)
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM anonymous_bootstraps WHERE user_id=$1`, mustUUID(string(input.CurrentUserID))); err != nil {
+	if err = queries.DeleteAnonymousBootstrapsByUser(ctx, mustUUID(string(input.CurrentUserID))); err != nil {
 		return result, err
 	}
-	if err = rotateSession(ctx, tx, input.CurrentSessionID, input.NewSessionID, input.CurrentUserID,
+	if err = rotateSession(ctx, queries, input.CurrentSessionID, input.NewSessionID, input.CurrentUserID,
 		input.SessionTokenHash, input.CSRFTokenHash, input.Now, input.IdleExpiresAt, input.AbsoluteExpiresAt); err != nil {
 		return result, err
 	}
@@ -74,6 +76,7 @@ func (repository *AccountRepository) LoginGoogle(ctx context.Context, input acco
 		return result, err
 	}
 	defer rollbackOnError(ctx, tx, &err)
+	queries := db.New(tx)
 	var targetUser pgtype.UUID
 	var googleEmail pgtype.Text
 	err = tx.QueryRow(ctx, `SELECT user_id,
@@ -91,15 +94,17 @@ WHERE provider='google' AND provider_subject=$1`, input.Identity.Subject).Scan(&
 	if err = lockUser(ctx, tx, result.UserID); err != nil {
 		return result, err
 	}
-	command, updateErr := tx.Exec(ctx, `UPDATE sessions SET revoked_at=$2
-WHERE id=$1 AND revoked_at IS NULL`, mustUUID(input.CurrentSessionID), input.Now)
+	rows, updateErr := queries.RevokeSession(ctx, db.RevokeSessionParams{
+		SessionID: mustUUID(input.CurrentSessionID),
+		Now:       timestamptz(input.Now),
+	})
 	if updateErr != nil {
 		return result, updateErr
 	}
-	if command.RowsAffected() != 1 {
+	if rows != 1 {
 		return result, pgx.ErrNoRows
 	}
-	if err = insertAccountSession(ctx, tx, input.NewSessionID, result.UserID, input.SessionTokenHash, input.CSRFTokenHash,
+	if err = insertAccountSession(ctx, queries, input.NewSessionID, result.UserID, input.SessionTokenHash, input.CSRFTokenHash,
 		input.Now, input.IdleExpiresAt, input.AbsoluteExpiresAt); err != nil {
 		return result, err
 	}
@@ -113,22 +118,15 @@ func (repository *AccountRepository) DeleteAccount(ctx context.Context, userID u
 		return err
 	}
 	defer rollbackOnError(ctx, tx, &err)
+	queries := db.New(tx)
 	if err = lockUser(ctx, tx, userID); err != nil {
 		return err
 	}
 	userUUID := mustUUID(string(userID))
-	goalRows, err := tx.Query(ctx, `SELECT id FROM goals WHERE user_id=$1 ORDER BY id FOR UPDATE`, userUUID)
-	if err != nil {
+	if _, err = queries.LockAccountGoalIDs(ctx, userUUID); err != nil {
 		return err
 	}
-	if err = consumeLockedUUIDRows(goalRows); err != nil {
-		return err
-	}
-	draftRows, err := tx.Query(ctx, `SELECT id FROM goal_drafts WHERE user_id=$1 ORDER BY id FOR UPDATE`, userUUID)
-	if err != nil {
-		return err
-	}
-	if err = consumeLockedUUIDRows(draftRows); err != nil {
+	if _, err = queries.LockAccountGoalDraftIDs(ctx, userUUID); err != nil {
 		return err
 	}
 	cycleRows, err := tx.Query(ctx, `SELECT id FROM pdca_cycles WHERE user_id=$1 ORDER BY id FOR UPDATE`, userUUID)
@@ -284,8 +282,8 @@ WHERE usage.user_id=$1 AND usage.operation_id=$2 AND usage.provider_usage_finali
 }
 
 func lockUser(ctx context.Context, tx pgx.Tx, userID user.ID) error {
-	var ignored pgtype.UUID
-	return tx.QueryRow(ctx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, mustUUID(string(userID))).Scan(&ignored)
+	_, err := db.New(tx).LockUser(ctx, mustUUID(string(userID)))
+	return err
 }
 
 func consumeLockedUUIDRows(rows pgx.Rows) error {
@@ -299,23 +297,31 @@ func consumeLockedUUIDRows(rows pgx.Rows) error {
 	return rows.Err()
 }
 
-func rotateSession(ctx context.Context, tx pgx.Tx, currentSessionID, newSessionID string, userID user.ID, tokenHash, csrfHash []byte, now, idleExpiry, absoluteExpiry time.Time) error {
-	command, err := tx.Exec(ctx, `UPDATE sessions SET revoked_at=$3
-WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL`, mustUUID(currentSessionID), mustUUID(string(userID)), now)
+func rotateSession(ctx context.Context, queries *db.Queries, currentSessionID, newSessionID string, userID user.ID, tokenHash, csrfHash []byte, now, idleExpiry, absoluteExpiry time.Time) error {
+	rows, err := queries.RevokeOwnedSession(ctx, db.RevokeOwnedSessionParams{
+		SessionID: mustUUID(currentSessionID),
+		UserID:    mustUUID(string(userID)),
+		Now:       timestamptz(now),
+	})
 	if err != nil {
 		return err
 	}
-	if command.RowsAffected() != 1 {
+	if rows != 1 {
 		return pgx.ErrNoRows
 	}
-	return insertAccountSession(ctx, tx, newSessionID, userID, tokenHash, csrfHash, now, idleExpiry, absoluteExpiry)
+	return insertAccountSession(ctx, queries, newSessionID, userID, tokenHash, csrfHash, now, idleExpiry, absoluteExpiry)
 }
 
-func insertAccountSession(ctx context.Context, tx pgx.Tx, sessionID string, userID user.ID, tokenHash, csrfHash []byte, now, idleExpiry, absoluteExpiry time.Time) error {
-	_, err := tx.Exec(ctx, `INSERT INTO sessions (
-id,user_id,token_hash,csrf_token_hash,created_at,last_seen_at,idle_expires_at,absolute_expires_at
-) VALUES($1,$2,$3,$4,$5,$5,$6,$7)`, mustUUID(sessionID), mustUUID(string(userID)), tokenHash, csrfHash, now, idleExpiry, absoluteExpiry)
-	return err
+func insertAccountSession(ctx context.Context, queries *db.Queries, sessionID string, userID user.ID, tokenHash, csrfHash []byte, now, idleExpiry, absoluteExpiry time.Time) error {
+	return queries.InsertSession(ctx, db.InsertSessionParams{
+		SessionID:         mustUUID(sessionID),
+		UserID:            mustUUID(string(userID)),
+		TokenHash:         tokenHash,
+		CsrfTokenHash:     csrfHash,
+		Now:               timestamptz(now),
+		IdleExpiresAt:     timestamptz(idleExpiry),
+		AbsoluteExpiresAt: timestamptz(absoluteExpiry),
+	})
 }
 
 func verifiedGoogleEmail(identity account.GoogleIdentity) *string {

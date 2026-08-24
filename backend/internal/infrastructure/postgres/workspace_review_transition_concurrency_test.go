@@ -128,21 +128,21 @@ func (barrier *continueContentionBarrier) releaseLeaderQuery() {
 }
 
 func isContinueReceiptQuery(sql string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	normalized := normalizeObservedSQL(sql)
 	return strings.Contains(normalized, "select c.goal_id,c.id,c.start_request_hash") &&
 		strings.Contains(normalized, "from pdca_cycles c") &&
 		strings.Contains(normalized, "where c.user_id=$1 and c.start_operation_id=$2")
 }
 
 func isContinueGoalLockQuery(sql string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	normalized := normalizeObservedSQL(sql)
 	return strings.Contains(normalized, "from goals") &&
 		strings.Contains(normalized, "where id=$1 and user_id=$2") &&
 		strings.Contains(normalized, "for update")
 }
 
 func isContinueClaimQuery(sql string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	normalized := normalizeObservedSQL(sql)
 	return strings.Contains(normalized, "insert into pdca_cycles") &&
 		strings.Contains(normalized, "on conflict (user_id,start_operation_id) do nothing")
 }

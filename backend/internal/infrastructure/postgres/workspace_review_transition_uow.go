@@ -3,12 +3,14 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
 
 var _ workspace.ReviewTransitionUnitOfWork = (*WorkspaceStore)(nil)
@@ -28,9 +30,10 @@ func (store *WorkspaceStore) WithinReviewTransitionTransaction(
 		return err
 	}
 	defer rollback(ctx, tx)
+	queries := store.queries.WithTx(tx)
 	reviewTx := &workspaceReviewTransitionTx{
-		workspaceCycleTx:     &workspaceCycleTx{tx: tx},
-		workspaceGoalDraftTx: &workspaceGoalDraftTx{tx: tx},
+		workspaceCycleTx:     &workspaceCycleTx{tx: tx, queries: queries},
+		workspaceGoalDraftTx: &workspaceGoalDraftTx{tx: tx, queries: queries},
 	}
 	if err = operation(reviewTx); err != nil {
 		return err
@@ -64,19 +67,20 @@ func (transaction *workspaceReviewTransitionTx) FindGoalTerminationReceipt(
 	ctx context.Context,
 	userID, operationID string,
 ) (*workspace.GoalTerminationReceipt, error) {
-	var receipt workspace.GoalTerminationReceipt
-	err := transaction.workspaceCycleTx.tx.QueryRow(ctx, `SELECT id,terminal_request_hash
-FROM goals
-WHERE user_id=$1 AND terminal_operation_id=$2`,
-		mustUUID(userID), mustUUID(operationID),
-	).Scan(&receipt.GoalID, &receipt.RequestHash)
+	row, err := transaction.workspaceCycleTx.queries.FindGoalTerminationReceipt(
+		ctx,
+		db.FindGoalTerminationReceiptParams{
+			UserID:      mustUUID(userID),
+			OperationID: mustUUID(operationID),
+		},
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &receipt, nil
+	return goalTerminationReceiptFromTransitionRow(row)
 }
 
 func (transaction *workspaceReviewTransitionTx) LockUser(ctx context.Context, userID string) error {
@@ -162,23 +166,16 @@ func (transaction *workspaceReviewTransitionTx) ContinueGoalCAS(
 	continued goal.Goal,
 	expectedRevision int64,
 ) (int64, error) {
-	command, err := transaction.workspaceCycleTx.tx.Exec(ctx, `UPDATE goals SET
-status=$3,current_version_number=$4,next_cycle_sequence_number=$5,
-revision=$6,updated_at=$7
-WHERE id=$1 AND user_id=$2 AND status='goal_review' AND revision=$8`,
-		mustUUID(continued.ID),
-		mustUUID(continued.UserID),
-		continued.Status,
-		continued.CurrentVersionNumber,
-		continued.NextCycleSequenceNumber,
-		continued.Revision,
-		continued.UpdatedAt,
-		expectedRevision,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.workspaceCycleTx.queries.ContinueGoalCAS(ctx, db.ContinueGoalCASParams{
+		Status:                  string(continued.Status),
+		CurrentVersionNumber:    continued.CurrentVersionNumber,
+		NextCycleSequenceNumber: continued.NextCycleSequenceNumber,
+		Revision:                continued.Revision,
+		UpdatedAt:               timestamptz(continued.UpdatedAt),
+		GoalID:                  mustUUID(continued.ID),
+		UserID:                  mustUUID(continued.UserID),
+		ExpectedRevision:        expectedRevision,
+	})
 }
 
 func (transaction *workspaceReviewTransitionTx) CancelCycleCAS(
@@ -209,13 +206,11 @@ func (transaction *workspaceReviewTransitionTx) DeleteReviewDraftCAS(
 	userID, draftID string,
 	expectedRevision int64,
 ) (int64, error) {
-	command, err := transaction.workspaceCycleTx.tx.Exec(ctx, `DELETE FROM goal_drafts
-WHERE id=$1 AND user_id=$2 AND draft_type='review' AND revision=$3`,
-		mustUUID(draftID), mustUUID(userID), expectedRevision)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.workspaceCycleTx.queries.DeleteReviewDraftCAS(ctx, db.DeleteReviewDraftCASParams{
+		DraftID:          mustUUID(draftID),
+		UserID:           mustUUID(userID),
+		ExpectedRevision: expectedRevision,
+	})
 }
 
 func (transaction *workspaceReviewTransitionTx) TerminateGoalCAS(
@@ -223,24 +218,20 @@ func (transaction *workspaceReviewTransitionTx) TerminateGoalCAS(
 	terminated goal.Goal,
 	expectedRevision int64,
 ) (int64, error) {
-	command, err := transaction.workspaceCycleTx.tx.Exec(ctx, `UPDATE goals SET
-status=$3,revision=$4,terminal_at=$5,terminal_operation_id=$6,
-terminal_request_hash=$7,updated_at=$8
-WHERE id=$1 AND user_id=$2 AND status IN ('active_cycle','goal_review') AND revision=$9`,
-		mustUUID(terminated.ID),
-		mustUUID(terminated.UserID),
-		terminated.Status,
-		terminated.Revision,
-		terminated.TerminalAt,
-		terminated.TerminalOperationID,
-		terminated.TerminalRequestHash,
-		terminated.UpdatedAt,
-		expectedRevision,
-	)
-	if err != nil {
-		return 0, err
+	if terminated.TerminalAt == nil || terminated.TerminalOperationID == nil || terminated.TerminalRequestHash == nil {
+		return 0, fmt.Errorf("%w: terminated Goal state is incomplete", workspace.ErrReviewTransitionPersistenceInvariant)
 	}
-	return command.RowsAffected(), nil
+	return transaction.workspaceCycleTx.queries.TerminateGoalCAS(ctx, db.TerminateGoalCASParams{
+		Status:              string(terminated.Status),
+		Revision:            terminated.Revision,
+		TerminalAt:          timestamptz(*terminated.TerminalAt),
+		TerminalOperationID: mustUUID(*terminated.TerminalOperationID),
+		TerminalRequestHash: *terminated.TerminalRequestHash,
+		UpdatedAt:           timestamptz(terminated.UpdatedAt),
+		GoalID:              mustUUID(terminated.ID),
+		UserID:              mustUUID(terminated.UserID),
+		ExpectedRevision:    expectedRevision,
+	})
 }
 
 func (transaction *workspaceReviewTransitionTx) LoadGoalView(
@@ -255,4 +246,17 @@ func (transaction *workspaceReviewTransitionTx) LoadCycleView(
 	userID, goalID, cycleID string,
 ) (workspace.CycleView, error) {
 	return transaction.workspaceCycleTx.LoadCycleView(ctx, userID, goalID, cycleID)
+}
+
+func goalTerminationReceiptFromTransitionRow(
+	row *db.FindGoalTerminationReceiptRow,
+) (*workspace.GoalTerminationReceipt, error) {
+	if row == nil || !row.GoalID.Valid || row.RequestHash == nil || *row.RequestHash == "" {
+		return nil, fmt.Errorf("%w: Goal termination receipt is incomplete", workspace.ErrReviewTransitionPersistenceInvariant)
+	}
+	goalID := uuidString(row.GoalID)
+	if goalID == "" {
+		return nil, fmt.Errorf("%w: Goal termination receipt identity is invalid", workspace.ErrReviewTransitionPersistenceInvariant)
+	}
+	return &workspace.GoalTerminationReceipt{GoalID: goalID, RequestHash: *row.RequestHash}, nil
 }

@@ -14,15 +14,43 @@ import (
 type queryTracer struct{}
 
 func (queryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	operation := "query"
-	if fields := strings.Fields(data.SQL); len(fields) > 0 {
-		operation = strings.ToLower(fields[0])
-	}
+	operation := sqlOperation(data.SQL)
 	ctx, _ = otel.Tracer("fukamu-cycle/postgres").Start(ctx, "postgres."+operation, trace.WithAttributes(
 		attribute.String("db.system.name", "postgresql"),
 		attribute.String("db.operation.name", operation),
 	))
 	return ctx
+}
+
+func sqlOperation(statement string) string {
+	fields := strings.Fields(sqlWithoutLeadingComments(statement))
+	if len(fields) == 0 {
+		return "query"
+	}
+	return strings.ToLower(fields[0])
+}
+
+func sqlWithoutLeadingComments(statement string) string {
+	statement = strings.TrimSpace(statement)
+	for statement != "" {
+		switch {
+		case strings.HasPrefix(statement, "--"):
+			newline := strings.IndexByte(statement, '\n')
+			if newline < 0 {
+				return ""
+			}
+			statement = strings.TrimSpace(statement[newline+1:])
+		case strings.HasPrefix(statement, "/*"):
+			end := strings.Index(statement[2:], "*/")
+			if end < 0 {
+				return ""
+			}
+			statement = strings.TrimSpace(statement[end+4:])
+		default:
+			return statement
+		}
+	}
+	return ""
 }
 
 func (queryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {

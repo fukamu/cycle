@@ -11,6 +11,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteAnonymousBootstrapByKeyHash = `-- name: DeleteAnonymousBootstrapByKeyHash :exec
+DELETE FROM anonymous_bootstraps
+WHERE key_hash = $1
+`
+
+func (q *Queries) DeleteAnonymousBootstrapByKeyHash(ctx context.Context, keyHash []byte) error {
+	_, err := q.db.Exec(ctx, deleteAnonymousBootstrapByKeyHash, keyHash)
+	return err
+}
+
+const deleteAnonymousBootstrapsByUser = `-- name: DeleteAnonymousBootstrapsByUser :exec
+DELETE FROM anonymous_bootstraps
+WHERE user_id = $1::uuid
+`
+
+func (q *Queries) DeleteAnonymousBootstrapsByUser(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAnonymousBootstrapsByUser, userID)
+	return err
+}
+
 const getSessionByTokenHash = `-- name: GetSessionByTokenHash :one
 SELECT
     s.id,
@@ -68,6 +88,183 @@ func (q *Queries) GetSessionByTokenHash(ctx context.Context, arg GetSessionByTok
 		&i.GoogleEmail,
 	)
 	return &i, err
+}
+
+const insertAnonymousBootstrap = `-- name: InsertAnonymousBootstrap :exec
+INSERT INTO anonymous_bootstraps (key_hash, user_id, expires_at, created_at)
+VALUES (
+    $1::bytea,
+    $2::uuid,
+    $3::timestamptz,
+    $4::timestamptz
+)
+`
+
+type InsertAnonymousBootstrapParams struct {
+	KeyHash   []byte
+	UserID    pgtype.UUID
+	ExpiresAt pgtype.Timestamptz
+	Now       pgtype.Timestamptz
+}
+
+func (q *Queries) InsertAnonymousBootstrap(ctx context.Context, arg InsertAnonymousBootstrapParams) error {
+	_, err := q.db.Exec(ctx, insertAnonymousBootstrap,
+		arg.KeyHash,
+		arg.UserID,
+		arg.ExpiresAt,
+		arg.Now,
+	)
+	return err
+}
+
+const insertAnonymousUser = `-- name: InsertAnonymousUser :exec
+INSERT INTO users (id, last_active_at, created_at, updated_at)
+VALUES (
+    $1::uuid,
+    $2::timestamptz,
+    $2::timestamptz,
+    $2::timestamptz
+)
+`
+
+type InsertAnonymousUserParams struct {
+	UserID pgtype.UUID
+	Now    pgtype.Timestamptz
+}
+
+func (q *Queries) InsertAnonymousUser(ctx context.Context, arg InsertAnonymousUserParams) error {
+	_, err := q.db.Exec(ctx, insertAnonymousUser, arg.UserID, arg.Now)
+	return err
+}
+
+const insertSession = `-- name: InsertSession :exec
+INSERT INTO sessions (
+    id,
+    user_id,
+    token_hash,
+    csrf_token_hash,
+    created_at,
+    last_seen_at,
+    idle_expires_at,
+    absolute_expires_at
+) VALUES (
+    $1::uuid,
+    $2::uuid,
+    $3::bytea,
+    $4::bytea,
+    $5::timestamptz,
+    $5::timestamptz,
+    $6::timestamptz,
+    $7::timestamptz
+)
+`
+
+type InsertSessionParams struct {
+	SessionID         pgtype.UUID
+	UserID            pgtype.UUID
+	TokenHash         []byte
+	CsrfTokenHash     []byte
+	Now               pgtype.Timestamptz
+	IdleExpiresAt     pgtype.Timestamptz
+	AbsoluteExpiresAt pgtype.Timestamptz
+}
+
+func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
+	_, err := q.db.Exec(ctx, insertSession,
+		arg.SessionID,
+		arg.UserID,
+		arg.TokenHash,
+		arg.CsrfTokenHash,
+		arg.Now,
+		arg.IdleExpiresAt,
+		arg.AbsoluteExpiresAt,
+	)
+	return err
+}
+
+const locateAnonymousBootstrap = `-- name: LocateAnonymousBootstrap :one
+SELECT user_id, expires_at
+FROM anonymous_bootstraps
+WHERE key_hash = $1
+`
+
+type LocateAnonymousBootstrapRow struct {
+	UserID    pgtype.UUID
+	ExpiresAt pgtype.Timestamptz
+}
+
+func (q *Queries) LocateAnonymousBootstrap(ctx context.Context, keyHash []byte) (*LocateAnonymousBootstrapRow, error) {
+	row := q.db.QueryRow(ctx, locateAnonymousBootstrap, keyHash)
+	var i LocateAnonymousBootstrapRow
+	err := row.Scan(&i.UserID, &i.ExpiresAt)
+	return &i, err
+}
+
+const lockAnonymousBootstrapByUser = `-- name: LockAnonymousBootstrapByUser :one
+SELECT user_id, expires_at
+FROM anonymous_bootstraps
+WHERE key_hash = $1
+  AND user_id = $2::uuid
+FOR UPDATE
+`
+
+type LockAnonymousBootstrapByUserParams struct {
+	KeyHash []byte
+	UserID  pgtype.UUID
+}
+
+type LockAnonymousBootstrapByUserRow struct {
+	UserID    pgtype.UUID
+	ExpiresAt pgtype.Timestamptz
+}
+
+func (q *Queries) LockAnonymousBootstrapByUser(ctx context.Context, arg LockAnonymousBootstrapByUserParams) (*LockAnonymousBootstrapByUserRow, error) {
+	row := q.db.QueryRow(ctx, lockAnonymousBootstrapByUser, arg.KeyHash, arg.UserID)
+	var i LockAnonymousBootstrapByUserRow
+	err := row.Scan(&i.UserID, &i.ExpiresAt)
+	return &i, err
+}
+
+const revokeOwnedSession = `-- name: RevokeOwnedSession :execrows
+UPDATE sessions
+SET revoked_at = $1::timestamptz
+WHERE id = $2::uuid
+  AND user_id = $3::uuid
+  AND revoked_at IS NULL
+`
+
+type RevokeOwnedSessionParams struct {
+	Now       pgtype.Timestamptz
+	SessionID pgtype.UUID
+	UserID    pgtype.UUID
+}
+
+func (q *Queries) RevokeOwnedSession(ctx context.Context, arg RevokeOwnedSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeOwnedSession, arg.Now, arg.SessionID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeSession = `-- name: RevokeSession :execrows
+UPDATE sessions
+SET revoked_at = $1::timestamptz
+WHERE id = $2::uuid
+  AND revoked_at IS NULL
+`
+
+type RevokeSessionParams struct {
+	Now       pgtype.Timestamptz
+	SessionID pgtype.UUID
+}
+
+func (q *Queries) RevokeSession(ctx context.Context, arg RevokeSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeSession, arg.Now, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const rotateSessionCSRF = `-- name: RotateSessionCSRF :execrows

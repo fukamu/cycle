@@ -31,7 +31,10 @@ func (store *WorkspaceStore) WithinActionAITransaction(
 		return err
 	}
 	defer rollback(ctx, tx)
-	port := &workspaceActionAITx{workspaceGoalDraftTx: &workspaceGoalDraftTx{tx: tx}}
+	port := &workspaceActionAITx{workspaceGoalDraftTx: &workspaceGoalDraftTx{
+		tx:      tx,
+		queries: store.queries.WithTx(tx),
+	}}
 	if err = callback(port); err != nil {
 		return err
 	}

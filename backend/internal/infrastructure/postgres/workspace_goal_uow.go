@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -10,10 +11,12 @@ import (
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
 
 type workspaceGoalTx struct {
-	tx pgx.Tx
+	tx      pgx.Tx
+	queries *db.Queries
 }
 
 func (store *WorkspaceStore) WithinGoalTransaction(
@@ -25,7 +28,7 @@ func (store *WorkspaceStore) WithinGoalTransaction(
 		return err
 	}
 	defer rollback(ctx, tx)
-	if err = operation(&workspaceGoalTx{tx: tx}); err != nil {
+	if err = operation(&workspaceGoalTx{tx: tx, queries: store.queries.WithTx(tx)}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -43,39 +46,76 @@ func (transaction *workspaceGoalTx) FindGoalDeleteReceipt(
 	ctx context.Context,
 	userID, idempotencyKey string,
 ) (*workspace.GoalDeleteReceipt, error) {
-	var receipt workspace.GoalDeleteReceipt
-	err := transaction.tx.QueryRow(ctx, `SELECT deleted_goal_id,request_hash,expires_at
-FROM goal_delete_receipts WHERE user_id=$1 AND idempotency_key=$2`,
-		mustUUID(userID), mustUUID(idempotencyKey),
-	).Scan(&receipt.GoalID, &receipt.RequestHash, &receipt.ExpiresAt)
+	row, err := transaction.queries.FindGoalDeleteReceipt(ctx, db.FindGoalDeleteReceiptParams{
+		UserID:         mustUUID(userID),
+		IdempotencyKey: mustUUID(idempotencyKey),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &receipt, nil
+	return goalDeleteReceiptFromRow(row)
+}
+
+func goalDeleteReceiptFromRow(row *db.FindGoalDeleteReceiptRow) (*workspace.GoalDeleteReceipt, error) {
+	if row == nil {
+		return nil, fmt.Errorf("%w: receipt row is nil", workspace.ErrGoalPersistenceInvariant)
+	}
+	if !row.DeletedGoalID.Valid {
+		return nil, fmt.Errorf("%w: receipt deleted_goal_id is invalid", workspace.ErrGoalPersistenceInvariant)
+	}
+	if row.RequestHash == "" {
+		return nil, fmt.Errorf("%w: receipt request_hash is empty", workspace.ErrGoalPersistenceInvariant)
+	}
+	if !row.ExpiresAt.Valid || row.ExpiresAt.InfinityModifier != pgtype.Finite {
+		return nil, fmt.Errorf("%w: receipt expires_at is invalid or non-finite", workspace.ErrGoalPersistenceInvariant)
+	}
+	return &workspace.GoalDeleteReceipt{
+		GoalID:      uuidString(row.DeletedGoalID),
+		RequestHash: row.RequestHash,
+		ExpiresAt:   row.ExpiresAt.Time,
+	}, nil
 }
 
 func (transaction *workspaceGoalTx) LockGoalForDelete(
 	ctx context.Context,
 	userID, goalID string,
 ) (workspace.GoalDeleteTarget, error) {
-	var target workspace.GoalDeleteTarget
-	err := transaction.tx.QueryRow(ctx, `SELECT revision FROM goals
-WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(goalID), mustUUID(userID)).Scan(&target.Revision)
+	revision, err := transaction.queries.LockGoalForDelete(ctx, db.LockGoalForDeleteParams{
+		GoalID: mustUUID(goalID),
+		UserID: mustUUID(userID),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspace.GoalDeleteTarget{}, workspace.ErrNotFound
 	}
-	return target, err
+	return workspace.GoalDeleteTarget{Revision: revision}, err
 }
 
 func (transaction *workspaceGoalTx) LockGoalDraftIDs(
 	ctx context.Context,
 	userID, goalID string,
 ) ([]string, error) {
-	return lockGoalChildIDs(ctx, transaction.tx, `SELECT id FROM goal_drafts
-WHERE goal_id=$1 AND user_id=$2 ORDER BY id FOR UPDATE`, goalID, userID)
+	rows, err := transaction.queries.LockGoalDraftIDs(ctx, db.LockGoalDraftIDsParams{
+		GoalID: mustUUID(goalID),
+		UserID: mustUUID(userID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return goalDeleteDraftIDsFromRows(rows)
+}
+
+func goalDeleteDraftIDsFromRows(rows []pgtype.UUID) ([]string, error) {
+	ids := make([]string, 0, len(rows))
+	for _, id := range rows {
+		if !id.Valid {
+			return nil, fmt.Errorf("%w: locked Goal Draft id is invalid", workspace.ErrGoalPersistenceInvariant)
+		}
+		ids = append(ids, uuidString(id))
+	}
+	return ids, nil
 }
 
 func (transaction *workspaceGoalTx) LockGoalCycleIDs(
@@ -274,26 +314,23 @@ func (transaction *workspaceGoalTx) DeleteGoalCAS(
 	userID, goalID string,
 	expectedRevision int64,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `DELETE FROM goals
-WHERE id=$1 AND user_id=$2 AND revision=$3`, mustUUID(goalID), mustUUID(userID), expectedRevision)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.DeleteGoalCAS(ctx, db.DeleteGoalCASParams{
+		GoalID:           mustUUID(goalID),
+		UserID:           mustUUID(userID),
+		ExpectedRevision: expectedRevision,
+	})
 }
 
 func (transaction *workspaceGoalTx) InsertGoalDeleteReceipt(
 	ctx context.Context,
 	record workspace.GoalDeleteReceiptRecord,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `INSERT INTO goal_delete_receipts
-(user_id,idempotency_key,deleted_goal_id,request_hash,deleted_at,expires_at)
-VALUES($1,$2,$3,$4,$5,$6)`,
-		mustUUID(record.UserID), mustUUID(record.IdempotencyKey), mustUUID(record.GoalID),
-		record.RequestHash, record.DeletedAt, record.ExpiresAt,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.InsertGoalDeleteReceipt(ctx, db.InsertGoalDeleteReceiptParams{
+		UserID:         mustUUID(record.UserID),
+		IdempotencyKey: mustUUID(record.IdempotencyKey),
+		DeletedGoalID:  mustUUID(record.GoalID),
+		RequestHash:    record.RequestHash,
+		DeletedAt:      timestamptz(record.DeletedAt),
+		ExpiresAt:      timestamptz(record.ExpiresAt),
+	})
 }

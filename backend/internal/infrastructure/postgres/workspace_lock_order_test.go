@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,10 +22,41 @@ func TestWorkspaceTransitionSharedLockHelpersRemainOwnerScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertWorkspaceQueryContains(t, accountFile, "lockUser",
-		"SELECT id FROM users WHERE id=$1 FOR UPDATE")
+	assertWorkspaceCallsMethods(t, accountFile, "lockUser", "New", "LockUser")
+	userQueries, err := os.ReadFile("queries/users.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalizedUserQuery := strings.ToLower(strings.Join(strings.Fields(string(userQueries)), " "))
+	for _, fragment := range []string{"select id from users", "where id = sqlc.arg(user_id)::uuid", "for update"} {
+		if !strings.Contains(normalizedUserQuery, fragment) {
+			t.Fatalf("LockUser query source = %q, want fragment %q", normalizedUserQuery, fragment)
+		}
+	}
 	assertWorkspaceQueryContains(t, transitionFile, "loadCycleForUpdate",
 		"FROM pdca_cycles WHERE id=$1 AND goal_id=$2 AND user_id=$3 FOR UPDATE")
+}
+
+func assertWorkspaceCallsMethods(t *testing.T, file *ast.File, functionName string, methods ...string) {
+	t.Helper()
+	function := findWorkspaceQueryFunction(t, file, functionName)
+	found := make(map[string]bool, len(methods))
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if ok {
+			found[selector.Sel.Name] = true
+		}
+		return true
+	})
+	for _, method := range methods {
+		if !found[method] {
+			t.Fatalf("%s does not call %s", functionName, method)
+		}
+	}
 }
 
 func assertWorkspaceQueryContains(t *testing.T, file *ast.File, functionName, expected string) {

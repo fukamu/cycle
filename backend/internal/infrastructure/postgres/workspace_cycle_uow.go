@@ -4,21 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
 
 var _ workspace.CycleUnitOfWork = (*WorkspaceStore)(nil)
 var _ workspace.CycleTx = (*workspaceCycleTx)(nil)
 
 type workspaceCycleTx struct {
-	tx pgx.Tx
+	tx      pgx.Tx
+	queries *db.Queries
 }
 
 func (store *WorkspaceStore) WithinCycleTransaction(
@@ -30,7 +32,7 @@ func (store *WorkspaceStore) WithinCycleTransaction(
 		return err
 	}
 	defer rollback(ctx, tx)
-	if err = operation(&workspaceCycleTx{tx: tx}); err != nil {
+	if err = operation(&workspaceCycleTx{tx: tx, queries: store.queries.WithTx(tx)}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -67,29 +69,17 @@ func (transaction *workspaceCycleTx) LockGoal(
 	ctx context.Context,
 	userID, goalID string,
 ) (goal.Goal, error) {
-	var current goal.Goal
-	err := transaction.tx.QueryRow(ctx, `SELECT
-id,user_id,status,current_version_number,next_cycle_sequence_number,revision,terminal_at,
-terminal_operation_id,terminal_request_hash,created_at,updated_at
-FROM goals
-WHERE id=$1 AND user_id=$2
-FOR UPDATE`, mustUUID(goalID), mustUUID(userID)).Scan(
-		&current.ID,
-		&current.UserID,
-		&current.Status,
-		&current.CurrentVersionNumber,
-		&current.NextCycleSequenceNumber,
-		&current.Revision,
-		&current.TerminalAt,
-		&current.TerminalOperationID,
-		&current.TerminalRequestHash,
-		&current.CreatedAt,
-		&current.UpdatedAt,
-	)
+	row, err := transaction.queries.LockGoalForTransition(ctx, db.LockGoalForTransitionParams{
+		GoalID: mustUUID(goalID),
+		UserID: mustUUID(userID),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return goal.Goal{}, workspace.ErrGoalNotFound
 	}
-	return current, err
+	if err != nil {
+		return goal.Goal{}, err
+	}
+	return goalFromTransitionRow(row)
 }
 
 func (transaction *workspaceCycleTx) LockCycle(
@@ -144,29 +134,13 @@ func (transaction *workspaceCycleTx) LoadCurrentGoalVersion(
 	userID, goalID string,
 	versionNumber int32,
 ) (goal.Version, error) {
-	var version goal.Version
-	var versionID pgtype.UUID
-	var versionUserID pgtype.UUID
-	var versionGoalID pgtype.UUID
-	var persistedNumber pgtype.Int4
-	var body pgtype.Text
-	var createdByOperationID pgtype.UUID
-	var createdAt pgtype.Timestamptz
-	err := transaction.tx.QueryRow(ctx, `SELECT
-gv.id,gv.user_id,gv.goal_id,gv.version_number,gv.body,gv.created_by_operation_id,gv.created_at
-FROM goals g
-LEFT JOIN goal_versions gv
-  ON gv.user_id=g.user_id AND gv.goal_id=g.id AND gv.version_number=$3
-WHERE g.id=$1 AND g.user_id=$2`,
-		mustUUID(goalID), mustUUID(userID), versionNumber,
-	).Scan(
-		&versionID,
-		&versionUserID,
-		&versionGoalID,
-		&persistedNumber,
-		&body,
-		&createdByOperationID,
-		&createdAt,
+	row, err := transaction.queries.LoadCurrentGoalVersionForTransition(
+		ctx,
+		db.LoadCurrentGoalVersionForTransitionParams{
+			VersionNumber: versionNumber,
+			GoalID:        mustUUID(goalID),
+			UserID:        mustUUID(userID),
+		},
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return goal.Version{}, workspace.ErrNotFound
@@ -174,18 +148,30 @@ WHERE g.id=$1 AND g.user_id=$2`,
 	if err != nil {
 		return goal.Version{}, err
 	}
-	if !versionID.Valid || !versionUserID.Valid || !versionGoalID.Valid || !persistedNumber.Valid ||
-		!body.Valid || !createdByOperationID.Valid || !createdAt.Valid {
+	return goalVersionFromTransitionRow(row)
+}
+
+func goalVersionFromTransitionRow(row *db.LoadCurrentGoalVersionForTransitionRow) (goal.Version, error) {
+	if row == nil || !row.ID.Valid || !row.UserID.Valid || !row.GoalID.Valid || row.VersionNumber == nil ||
+		row.Body == nil || !row.CreatedByOperationID.Valid || !isFiniteGoalTimestamptz(row.CreatedAt) {
 		return goal.Version{}, workspace.ErrGoalVersionConflict
 	}
-	version.ID = uuidString(versionID)
-	version.UserID = uuidString(versionUserID)
-	version.GoalID = uuidString(versionGoalID)
-	version.VersionNumber = persistedNumber.Int32
-	version.Body = body.String
-	version.CreatedByOperationID = uuidString(createdByOperationID)
-	version.CreatedAt = createdAt.Time
-	return version, nil
+	versionID := uuidString(row.ID)
+	versionUserID := uuidString(row.UserID)
+	versionGoalID := uuidString(row.GoalID)
+	createdByOperationID := uuidString(row.CreatedByOperationID)
+	if versionID == "" || versionUserID == "" || versionGoalID == "" || createdByOperationID == "" {
+		return goal.Version{}, workspace.ErrGoalVersionConflict
+	}
+	return goal.Version{
+		ID:                   versionID,
+		UserID:               versionUserID,
+		GoalID:               versionGoalID,
+		VersionNumber:        *row.VersionNumber,
+		Body:                 *row.Body,
+		CreatedByOperationID: createdByOperationID,
+		CreatedAt:            row.CreatedAt.Time.UTC(),
+	}, nil
 }
 
 func (transaction *workspaceCycleTx) HasRunningCycleGeneration(
@@ -340,23 +326,17 @@ func (transaction *workspaceCycleTx) InsertReviewDraft(
 	if draft.Type != goal.DraftReview || draft.GoalID == nil || draft.BaseGoalVersionID == nil || draft.ReviewCycleID == nil {
 		return 0, fmt.Errorf("%w: Cycle Review Draft state is incomplete", workspace.ErrCyclePersistenceInvariant)
 	}
-	command, err := transaction.tx.Exec(ctx, `INSERT INTO goal_drafts
-(id,user_id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,created_at,updated_at)
-VALUES($1,$2,'review',$3,$4,$5,$6,$7,$8,$9)`,
-		mustUUID(draft.ID),
-		mustUUID(draft.UserID),
-		mustUUID(*draft.GoalID),
-		mustUUID(*draft.BaseGoalVersionID),
-		mustUUID(*draft.ReviewCycleID),
-		draft.Body,
-		draft.Revision,
-		draft.CreatedAt,
-		draft.UpdatedAt,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.InsertReviewDraftForTransition(ctx, db.InsertReviewDraftForTransitionParams{
+		DraftID:           mustUUID(draft.ID),
+		UserID:            mustUUID(draft.UserID),
+		GoalID:            mustUUID(*draft.GoalID),
+		BaseGoalVersionID: mustUUID(*draft.BaseGoalVersionID),
+		ReviewCycleID:     mustUUID(*draft.ReviewCycleID),
+		Body:              draft.Body,
+		Revision:          draft.Revision,
+		CreatedAt:         timestamptz(draft.CreatedAt),
+		UpdatedAt:         timestamptz(draft.UpdatedAt),
+	})
 }
 
 func (transaction *workspaceCycleTx) EnterGoalReviewCAS(
@@ -367,22 +347,15 @@ func (transaction *workspaceCycleTx) EnterGoalReviewCAS(
 	if reviewing.Status != goal.StatusGoalReview || reviewing.Revision != expectedRevision+1 {
 		return 0, fmt.Errorf("%w: reviewing Goal state is inconsistent", workspace.ErrCyclePersistenceInvariant)
 	}
-	command, err := transaction.tx.Exec(ctx, `UPDATE goals SET
-status='goal_review',revision=$3,updated_at=$4
-WHERE id=$1 AND user_id=$2 AND status='active_cycle' AND revision=$5
-  AND current_version_number=$6 AND next_cycle_sequence_number=$7`,
-		mustUUID(reviewing.ID),
-		mustUUID(reviewing.UserID),
-		reviewing.Revision,
-		reviewing.UpdatedAt,
-		expectedRevision,
-		reviewing.CurrentVersionNumber,
-		reviewing.NextCycleSequenceNumber,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.EnterGoalReviewCAS(ctx, db.EnterGoalReviewCASParams{
+		Revision:                reviewing.Revision,
+		UpdatedAt:               timestamptz(reviewing.UpdatedAt),
+		GoalID:                  mustUUID(reviewing.ID),
+		UserID:                  mustUUID(reviewing.UserID),
+		ExpectedRevision:        expectedRevision,
+		CurrentVersionNumber:    reviewing.CurrentVersionNumber,
+		NextCycleSequenceNumber: reviewing.NextCycleSequenceNumber,
+	})
 }
 
 func (transaction *workspaceCycleTx) LoadGoalView(
@@ -403,17 +376,98 @@ func (transaction *workspaceCycleTx) FindReviewDraftByCycle(
 	ctx context.Context,
 	userID, goalID, cycleID string,
 ) (*workspace.DraftView, error) {
-	draft, err := scanDraft(transaction.tx.QueryRow(ctx, `SELECT
-id,draft_type,goal_id,base_goal_version_id,review_cycle_id,body,revision,updated_at
-FROM goal_drafts
-WHERE user_id=$1 AND goal_id=$2 AND review_cycle_id=$3 AND draft_type='review'`,
-		mustUUID(userID), mustUUID(goalID), mustUUID(cycleID),
-	))
-	if errors.Is(err, workspace.ErrNotFound) {
+	row, err := transaction.queries.FindReviewDraftByCycle(ctx, db.FindReviewDraftByCycleParams{
+		UserID:  mustUUID(userID),
+		GoalID:  mustUUID(goalID),
+		CycleID: mustUUID(cycleID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &draft, nil
+	view, err := reviewDraftViewFromTransitionRow(row)
+	if err != nil {
+		return nil, err
+	}
+	return &view, nil
+}
+
+func goalFromTransitionRow(row *db.Goal) (goal.Goal, error) {
+	if row == nil || !row.ID.Valid || !row.UserID.Valid ||
+		!isFiniteGoalTimestamptz(row.CreatedAt) || !isFiniteGoalTimestamptz(row.UpdatedAt) {
+		return goal.Goal{}, goalTransitionPersistenceError("required Goal identity or timestamp is missing")
+	}
+	id := uuidString(row.ID)
+	userID := uuidString(row.UserID)
+	if id == "" || userID == "" {
+		return goal.Goal{}, goalTransitionPersistenceError("required Goal identity is invalid")
+	}
+
+	status := goal.Status(row.Status)
+	var terminalAt *time.Time
+	var terminalOperationID *string
+	switch status {
+	case goal.StatusActiveCycle, goal.StatusGoalReview:
+		if row.TerminalAt.Valid || row.TerminalOperationID.Valid || row.TerminalRequestHash != nil {
+			return goal.Goal{}, goalTransitionPersistenceError("progressing Goal has terminal metadata")
+		}
+	case goal.StatusAchieved, goal.StatusEnded:
+		if !isFiniteGoalTimestamptz(row.TerminalAt) || !row.TerminalOperationID.Valid ||
+			row.TerminalRequestHash == nil || *row.TerminalRequestHash == "" {
+			return goal.Goal{}, goalTransitionPersistenceError("terminal Goal metadata is incomplete")
+		}
+		operationID := uuidString(row.TerminalOperationID)
+		if operationID == "" {
+			return goal.Goal{}, goalTransitionPersistenceError("terminal Goal operation identity is invalid")
+		}
+		terminalTime := row.TerminalAt.Time.UTC()
+		terminalAt = &terminalTime
+		terminalOperationID = &operationID
+	default:
+		return goal.Goal{}, goalTransitionPersistenceError("Goal status is invalid")
+	}
+
+	return goal.Goal{
+		ID:                      id,
+		UserID:                  userID,
+		Status:                  status,
+		CurrentVersionNumber:    row.CurrentVersionNumber,
+		NextCycleSequenceNumber: row.NextCycleSequenceNumber,
+		Revision:                row.Revision,
+		TerminalAt:              terminalAt,
+		TerminalOperationID:     terminalOperationID,
+		TerminalRequestHash:     row.TerminalRequestHash,
+		CreatedAt:               row.CreatedAt.Time.UTC(),
+		UpdatedAt:               row.UpdatedAt.Time.UTC(),
+	}, nil
+}
+
+func reviewDraftViewFromTransitionRow(row *db.FindReviewDraftByCycleRow) (workspace.DraftView, error) {
+	if row == nil || !row.ID.Valid || !row.GoalID.Valid || !row.BaseGoalVersionID.Valid ||
+		!row.ReviewCycleID.Valid || !isFiniteGoalTimestamptz(row.UpdatedAt) {
+		return workspace.DraftView{}, goalTransitionPersistenceError("Review Draft identity, references, or timestamp is missing")
+	}
+	id := uuidString(row.ID)
+	goalID := uuidString(row.GoalID)
+	baseGoalVersionID := uuidString(row.BaseGoalVersionID)
+	reviewCycleID := uuidString(row.ReviewCycleID)
+	if row.DraftType != string(goal.DraftReview) || id == "" || goalID == "" || baseGoalVersionID == "" || reviewCycleID == "" {
+		return workspace.DraftView{}, goalTransitionPersistenceError("Review Draft tuple is invalid")
+	}
+	return workspace.DraftView{
+		ID:                id,
+		DraftType:         row.DraftType,
+		GoalID:            &goalID,
+		BaseGoalVersionID: &baseGoalVersionID,
+		ReviewCycleID:     &reviewCycleID,
+		Body:              row.Body,
+		Revision:          row.Revision,
+		UpdatedAt:         row.UpdatedAt.Time.UTC(),
+	}, nil
+}
+
+func goalTransitionPersistenceError(detail string) error {
+	return fmt.Errorf("%w: %s", workspace.ErrGoalPersistenceInvariant, detail)
 }

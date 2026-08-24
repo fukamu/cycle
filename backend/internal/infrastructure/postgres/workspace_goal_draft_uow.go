@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,10 +13,12 @@ import (
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
 
 type workspaceGoalDraftTx struct {
-	tx pgx.Tx
+	tx      pgx.Tx
+	queries *db.Queries
 }
 
 var (
@@ -32,7 +35,7 @@ func (store *WorkspaceStore) WithinGoalDraftTransaction(
 		return err
 	}
 	defer rollback(ctx, tx)
-	if err = callback(&workspaceGoalDraftTx{tx: tx}); err != nil {
+	if err = callback(&workspaceGoalDraftTx{tx: tx, queries: store.queries.WithTx(tx)}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -47,12 +50,14 @@ func (transaction *workspaceGoalDraftTx) LockUser(ctx context.Context, userID st
 }
 
 func (transaction *workspaceGoalDraftTx) FindCreationDraft(ctx context.Context, userID string) (*goal.Draft, error) {
-	draft, err := scanGoalDraft(transaction.tx.QueryRow(ctx, `SELECT id,user_id,draft_type,goal_id,base_goal_version_id,
-review_cycle_id,body,revision,created_at,updated_at
-FROM goal_drafts WHERE user_id=$1 AND draft_type='creation'`, mustUUID(userID)))
-	if errors.Is(err, workspace.ErrNotFound) {
+	row, err := transaction.queries.FindCreationDraft(ctx, mustUUID(userID))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	draft, err := goalDraftFromSQLC(row)
 	if err != nil {
 		return nil, err
 	}
@@ -64,9 +69,17 @@ func (transaction *workspaceGoalDraftTx) LockDraftByID(
 	userID string,
 	draftID string,
 ) (goal.Draft, error) {
-	return scanGoalDraft(transaction.tx.QueryRow(ctx, `SELECT id,user_id,draft_type,goal_id,base_goal_version_id,
-review_cycle_id,body,revision,created_at,updated_at
-FROM goal_drafts WHERE id=$1 AND user_id=$2 FOR UPDATE`, mustUUID(draftID), mustUUID(userID)))
+	row, err := transaction.queries.LockDraftByID(ctx, db.LockDraftByIDParams{
+		DraftID: mustUUID(draftID),
+		UserID:  mustUUID(userID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return goal.Draft{}, workspace.ErrNotFound
+	}
+	if err != nil {
+		return goal.Draft{}, err
+	}
+	return goalDraftFromSQLC(row)
 }
 
 func (transaction *workspaceGoalDraftTx) LockReviewDraftByGoal(
@@ -74,23 +87,35 @@ func (transaction *workspaceGoalDraftTx) LockReviewDraftByGoal(
 	userID string,
 	goalID string,
 ) (goal.Draft, error) {
-	return scanGoalDraft(transaction.tx.QueryRow(ctx, `SELECT id,user_id,draft_type,goal_id,base_goal_version_id,
-review_cycle_id,body,revision,created_at,updated_at
-FROM goal_drafts WHERE goal_id=$1 AND user_id=$2 AND draft_type='review' FOR UPDATE`, mustUUID(goalID), mustUUID(userID)))
+	row, err := transaction.queries.LockReviewDraftByGoal(ctx, db.LockReviewDraftByGoalParams{
+		GoalID: mustUUID(goalID),
+		UserID: mustUUID(userID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return goal.Draft{}, workspace.ErrNotFound
+	}
+	if err != nil {
+		return goal.Draft{}, err
+	}
+	return goalDraftFromSQLC(row)
 }
 
 func (transaction *workspaceGoalDraftTx) InsertCreationDraft(ctx context.Context, draft goal.Draft) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `INSERT INTO goal_drafts
-(id,user_id,draft_type,body,revision,created_at,updated_at)
-VALUES($1,$2,'creation',$3,$4,$5,$6)`, mustUUID(draft.ID), mustUUID(draft.UserID), draft.Body, draft.Revision,
-		draft.CreatedAt, draft.UpdatedAt)
+	rows, err := transaction.queries.InsertCreationDraft(ctx, db.InsertCreationDraftParams{
+		DraftID:   mustUUID(draft.ID),
+		UserID:    mustUUID(draft.UserID),
+		Body:      draft.Body,
+		Revision:  draft.Revision,
+		CreatedAt: timestamptz(draft.CreatedAt),
+		UpdatedAt: timestamptz(draft.UpdatedAt),
+	})
 	if isUniqueViolation(err) {
 		return 0, workspace.ErrDraftAlreadyExists
 	}
 	if err != nil {
 		return 0, err
 	}
-	return command.RowsAffected(), nil
+	return rows, nil
 }
 
 func (transaction *workspaceGoalDraftTx) SaveDraftCAS(
@@ -98,13 +123,15 @@ func (transaction *workspaceGoalDraftTx) SaveDraftCAS(
 	draft goal.Draft,
 	expectedRevision int64,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `UPDATE goal_drafts SET body=$4,revision=$5,updated_at=$6
-WHERE id=$1 AND user_id=$2 AND draft_type=$3 AND revision=$7`, mustUUID(draft.ID), mustUUID(draft.UserID),
-		string(draft.Type), draft.Body, draft.Revision, draft.UpdatedAt, expectedRevision)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.SaveDraftCAS(ctx, db.SaveDraftCASParams{
+		Body:             draft.Body,
+		NewRevision:      draft.Revision,
+		UpdatedAt:        timestamptz(draft.UpdatedAt),
+		DraftID:          mustUUID(draft.ID),
+		UserID:           mustUUID(draft.UserID),
+		DraftType:        string(draft.Type),
+		ExpectedRevision: expectedRevision,
+	})
 }
 
 func (transaction *workspaceGoalDraftTx) DeleteCreationDraftCAS(
@@ -113,12 +140,11 @@ func (transaction *workspaceGoalDraftTx) DeleteCreationDraftCAS(
 	draftID string,
 	expectedRevision int64,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `DELETE FROM goal_drafts
-WHERE id=$1 AND user_id=$2 AND draft_type='creation' AND revision=$3`, mustUUID(draftID), mustUUID(userID), expectedRevision)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.DeleteCreationDraftCAS(ctx, db.DeleteCreationDraftCASParams{
+		DraftID:          mustUUID(draftID),
+		UserID:           mustUUID(userID),
+		ExpectedRevision: expectedRevision,
+	})
 }
 
 func (transaction *workspaceGoalDraftTx) LockDraftGenerations(
@@ -232,32 +258,33 @@ WHERE user_id=$1 AND start_operation_id=$2`, mustUUID(userID), mustUUID(operatio
 }
 
 func (transaction *workspaceGoalDraftTx) CountProgressingGoals(ctx context.Context, userID string) (int, error) {
-	var count int
-	err := transaction.tx.QueryRow(ctx, `SELECT count(*) FROM goals
-WHERE user_id=$1 AND status IN ('active_cycle','goal_review')`, mustUUID(userID)).Scan(&count)
-	return count, err
+	count, err := transaction.queries.CountProgressingGoals(ctx, mustUUID(userID))
+	return int(count), err
 }
 
 func (transaction *workspaceGoalDraftTx) InsertInitialGoal(ctx context.Context, current goal.Goal) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `INSERT INTO goals
-(id,user_id,status,current_version_number,next_cycle_sequence_number,revision,created_at,updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, mustUUID(current.ID), mustUUID(current.UserID), current.Status,
-		current.CurrentVersionNumber, current.NextCycleSequenceNumber, current.Revision, current.CreatedAt, current.UpdatedAt)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.InsertInitialGoal(ctx, db.InsertInitialGoalParams{
+		GoalID:                  mustUUID(current.ID),
+		UserID:                  mustUUID(current.UserID),
+		Status:                  string(current.Status),
+		CurrentVersionNumber:    current.CurrentVersionNumber,
+		NextCycleSequenceNumber: current.NextCycleSequenceNumber,
+		Revision:                current.Revision,
+		CreatedAt:               timestamptz(current.CreatedAt),
+		UpdatedAt:               timestamptz(current.UpdatedAt),
+	})
 }
 
 func (transaction *workspaceGoalDraftTx) InsertInitialVersion(ctx context.Context, version goal.Version) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `INSERT INTO goal_versions
-(id,user_id,goal_id,version_number,body,created_by_operation_id,created_at)
-VALUES($1,$2,$3,$4,$5,$6,$7)`, mustUUID(version.ID), mustUUID(version.UserID), mustUUID(version.GoalID),
-		version.VersionNumber, version.Body, mustUUID(version.CreatedByOperationID), version.CreatedAt)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.InsertGoalVersion(ctx, db.InsertGoalVersionParams{
+		VersionID:            mustUUID(version.ID),
+		UserID:               mustUUID(version.UserID),
+		GoalID:               mustUUID(version.GoalID),
+		VersionNumber:        version.VersionNumber,
+		Body:                 version.Body,
+		CreatedByOperationID: mustUUID(version.CreatedByOperationID),
+		CreatedAt:            timestamptz(version.CreatedAt),
+	})
 }
 
 func (transaction *workspaceGoalDraftTx) TryInsertInitialCycleClaim(ctx context.Context, current cycle.PDCACycle) (int64, error) {
@@ -323,16 +350,29 @@ func (transaction *workspaceGoalDraftTx) LockGoalWithCurrentVersion(
 	userID string,
 	goalID string,
 ) (workspace.GoalTargetState, error) {
-	var state workspace.GoalTargetState
-	err := transaction.tx.QueryRow(ctx, `SELECT g.status,g.revision,gv.id,gv.body FROM goals g
-JOIN goal_versions gv ON gv.goal_id=g.id AND gv.version_number=g.current_version_number
-WHERE g.id=$1 AND g.user_id=$2 FOR UPDATE OF g`, mustUUID(goalID), mustUUID(userID)).Scan(
-		&state.Status, &state.Revision, &state.CurrentVersionID, &state.Body,
-	)
+	row, err := transaction.queries.LockGoalWithCurrentVersion(ctx, db.LockGoalWithCurrentVersionParams{
+		GoalID: mustUUID(goalID),
+		UserID: mustUUID(userID),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspace.GoalTargetState{}, workspace.ErrNotFound
 	}
-	return state, err
+	if err != nil {
+		return workspace.GoalTargetState{}, err
+	}
+	currentVersionID := uuidString(row.CurrentVersionID)
+	if currentVersionID == "" {
+		return workspace.GoalTargetState{}, fmt.Errorf(
+			"%w: locked Goal current Version identity is missing",
+			workspace.ErrGoalPersistenceInvariant,
+		)
+	}
+	return workspace.GoalTargetState{
+		Status:           goal.Status(row.Status),
+		Revision:         row.Revision,
+		CurrentVersionID: currentVersionID,
+		Body:             row.Body,
+	}, nil
 }
 
 func (transaction *workspaceGoalDraftTx) FindGoalRefineReplay(
@@ -761,13 +801,14 @@ func (transaction *workspaceGoalDraftTx) AdoptDraftCAS(
 	ctx context.Context,
 	record workspace.AdoptDraftRecord,
 ) (int64, error) {
-	command, err := transaction.tx.Exec(ctx, `UPDATE goal_drafts SET body=$3,revision=$4,updated_at=$5
-WHERE id=$1 AND user_id=$2 AND revision=$6`, mustUUID(record.DraftID), mustUUID(record.UserID), record.Body,
-		record.NewRevision, record.UpdatedAt, record.ExpectedRevision)
-	if err != nil {
-		return 0, err
-	}
-	return command.RowsAffected(), nil
+	return transaction.queries.AdoptDraftCAS(ctx, db.AdoptDraftCASParams{
+		Body:             record.Body,
+		NewRevision:      record.NewRevision,
+		UpdatedAt:        timestamptz(record.UpdatedAt),
+		DraftID:          mustUUID(record.DraftID),
+		UserID:           mustUUID(record.UserID),
+		ExpectedRevision: record.ExpectedRevision,
+	})
 }
 
 func (transaction *workspaceGoalDraftTx) MarkSuggestionAdoptedCAS(
@@ -785,14 +826,62 @@ WHERE id=$1 AND operation_type='goal_refine' AND status='succeeded' AND adopted_
 	return command.RowsAffected(), nil
 }
 
-func scanGoalDraft(row pgx.Row) (goal.Draft, error) {
-	var draft goal.Draft
-	err := row.Scan(&draft.ID, &draft.UserID, &draft.Type, &draft.GoalID, &draft.BaseGoalVersionID,
-		&draft.ReviewCycleID, &draft.Body, &draft.Revision, &draft.CreatedAt, &draft.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return goal.Draft{}, workspace.ErrNotFound
+func goalDraftFromSQLC(row *db.GoalDraft) (goal.Draft, error) {
+	if row == nil || !row.ID.Valid || !row.UserID.Valid ||
+		!isFiniteGoalTimestamptz(row.CreatedAt) || !isFiniteGoalTimestamptz(row.UpdatedAt) {
+		return goal.Draft{}, goalDraftPersistenceError("required identity or timestamp is missing")
 	}
-	return draft, err
+	id := uuidString(row.ID)
+	userID := uuidString(row.UserID)
+	if id == "" || userID == "" {
+		return goal.Draft{}, goalDraftPersistenceError("required identity is invalid")
+	}
+	goalID, goalIDValid := goalDraftNullableUUID(row.GoalID)
+	baseVersionID, baseVersionIDValid := goalDraftNullableUUID(row.BaseGoalVersionID)
+	reviewCycleID, reviewCycleIDValid := goalDraftNullableUUID(row.ReviewCycleID)
+	if !goalIDValid || !baseVersionIDValid || !reviewCycleIDValid {
+		return goal.Draft{}, goalDraftPersistenceError("reference identity is invalid")
+	}
+	draftType := goal.DraftType(row.DraftType)
+	switch draftType {
+	case goal.DraftCreation:
+		if goalID != nil || baseVersionID != nil || reviewCycleID != nil {
+			return goal.Draft{}, goalDraftPersistenceError("Creation Draft references current work")
+		}
+	case goal.DraftReview:
+		if goalID == nil || baseVersionID == nil || reviewCycleID == nil {
+			return goal.Draft{}, goalDraftPersistenceError("Review Draft references are incomplete")
+		}
+	default:
+		return goal.Draft{}, goalDraftPersistenceError("Draft type is invalid")
+	}
+	return goal.Draft{
+		ID:                id,
+		UserID:            userID,
+		Type:              draftType,
+		GoalID:            goalID,
+		BaseGoalVersionID: baseVersionID,
+		ReviewCycleID:     reviewCycleID,
+		Body:              row.Body,
+		Revision:          row.Revision,
+		CreatedAt:         row.CreatedAt.Time.UTC(),
+		UpdatedAt:         row.UpdatedAt.Time.UTC(),
+	}, nil
+}
+
+func goalDraftNullableUUID(value pgtype.UUID) (*string, bool) {
+	if !value.Valid {
+		return nil, true
+	}
+	result := uuidString(value)
+	if result == "" {
+		return nil, false
+	}
+	return &result, true
+}
+
+func goalDraftPersistenceError(detail string) error {
+	return fmt.Errorf("%w: %s", workspace.ErrGoalPersistenceInvariant, detail)
 }
 
 func nullableUUID(value string) any {

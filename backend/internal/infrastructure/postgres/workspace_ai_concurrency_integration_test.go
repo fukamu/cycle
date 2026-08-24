@@ -605,7 +605,7 @@ func isAIGenerationByIDLookup(sql string) bool {
 }
 
 func normalizeAIConcurrencySQL(sql string) string {
-	return strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	return normalizeObservedSQL(sql)
 }
 
 func approximatelyEqual(left, right float64) bool {

@@ -109,7 +109,7 @@ func isAIExpiredBudgetRelease(sql string) bool {
 	normalized := normalizeAIConcurrencySQL(sql)
 	return stringsContainsAll(normalized,
 		"update ai_budget_monthly",
-		"reserved_cost_usd=reserved_cost_usd-$2::numeric",
+		"reserved_cost_usd=reserved_cost_usd-$2",
 		"where month_utc=$1",
 	)
 }

@@ -83,8 +83,12 @@ func (barrier *completeReplayContinueBarrier) release() {
 }
 
 func isGoalViewLookupQuery(sql string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
-	return strings.Contains(normalized, "from goals g left join goal_versions gv on gv.goal_id=g.id and gv.version_number=g.current_version_number") &&
+	normalized := normalizeObservedSQL(sql)
+	return strings.Contains(normalized, "from goals g") &&
+		strings.Contains(normalized, "left join goal_versions gv") &&
+		strings.Contains(normalized, "gv.user_id=g.user_id") &&
+		strings.Contains(normalized, "gv.goal_id=g.id") &&
+		strings.Contains(normalized, "gv.version_number=g.current_version_number") &&
 		strings.Contains(normalized, "where g.id=$1 and g.user_id=$2")
 }
 

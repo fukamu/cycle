@@ -71,7 +71,7 @@ func (barrier *cycleSaveConcurrencyBarrier) release() {
 }
 
 func isCycleSaveGoalLock(sql string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	normalized := normalizeObservedSQL(sql)
 	return strings.Contains(normalized, "select id,user_id,status,current_version_number") &&
 		strings.Contains(normalized, "from goals") &&
 		strings.Contains(normalized, "where id=$1 and user_id=$2") &&
@@ -79,7 +79,7 @@ func isCycleSaveGoalLock(sql string) bool {
 }
 
 func isCycleFrameSaveUpdate(sql string, frame cycle.Frame) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	normalized := normalizeObservedSQL(sql)
 	if !strings.HasPrefix(normalized, "update pdca_cycles set ") ||
 		!strings.Contains(normalized, "where id=$1 and user_id=$2 and goal_id=$3 and status='active'") {
 		return false

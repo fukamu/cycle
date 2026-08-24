@@ -76,7 +76,7 @@ func (barrier *completeTerminateLockBarrier) release() {
 }
 
 func isCompletePostCycleLockQuery(sql string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	normalized := normalizeObservedSQL(sql)
 	return strings.Contains(normalized, "select exists(") &&
 		strings.Contains(normalized, "select 1 from ai_generations") &&
 		strings.Contains(normalized, "where user_id=$1") &&
@@ -214,7 +214,7 @@ func (barrier *completeReplayBarrier) release() {
 }
 
 func isCompleteReplayLookupQuery(sql string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	normalized := normalizeObservedSQL(sql)
 	return strings.Contains(normalized, "select goal_id,id,completion_request_hash from pdca_cycles") &&
 		strings.Contains(normalized, "where user_id=$1 and completion_operation_id=$2")
 }
