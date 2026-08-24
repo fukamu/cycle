@@ -105,6 +105,7 @@ if [[ "${run_backend}" == "true" ]]; then
     mkdir -p -- "${repo_root}/.tmp/check"
     go build -o "${repo_root}/.tmp/check/server" ./cmd/server
     go build -o "${repo_root}/.tmp/check/migrate" ./cmd/migrate
+    go build -o "${repo_root}/.tmp/check/cleanup" ./cmd/cleanup
     go build -o "${repo_root}/.tmp/check/configcheck" ./cmd/configcheck
   )
 fi

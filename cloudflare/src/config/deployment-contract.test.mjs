@@ -28,7 +28,7 @@ test("deployment contract is the exact repository handoff classification", () =>
   assert.equal(contract.version, 1);
   assert.equal(backend.fixed.length, 5);
   assert.deepEqual(backend.omitted, ["STATIC_DIR"]);
-  assert.equal(backend.githubVariables.length, 36);
+  assert.equal(backend.githubVariables.length, 38);
   assert.deepEqual(backend.derived, { AI_PRICING_MODEL: "AI_MODEL" });
   assert.equal(backend.secrets.length, 9);
   assert.equal(

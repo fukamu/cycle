@@ -92,7 +92,7 @@ WHERE id=$1 AND user_id=$2 AND draft_type='review'`,
 		review:          review,
 		creationDraft:   creationDraft,
 		startInput: workspace.StartGoalInput{
-			UserID: userID, DraftID: creationDraftID, OperationID: operationID,
+			UserID: userID, SessionID: userID, DraftID: creationDraftID, OperationID: operationID,
 			ExpectedDraftRevision: creationDraft.Revision,
 			GoalID:                "22000000-0000-7000-8000-000000000501",
 			VersionID:             "32000000-0000-7000-8000-000000000501",

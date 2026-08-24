@@ -47,7 +47,7 @@ func TestStartGoalMetricsDistinguishLimitFromPersistedInvariant(t *testing.T) {
 			observer := &workspaceObserverRecorder{}
 			service := &Service{goalDraft: useCases, settings: Settings{EventObserver: observer}}
 			_, err := service.StartGoal(
-				context.Background(), goalDraftTestUserID, goalDraftTestDraftID, goalDraftTestOperationID, 4,
+				context.Background(), goalDraftTestUserID, goalDraftTestSessionID, goalDraftTestDraftID, goalDraftTestOperationID, 4,
 			)
 			if !errors.Is(err, ErrGoalActiveLimit) || errors.Is(err, ErrProgressingGoalLimitInvariant) != test.wantInvariant {
 				t.Fatalf("error = %v, want invariant=%v", err, test.wantInvariant)
@@ -59,6 +59,63 @@ func TestStartGoalMetricsDistinguishLimitFromPersistedInvariant(t *testing.T) {
 				if observer.events[index].Event != want {
 					t.Fatalf("events = %#v, want %#v", observer.events, test.wantEvents)
 				}
+			}
+		})
+	}
+}
+
+func TestStartGoalRateLimitMetricEmitsOnlyForLimiterRejection(t *testing.T) {
+	t.Parallel()
+	requestHash := hashRequest(struct {
+		DraftID  string `json:"draftId"`
+		Revision int64  `json:"revision"`
+	}{goalDraftTestDraftID, 4})
+	tests := []struct {
+		name       string
+		tx         *goalDraftFakeTx
+		wantMetric bool
+	}{
+		{
+			name: "rate rejected",
+			tx: &goalDraftFakeTx{
+				draft:      creationDraft("開始する目標", 4),
+				rateCounts: map[string]int{"goal_start_user_minute": 6},
+			},
+			wantMetric: true,
+		},
+		{
+			name: "database error",
+			tx:   &goalDraftFakeTx{fail: map[string]error{"lock_user": errors.New("database unavailable")}},
+		},
+		{
+			name: "replay",
+			tx: &goalDraftFakeTx{
+				startReplay: &StartReplayState{
+					GoalID: goalDraftTestGoalID, CycleID: goalDraftTestCycleID, RequestHash: requestHash,
+				},
+				goalView: GoalView{ID: goalDraftTestGoalID}, cycleView: CycleView{ID: goalDraftTestCycleID},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			useCases, _ := newGoalDraftTestUseCases(
+				test.tx, goalDraftTestGoalID, goalDraftTestVersionID, goalDraftTestCycleID,
+			)
+			observer := &workspaceObserverRecorder{}
+			service := &Service{goalDraft: useCases, settings: Settings{EventObserver: observer}}
+			_, _ = service.StartGoal(
+				context.Background(), goalDraftTestUserID, goalDraftTestSessionID,
+				goalDraftTestDraftID, goalDraftTestOperationID, 4,
+			)
+			if test.wantMetric {
+				if len(observer.events) != 1 || observer.events[0].Event != WorkspaceMetricRateLimitRejected ||
+					observer.events[0].Scope != "goal_start" {
+					t.Fatalf("events = %#v", observer.events)
+				}
+			} else if len(observer.events) != 0 {
+				t.Fatalf("unexpected events = %#v", observer.events)
 			}
 		})
 	}
@@ -127,7 +184,7 @@ func TestStartGoalTransitionMetricsEmitOnlyForFreshCommit(t *testing.T) {
 			observer := &workspaceObserverRecorder{}
 			service := &Service{goalDraft: useCases, settings: Settings{EventObserver: observer}}
 			_, _ = service.StartGoal(
-				context.Background(), goalDraftTestUserID, goalDraftTestDraftID, goalDraftTestOperationID, 4,
+				context.Background(), goalDraftTestUserID, goalDraftTestSessionID, goalDraftTestDraftID, goalDraftTestOperationID, 4,
 			)
 			if len(observer.events) != len(test.wantEvents) {
 				t.Fatalf("events = %#v, want %#v", observer.events, test.wantEvents)

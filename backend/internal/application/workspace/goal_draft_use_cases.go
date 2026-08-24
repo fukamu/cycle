@@ -225,7 +225,10 @@ func (useCases *GoalDraftUseCases) AbandonDraft(ctx context.Context, userID, dra
 	})
 }
 
-func (useCases *GoalDraftUseCases) StartGoal(ctx context.Context, userID, draftID, operationID string, expectedDraftRevision int64) (result StartGoalResult, err error) {
+func (useCases *GoalDraftUseCases) StartGoal(ctx context.Context, userID, sessionID, draftID, operationID string, expectedDraftRevision int64) (result StartGoalResult, err error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return result, errors.New("Goal Start session ID is required")
+	}
 	goalID, versionID, cycleID, err := useCases.threeIDs()
 	if err != nil {
 		return result, err
@@ -297,6 +300,9 @@ func (useCases *GoalDraftUseCases) StartGoal(ctx context.Context, userID, draftI
 		if count == limits.MaxProgressingGoals {
 			return ErrGoalActiveLimit
 		}
+		if rateErr := useCases.checkGoalStartRateLimits(ctx, tx, userID, sessionID, now); rateErr != nil {
+			return rateErr
+		}
 		if insertErr := insertInitialAggregate(ctx, tx, aggregate); insertErr != nil {
 			return insertErr
 		}
@@ -331,6 +337,42 @@ func (useCases *GoalDraftUseCases) StartGoal(ctx context.Context, userID, draftI
 		return deleteErr
 	})
 	return result, err
+}
+
+func (useCases *GoalDraftUseCases) checkGoalStartRateLimits(
+	ctx context.Context,
+	tx GoalDraftTx,
+	userID string,
+	sessionID string,
+	now time.Time,
+) error {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(sessionID) == "" ||
+		len(useCases.settings.RateHashKey) == 0 || useCases.settings.GoalStartPerUserMinute <= 0 ||
+		useCases.settings.GoalStartPerSessionMinute <= 0 {
+		return errors.New("Goal Start rate-limit configuration is invalid")
+	}
+	checks := []struct {
+		scope string
+		value string
+		limit int
+	}{
+		{scope: "goal_start_user_minute", value: userID, limit: useCases.settings.GoalStartPerUserMinute},
+		{scope: "goal_start_session_minute", value: sessionID, limit: useCases.settings.GoalStartPerSessionMinute},
+	}
+	window := now.UTC().Truncate(time.Minute)
+	for _, check := range checks {
+		count, err := tx.IncrementRateBucket(ctx, AIRateBucket{
+			Scope: check.scope, KeyHash: goalDraftRateHash(useCases.settings.RateHashKey, check.scope, check.value),
+			WindowStart: window, ExpiresAt: window.Add(aiRateBucketLifetime),
+		})
+		if err != nil {
+			return err
+		}
+		if count > check.limit {
+			return ports.ErrRateLimitExceeded
+		}
+	}
+	return nil
 }
 
 func (useCases *GoalDraftUseCases) BeginGoalRefine(ctx context.Context, input GoalRefineInput, selectContext AIContextSelector) (snapshot AISnapshot, err error) {

@@ -18,7 +18,7 @@ func TestAnonymousRateLimiterPersistsBlockedAttemptAcrossInstances(t *testing.T)
 			t.Fatalf("attempt %d: %v", attempt, err)
 		}
 	}
-	if err := NewAnonymousRateLimiter(pool, 2, 10).Check(context.Background(), key, integrationNow()); !errors.Is(err, ports.ErrAnonymousCreationBlocked) {
+	if err := NewAnonymousRateLimiter(pool, 2, 10).Check(context.Background(), key, integrationNow()); !errors.Is(err, ports.ErrRateLimitExceeded) {
 		t.Fatalf("third attempt error = %v", err)
 	}
 	var count int

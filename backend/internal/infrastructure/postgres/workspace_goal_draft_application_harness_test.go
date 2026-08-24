@@ -119,13 +119,27 @@ func executeGoalStartUseCase(
 	input workspace.StartGoalInput,
 	maxProgressing int,
 ) (workspace.StartGoalResult, error) {
-	return newGoalDraftIntegrationUseCases(store,
+	return executeGoalStartUseCaseWithSettings(
+		store, ctx, input, maxProgressing, defaultAIIntegrationApplicationSettings(),
+	)
+}
+
+func executeGoalStartUseCaseWithSettings(
+	store *WorkspaceStore,
+	ctx context.Context,
+	input workspace.StartGoalInput,
+	maxProgressing int,
+	settings aiIntegrationApplicationSettings,
+) (workspace.StartGoalResult, error) {
+	return newGoalDraftIntegrationUseCasesWithSettings(
+		store,
 		input.Now,
 		maxProgressing,
+		settings,
 		input.GoalID,
 		input.VersionID,
 		input.CycleID,
-	).StartGoal(ctx, input.UserID, input.DraftID, input.OperationID, input.ExpectedDraftRevision)
+	).StartGoal(ctx, input.UserID, input.SessionID, input.DraftID, input.OperationID, input.ExpectedDraftRevision)
 }
 
 func executeGoalRefineBeginUseCase(

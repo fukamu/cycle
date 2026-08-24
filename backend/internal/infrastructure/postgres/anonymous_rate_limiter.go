@@ -54,7 +54,7 @@ func (limiter *AnonymousRateLimiter) Check(ctx context.Context, keyHash []byte, 
 		return err
 	}
 	if blocked {
-		return ports.ErrAnonymousCreationBlocked
+		return ports.ErrRateLimitExceeded
 	}
 	return nil
 }

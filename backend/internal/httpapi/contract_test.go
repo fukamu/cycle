@@ -81,6 +81,7 @@ type contractWorkspaceStub struct {
 	home           func(context.Context, string) (workspace.HomeView, error)
 	createDraft    func(context.Context, string, string) (workspace.DraftView, error)
 	saveDraft      func(context.Context, string, string, string, int64) (workspace.DraftView, error)
+	startGoal      func(context.Context, string, string, string, string, int64) (workspace.StartGoalResult, error)
 	getGoal        func(context.Context, string, string) (workspace.GoalView, error)
 	saveReview     func(context.Context, string, string, string, string, int64) (workspace.DraftView, error)
 	saveFrame      func(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
@@ -109,6 +110,20 @@ func (stub *contractWorkspaceStub) SaveDraft(ctx context.Context, userID, draftI
 		panic("unexpected SaveDraft call")
 	}
 	return stub.saveDraft(ctx, userID, draftID, body, revision)
+}
+
+func (stub *contractWorkspaceStub) StartGoal(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	draftID string,
+	operationID string,
+	revision int64,
+) (workspace.StartGoalResult, error) {
+	if stub.startGoal == nil {
+		panic("unexpected StartGoal call")
+	}
+	return stub.startGoal(ctx, userID, sessionID, draftID, operationID, revision)
 }
 
 func (stub *contractWorkspaceStub) GetGoal(ctx context.Context, userID, goalID string) (workspace.GoalView, error) {
@@ -478,6 +493,7 @@ func TestAnonymousBootstrapHTTPBoundary(t *testing.T) {
 		code   string
 	}{
 		{"blocked", ports.ErrAnonymousCreationBlocked, http.StatusForbidden, "ANONYMOUS_CREATION_BLOCKED"},
+		{"rate limited", ports.ErrRateLimitExceeded, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED"},
 		{"anti-abuse unavailable", ports.ErrAntiAbuseUnavailable, http.StatusServiceUnavailable, "ANTI_ABUSE_SERVICE_UNAVAILABLE"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -693,6 +709,35 @@ func TestAutosaveRevisionConflictsHaveStableHTTPContract(t *testing.T) {
 			`{"content":"local plan","expectedFrameRevision":7}`, addContractAuthentication)
 		assertContractError(t, response, http.StatusConflict, "CYCLE_REVISION_CONFLICT", nil)
 	})
+}
+
+func TestGoalStartUsesAuthenticatedSessionAndReturnsGenericRateLimit(t *testing.T) {
+	spaces := &contractWorkspaceStub{startGoal: func(
+		_ context.Context,
+		userID string,
+		sessionID string,
+		draftID string,
+		operationID string,
+		revision int64,
+	) (workspace.StartGoalResult, error) {
+		if userID != contractUserID || sessionID != contractSessionID || draftID != contractDraftID ||
+			operationID != contractOperationID || revision != 4 {
+			t.Fatalf("StartGoal input = %q/%q/%q/%q/%d", userID, sessionID, draftID, operationID, revision)
+		}
+		return workspace.StartGoalResult{}, ports.ErrRateLimitExceeded
+	}}
+	router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+	response := serveContract(
+		router,
+		http.MethodPost,
+		"/api/v1/goal-drafts/"+contractDraftID+"/start",
+		`{"operationId":"`+contractOperationID+`","expectedDraftRevision":4}`,
+		addContractAuthentication,
+	)
+	assertContractError(t, response, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED", nil)
+	if len(response.Result().Cookies()) != 0 {
+		t.Fatalf("rate rejection set cookies: %#v", response.Result().Cookies())
+	}
 }
 
 func TestTypedActionAIHTTPContract(t *testing.T) {

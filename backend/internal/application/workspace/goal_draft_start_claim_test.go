@@ -48,7 +48,7 @@ func TestGoalDraftUseCasesStartClassifiesLostInitialCycleClaim(t *testing.T) {
 			useCases, uow := newGoalDraftTestUseCases(
 				tx, goalDraftTestGoalID, goalDraftTestVersionID, goalDraftTestCycleID)
 			_, err := useCases.StartGoal(
-				context.Background(), goalDraftTestUserID, goalDraftTestDraftID,
+				context.Background(), goalDraftTestUserID, goalDraftTestSessionID, goalDraftTestDraftID,
 				goalDraftTestOperationID, 4)
 			if !errors.Is(err, test.want) || uow.rolledBack != 1 || uow.committed != 0 {
 				t.Fatalf("error/transaction = %v / %#v, want %v/rollback", err, uow, test.want)
@@ -59,7 +59,8 @@ func TestGoalDraftUseCasesStartClassifiesLostInitialCycleClaim(t *testing.T) {
 			}
 			wantTrace := []string{
 				"lock_user", "find_start_replay", "lock_draft", "lock_draft_generations",
-				"count_progressing_goals", "insert_initial_goal", "insert_initial_version",
+				"count_progressing_goals", "rate_goal_start_user_minute", "rate_goal_start_session_minute",
+				"insert_initial_goal", "insert_initial_version",
 				"insert_initial_cycle", "find_start_replay",
 			}
 			if !reflect.DeepEqual(tx.trace, wantTrace) {

@@ -92,11 +92,13 @@ type AIPricingConfig struct {
 }
 
 type RateLimitConfig struct {
-	AnonymousCreatePerIPHour int
-	AnonymousCreatePerIP24h  int
-	AIPerUserMinute          int
-	AIPerSessionMinute       int
-	AIPerIPMinute            int
+	AnonymousCreatePerIPHour  int
+	AnonymousCreatePerIP24h   int
+	GoalStartPerUserMinute    int
+	GoalStartPerSessionMinute int
+	AIPerUserMinute           int
+	AIPerSessionMinute        int
+	AIPerIPMinute             int
 }
 
 type TurnstileConfig struct {
@@ -173,11 +175,13 @@ func Load(lookup LookupEnv) (Config, error) {
 			},
 		},
 		RateLimit: RateLimitConfig{
-			AnonymousCreatePerIPHour: reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_HOUR", 5),
-			AnonymousCreatePerIP24h:  reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_24H", 20),
-			AIPerUserMinute:          reader.intValue("RATE_AI_PER_USER_MINUTE", 3),
-			AIPerSessionMinute:       reader.intValue("RATE_AI_PER_SESSION_MINUTE", 3),
-			AIPerIPMinute:            reader.intValue("RATE_AI_PER_IP_MINUTE", 10),
+			AnonymousCreatePerIPHour:  reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_HOUR", 5),
+			AnonymousCreatePerIP24h:   reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_24H", 20),
+			GoalStartPerUserMinute:    reader.intValue("RATE_GOAL_START_PER_USER_MINUTE", 5),
+			GoalStartPerSessionMinute: reader.intValue("RATE_GOAL_START_PER_SESSION_MINUTE", 5),
+			AIPerUserMinute:           reader.intValue("RATE_AI_PER_USER_MINUTE", 3),
+			AIPerSessionMinute:        reader.intValue("RATE_AI_PER_SESSION_MINUTE", 3),
+			AIPerIPMinute:             reader.intValue("RATE_AI_PER_IP_MINUTE", 10),
 		},
 		Turnstile: TurnstileConfig{
 			Enabled:        reader.boolValue("TURNSTILE_ENABLED", true),
@@ -276,7 +280,7 @@ func (config Config) Validate() error {
 		}
 		previous = threshold
 	}
-	if config.RateLimit.AnonymousCreatePerIPHour <= 0 || config.RateLimit.AnonymousCreatePerIP24h <= 0 || config.RateLimit.AIPerUserMinute <= 0 || config.RateLimit.AIPerSessionMinute <= 0 || config.RateLimit.AIPerIPMinute <= 0 {
+	if config.RateLimit.AnonymousCreatePerIPHour <= 0 || config.RateLimit.AnonymousCreatePerIP24h <= 0 || config.RateLimit.GoalStartPerUserMinute <= 0 || config.RateLimit.GoalStartPerSessionMinute <= 0 || config.RateLimit.AIPerUserMinute <= 0 || config.RateLimit.AIPerSessionMinute <= 0 || config.RateLimit.AIPerIPMinute <= 0 {
 		problems = append(problems, "rate limits must be positive")
 	}
 	if config.Turnstile.ExpectedAction == "" {

@@ -516,7 +516,8 @@ content_revision=content_revision+1,plan_revision=plan_revision+1,updated_at=$2 
 (SELECT settlement_budget_month_utc FROM ai_usage_events WHERE operation_id=$1),
 (SELECT settlement_reservation_cost_usd::text FROM ai_usage_events WHERE operation_id=$1),
 (SELECT reserved_cost_usd FROM ai_budget_monthly WHERE month_utc=$2),
-(SELECT count(*) FROM abuse_rate_buckets),
+(SELECT count(*) FROM abuse_rate_buckets
+ WHERE scope IN ('ai_user_minute','ai_session_minute','ai_ip_minute')),
 (SELECT count(*) FROM ai_generations),
 (SELECT count(*) FROM ai_usage_events)`, expiredSnapshot.GenerationID, month).Scan(
 		&generationStatus, &generationFailure, &generationReservation, &leaseCleared, &finished,

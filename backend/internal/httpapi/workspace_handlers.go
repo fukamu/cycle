@@ -176,7 +176,7 @@ func (server *api) startGoal(writer http.ResponseWriter, request *http.Request) 
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	view, err := server.dependencies.Workspace.StartGoal(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), input.OperationID, input.ExpectedDraftRevision)
+	view, err := server.dependencies.Workspace.StartGoal(request.Context(), currentUserID(request), sessionID(request), chi.URLParam(request, "draftId"), input.OperationID, input.ExpectedDraftRevision)
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalStartFailed), nil)
 		return

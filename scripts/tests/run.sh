@@ -164,6 +164,12 @@ EOF
   pass "check runs the frontend contract and rejects unsafe E2E scope"
 }
 
+test_backend_command_build_targets() {
+  assert_file_contains "${repo_root}/scripts/check.sh" \
+    "    go build -o \"\${repo_root}/.tmp/check/cleanup\" ./cmd/cleanup"
+  pass "check builds the retention cleanup maintenance command"
+}
+
 test_before_commit_check() {
   local fixture
   fixture="$(new_fixture before-commit)"
@@ -485,6 +491,7 @@ test_admission_helpers() {
 test_setup
 test_import_env
 test_frontend_check
+test_backend_command_build_targets
 test_before_commit_check
 test_local_app
 test_sqlc_runner

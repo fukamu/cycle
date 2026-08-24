@@ -27,6 +27,9 @@ func TestLoadDevelopmentConfig(t *testing.T) {
 	if config.Goals.MaxProgressingGoals != 2 {
 		t.Fatalf("MaxProgressingGoals = %d, want free limit 2", config.Goals.MaxProgressingGoals)
 	}
+	if config.RateLimit.GoalStartPerUserMinute != 5 || config.RateLimit.GoalStartPerSessionMinute != 5 {
+		t.Fatalf("Goal Start rate defaults = %#v", config.RateLimit)
+	}
 	if config.Telemetry.OTLPEndpoint != "" || config.Telemetry.OTLPHeaders != "" {
 		t.Fatalf("development telemetry = %#v, want in-memory defaults", config.Telemetry)
 	}
@@ -71,6 +74,32 @@ func TestLoadAcceptsPaidProgressingGoalBoundary(t *testing.T) {
 	}
 	if config.Goals.MaxProgressingGoals != 3 {
 		t.Fatalf("MaxProgressingGoals = %d, want paid boundary 3", config.Goals.MaxProgressingGoals)
+	}
+}
+
+func TestLoadValidatesGoalStartRateLimitsStrictly(t *testing.T) {
+	t.Parallel()
+	environment := validEnvironment()
+	environment["RATE_GOAL_START_PER_USER_MINUTE"] = "7"
+	environment["RATE_GOAL_START_PER_SESSION_MINUTE"] = "9"
+	loaded, err := Load(mapLookup(environment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.RateLimit.GoalStartPerUserMinute != 7 || loaded.RateLimit.GoalStartPerSessionMinute != 9 {
+		t.Fatalf("Goal Start rate config = %#v", loaded.RateLimit)
+	}
+	for _, key := range []string{"RATE_GOAL_START_PER_USER_MINUTE", "RATE_GOAL_START_PER_SESSION_MINUTE"} {
+		for _, value := range []string{"0", "-1", "not-an-integer"} {
+			t.Run(key+"/"+value, func(t *testing.T) {
+				t.Parallel()
+				invalid := validEnvironment()
+				invalid[key] = value
+				if _, loadErr := Load(mapLookup(invalid)); loadErr == nil {
+					t.Fatalf("Load accepted %s=%q", key, value)
+				}
+			})
+		}
 	}
 }
 

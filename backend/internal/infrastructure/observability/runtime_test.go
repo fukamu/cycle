@@ -255,6 +255,19 @@ func TestMetricSanitizerPreservesSoTConfigurationLabels(t *testing.T) {
 	}
 }
 
+func TestMetricSanitizerPreservesGoalStartRateLimitScopeAndErrorCode(t *testing.T) {
+	t.Parallel()
+	if got := sanitizeMetricAttributeValue("rate_limit_rejected_total", "scope", "goal_start"); got != "goal_start" {
+		t.Fatalf("goal_start scope sanitized to %q", got)
+	}
+	if got := sanitizeMetricAttributeValue("rate_limit_rejected_total", "scope", "user-id-canary"); got != "other" {
+		t.Fatalf("unknown rate scope sanitized to %q, want other", got)
+	}
+	if got := sanitizeMetricAttributeValue("error_code_total", "code", "RATE_LIMIT_EXCEEDED"); got != "RATE_LIMIT_EXCEEDED" {
+		t.Fatalf("RATE_LIMIT_EXCEEDED sanitized to %q", got)
+	}
+}
+
 func TestSetupDevelopmentUsesBoundedCountOnlyExporters(t *testing.T) {
 	previousTraceProvider := otel.GetTracerProvider()
 	previousMeterProvider := otel.GetMeterProvider()

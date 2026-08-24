@@ -9,5 +9,7 @@ type aiIntegrationApplicationSettings struct {
 }
 
 func defaultAIIntegrationApplicationSettings() aiIntegrationApplicationSettings {
-	return aiIntegrationApplicationSettings{}
+	return aiIntegrationApplicationSettings{GoalDraft: workspace.GoalDraftUseCaseSettings{
+		RateHashKey: []byte("integration-test-rate-key"), GoalStartPerUserMinute: 5, GoalStartPerSessionMinute: 5,
+	}}
 }

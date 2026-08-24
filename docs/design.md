@@ -1916,8 +1916,10 @@ sequenceDiagram
     F->>B: start(draftId, operationId, expectedRevision)
     B->>DB: BEGIN
     B->>DB: SELECT User FOR UPDATE
+    B->>DB: Find same start operation replay
     B->>DB: SELECT Draft FOR UPDATE
     B->>DB: count Progressing Goals
+    B->>DB: consume User / Session start rate buckets
     B->>DB: INSERT Goal
     B->>DB: INSERT Goal Version 1
     B->>DB: INSERT Cycle 1
@@ -1933,6 +1935,7 @@ Preconditions:
 - body trim nonblank、<=80。
 - save済み、running Goal Refineなし。
 - Progressing Goal count < `MaxProgressingGoals`。
+- Fresh startのUser / Session rate limit内。Replayはrate bucketを消費しない。
 
 Transaction details:
 
@@ -2741,6 +2744,7 @@ Errors:
 - `409 GOAL_ACTIVE_LIMIT_EXCEEDED`
 - `409 AI_OPERATION_IN_PROGRESS`
 - `409 IDEMPOTENCY_KEY_REUSED`
+- `429 RATE_LIMIT_EXCEEDED`
 - `500 GOAL_START_FAILED`
 
 ---
@@ -5105,12 +5109,13 @@ MVPは次の多層防御を使う。
 
 1. Anonymous bootstrapのCloudflare Turnstile invisible challenge
 2. Anonymous create endpointのIP-HMAC rate limit
-3. AI endpointのUser / Session / IP-HMAC rate limit
-4. User rolling AI quota
-5. Goal Draft / Cycleごとのrunning AI unique constraint
-6. Service monthly budget reservation
-7. OpenAI provider-side spend/rate limits
-8. Request body size、timeout、concurrency上限
+3. Goal Start endpointのUser / Session HMAC rate limit
+4. AI endpointのUser / Session / IP-HMAC rate limit
+5. User rolling AI quota
+6. Goal Draft / Cycleごとのrunning AI unique constraint
+7. Service monthly budget reservation
+8. OpenAI provider-side spend/rate limits
+9. Request body size、timeout、concurrency上限
 
 単一のCAPTCHAや単一のIP limitだけをAbuse対策としない。
 
@@ -5132,6 +5137,8 @@ rate_limits:
 
 これらはProduct Ruleではなく運営設定である。
 
+Goal StartはUser row lock後に同じoperationのreplayを先に判定し、fresh startだけUser / Sessionの1分bucketを同じTransactionで消費する。Replayはbucketを追加消費しない。どちらかの上限超過はgeneric `429 RATE_LIMIT_EXCEEDED`とし、Draft、Goal、Version、Cycle、rate bucket増分をすべてrollbackする。User / Sessionのraw IDはbucket keyへ保存せず、scopeとidentityを区切ったHMAC digestを使用する。
+
 ## 39.3 IP handling
 
 - BackendはCloudflare Workerからのtrusted headerだけを使用する。
@@ -5151,9 +5158,13 @@ rate_limits:
 
 Invisible challengeを採用し、通常操作の摩擦を抑える。Risk判定によりchallengeが表示される場合は許容する。
 
-## 39.5 Rate bucket cleanup
+## 39.5 Retention cleanup
 
-`abuse_rate_buckets.expires_at`でlazy cleanupまたは運用batchを行える。Cleanup BatchをUser向けMVP機能として提供する必要はないが、無期限にbucketが蓄積しないようRepository methodとmaintenance commandを実装する。
+`abuse_rate_buckets.expires_at`でlazy cleanupまたは運用batchを行える。§38.2の期限へ到達した確定済み・content-deleted AIUsageEventも同じmaintenance commandの別resourceとしてcleanupする。Cleanup BatchをUser向けMVP機能として提供する必要はないが、対象recordが無期限に蓄積しないようRepository methodとmaintenance commandを実装する。
+
+Maintenance commandはread-only repeatable-read snapshotでresource別件数だけを返す`dry-run`と、明示した1..1000のbatch sizeで削除する`execute`を排他的に提供する。1000は一つのTransactionを短く保つhard safety ceilingであり、Productionのdefault batch sizeではない。起動時のUTC時刻を一度だけdeadlineとしてcaptureし、User入力で時刻を上書きしない。Executeはresourceごとの短いTransactionで安定順のcandidateを`FOR UPDATE SKIP LOCKED`し、Delete側でも期限・確定・content-deleted条件を再検証する。並行worker、late settlement、Goal / Account Deleteとの競合はskipまたは0件へ収束し、再実行で安全に完了する。途中まで成功した削除を補償復元しない。
+
+Productionのbatch size、実行cadence、起動ownerは運用判断であり、未承認値をdefaultから推測してlive実行しない。Outputは§42.2のaggregate cleanup fieldだけとし、deadline、DB URL、operation / User / Session ID、bucket key/hash、raw errorを出さない。
 
 ---
 
@@ -5430,6 +5441,11 @@ error_class
 error_code
 failure_count
 operation
+cleanup_mode
+cleanup_resource
+cleanup_candidate_count
+cleanup_deleted_count
+cleanup_batch_count
 goal_state_from
 goal_state_to
 cycle_state_from
@@ -5897,6 +5913,8 @@ ai:
 rate_limits:
   anonymous_create_per_ip_hour: 5
   anonymous_create_per_ip_24h: 20
+  goal_start_per_user_minute: 5
+  goal_start_per_session_minute: 5
   ai_per_user_minute: 3
   ai_per_session_minute: 3
   ai_per_ip_minute: 10
@@ -6081,6 +6099,9 @@ Repository / concurrency testはSQLiteで代用しない。PostgreSQL固有のpa
 | G-CREATE-11 | creation start while refine running | `AI_OPERATION_IN_PROGRESS` |
 | G-CREATE-12 | creation start with stale Draft revision | conflict、Draft維持 |
 | G-CREATE-13 | Progressing Goal上限到達中にCreation Draft作成 | 作成・保存・Refine可。Startだけ拒否 |
+| G-CREATE-14 | Goal Start User / Session rateの境界 | configured回数まで成功し、次は`RATE_LIMIT_EXCEEDED` |
+| G-CREATE-15 | same Start operation replay | Goal/Cycleとrate bucketを追加しない |
+| G-CREATE-16 | rate拒否または並行Start | Draft/Goal/Version/Cycle/bucket部分更新なし |
 
 ## 48.4 Progressing Goal limit / future entitlement tests
 
@@ -6319,6 +6340,13 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 | Q-21 | lease expiry | settlement metadata維持、late settlementで一度だけclear |
 | Q-22 | Goal Delete後→Account Delete→callback | orphan Usage exposureをunattributedへ一度だけ移しcallbackはno-op |
 | Q-23 | callback→Account Delete | actualだけを計上しunattributed重複なし |
+| Q-24 | cleanup dry-run | resource別件数一致、全table無変更 |
+| Q-25 | finalized content-deleted Usageの期限前 / exact期限 | 期限前は保持、exact期限は削除対象 |
+| Q-26 | 未確定Usageまたはcontent未削除Usage | 期限後もcleanupで保持 |
+| Q-27 | 期限後のlate settlement前 / 後 | 前はskip、確定後の次回runで一度だけ削除 |
+| Q-28 | 並行cleanup / callback / Goal・Account Delete | deadlock・重複削除・二重Costなし |
+| Q-29 | rate bucketの期限前 / exact期限 | 期限前は保持、exact期限は削除対象 |
+| Q-30 | bounded batch失敗・cancel後の再実行 | 完了済みを復元せず残件だけ冪等削除 |
 
 ## 48.16 Goal Delete tests
 
@@ -6346,6 +6374,7 @@ Schema testだけで意味的保証はできないため§49のrubric評価をre
 
 ## 48.17 Auth / authorization tests
 
+- Anonymous作成のTurnstile拒否は403、IP rate超過はgeneric 429として分離する。
 - Google valid token `sub`でcurrent UserへIdentity追加。
 - Upgrade後User ID不変、Goals/Cycles不変。
 - wrong audience、expired、invalid signature拒否。

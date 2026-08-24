@@ -21,9 +21,12 @@ func TestWorkspaceHTTPTerminationRejectsHistoricalCycleBeforeStaleRevision(t *te
 	provider := &contractRejectProvider{}
 	service := workspace.NewService(store, store, store, store, store, store, store, store, provider, provider,
 		contractIntegrationClock{now: now.Add(10 * time.Minute)}, system.RandomGenerator{}, workspace.Settings{
-			MaxProgressingGoals: 2,
-			CursorSigningKey:    []byte("test-cursor-key"),
-			MaxProviderAttempts: 1,
+			MaxProgressingGoals:       2,
+			CursorSigningKey:          []byte("test-cursor-key"),
+			RateHashKey:               []byte("test-rate-key"),
+			GoalStartPerUserMinute:    5,
+			GoalStartPerSessionMinute: 5,
+			MaxProviderAttempts:       1,
 		})
 	router := newContractIntegrationRouter(pool, service)
 	owner := bootstrapContractClient(t, router, "0198c20b-7b95-7000-8000-000000000005")

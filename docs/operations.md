@@ -27,6 +27,12 @@ curl --fail --silent --show-error 'https://cycle.staging.fukamu.matoruru.com/rea
 
 Healthだけで機能正常を断定せず、5xx、latency、Container cold start、Neon connections、代表操作も確認します。
 
+## Retention cleanup
+
+対象predicate、dry-run/execute、1..1000のhard safety ceiling、Transaction、再実行、安全な出力、実commandは [`database.md`のRetention cleanup command](database.md#retention-cleanup-command) を参照します。
+
+Productionのbatch size、実行cadence、起動owner、job経路は未決です。これらとDB/index影響を承認するまで、Productionではdry-runを含め実行・scheduleせず、example値やStaging値から推測しません。
+
 ## Deploy後チェック
 
 1. commit SHA、Terraform Plan/Apply runとapprover、Cloudflare deployment/version、Container rollout、migration workflow runをrelease記録へ残す。

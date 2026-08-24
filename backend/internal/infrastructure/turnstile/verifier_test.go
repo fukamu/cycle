@@ -222,12 +222,12 @@ func TestVerifierObserverSeparatesSuccessfulSiteverifyFromAnonymousRateLimit(t *
 	observer := &recordingObserver{}
 	client := &fakeHTTPClient{response: response(http.StatusOK,
 		`{"success":true,"hostname":"cycle.example","action":"anonymous_bootstrap"}`)}
-	limiter := &fakeLimiter{err: ports.ErrAnonymousCreationBlocked}
+	limiter := &fakeLimiter{err: ports.ErrRateLimitExceeded}
 	err := testVerifierWithObserver(client, limiter, observer).VerifyAnonymousCreation(context.Background(), ports.AnonymousAbuseInput{
 		TurnstileToken: "token", RemoteAddress: "203.0.113.1",
 	})
-	if !errors.Is(err, ports.ErrAnonymousCreationBlocked) {
-		t.Fatalf("error = %v, want %v", err, ports.ErrAnonymousCreationBlocked)
+	if !errors.Is(err, ports.ErrRateLimitExceeded) {
+		t.Fatalf("error = %v, want %v", err, ports.ErrRateLimitExceeded)
 	}
 	assertObserverCalls(t, observer, []string{"success"}, []string{"anonymous"})
 }

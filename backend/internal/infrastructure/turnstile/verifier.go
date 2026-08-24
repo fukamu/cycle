@@ -132,7 +132,7 @@ func (verifier *Verifier) VerifyAnonymousCreation(ctx context.Context, input por
 	}
 	metricResult = "success"
 	if err := verifier.limiter.Check(ctx, hash(verifier.rateHashKey, normalizeIP(input.RemoteAddress)), verifier.clock.Now().UTC()); err != nil {
-		if errors.Is(err, ports.ErrAnonymousCreationBlocked) && verifier.observer != nil {
+		if errors.Is(err, ports.ErrRateLimitExceeded) && verifier.observer != nil {
 			verifier.observer.RateLimitRejected(context.WithoutCancel(ctx), "anonymous")
 		}
 		return err

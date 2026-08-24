@@ -174,6 +174,7 @@ type CyclePage struct {
 
 type StartGoalInput struct {
 	UserID                string
+	SessionID             string
 	DraftID               string
 	OperationID           string
 	ExpectedDraftRevision int64

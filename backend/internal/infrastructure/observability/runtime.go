@@ -994,7 +994,7 @@ func sanitizeMetricAttributeValue(name, key, value string) string {
 			return value
 		}
 	case "scope":
-		if oneOf(value, "ai", "anonymous", "auth", "session") {
+		if oneOf(value, "ai", "anonymous", "auth", "session", "goal_start") {
 			return value
 		}
 	case "code":
@@ -1058,7 +1058,7 @@ func isAllowedMetricErrorCode(value string) bool {
 		"GOAL_STATE_CONFLICT", "GOAL_TERMINATION_FAILED", "GOAL_TEXT_REQUIRED", "GOAL_TEXT_TOO_LONG", "GOAL_VERSION_CONFLICT",
 		"GOOGLE_ACCOUNT_NOT_LINKED", "GOOGLE_IDENTITY_ALREADY_LINKED", "GOOGLE_IDENTITY_VERIFICATION_UNAVAILABLE", "GOOGLE_ID_TOKEN_INVALID",
 		"GOOGLE_LOGIN_FAILED", "IDEMPOTENCY_KEY_REUSED", "INTERNAL_ERROR", "INVALID_CURSOR", "INVALID_GOAL_OUTCOME",
-		"SESSION_EXPIRED", "SESSION_IDENTITY_CHANGED", "SESSION_MISSING", "VALIDATION_ERROR":
+		"RATE_LIMIT_EXCEEDED", "SESSION_EXPIRED", "SESSION_IDENTITY_CHANGED", "SESSION_MISSING", "VALIDATION_ERROR":
 		return true
 	default:
 		return false

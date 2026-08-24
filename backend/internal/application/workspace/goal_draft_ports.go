@@ -130,10 +130,12 @@ type GoalDraftUseCaseSettings struct {
 	ReservationUSD    float64
 	LeaseDuration     time.Duration
 
-	RateHashKey        []byte
-	AIPerUserMinute    int
-	AIPerSessionMinute int
-	AIPerIPMinute      int
+	RateHashKey               []byte
+	GoalStartPerUserMinute    int
+	GoalStartPerSessionMinute int
+	AIPerUserMinute           int
+	AIPerSessionMinute        int
+	AIPerIPMinute             int
 }
 
 type DraftGenerationState struct {

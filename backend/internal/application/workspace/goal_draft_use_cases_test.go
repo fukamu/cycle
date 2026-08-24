@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
@@ -26,6 +28,7 @@ const (
 	goalDraftTestVersionID                  = "50000000-0000-7000-8000-000000000001"
 	goalDraftTestCycleID                    = "60000000-0000-7000-8000-000000000001"
 	goalDraftTestOperationID                = "70000000-0000-7000-8000-000000000001"
+	goalDraftTestSessionID                  = "80000000-0000-7000-8000-000000000001"
 	goalDraftTestCanonicalProviderInputHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
@@ -110,6 +113,7 @@ type goalDraftFakeTx struct {
 	usageCount           int
 	rollingAcceptedAfter time.Time
 	rateCounts           map[string]int
+	rateBuckets          []AIRateBucket
 	contexts             []AIContextCycle
 	budget               AIBudgetState
 
@@ -334,6 +338,7 @@ func (tx *goalDraftFakeTx) CountRollingUsage(_ context.Context, _ string, accept
 }
 
 func (tx *goalDraftFakeTx) IncrementRateBucket(_ context.Context, bucket AIRateBucket) (int, error) {
+	tx.rateBuckets = append(tx.rateBuckets, bucket)
 	if err := tx.record("rate_" + bucket.Scope); err != nil {
 		return 0, err
 	}
@@ -454,7 +459,8 @@ func newGoalDraftTestUseCasesWithPolicy(tx *goalDraftFakeTx, entitlements Entitl
 	useCases := NewGoalDraftUseCases(uow, entitlements, goalDraftFakeClock{now: goalDraftTestNow}, &goalDraftFakeIDs{values: ids}, GoalDraftUseCaseSettings{
 		Provider: "openai", Model: "test-model", GoalPromptVersion: "goal-v2",
 		MonthlyBudgetUSD: 1, ReservationUSD: 0.1, LeaseDuration: 2 * time.Minute,
-		RateHashKey: []byte("test-rate-key"), AIPerUserMinute: 2, AIPerSessionMinute: 2, AIPerIPMinute: 2,
+		RateHashKey: []byte("test-rate-key"), GoalStartPerUserMinute: 5, GoalStartPerSessionMinute: 5,
+		AIPerUserMinute: 2, AIPerSessionMinute: 2, AIPerIPMinute: 2,
 	})
 	return useCases, uow
 }
@@ -729,7 +735,7 @@ func TestGoalDraftUseCasesStartBuildsAndPersistsInitialAggregateInOrder(t *testi
 	}
 	useCases, uow := newGoalDraftTestUseCases(tx, goalDraftTestGoalID, goalDraftTestVersionID, goalDraftTestCycleID)
 	result, err := useCases.StartGoal(
-		context.Background(), goalDraftTestUserID, goalDraftTestDraftID, goalDraftTestOperationID, 4,
+		context.Background(), goalDraftTestUserID, goalDraftTestSessionID, goalDraftTestDraftID, goalDraftTestOperationID, 4,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -741,11 +747,88 @@ func TestGoalDraftUseCasesStartBuildsAndPersistsInitialAggregateInOrder(t *testi
 	}
 	want := []string{
 		"lock_user", "find_start_replay", "lock_draft", "lock_draft_generations", "count_progressing_goals",
+		"rate_goal_start_user_minute", "rate_goal_start_session_minute",
 		"insert_initial_goal", "insert_initial_version", "insert_initial_cycle",
 		"attach_draft_generations", "attach_usage", "delete_creation_draft", "load_goal_view", "load_cycle_view",
 	}
 	if !reflect.DeepEqual(tx.trace, want) || uow.committed != 1 {
 		t.Fatalf("trace/transaction = %v / %#v", tx.trace, uow)
+	}
+	if len(tx.rateBuckets) != 2 {
+		t.Fatalf("rate buckets = %#v, want user and session", tx.rateBuckets)
+	}
+	wantWindow := goalDraftTestNow.Truncate(time.Minute)
+	scopes := []string{"goal_start_user_minute", "goal_start_session_minute"}
+	values := []string{goalDraftTestUserID, goalDraftTestSessionID}
+	for index, bucket := range tx.rateBuckets {
+		if bucket.Scope != scopes[index] || !bucket.WindowStart.Equal(wantWindow) ||
+			!bucket.ExpiresAt.Equal(wantWindow.Add(2*time.Minute)) ||
+			!bytes.Equal(bucket.KeyHash, goalDraftRateHash([]byte("test-rate-key"), scopes[index], values[index])) {
+			t.Fatalf("rate bucket[%d] = %#v", index, bucket)
+		}
+		if bytes.Contains(bucket.KeyHash, []byte(values[index])) {
+			t.Fatalf("rate bucket[%d] retained raw identifier", index)
+		}
+	}
+}
+
+func TestGoalDraftUseCasesStartRateLimitRejectsInFixedOrderAndRollsBack(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		rateCounts map[string]int
+		wantTrace  []string
+	}{
+		{
+			name:       "user",
+			rateCounts: map[string]int{"goal_start_user_minute": 6},
+			wantTrace: []string{
+				"lock_user", "find_start_replay", "lock_draft", "lock_draft_generations",
+				"count_progressing_goals", "rate_goal_start_user_minute",
+			},
+		},
+		{
+			name:       "session",
+			rateCounts: map[string]int{"goal_start_session_minute": 6},
+			wantTrace: []string{
+				"lock_user", "find_start_replay", "lock_draft", "lock_draft_generations",
+				"count_progressing_goals", "rate_goal_start_user_minute", "rate_goal_start_session_minute",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			tx := &goalDraftFakeTx{draft: creationDraft("開始する目標", 4), rateCounts: test.rateCounts}
+			useCases, uow := newGoalDraftTestUseCases(
+				tx, goalDraftTestGoalID, goalDraftTestVersionID, goalDraftTestCycleID,
+			)
+			_, err := useCases.StartGoal(
+				context.Background(), goalDraftTestUserID, goalDraftTestSessionID,
+				goalDraftTestDraftID, goalDraftTestOperationID, 4,
+			)
+			if !errors.Is(err, ports.ErrRateLimitExceeded) || uow.rolledBack != 1 || uow.committed != 0 {
+				t.Fatalf("error/transaction = %v / %#v", err, uow)
+			}
+			if !reflect.DeepEqual(tx.trace, test.wantTrace) {
+				t.Fatalf("trace = %v, want %v", tx.trace, test.wantTrace)
+			}
+			if tx.initialGoal.ID != "" || tx.initialVersion.ID != "" || tx.initialCycle.ID != "" {
+				t.Fatalf("rate rejection persisted aggregate = %#v / %#v / %#v", tx.initialGoal, tx.initialVersion, tx.initialCycle)
+			}
+		})
+	}
+}
+
+func TestGoalDraftUseCasesStartRequiresSessionBeforeTransaction(t *testing.T) {
+	t.Parallel()
+	tx := &goalDraftFakeTx{}
+	useCases, uow := newGoalDraftTestUseCases(tx)
+	_, err := useCases.StartGoal(
+		context.Background(), goalDraftTestUserID, "", goalDraftTestDraftID, goalDraftTestOperationID, 4,
+	)
+	if err == nil || len(tx.trace) != 0 || uow.committed != 0 || uow.rolledBack != 0 {
+		t.Fatalf("error/trace/transaction = %v / %v / %#v", err, tx.trace, uow)
 	}
 }
 
@@ -757,7 +840,7 @@ func TestGoalDraftUseCasesStartValidatesBodyBeforeRunningAndLimit(t *testing.T) 
 	}
 	useCases, uow := newGoalDraftTestUseCases(tx, goalDraftTestGoalID, goalDraftTestVersionID, goalDraftTestCycleID)
 	_, err := useCases.StartGoal(
-		context.Background(), goalDraftTestUserID, goalDraftTestDraftID, goalDraftTestOperationID, 0,
+		context.Background(), goalDraftTestUserID, goalDraftTestSessionID, goalDraftTestDraftID, goalDraftTestOperationID, 0,
 	)
 	if !errors.Is(err, goal.ErrTextRequired) || uow.rolledBack != 1 {
 		t.Fatalf("error/transaction = %v / %#v", err, uow)
@@ -1072,7 +1155,7 @@ func TestGoalDraftCreationCommandsHideReviewDraftAsNotFound(t *testing.T) {
 	tx := &goalDraftFakeTx{draft: reviewDraft("Review", 2)}
 	useCases, uow := newGoalDraftTestUseCases(tx, goalDraftTestGoalID, goalDraftTestVersionID, goalDraftTestCycleID)
 	_, err := useCases.StartGoal(
-		context.Background(), goalDraftTestUserID, goalDraftTestDraftID, goalDraftTestOperationID, 2,
+		context.Background(), goalDraftTestUserID, goalDraftTestSessionID, goalDraftTestDraftID, goalDraftTestOperationID, 2,
 	)
 	if !errors.Is(err, ErrNotFound) || uow.rolledBack != 1 {
 		t.Fatalf("error/transaction = %v / %#v", err, uow)
@@ -1105,7 +1188,7 @@ func TestGoalDraftUseCasesEvaluateEntitlementUnderUserLock(t *testing.T) {
 		tx, policy, goalDraftTestGoalID, goalDraftTestVersionID, goalDraftTestCycleID,
 	)
 	_, err := useCases.StartGoal(
-		context.Background(), goalDraftTestUserID, goalDraftTestDraftID, goalDraftTestOperationID, 0,
+		context.Background(), goalDraftTestUserID, goalDraftTestSessionID, goalDraftTestDraftID, goalDraftTestOperationID, 0,
 	)
 	if !errors.Is(err, policyErr) || uow.rolledBack != 1 || policy.calls != 1 {
 		t.Fatalf("error/transaction/policy calls = %v / %#v / %d", err, uow, policy.calls)
@@ -1132,13 +1215,13 @@ func TestGoalDraftUseCasesStartReplayBypassesEntitlementPolicy(t *testing.T) {
 		tx, policy, goalDraftTestGoalID, goalDraftTestVersionID, goalDraftTestCycleID,
 	)
 	result, err := useCases.StartGoal(
-		context.Background(), goalDraftTestUserID, goalDraftTestDraftID, goalDraftTestOperationID, 4,
+		context.Background(), goalDraftTestUserID, goalDraftTestSessionID, goalDraftTestDraftID, goalDraftTestOperationID, 4,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Replayed || policy.calls != 0 || uow.committed != 1 {
-		t.Fatalf("result/policy calls/transaction = %#v / %d / %#v", result, policy.calls, uow)
+	if !result.Replayed || policy.calls != 0 || uow.committed != 1 || len(tx.rateBuckets) != 0 {
+		t.Fatalf("result/policy calls/transaction/rate buckets = %#v / %d / %#v / %#v", result, policy.calls, uow, tx.rateBuckets)
 	}
 	want := []string{"lock_user", "find_start_replay", "load_goal_view", "load_cycle_view"}
 	if !reflect.DeepEqual(tx.trace, want) {
@@ -1320,7 +1403,7 @@ func TestGoalDraftUseCasesStaticPaidEntitlementAllowsThirdProgressingGoal(t *tes
 		tx, policy, goalDraftTestGoalID, goalDraftTestVersionID, goalDraftTestCycleID,
 	)
 	result, err := useCases.StartGoal(
-		context.Background(), goalDraftTestUserID, goalDraftTestDraftID, goalDraftTestOperationID, 0,
+		context.Background(), goalDraftTestUserID, goalDraftTestSessionID, goalDraftTestDraftID, goalDraftTestOperationID, 0,
 	)
 	if err != nil {
 		t.Fatal(err)

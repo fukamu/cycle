@@ -44,6 +44,11 @@ func TestJSONLoggerEmitsOnlySourceOfTruthFields(t *testing.T) {
 		slog.Float64("migration_duration_ms", 4.5),
 		slog.Int("migration_applied_count", 1),
 		slog.Bool("migration_no_change", false),
+		slog.String("cleanup_mode", "execute"),
+		slog.String("cleanup_resource", "ai_usage_events"),
+		slog.Int64("cleanup_candidate_count", 4),
+		slog.Int64("cleanup_deleted_count", 4),
+		slog.Int64("cleanup_batch_count", 2),
 		slog.String("database_url", "postgres://secret@database/private"),
 		slog.String("raw_ip", "203.0.113.10"),
 		slog.Group("nested", slog.String("operation", "SESSION_TOKEN_CANARY")),
@@ -85,6 +90,9 @@ func TestJSONLoggerRejectsMalformedAllowedFieldValues(t *testing.T) {
 		slog.String("migration_file", "../../private.sql"),
 		slog.Float64("estimated_cost_usd", math.Inf(1)),
 		slog.String("migration_no_change", "SESSION_TOKEN_CANARY"),
+		slog.String("cleanup_mode", "GOAL_BODY_CANARY"),
+		slog.String("cleanup_resource", "private_table"),
+		slog.Int64("cleanup_candidate_count", -1),
 	)
 	record := decodeRecord(t, output.String())
 	if len(record) != 2 || record["timestamp"] == nil || record["severity"] == nil {

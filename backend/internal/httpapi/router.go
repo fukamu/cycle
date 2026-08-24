@@ -31,7 +31,7 @@ type WorkspaceService interface {
 	GetDraft(context.Context, string, string) (workspace.DraftView, error)
 	SaveDraft(context.Context, string, string, string, int64) (workspace.DraftView, error)
 	AbandonDraft(context.Context, string, string) error
-	StartGoal(context.Context, string, string, string, int64) (workspace.StartGoalResult, error)
+	StartGoal(context.Context, string, string, string, string, int64) (workspace.StartGoalResult, error)
 	ListGoals(context.Context, string, string, string, int) (workspace.GoalPage, error)
 	GetGoal(context.Context, string, string) (workspace.GoalView, error)
 	GetReview(context.Context, string, string) (workspace.ReviewView, error)

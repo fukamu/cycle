@@ -245,12 +245,14 @@ func progressingGoalFixtures() []progressingGoalFixture {
 		{draftID: "11000000-0000-7000-8000-000000000002", goalID: "21000000-0000-7000-8000-000000000002", versionID: "31000000-0000-7000-8000-000000000002", cycleID: "41000000-0000-7000-8000-000000000002", operationID: "51000000-0000-7000-8000-000000000002", body: "二つ目の目標"},
 		{draftID: "11000000-0000-7000-8000-000000000003", goalID: "21000000-0000-7000-8000-000000000003", versionID: "31000000-0000-7000-8000-000000000003", cycleID: "41000000-0000-7000-8000-000000000003", operationID: "51000000-0000-7000-8000-000000000003", body: "三つ目の目標"},
 		{draftID: "11000000-0000-7000-8000-000000000004", goalID: "21000000-0000-7000-8000-000000000004", versionID: "31000000-0000-7000-8000-000000000004", cycleID: "41000000-0000-7000-8000-000000000004", operationID: "51000000-0000-7000-8000-000000000004", body: "四つ目の目標"},
+		{draftID: "11000000-0000-7000-8000-000000000005", goalID: "21000000-0000-7000-8000-000000000005", versionID: "31000000-0000-7000-8000-000000000005", cycleID: "41000000-0000-7000-8000-000000000005", operationID: "51000000-0000-7000-8000-000000000005", body: "五つ目の目標"},
+		{draftID: "11000000-0000-7000-8000-000000000006", goalID: "21000000-0000-7000-8000-000000000006", versionID: "31000000-0000-7000-8000-000000000006", cycleID: "41000000-0000-7000-8000-000000000006", operationID: "51000000-0000-7000-8000-000000000006", body: "六つ目の目標"},
 	}
 }
 
 func (fixture progressingGoalFixture) startInput(userID string, now time.Time) workspace.StartGoalInput {
 	return workspace.StartGoalInput{
-		UserID: userID, DraftID: fixture.draftID, OperationID: fixture.operationID,
+		UserID: userID, SessionID: userID, DraftID: fixture.draftID, OperationID: fixture.operationID,
 		ExpectedDraftRevision: 0, RequestHash: "request-" + fixture.operationID,
 		GoalID: fixture.goalID, VersionID: fixture.versionID, CycleID: fixture.cycleID, Now: now,
 	}
@@ -432,7 +434,7 @@ VALUES($1,$2,'creation','目標本文',$3,$3)`, draftID, userID, now); err != ni
 	}
 	store := NewWorkspaceStore(pool)
 	startInput := workspace.StartGoalInput{
-		UserID: userID, DraftID: draftID, OperationID: startOperation, ExpectedDraftRevision: 0,
+		UserID: userID, SessionID: userID, DraftID: draftID, OperationID: startOperation, ExpectedDraftRevision: 0,
 		RequestHash: "start-hash", GoalID: goalID, VersionID: versionID, CycleID: cycleID, Now: now,
 	}
 	if _, err := executeGoalStartUseCase(store, context.Background(), startInput, 1); err != nil {

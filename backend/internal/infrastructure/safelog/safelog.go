@@ -51,6 +51,8 @@ var allowedFields = map[string]struct{}{
 	"context_cycle_count": {}, "context_changed": {}, "migration_version": {},
 	"migration_direction": {}, "migration_file": {}, "migration_duration_ms": {},
 	"migration_applied_count": {}, "migration_no_change": {},
+	"cleanup_mode": {}, "cleanup_resource": {}, "cleanup_candidate_count": {},
+	"cleanup_deleted_count": {}, "cleanup_batch_count": {},
 }
 
 // NewJSON returns a logger that emits only the exact fields allowed by
@@ -119,6 +121,10 @@ func safeValue(key string, value slog.Value) bool {
 		}
 	case "migration_direction":
 		return value.Kind() == slog.KindString && (value.String() == "up" || value.String() == "down")
+	case "cleanup_mode":
+		return value.Kind() == slog.KindString && (value.String() == "dry_run" || value.String() == "execute")
+	case "cleanup_resource":
+		return value.Kind() == slog.KindString && (value.String() == "ai_usage_events" || value.String() == "abuse_rate_buckets")
 	case "migration_file":
 		return value.Kind() == slog.KindString && migrationFilePattern.MatchString(value.String())
 	case "error_class", "error_code", "operation", "goal_state_from", "goal_state_to",
@@ -128,7 +134,8 @@ func safeValue(key string, value slog.Value) bool {
 		status, ok := integerValue(value)
 		return ok && status >= 100 && status <= 599
 	case "failure_count", "input_tokens", "output_tokens", "context_cycle_count",
-		"migration_version", "migration_applied_count":
+		"migration_version", "migration_applied_count", "cleanup_candidate_count",
+		"cleanup_deleted_count", "cleanup_batch_count":
 		count, ok := integerValue(value)
 		return ok && count >= 0
 	case "latency_ms", "provider_latency_ms", "migration_duration_ms", "estimated_cost_usd":

@@ -118,6 +118,7 @@ func TestClassifyErrorMatchesPublicStatusCodeMatrix(t *testing.T) {
 		{"csrf invalid", appsession.ErrCSRFInvalid, 403, "CSRF_INVALID"},
 		{"bootstrap ID", appsession.ErrBootstrapID, 400, "VALIDATION_ERROR"},
 		{"anonymous blocked", ports.ErrAnonymousCreationBlocked, 403, "ANONYMOUS_CREATION_BLOCKED"},
+		{"generic rate", ports.ErrRateLimitExceeded, 429, "RATE_LIMIT_EXCEEDED"},
 		{"anti-abuse unavailable", ports.ErrAntiAbuseUnavailable, 503, "ANTI_ABUSE_SERVICE_UNAVAILABLE"},
 		{"goal text required", goal.ErrTextRequired, 400, "GOAL_TEXT_REQUIRED"},
 		{"goal text too long", goal.ErrTextTooLong, 400, "GOAL_TEXT_TOO_LONG"},

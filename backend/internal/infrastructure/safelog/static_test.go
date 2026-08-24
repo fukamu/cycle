@@ -16,7 +16,8 @@ import (
 
 func TestAllowedFieldCatalogMatchesSourceOfTruth(t *testing.T) {
 	want := []string{
-		"ai_generation_id", "ai_model", "ai_operation_type", "context_changed", "context_cycle_count",
+		"ai_generation_id", "ai_model", "ai_operation_type", "cleanup_batch_count", "cleanup_candidate_count",
+		"cleanup_deleted_count", "cleanup_mode", "cleanup_resource", "context_changed", "context_cycle_count",
 		"cycle_state_from", "cycle_state_to", "error_class", "error_code", "estimated_cost_usd",
 		"failure_count", "goal_state_from", "goal_state_to", "input_tokens", "latency_ms", "method",
 		"migration_applied_count", "migration_direction", "migration_duration_ms", "migration_file",

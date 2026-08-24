@@ -69,6 +69,7 @@ func TestMetricsExposeCompleteServerSideSoTContract(t *testing.T) {
 	metrics.ObserveWorkspace(ctx, workspace.WorkspaceObservation{
 		Event: workspace.WorkspaceMetricRateLimitRejected, Scope: "ai",
 	})
+	metrics.RateLimitRejected(ctx, "goal_start")
 	metrics.AIUnattributedCost(ctx, 0.125)
 	metrics.AIContextIsolationViolation(ctx)
 	metrics.AccountUpgrade(ctx, "success")
@@ -77,6 +78,7 @@ func TestMetricsExposeCompleteServerSideSoTContract(t *testing.T) {
 	metrics.AnonymousCreate(ctx, "idempotent")
 	metrics.TurnstileVerification(ctx, "success")
 	metrics.ErrorCode(ctx, "VALIDATION_ERROR")
+	metrics.ErrorCode(ctx, "RATE_LIMIT_EXCEEDED")
 	metrics.ObserveAIGeneration(ctx, AIObservation{
 		GenerationID: "00000000-0000-7000-8000-000000000001",
 		Operation:    string(domainai.OperationActionGenerate),
@@ -165,6 +167,8 @@ func TestMetricsExposeCompleteServerSideSoTContract(t *testing.T) {
 	assertMetricLabel(t, measurements["ai_suggestion_adopted_total"], "source_type", "creation")
 	assertMetricLabel(t, measurements["goal_review_continued_total"], "version_changed", "true")
 	assertMetricLabel(t, measurements["rate_limit_rejected_total"], "scope", "ai")
+	assertMetricLabel(t, measurements["rate_limit_rejected_total"], "scope", "goal_start")
+	assertMetricLabel(t, measurements["error_code_total"], "code", "RATE_LIMIT_EXCEEDED")
 }
 
 func TestMetricLogUsesOnlySafeCorrelationAndProviderDuration(t *testing.T) {

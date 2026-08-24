@@ -87,6 +87,8 @@ OTLP endpoint、header credential ownerと実値は未決です。使用するpi
 | `TURNSTILE_EXPECTED_ACTION` | `anonymous_bootstrap` | non-empty | Container code固定 |
 | `RATE_ANONYMOUS_CREATE_PER_IP_HOUR` | anon/IP/hour、`5` | positive | GitHub variable |
 | `RATE_ANONYMOUS_CREATE_PER_IP_24H` | anon/IP/24h、`20` | positive | GitHub variable |
+| `RATE_GOAL_START_PER_USER_MINUTE` | Goal開始/user/min、`5` | positive | GitHub variable |
+| `RATE_GOAL_START_PER_SESSION_MINUTE` | Goal開始/session/min、`5` | positive | GitHub variable |
 | `RATE_AI_PER_USER_MINUTE` | AI/user/min、`3` | positive | GitHub variable |
 | `RATE_AI_PER_SESSION_MINUTE` | AI/session/min、`3` | positive | GitHub variable |
 | `RATE_AI_PER_IP_MINUTE` | AI/IP/min、`10` | positive | GitHub variable |
@@ -216,6 +218,8 @@ AI_PRICE_INPUT_USD_PER_MILLION
 AI_PRICE_OUTPUT_USD_PER_MILLION
 RATE_ANONYMOUS_CREATE_PER_IP_HOUR
 RATE_ANONYMOUS_CREATE_PER_IP_24H
+RATE_GOAL_START_PER_USER_MINUTE
+RATE_GOAL_START_PER_SESSION_MINUTE
 RATE_AI_PER_USER_MINUTE
 RATE_AI_PER_SESSION_MINUTE
 RATE_AI_PER_IP_MINUTE

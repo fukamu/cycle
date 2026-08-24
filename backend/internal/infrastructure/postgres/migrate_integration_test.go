@@ -18,6 +18,11 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	cleanupDown, err := os.ReadFile(filepath.Join(directory, "000005_retention_cleanup_index.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, cleanupDown)
 	hashDown, err := os.ReadFile(filepath.Join(directory, "000004_ai_generation_hash_split.down.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -44,14 +49,15 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 4 {
-		t.Fatalf("applied migrations = %v, want 4", result.Applied)
+	if len(result.Applied) != 5 {
+		t.Fatalf("applied migrations = %v, want 5", result.Applied)
 	}
-	baseline, retention, exposure, hashSplit := result.Applied[0], result.Applied[1], result.Applied[2], result.Applied[3]
+	baseline, retention, exposure, hashSplit, cleanupIndex := result.Applied[0], result.Applied[1], result.Applied[2], result.Applied[3], result.Applied[4]
 	if baseline.Version != 1 || baseline.Direction != "up" || baseline.File != "000001_fukamu_cycle_baseline.up.sql" ||
 		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" ||
 		exposure.Version != 3 || exposure.Direction != "up" || exposure.File != "000003_ai_usage_settlement_exposure.up.sql" ||
-		hashSplit.Version != 4 || hashSplit.Direction != "up" || hashSplit.File != "000004_ai_generation_hash_split.up.sql" {
+		hashSplit.Version != 4 || hashSplit.Direction != "up" || hashSplit.File != "000004_ai_generation_hash_split.up.sql" ||
+		cleanupIndex.Version != 5 || cleanupIndex.Direction != "up" || cleanupIndex.File != "000005_retention_cleanup_index.up.sql" {
 		t.Fatalf("applied migrations = %+v", result.Applied)
 	}
 	result, err = Migrate(databaseURL, directory)
@@ -64,7 +70,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 4 || users != 0 {
+	if version != 5 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
@@ -79,6 +85,50 @@ VALUES('10000000-0000-7000-8000-000000000001',now(),now(),now())`)
 VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000001','creation',$1,now(),now())`, strings.Repeat("界", 81))
 	if err == nil {
 		t.Fatal("oversize goal draft unexpectedly succeeded")
+	}
+}
+
+func TestMigratePinsPublicSchemaAndHistoryAgainstAmbientOptions(t *testing.T) {
+	pool := integrationPool(t)
+	directory := filepath.Join("..", "..", "..", "migrations")
+	_, err := pool.Exec(t.Context(), `DROP SCHEMA IF EXISTS migration_runner_shadow CASCADE;
+CREATE SCHEMA migration_runner_shadow;
+CREATE TABLE migration_runner_shadow.schema_migrations (
+    version bigint NOT NULL,
+    dirty boolean NOT NULL
+);
+INSERT INTO migration_runner_shadow.schema_migrations(version, dirty) VALUES(999, TRUE)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS migration_runner_shadow CASCADE")
+	})
+	t.Setenv("PGOPTIONS", "-c search_path=migration_runner_shadow,public")
+
+	result, err := Migrate(os.Getenv("TEST_DATABASE_URL"), directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.NoChange() {
+		t.Fatalf("ambient shadow migration applied = %v, want no change", result.Applied)
+	}
+
+	var publicVersion, shadowVersion, shadowTables int
+	var publicDirty, shadowDirty bool
+	if err = pool.QueryRow(t.Context(), `SELECT
+    (SELECT version FROM public.schema_migrations),
+    (SELECT dirty FROM public.schema_migrations),
+    (SELECT version FROM migration_runner_shadow.schema_migrations),
+    (SELECT dirty FROM migration_runner_shadow.schema_migrations),
+    (SELECT count(*) FROM pg_tables WHERE schemaname='migration_runner_shadow')`).Scan(
+		&publicVersion, &publicDirty, &shadowVersion, &shadowDirty, &shadowTables,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if publicVersion != 5 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
+		t.Fatalf("migration schemas = public:%d/%t shadow:%d/%t tables:%d",
+			publicVersion, publicDirty, shadowVersion, shadowDirty, shadowTables)
 	}
 }
 

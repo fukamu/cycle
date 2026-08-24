@@ -78,6 +78,8 @@ func classifyError(err error) (int, string, string) {
 		return 403, "CSRF_INVALID", "ページを再読み込みして、もう一度お試しください。"
 	case errors.Is(err, appsession.ErrBootstrapID):
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
+	case errors.Is(err, ports.ErrRateLimitExceeded):
+		return 429, "RATE_LIMIT_EXCEEDED", "短時間に操作が続いています。時間を空けてもう一度お試しください。"
 	case errors.Is(err, ports.ErrAnonymousCreationBlocked):
 		return 403, "ANONYMOUS_CREATION_BLOCKED", "時間を空けてもう一度お試しください。"
 	case errors.Is(err, ports.ErrAntiAbuseUnavailable):

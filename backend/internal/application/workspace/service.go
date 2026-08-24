@@ -23,6 +23,8 @@ type Settings struct {
 	ActionReservationUSD       float64
 	LeaseDuration              time.Duration
 	RateHashKey                []byte
+	GoalStartPerUserMinute     int
+	GoalStartPerSessionMinute  int
 	AIPerUserMinute            int
 	AIPerSessionMinute         int
 	AIPerIPMinute              int
@@ -86,8 +88,10 @@ func NewService(
 		Provider: settings.Provider, Model: settings.Model, GoalPromptVersion: settings.GoalPromptVersion,
 		MonthlyBudgetUSD: settings.MonthlyBudgetUSD,
 		ReservationUSD:   settings.ReservationUSD, LeaseDuration: settings.LeaseDuration,
-		RateHashKey: settings.RateHashKey, AIPerUserMinute: settings.AIPerUserMinute,
-		AIPerSessionMinute: settings.AIPerSessionMinute, AIPerIPMinute: settings.AIPerIPMinute,
+		RateHashKey:            settings.RateHashKey,
+		GoalStartPerUserMinute: settings.GoalStartPerUserMinute, GoalStartPerSessionMinute: settings.GoalStartPerSessionMinute,
+		AIPerUserMinute: settings.AIPerUserMinute, AIPerSessionMinute: settings.AIPerSessionMinute,
+		AIPerIPMinute: settings.AIPerIPMinute,
 	})
 	goals := NewGoalUseCases(goalQueries, goalUOW, clock, GoalUseCaseSettings{
 		CursorSigningKey: settings.CursorSigningKey,
@@ -143,8 +147,11 @@ func (service *Service) AbandonDraft(ctx context.Context, userID, draftID string
 	return resourceNotFound(service.goalDraft.AbandonDraft(ctx, userID, draftID), ErrGoalDraftNotFound)
 }
 
-func (service *Service) StartGoal(ctx context.Context, userID, draftID, operationID string, expectedDraftRevision int64) (StartGoalResult, error) {
-	result, err := service.goalDraft.StartGoal(ctx, userID, draftID, operationID, expectedDraftRevision)
+func (service *Service) StartGoal(ctx context.Context, userID, sessionID, draftID, operationID string, expectedDraftRevision int64) (StartGoalResult, error) {
+	result, err := service.goalDraft.StartGoal(ctx, userID, sessionID, draftID, operationID, expectedDraftRevision)
+	if errors.Is(err, ports.ErrRateLimitExceeded) {
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricRateLimitRejected, Scope: "goal_start"})
+	}
 	if errors.Is(err, ErrGoalActiveLimit) {
 		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricProgressingGoalLimitRejected})
 	}
