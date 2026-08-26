@@ -11,7 +11,7 @@ Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging L
 - Stagingのnon-secret configurationはGitHub `staging` Environment variablesからWrangler `--var`で登録します。
 - Staging runtime secretsはGitHub `staging` Environmentからdeploy時の一時`--secrets-file`経由でCloudflare Worker Secretsへ登録します。一時fileはworkflowの`always()` stepで削除します。
 - Neon migration direct URLはGitHub Actionsだけが使い、Worker/Containerへ渡しません。Runtimeにはpooled URLだけを渡します。
-- R2 backend credential、Terraform/Turnstile token、Cloudflare deploy tokenは用途別に分離します。
+- R2 backendはrepositoryのPlan用Object Read Only credentialと `staging-terraform-apply` EnvironmentのApply用Object Read & Write credentialを別tokenにし、Terraform/Turnstile token、Cloudflare deploy tokenとも分離します。
 - Session/CSRF/bootstrap pepper、rate-limit HMAC、cursor署名secretは環境ごと・用途ごとに異なる24文字以上の高entropy値にします。
 
 ## Temporary Closed Beta ingress
@@ -123,16 +123,16 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 | `CI` | Playwright behavior | CIが自動設定 |
 | `CLOUDFLARE_ACCOUNT_ID` | Wrangler account | GitHub secret（値自体はcredentialではない） |
 | `CLOUDFLARE_API_TOKEN` | Wrangler deploy auth | **GitHub secret**、deploy最小権限 |
-| `AWS_ACCESS_KEY_ID` | R2 S3 backend access ID | **secret**、local operator environment / workflowが`TERRAFORM_R2_ACCESS_KEY_ID`から一時mapping |
-| `AWS_SECRET_ACCESS_KEY` | R2 S3 backend secret | **secret**、local operator environment / workflowが`TERRAFORM_R2_SECRET_ACCESS_KEY`から一時mapping |
+| `AWS_ACCESS_KEY_ID` | R2 S3 backend access ID | **secret**、PlanはrepositoryのObject Read Only、Applyは `staging-terraform-apply` EnvironmentのObject Read & Write `TERRAFORM_R2_ACCESS_KEY_ID`から一時mapping |
+| `AWS_SECRET_ACCESS_KEY` | R2 S3 backend secret | **secret**、PlanはrepositoryのObject Read Only、Applyは `staging-terraform-apply` EnvironmentのObject Read & Write `TERRAFORM_R2_SECRET_ACCESS_KEY`から一時mapping |
 
 ### Dockerローカル実機profile
 
 `compose.local.yaml`はRepositoryの`.env`をcontainerへ渡さず、development専用の非secret値を明示します。PostgreSQL URLとpepperは破棄可能な隔離環境だけで使用し、OpenAI、Google、Turnstileのcredentialは設定しません。このprofileをStaging / Productionへ転用してはいけません。
 
-## GitHub Terraform repository inputs
+## GitHub Terraform inputs
 
-Terraform PlanとApplyだけが使います。Application `staging` EnvironmentやWorker/Containerへ渡しません。
+Terraform PlanとApplyだけが使います。Application `staging` Environment、Worker、Containerへ渡しません。R2 secret名はscope間で同じですが、値は別tokenです。
 
 Repository secrets:
 
@@ -143,7 +143,17 @@ TERRAFORM_R2_SECRET_ACCESS_KEY
 ```
 
 - `TERRAFORM_CLOUDFLARE_API_TOKEN`: 対象accountのTurnstile Editだけにscopeする。
-- `TERRAFORM_R2_ACCESS_KEY_ID` / `TERRAFORM_R2_SECRET_ACCESS_KEY`: state bucketだけのObject Read/Write credential。PlanのlockfileとApplyのstate更新に必要。
+- Repositoryの `TERRAFORM_R2_ACCESS_KEY_ID` / `TERRAFORM_R2_SECRET_ACCESS_KEY`: state bucketだけの `Object Read Only` credential。Planは `-lock=false`でstateをreadし、lock/state/backup objectを書きません。
+
+GitHub `staging-terraform-apply` Environment secrets:
+
+```text
+TERRAFORM_R2_ACCESS_KEY_ID
+TERRAFORM_R2_SECRET_ACCESS_KEY
+```
+
+- Environmentの同名2 secrets: state bucketだけの別の `Object Read & Write` credential。Pre-Apply snapshot/checksum、isolated restore drill、lock、Apply state更新に必要です。
+- Apply jobはこのEnvironmentを参照するため、GitHubのscope precedenceによりEnvironment値がRepositoryのRead Only値を上書きします。Environment値が未設定・Read Only・不正ならsnapshot uploadが失敗し、Apply前に停止します。
 
 Repository variables:
 
@@ -155,9 +165,9 @@ TERRAFORM_APPLY_APPROVER
 
 - `TERRAFORM_CLOUDFLARE_ACCOUNT_ID`: 32文字lowercase hexadecimal account ID。credentialではない。
 - `TERRAFORM_R2_STATE_BUCKET`: manual bootstrap済みの専用private bucket名。credentialではない。
-- `TERRAFORM_APPLY_APPROVER`: Plan review後に`Terraform Apply Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorと照合する。
+- `TERRAFORM_APPLY_APPROVER`: Plan review後に `Terraform Apply Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorと照合する。
 
-GitHub Environment `staging-terraform-apply`はsecret/variableの保管場所ではありません。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateとしてEnvironmentを設定します。Workflow preflightはactorと`TERRAFORM_APPLY_APPROVER`を照合し、不一致・未設定ではApplyしません。
+GitHub Environment `staging-terraform-apply`はApply用R2 Read/Write secretの必須保管場所です。Deployment branchを `main`へ制限します。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateも設定します。Workflow preflightはactorと `TERRAFORM_APPLY_APPROVER`を照合し、不一致・未設定ではEnvironment credentialを使うApply jobへ進みません。
 
 ## GitHub `staging` Environment
 

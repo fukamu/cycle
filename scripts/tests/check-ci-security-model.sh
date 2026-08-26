@@ -331,10 +331,10 @@ validate_secret_workflow_exact_digest() {
       expected_digest="094ebf026e6493f7d13398668771e19e19e99c336a1f254bb20acceb9ed28a44"
       ;;
     terraform-plan)
-      expected_digest="0ad1b885e910ab0f7a2dc30bf2c82c036d79b4e1f3558a0b753d459c015a0db3"
+      expected_digest="c06fb1aaeebabb2b5311c26cdd711144f15c511241fbfc165204c7f06196b949"
       ;;
     terraform-apply)
-      expected_digest="2de7f7e2c34a3ea4d1098804fdcec3633a44f8ed3dc9783f79c992c5050dce34"
+      expected_digest="b3aad3beb9f05f9662c183994657b42e6102efcfdac24d45d819b8af9a361af9"
       ;;
     *) return 0 ;;
   esac

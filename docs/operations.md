@@ -108,7 +108,7 @@ OTLP export failureでは固定のerror classと集約`failure_count`だけを�
 ## Environment / secret rotation
 
 1. [`environment.md`](environment.md)でserver/client、secret/public、validation、影響を確認。
-2. Application値はGitHub `staging` Environment、Terraform/R2 credentialはrepository secretsで用途別にrotateする。OTLP header credentialは同Environment secretとprovider側を同時にrotateし、endpoint variableへcredentialを移さない。Apply approver変更はrepository variableとEnvironment Required reviewerを同時に更新する。
+2. Application値はGitHub `staging` Environmentでrotateする。Terraform/R2はrepositoryのPlan用Object Read Only tokenと `staging-terraform-apply` EnvironmentのApply用Object Read & Write tokenを別々にrotateし、同じsecret名でも値を共有しない。各scopeを検証してから旧tokenをrevokeする。OTLP header credentialは同Environment secretとprovider側を同時にrotateし、endpoint variableへcredentialを移さない。Apply approver変更はrepository variableとEnvironment Required reviewerを同時に更新する。
 3. 変更理由、時刻、所有者、失効確認を記録する。値自体は記録しない。
 4. `VITE_`対応値がある場合はFrontendを必ずrebuildする。
 5. main CIからPlan/承認付きApply/`Deploy Staging`を通し、healthと代表操作を確認する。Application値だけの変更で再buildが必要な場合はmain HEADから`Deploy Staging`をmanual dispatchする。

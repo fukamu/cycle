@@ -777,6 +777,7 @@ test_sqlc_runner
 test_clean
 test_reset_local_db
 test_admission_helpers
+bash "${script_dir}/check-terraform-state-recovery.sh"
 node --test "${script_dir}/staging-critical.test.mjs"
 bash "${script_dir}/check-staging-critical.sh"
 bash "${script_dir}/check-ci-security-model.sh"

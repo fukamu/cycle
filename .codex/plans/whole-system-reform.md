@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M26 final commit gate; M27 follows after independent commit
+- 状態: IN_PROGRESS / M27 final commit gate; M28 follows after independent commit
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -70,7 +70,6 @@
 | AI model、reasoning effort、価格、budget、rate limitのProduction値 | Product/Operations owner、Production release前 | Staging承認値をProductionへcopyせず、Production releaseを停止 |
 | Terraform state snapshot保持期間 | Operations owner、M27 cleanup追加前 | Snapshotをprivate R2へ保存するが、自動削除しない |
 | Browser Draft recovery telemetry transport | Product/Security owner、M23 instrumentation前 | Backendで観測可能なmetricは進めるが、新しいbrowser telemetry endpoint/header/exporterを推測で追加しない |
-| Terraform R2 credential topology | Operations owner、M27 workflow変更前 | Snapshot helperとlocal isolated testは進めるが、secret配置、Plan/Apply権限、live R2 drillを変更・実行しない |
 | React Hook Formを削除する設計変更 | Product/Architecture owner、M29 dependency削除前 | chi等の独立更新は進めるが、RHFと該当SoTは維持 |
 | Closed Beta終了日 | Product owner | `off` deploy、連続168時間、owner承認までcode/config/runbookを維持 |
 
@@ -550,6 +549,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 24. Decision log
 
+- 2026-08-27: OwnerはM27のTerraform R2 credential topologyとしてOption 1を選択した。Repository secretsの同名2 credentialはstate bucket限定のObject Read OnlyとしてPlanだけが`-lock=false`で使用し、`staging-terraform-apply` Environmentの同名2 credentialは別tokenのObject Read & WriteとしてEnvironment precedenceによりApplyだけが使用する。RepositoryのPlan/Applyは共有concurrency groupで直列化し、manual remote state操作を並行させない。Applyは既存backend lockを維持し、最終main HEAD確認後にlive stateをprivate snapshot/checksumへconditional put・read-back検証し、isolated keyでrestore drillと`-refresh=false -lock=false` planを完了してisolated state/lockだけを削除してからsaved planを適用する。Snapshot保持期間は未決のため自動削除せず、live R2 drill、Apply、secret変更はこのmilestone実装では行わない。
 - 2026-08-27: M26のpost-deploy critical journeyは、canonical Staging originだけを許可するreporterless Playwright harnessをNodeで直接実行し、protected EnvironmentのRaw Invite Tokenをdebug環境・argv・log・artifactへ渡さずbrowser fragmentだけへ注入する。GitHub repository/run ID/commitとcommit timestampから同一runのrerunで安定するUUIDv7 bootstrap IDを導出し、通常run間ではaccountを分離する。UI journey中の`GET /api/v1/session`はCSRFをrotateするためanonymous POST responseから最初のidentityを捕捉し、page close後に公開session GETで最新CSRFと双方向identityを再取得してから公開account DELETEを行う。Deleteはresponse bodyを読まず204とresponse identityだけを検証し、1/2/4/8/16秒で再試行後にsession 401を確認する。失敗annotationは本文なしのSHA-256 account correlationと固定phaseだけとし、AI操作、raw DB correction、自動migration downは行わない。
 - 2026-08-26: M25 final commit gateで、candidate snapshot専用のdeployment contract testがCloudflare通常package testのglobにも含まれ、固定parser pathなしにfull repositoryを走査する誤配線を検出した。通常package testはCloudflare固有の57 testsをexplicit inventoryで実行し、cross-boundary contract 5 testsはtracked+nonignored candidate snapshotを作る`check-config-parity.sh`だけが所有する。Node supply-chain policyはこのexact script inventoryを固定し、broad globによる再混入を拒否する。
 - 2026-08-26: OwnerはM25 commit後に停止する直前指示を上書きし、元のwhole-system reform plan全体を継続実行することと、従来どおり検証可能な独立単位で定期commitすることを承認した。直前の停止・再優先順位付けdecisionはsupersededとし、M25完了後は依存順に残るmilestoneへ進む。M25 final gateについて事前説明したnpm/Go advisory・scanner registry/databaseへのrepository由来dependency metadata送信も、この全計画実行承認に含まれる。Production deploy/apply/secret変更/live data操作は、各milestoneの既存停止条件と明示承認境界を引き続き守る。
@@ -613,6 +613,8 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-27: M27 candidateを実装した。Terraform Planはrepositoryのbucket-scoped Object Read Only R2 credentialと`-lock=false`、Applyは`staging-terraform-apply` Environmentの別Object Read & Write credentialとbackend lockへ分離した。Apply直前helperは16 MiB以下のstate envelopeをprivate tempへpullし、commit/timestamp別backupとSHA-256をconditional put・read-back照合後、run/attempt別isolated backendでstate checksumと`terraform plan -refresh=false -lock=false`を検証し、isolated state/lockだけをresponse-loss時もcleanupする。Live keyへのpush/copy/delete経路は持たず、snapshotまたはcleanup失敗はApply前にfail-closedとなる。Fake R2/Terraform fixture、ShellCheck 0.11.0、shfmt 3.13.1、actionlint 1.7.12、CI security model、13 Markdown / 12 Mermaid、config parity 5/5、Compose、Terraform fmt/init/validate、Cloudflare 57 tests、Wrangler dry-run/Container buildが固定Linux containerで成功した。Live R2、Apply、secret変更、deployは行っておらず、plan-inclusive final Cを次に実行する。
+- 2026-08-27: M26のplan-inclusive final Cはcandidate tree `af8496ba7eedd91f65110bff41ba2327d081beef`で成功し、index/working treeを変えずcommit `b43290323f97df17c487ad18565e274594ebdcb3`（`ci: verify staging critical journey`）として独立commitした。Fresh disposable PostgreSQL 18.6はmigration version 5・dirty=falseを確認後に削除済みで、Live Staging journey、deploy、secret変更、live data操作は行っていない。
 - 2026-08-27: M26 candidateを実装した。Deployのsmoke後に固定Chromiumでunique anonymous Goal作成、P/D/C/A autosave、Cycle完了、Review継続、HistoryのGoal V1/Cycle 1/Cycle 2を検証し、公開account-delete routeでself-cleanupする。Secretはstep scope、direct Node、fragment注入、debug unset、artifactなしへ固定し、cleanup failureはbodyを読まずhashed correlationだけでfail-closedにする。Node helper/security 7/7、wrapper、Frontend ESLint/Prettier、ShellCheck 0.11.0、shfmt 3.13.1、actionlint 1.7.12、CI security model、config parity 5/5、docs/config全negative fixtureが固定Linux containerで成功した。Live Staging journey、deploy、secret変更、live data操作は行っておらず、plan-inclusive final Cを次に実行する。
 - 2026-08-27: M25のplan-inclusive final Cはcandidate tree `cc8a9bacdce890074c72f337566dfb1cf1644b38`で成功し、index/working treeを変えずcommit `3f7a53b1bf2b3a27ab064a6b9f825e08a93af0e9`（`ci: add security and contract gates`）として独立commitした。検証container/databaseは削除済みで、M26変更と混在していない。
 - 2026-08-26: M25 final Cの最初の試行は、security profile、Frontend 51 files / 438 tests、Backend全package/PostgreSQL integration、CI modelまで成功後、固定tool imageの`zip`不足でdocs/config負例開始前に停止した。`zip 3.0-13`だけを追加した一時imageとfresh DBで全gateを再実行し、security profile 2回、docs/config全負例、Frontend、Backend、Docker context、Terraform validateまで成功したが、Cloudflare通常checkがcandidate snapshot専用testを直接起動して57/58で停止した。この配線を責務分離し、Cloudflare unit 57/57とcandidate config 5/5をnetworkless targetで確認した。Candidate treeは再stage前であり、別fresh DBによるfinal Cを最初から再実行する。Production deploy/apply/secret変更/live data操作は行っていない。
@@ -718,7 +720,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M26 final commit gate。Reporter/trace/screenshot/videoなしのStaging critical harness、deterministic bootstrap、公開account cleanup、Deploy/config/security/docs契約とtarget validationはGREEN。全変更をstageし、fresh disposable `*_test` PostgreSQLでplan-inclusive Cを最初から完走後、index/working treeを変えずM26を独立commitする。Commit後はM27 Terraform state recoveryへ進む。Live Staging journey、Production/Staging deploy/apply、secret変更、live data操作は禁止したまま維持する。
+- 現在の再開位置: M27 final commit gate。Repository Read Only / Apply Environment Read & Write credential分離、Plan no-lock、pre-Apply private snapshot/checksum、isolated restore drill、fail-closed cleanupとtarget validationはGREEN。全変更をstageし、fresh disposable `*_test` PostgreSQLでplan-inclusive Cを最初から完走後、index/working treeを変えずM27を独立commitする。Commit後はM28 Supply-chain pinningへ進む。Live R2、Production/Staging deploy/apply、secret変更、live data操作は禁止したまま維持する。
 
 ## 26. Final definition of done
 

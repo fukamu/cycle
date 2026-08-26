@@ -32,7 +32,7 @@ GitHub Actions
   -> WranglerでWorker + Container + assets + runtime secretsをdeploy
 
 R2
-  -> Terraform state/lockfile
+  -> Terraform state/lockfile、retained pre-Apply backup/checksum、temporary restore-drill key
 ```
 
 CloudflareのDDoS protectionはplanを問わず自動有効です。ただし、Application rate limit、Turnstile、認可、OpenAIのprovider/application budgetは別に必要です。
@@ -41,10 +41,10 @@ CloudflareのDDoS protectionはplanを問わず自動有効です。ただし、
 
 | Owner | Managed resources |
 |---|---|
-| Terraform / `terraform-plan.yml` / `terraform-apply.yml` | Staging専用Turnstile widget、saved plan review、承認付きApply |
+| Terraform / `terraform-plan.yml` / `terraform-apply.yml` | Staging専用Turnstile widget、saved plan review、承認付きApply、pre-Apply state backup / restore drill |
 | Wrangler / `deploy.yml` | Worker code、Container image/config、static assets、custom domain、runtime secret、deployment |
 | GitHub Actions | main/CI/exact SHA gate、migration-first順序、smoke test、self-cleaning post-deploy critical journey |
-| Manual bootstrap | Cloudflare account/zone/plan/token、R2 bucket/credential、Neon、Google client、OpenAI limit、GitHub Environment protectionとinput |
+| Manual bootstrap | Cloudflare account/zone/plan/token、R2 bucket、Plan Read Only / Apply Read & Write credential、Neon、Google client、OpenAI limit、GitHub Environment protectionとinput |
 
 Worker/ContainerをTerraformとWranglerの両方で管理しません。Application releaseとDB migrationはTerraform stateへ入れません。
 
@@ -57,7 +57,7 @@ Worker/ContainerをTerraformとWranglerの両方で管理しません。Applicat
 | Cloudflare | account ID、zone ID、`matoruru.com`がActive、Workers Paid plan、operator |
 | Domain | `https://cycle.staging.fukamu.matoruru.com`、同名recordの有無、domain owner |
 | Container | `lite`、max instances `1`、APAC、idle sleep `10m`をStaging初期値として承認 |
-| R2 state | private bucket名、bucket-scoped credential owner、GitHub secret owner、復旧方針 |
+| R2 state | private bucket名、Plan Read Only / Apply Read & Write token owner、GitHub secret scope owner、snapshot保持期間、復旧方針 |
 | Neon | Staging専用project/branch、region、compute/scale-to-zero、restore window、connection limit |
 | DB connections | application pooled URL、migration direct URL、`DB_MAX_OPEN_CONNS`、管理/migration余裕 |
 | Google | Staging専用Web Client ID、authorized origin |
@@ -83,26 +83,22 @@ Repository全体の事前検査:
 
 ## 2. R2 Terraform backend bootstrap
 
-R2 bucketとS3 credentialはTerraform自身より先に必要なためmanual bootstrapです。
+R2 bucketとS3 credentialはTerraform自身より先に必要なためmanual bootstrapです。[Cloudflare R2のObject permission](https://developers.cloudflare.com/r2/api/tokens/)を使い、管理tokenではなく対象bucketだけのtokenを分離します。
 
 1. Cloudflare Dashboardでprivate R2 bucket（例: `fukamu-cycle-terraform-state`）を作る。他用途と共有しない。
-2. 対象bucketだけにObject Read/WriteできるR2 API tokenを作る。Plan時のstate read/lockとApply時のstate更新に使い、account全体の管理tokenやdeploy tokenと共有しない。
-3. [`backend.hcl.example`](../infra/terraform/staging/backend.hcl.example) をuntrackedの `backend.hcl` へcopyし、bucketとaccount IDを設定する。
-4. Access Key ID / Secret Access Keyを現在のBash processだけへ設定する。値をcommand historyへ直接貼らないため、password managerから安全に取得する。
+2. 対象bucketだけにscopeしたPlan用の `Object Read Only` R2 API tokenを作る。
+3. 同じbucketだけにscopeしたApply用の別の `Object Read & Write` R2 API tokenを作る。Plan token、account管理token、Wrangler deploy tokenと共有しない。
+4. Plan credentialをrepository secret、Apply credentialを `staging-terraform-apply` Environment secretへ、§3の同じsecret名で登録する。値をCLI argument、issue、workflow logへ出さない。
+5. [`backend.hcl.example`](../infra/terraform/staging/backend.hcl.example) をuntrackedの `backend.hcl` へcopyし、bucketとaccount IDを設定する。
+6. 障害調査でlocal remote readが必要な場合だけ、password managerからPlan用Read Only credentialを現在のBash processへ読み込む。通常releaseをlocal Applyで迂回しない。
 
-```bash
-cp -- ./infra/terraform/staging/backend.hcl.example ./infra/terraform/staging/backend.hcl
-read -r -p 'R2 access key ID: ' AWS_ACCESS_KEY_ID
-read -r -s -p 'R2 secret access key: ' AWS_SECRET_ACCESS_KEY
-printf '\n'
-export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-```
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` は値をcommand historyへ直接貼らず、現在processだけへ設定します。
 
-Backendは`use_lockfile = true`を使います。R2はstrong consistencyとconditional writesを提供しますが、S3 Object Versioningに相当するstate履歴復旧はありません。State bucketへBucket Lockを設定するとTerraformの上書きを妨げるため設定しません。State/backend credential/plan fileはsecretとして扱い、Terraform workflowのconcurrency group以外から同時applyしません。
+`use_lockfile = true` はbackendの既定として維持します。ApplyはRead/Write credentialでlockを取得します。PlanだけはRead Only credentialを使うため `terraform init -lock=false` と `terraform plan -lock=false` を実行します。HashiCorpは並行操作があり得る環境でlock無効化を推奨していないため、`staging-terraform` concurrency group以外からremote Plan/Apply/state操作を同時実行しません。R2 state bucketへBucket Lockを設定するとTerraformの通常更新を妨げるため設定しません。
 
 ## 3. Terraform Plan / Apply CI/CD
 
-Turnstile編集だけにscopeしたCloudflare API tokenを使い、deploy tokenとは分離します。Terraform workflowはrepository-levelの次のinputを使います。正確な分類は [`environment.md`](environment.md) を参照してください。
+Turnstile編集だけにscopeしたCloudflare API tokenを使い、deploy tokenとは分離します。R2 credentialは同じsecret名をscope別に設定し、値は必ず異なるtokenにします。正確な分類は [`environment.md`](environment.md) を参照してください。
 
 Repository secrets:
 
@@ -112,6 +108,19 @@ TERRAFORM_R2_ACCESS_KEY_ID
 TERRAFORM_R2_SECRET_ACCESS_KEY
 ```
 
+- `TERRAFORM_CLOUDFLARE_API_TOKEN`: 対象accountのTurnstile Editだけにscopeする。
+- RepositoryのR2 2 secrets: 対象state bucketだけの `Object Read Only` credential。`Terraform Plan Staging`だけが使う。
+
+`staging-terraform-apply` Environment secrets:
+
+```text
+TERRAFORM_R2_ACCESS_KEY_ID
+TERRAFORM_R2_SECRET_ACCESS_KEY
+```
+
+- EnvironmentのR2 2 secrets: 同じstate bucketだけの別の `Object Read & Write` credential。Snapshot、isolated drill、lock、Apply state更新だけに使う。
+- [GitHubのsecret precedence](https://docs.github.com/en/actions/reference/security/secrets#naming-your-secrets)により、Environmentを参照するApply jobでは同名Environment secretがrepository secretより優先される。Plan jobはEnvironmentを参照しないためRead Onlyのままです。
+
 Repository variables:
 
 ```text
@@ -120,37 +129,58 @@ TERRAFORM_R2_STATE_BUCKET
 TERRAFORM_APPLY_APPROVER=<your GitHub login>
 ```
 
-`Terraform Apply Staging`は自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人がActions画面からmanual dispatchし、対象の`Terraform Plan Staging` run IDを入力します。Workflow preflightはactor、Plan workflow、repository、成功状態、main、artifact、current main HEADを検査し、不一致ならcredentialを使うApply jobへ進みません。このmanual dispatchがすべてのGitHub planで必須のapproval gateです。
+`staging-terraform-apply` Environmentは必須です。Deployment branchesを `main`へ制限し、上記Read/Write secretsを登録します。利用中のGitHub planでRequired reviewersを使える場合は `TERRAFORM_APPLY_APPROVER`と同じuserを指定します。本人がmanual dispatchとreviewの両方を行う場合は `Prevent self-review`を有効にしません。Environment protectionを利用できない場合も、owner限定manual dispatch gateは維持します。
 
-追加のUI approvalを使えるGitHub planではEnvironment `staging-terraform-apply`を作成し、Deployment branchesを`main`へ制限して、Required reviewersへ`TERRAFORM_APPLY_APPROVER`と同じuserを指定します。本人がmanual dispatchとreviewの両方を行う場合は`Prevent self-review`を有効にしません。GitHub Free/Pro/Teamのprivate repositoryでは[Required reviewers](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#required-reviewers)を利用できないため、Environmentはunprotectedのままでもowner限定manual dispatch gateがApplyを保護します。
+`Terraform Apply Staging`は自動起動しません。Planをreviewした `TERRAFORM_APPLY_APPROVER`本人がActions画面からmanual dispatchし、対象の `Terraform Plan Staging` run IDを入力します。Workflow preflightはactor、Plan workflow、repository、成功状態、main、artifact、current main HEADを検査し、不一致ならEnvironment credentialを使うApply jobへ進みません。
 
 通常のsequence:
 
 ```text
 CI (main HEAD。完全一致するPR検証treeを再利用、証明不能なら全check)
 -> Terraform Plan Staging
-   -> R2 state lock/read
-   -> terraform plan -out=staging.tfplan
+   -> repository Object Read Only credentialでR2 live stateをlockなしでread
+   -> terraform plan -lock=false -out=staging.tfplan
    -> SHA-256 + commit SHA付きartifact（7日）
 -> ownerがPlan run IDを指定してTerraform Apply Stagingをmanual dispatch
 -> Terraform Apply Staging preflight
    -> actor、source Plan、artifact、current main HEADを検証
--> optional staging-terraform-apply Environment approval
--> 同じartifactを再検証してterraform apply
+-> staging-terraform-apply Environment（設定時はreviewer approval）
+   -> Environment Object Read & Write credentialへscope override
+   -> saved planを再検証しTerraform backendをlock対応で初期化
+   -> current main HEADを最終再検証
+   -> live state snapshot + SHA-256をprivate R2へ保存してread-back検証
+   -> isolated backend keyでchecksum比較とterraform plan -refresh=false
+   -> isolated state/lockを削除
+   -> 同じsaved planをlock付きでterraform apply
 -> Apply metadata artifact
 -> Deploy Staging
 ```
 
-`Terraform Plan Staging`のlogでhostnameが`cycle.staging.fukamu.matoruru.com`、modeがinvisible、destroy/replaceがないことを確認してから、そのPlan run IDで`Terraform Apply Staging`を実行します。Environment Required reviewerも設定した場合は、続けて`Review deployments`から承認します。Review中にmainが進んだ場合はstale planとして停止し、新しいCI/Planを待ちます。Plan artifactはApply成功後に削除を試み、削除できなくても7日でexpireします。
+Planの `-lock=false` はRead Only credentialを成立させるための限定例外です。RepositoryのPlanとApplyは同じ `staging-terraform` concurrency groupで直列化します。Manual remote state操作を並行させず、stateが別経路で変化した場合はsaved planをstaleとして破棄し、新しいPlanからやり直します。
+
+### Pre-Apply state snapshot and restore drill
+
+Applyは最終main HEAD確認の直後、Terraform wrapperを無効化したCLIで [`backup-and-drill-terraform-state.sh`](../scripts/backup-and-drill-terraform-state.sh) を実行します。Wrapperやworkflow outputへstate stdoutを保存しません。
+
+1. `terraform state pull`の結果をprivate runner tempへ `umask 077`で保存し、state envelopeと16 MiB上限を検証する。
+2. SHA-256を計算し、次のstate objectと `.sha256` objectをconditional putで新規作成する。既存objectは上書きしない。
+   - `fukamu-cycle/staging/state-backups/<commit-sha>/<utc-timestamp>.tfstate`
+3. 両objectを読み戻し、local snapshot、保存checksum、read-back bytesが一致することを確認する。
+4. 検証済みbytesを `fukamu-cycle/staging/state-restore-drills/<commit-sha>/<run-id>-<attempt>/terraform.tfstate` へconditional putし、別backend keyとして初期化する。
+5. Isolated stateのchecksumを再比較し、`terraform plan -refresh=false -lock=false` を成功させる。Live stateへ `state push`しない。
+6. Isolated stateとその `.tflock`だけを削除する。Uploadのresponse lossでもcleanupを試行し、cleanup失敗時もApplyを停止する。
+
+Snapshot、checksum upload/read-back、drill、cleanupのどれかが失敗した場合、後続の `terraform apply` は実行されません。保持期間はOperations owner未決のため、運用契約は **automatic snapshot deletion is disabled** です。`state-backups`配下のstate/checksumをworkflowから削除しません。成功時は両backup keyだけをApply summaryへ記録し、state本文やcredentialを出力しません。
+
+`Terraform Plan Staging`のlogでhostnameが `cycle.staging.fukamu.matoruru.com`、modeがinvisible、destroy/replaceがないことを確認してから、そのPlan run IDで `Terraform Apply Staging`を実行します。Environment Required reviewerも設定した場合は、続けて `Review deployments`から承認します。Review中にmainが進んだ場合はstale planとして停止し、新しいCI/Planを待ちます。Plan artifactはApply成功後に削除を試み、削除できなくても7日でexpireします。
 
 Saved planはstateとresource値を含み得るsecret相当です。Artifactをdownload、転記、長期保存しません。Turnstile resourceが返すsecretもR2 stateへ含まれ得るため、R2 credentialとGitHub Actions accessを最小化します。Site keyはGitHub variableへ、secret keyはCloudflare DashboardからGitHub secretへ登録し、terminal/logへ出しません。
 
-Localではcredential不要のfmt/validateを通常検査に使います。CI/CD障害調査でremote planが必要な場合だけ、[`backend.hcl.example`](../infra/terraform/staging/backend.hcl.example) と [`terraform.tfvars.example`](../infra/terraform/staging/terraform.tfvars.example) からGit管理外ファイルを作り、同じscopeのcredentialを現在processへ設定します。通常releaseをlocal `terraform apply`で迂回しません。
+Localではcredential不要のfmt/validateを通常検査に使います。CI/CD障害調査でremote planが必要な場合だけ、[`backend.hcl.example`](../infra/terraform/staging/backend.hcl.example) と [`terraform.tfvars.example`](../infra/terraform/staging/terraform.tfvars.example) からGit管理外fileを作り、Plan用Read Only credentialを現在processへ設定して `-lock=false`で実行します。通常releaseをlocal `terraform apply`で迂回しません。
 
 ```bash
 ./scripts/check.sh --scope infrastructure
 ```
-
 
 ## 4. Neon PostgreSQL
 
@@ -325,9 +355,14 @@ OTLP collector障害だけを理由にApplicationをrollbackせず、bounded ret
 
 Terraform recovery:
 
-- R2にはS3 Object Versioningによるstate履歴がありません。`terraform state`操作、import、backend移行は通常deployとして扱わず、対象とbackupを確認したmaintenanceとして行います。
-- Lockが残った場合は実行中のapplyがないことを確認し、lock所有情報を調査してから対応します。安易なforce-unlockをしません。
-- TurnstileをDashboardで手動変更した場合はdriftをplanで確認し、Source of TruthをTerraformへ戻します。
+1. Terraform Plan/Apply workflowとmanual remote state操作を停止し、実行中のwriterがないことを確認する。
+2. 成功したApply summaryまたはprivate R2 inventoryから同じprefixの `.tfstate` / `.tfstate.sha256` pairを選ぶ。State本文、checksum、credentialをissueやchatへ転記しない。
+3. Access-controlledな一時workspaceで両objectを取得し、SHA-256とstate envelopeを確認する。Source backup objectは変更・削除しない。
+4. Live keyではない新しい `fukamu-cycle/staging/state-restore-drills/` keyへcopyし、そのkeyだけでbackendを初期化する。`terraform state pull`のchecksum一致と `terraform plan -refresh=false -lock=false`を確認する。
+5. Drillではlive `fukamu-cycle/staging/terraform.tfstate`へ `state push`、copy、overwriteを行わない。Live state復旧が本当に必要な場合は、確認済みbackup、現在resource、expected diffを添えた別のowner-reviewed maintenanceとして復旧方法を決める。
+6. Drillのisolated state/lockだけを削除し、source backup/checksumは保持する。保持期間が決まるまで自動cleanupを追加しない。
+
+Lockが残った場合は実行中のApplyがないことを確認し、lock所有情報を調査してから対応します。安易なforce-unlockをしません。TurnstileをDashboardで手動変更した場合はdriftをPlanで確認し、Source of TruthをTerraformへ戻します。
 
 ## 11. Teardown
 

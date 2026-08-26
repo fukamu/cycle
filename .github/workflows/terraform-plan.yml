@@ -137,6 +137,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.15.8
+          terraform_wrapper: false
 
       - name: Prepare ephemeral R2 backend configuration
         shell: bash
@@ -154,7 +155,7 @@ jobs:
         working-directory: infra/terraform/staging
         run: |
           terraform fmt -check
-          terraform init -input=false -backend-config="${RUNNER_TEMP}/fukamu-cycle-staging-backend.hcl"
+          terraform init -lock=false -input=false -backend-config="${RUNNER_TEMP}/fukamu-cycle-staging-backend.hcl"
           terraform validate
 
       - name: Create saved Terraform plan
@@ -162,7 +163,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          terraform plan -input=false -no-color -out=staging.tfplan
+          terraform plan -lock=false -input=false -no-color -out=staging.tfplan
           sha256sum staging.tfplan > staging.tfplan.sha256
           printf '%s\n' "${COMMIT_SHA}" > staging.tfplan.commit-sha
 
