@@ -114,6 +114,8 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 |---|---|---|
 | `MIGRATIONS_DIR` | migration directory、`migrations` | GitHub Actionsで明示 |
 | `NEON_MIGRATION_DATABASE_URL` | Staging direct URL | **GitHub secret**、workflowが`DATABASE_URL`へ一時mapping |
+| `STAGING_BASE_URL` | post-deploy critical journeyのcanonical origin | workflowが`PUBLIC_ORIGIN`からstep scopeで設定。固定Staging HTTPS originだけを許可 |
+| `STAGING_E2E_INVITE_TOKEN` | post-deploy critical journeyのClosed Beta admission | **GitHub `staging` Environment secret**。生成済みRaw Token形式を必須とし、専用harnessだけへstep scopeで渡す。argv/log/trace/screenshot/artifact、Frontend bundle、Worker/Containerへ渡さない |
 | `TEST_DATABASE_URL` | disposable integration/E2E DB | runtime/Production DBを指定禁止 |
 | `FUKAMU_CYCLE_GO_BINARY` | Playwright用Go executable | optional |
 | `FUKAMU_CYCLE_SERVER_BINARY` | prebuilt E2E server | optional、指定時は事前migration必要 |
@@ -159,7 +161,7 @@ GitHub Environment `staging-terraform-apply`はsecret/variableの保管場所で
 
 ## GitHub `staging` Environment
 
-Exact required listは [`deploy.yml`](../.github/workflows/deploy.yml) の`Validate required deployment inputs`がenforceします。
+Runtime/deployのexact required listは [`deploy.yml`](../.github/workflows/deploy.yml) の`Validate required deployment inputs`がenforceします。Post-deploy専用`STAGING_E2E_INVITE_TOKEN`はtraffic切替後の`./scripts/check-staging-critical.sh`が値を表示せず検証します。
 
 Secrets:
 
@@ -176,7 +178,10 @@ BOOTSTRAP_ID_PEPPER
 RATE_LIMIT_HMAC_SECRET
 CURSOR_SIGNING_SECRET
 TURNSTILE_SECRET_KEY
+STAGING_E2E_INVITE_TOKEN
 ```
+
+`STAGING_E2E_INVITE_TOKEN`は常に非個人Inviteとして専用発行し、Raw値をpassword managerからGitHub Environmentへ一度だけ登録します。`BETA_ADMISSION_MODE=closed`では対応する非個人Invite ID/digestを`BETA_INVITES`へ含めます。`off`でもworkflow配線を一定に保つためsecret自体は必須ですが、Application runtimeへは渡しません。
 
 Closed BetaをStagingで検証する場合だけ、secretへ`BETA_ADMISSION_COOKIE_KEY`を追加します。`BETA_ADMISSION_MODE=off`では不要です。
 

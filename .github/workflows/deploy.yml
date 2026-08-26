@@ -281,6 +281,9 @@ jobs:
           untracked_files="$(git ls-files --others --exclude-standard)"
           [[ -z "${untracked_files}" ]]
 
+      - name: Install staging Chromium
+        run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match exec playwright install --with-deps chromium
+
       - name: Build static frontend
         env:
           VITE_DEPLOYMENT_ENV: staging
@@ -437,3 +440,10 @@ jobs:
           set -euo pipefail
           curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 10 --max-time 30 "${PUBLIC_ORIGIN}/healthz"
           curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 --max-time 30 "${PUBLIC_ORIGIN}/readyz"
+
+      - name: Run staging critical journey
+        shell: bash
+        env:
+          STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}
+          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}
+        run: bash ./scripts/check-staging-critical.sh

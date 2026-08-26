@@ -43,7 +43,7 @@ CloudflareのDDoS protectionはplanを問わず自動有効です。ただし、
 |---|---|
 | Terraform / `terraform-plan.yml` / `terraform-apply.yml` | Staging専用Turnstile widget、saved plan review、承認付きApply |
 | Wrangler / `deploy.yml` | Worker code、Container image/config、static assets、custom domain、runtime secret、deployment |
-| GitHub Actions | main/CI/exact SHA gate、migration-first順序、smoke test |
+| GitHub Actions | main/CI/exact SHA gate、migration-first順序、smoke test、self-cleaning post-deploy critical journey |
 | Manual bootstrap | Cloudflare account/zone/plan/token、R2 bucket/credential、Neon、Google client、OpenAI limit、GitHub Environment protectionとinput |
 
 Worker/ContainerをTerraformとWranglerの両方で管理しません。Application releaseとDB migrationはTerraform stateへ入れません。
@@ -64,7 +64,7 @@ Worker/ContainerをTerraformとWranglerの両方で管理しません。Applicat
 | Turnstile | widget site key、secret owner、hostname/action |
 | OpenAI | project/key owner、model、確認日、token単価、provider spend/rate limit |
 | Telemetry | OTLP/HTTP collector endpoint、header credential owner、pinned SDK defaultのsampler / export volumeのStaging受入、Production retention、dashboard、alert、notification、on-call |
-| App controls | AI monthly budget、rolling/rate limit、tester、公開期間、任意のApplication紹介導線をStagingで公開するか |
+| App controls | AI monthly budget、rolling/rate limit、tester、公開期間、任意のApplication紹介導線をStagingで公開するか、post-deploy E2E用の非個人Invite IDとRaw Token owner |
 | Operations | Terraform Apply approver、logs/traces確認者、cost確認、teardown/継続判断日 |
 
 ## 1. Prerequisites
@@ -203,6 +203,9 @@ GitHub `staging` Environment secrets:
 - `RATE_LIMIT_HMAC_SECRET`
 - `CURSOR_SIGNING_SECRET`
 - `TURNSTILE_SECRET_KEY`
+- `STAGING_E2E_INVITE_TOKEN`
+
+`STAGING_E2E_INVITE_TOKEN`は`./scripts/check-staging-critical.sh`だけへstep scopeで渡すRaw Closed Beta Invite Tokenです。非個人Invite IDとして発行し、`closed`時は対応digestを`BETA_INVITES`へ登録します。Worker/Container secret、CLI argument、workflow log、trace、screenshot、artifactへ渡しません。
 
 Pepper/HMAC/cursor署名secretはそれぞれ別の暗号学的random値を生成し、24文字以上にします。Application runtime/migration/deploy secretはGitHub repository-level secretではなく`staging` Environmentへ置きます。Terraform Plan/Apply用の独立credentialだけは§3のrepository secretへ置き、applicationへ渡しません。
 
@@ -262,7 +265,7 @@ Application紹介導線は任意です。Stagingで意図して公開する場�
 ## 8. First CI/CD deployment
 
 1. §3のTerraform repository secrets/variablesを設定する。GitHub planが対応する場合は`staging-terraform-apply` Required reviewerも設定する。
-2. §6–7の`staging` Environment secrets/variablesを設定する。Turnstile widgetがまだ存在しない初回だけ、`TURNSTILE_SITE_KEY`と`TURNSTILE_SECRET_KEY`はApply後に設定する。
+2. §6–7の`staging` Environment secrets/variablesと、post-deploy E2E専用`STAGING_E2E_INVITE_TOKEN`を設定する。Turnstile widgetがまだ存在しない初回だけ、`TURNSTILE_SITE_KEY`と`TURNSTILE_SECRET_KEY`はApply後に設定する。
 3. この変更を`main`へmergeし、対象commitの`CI` workflowが成功したことを確認する。
 4. `Terraform Plan Staging`の`Create saved Terraform plan` logを確認する。
 5. Plan summaryに表示されたrun IDを入力し、`TERRAFORM_APPLY_APPROVER`本人が`Terraform Apply Staging`をRun workflowする。Environment reviewerも設定した場合はpending deploymentを開き`Review deployments`から承認する。
@@ -272,15 +275,18 @@ Application紹介導線は任意です。Stagingで意図して公開する場�
 saved plan integrity / exact main SHA check
 -> owner approval
 -> terraform apply
+-> staging Chromium install
 -> frontend build
 -> Neon direct URLでmigration
 -> ephemeral secrets file作成
 -> Wrangler deploy Worker + Container + assets
 -> secrets file削除 (always)
 -> /healthz, /readyz smoke test
+-> unique anonymous accountのGoal / Cycle / Review / History critical journey
+-> 公開account-delete APIでaccount cleanup
 ```
 
-Migrationに失敗した場合、Wrangler deployへ進みません。Wrangler deploy後のsmoke test失敗では新deploymentが存在するため、Cloudflare Workers Builds/Deployments、Logs、Container statusをすぐ確認します。Application入力の初回設定漏れなどでDeployだけ失敗した場合は、値を修正して同じ`Deploy Staging` runのfailed jobをrerunします。`workflow_dispatch`はmain HEADのApplication再deploy/復旧用に残しますが、Terraform変更を迂回する用途には使いません。
+Migrationに失敗した場合、Wrangler deployへ進みません。Wrangler deploy後のsmoke testまたはcritical journey失敗では新deploymentが存在するため、Cloudflare Workers Builds/Deployments、Logs、Container statusをすぐ確認します。Critical journeyはtrace、screenshot、videoを保存せず、account cleanup失敗もworkflow失敗として扱います。Application入力の初回設定漏れなどでDeployだけ失敗した場合は、値を修正して同じ`Deploy Staging` runのfailed jobをrerunします。`workflow_dispatch`はmain HEADのApplication再deploy/復旧用に残しますが、Terraform変更を迂回する用途には使いません。
 
 Custom domainは [`cloudflare/wrangler.jsonc`](../cloudflare/wrangler.jsonc) の`custom_domain` routeから作られ、CloudflareがDNS recordとcertificateを管理します。同名DNS recordが既にある場合は内容・利用者を確認し、不要と確認できたrecordだけをDashboardから除去して再deployします。`workers.dev`とpreview URLは無効です。
 
@@ -292,8 +298,8 @@ Custom domainは [`cloudflare/wrangler.jsonc`](../cloudflare/wrangler.jsonc) の
 
 ## 9. Post-deploy verification
 
-- `https://cycle.staging.fukamu.matoruru.com/healthz` が200。
-- `https://cycle.staging.fukamu.matoruru.com/readyz` が200。
+- Deploy workflowのsmoke stepで`https://cycle.staging.fukamu.matoruru.com/healthz`と`/readyz`が200。
+- 続くcritical journeyがunique anonymous accountでGoal作成、P/D/C/A保存、Cycle完了、Review遷移、次Cycle開始、HistoryのGoal V1/Cycle 1/Cycle 2確認を行い、公開`DELETE /api/v1/account`でaccountを削除して成功する。
 - 配信されたHTMLに`<meta name="robots" content="noindex, nofollow">`があり、Stagingが検索engineへindex/follow拒否を指示している。
 - Browserでcertificate/mixed-content/CSP errorがない。
 - Anonymous bootstrapがTurnstile hostname/action検証を通る。
@@ -312,6 +318,8 @@ Application rollback:
 1. Cloudflare Dashboardで対象deployment、Container rollout、logsを確認する。
 2. Schemaが旧codeと互換な場合だけ、直前の成功した`Deploy Staging` workflow runを再実行する。Manual dispatchはcurrent main HEADだけを対象とする。
 3. Schemaに関係する場合は[`database.md`](database.md)のmigration-first/expand-contract規則に従う。DB resetや既存migration編集で復旧しない。
+
+Post-deploy critical journey失敗ではmigrationを自動downしません。Account cleanup失敗は[`operations.md`](operations.md#staging-critical-journey-cleanup)の公開delete再試行だけで処理し、raw DB correctionを行いません。Schema互換なら直前Wrangler deploymentへのrollbackを検討し、非互換ならforward fixします。
 
 OTLP collector障害だけを理由にApplicationをrollbackせず、bounded retry後の固定diagnosticとWorkers Logsを使って切り分けます。Exporter composition自体に新version固有の障害がある場合はstructured logsを維持できる直前versionへ戻します。Header credential漏洩が疑われる場合はexportを止め、provider側credentialをrotate / revokeし、必要なprovider-side telemetry削除手順を実行します。
 

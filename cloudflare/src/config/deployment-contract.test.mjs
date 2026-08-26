@@ -327,6 +327,7 @@ test("deployment contract is the exact repository handoff classification", () =>
       "name: Validate required deployment inputs",
       "name: Install JavaScript dependencies",
       "name: Verify dependency install preserved candidate tree",
+      "name: Install staging Chromium",
       "name: Build static frontend",
       "name: Validate Backend runtime configuration",
       "name: Re-verify deployment commit is still main HEAD",
@@ -336,6 +337,7 @@ test("deployment contract is the exact repository handoff classification", () =>
       "name: Deploy Worker, static assets, and Container",
       "name: Remove ephemeral Worker secrets file",
       "name: Smoke test",
+      "name: Run staging critical journey",
     ],
     "deployment step inventory",
   );
@@ -647,6 +649,20 @@ test("deployment contract is the exact repository handoff classification", () =>
     ].join("\n"),
     "deployment dependency tree guard step",
   );
+  const browserInstallStep = extractStep(workflow, "Install staging Chromium");
+  assertStepExecutionControls(
+    browserInstallStep,
+    "staging Chromium installation",
+    null,
+  );
+  assert.equal(
+    browserInstallStep.trimEnd(),
+    [
+      "      - name: Install staging Chromium",
+      "        run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match exec playwright install --with-deps chromium",
+    ].join("\n"),
+    "deployment staging Chromium installation step",
+  );
 
   const expectedRequiredInputs = requiredInputNames(contract);
   assertExactSet(
@@ -834,6 +850,37 @@ test("deployment contract is the exact repository handoff classification", () =>
     ].join("\n"),
     "deployment smoke test step",
   );
+  const stagingCriticalStep = extractStep(
+    workflow,
+    "Run staging critical journey",
+  );
+  assertStepExecutionControls(
+    stagingCriticalStep,
+    "deployment staging critical journey",
+    "bash",
+  );
+  assert.equal(
+    stagingCriticalStep.trimEnd(),
+    [
+      "      - name: Run staging critical journey",
+      "        shell: bash",
+      "        env:",
+      "          STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}",
+      "          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}",
+      "        run: bash ./scripts/check-staging-critical.sh",
+    ].join("\n"),
+    "deployment staging critical journey step",
+  );
+  assert.deepEqual(stepEnvironmentMappings(stagingCriticalStep), {
+    STAGING_BASE_URL: {
+      kind: "environment",
+      value: "PUBLIC_ORIGIN",
+    },
+    STAGING_E2E_INVITE_TOKEN: {
+      kind: "secret",
+      value: "STAGING_E2E_INVITE_TOKEN",
+    },
+  });
 
   const migrationStep = extractStep(workflow, "Apply database migrations");
   assertStepExecutionControls(
@@ -1143,6 +1190,12 @@ test("deployment contract is the exact repository handoff classification", () =>
   assert.deepEqual(stepEnvironmentMappings(postMigrationMainIdentityStep), {
     GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
   });
+  const browserInstallPosition = workflow.indexOf(
+    "      - name: Install staging Chromium\n",
+  );
+  const frontendBuildPosition = workflow.indexOf(
+    "      - name: Build static frontend\n",
+  );
   const backendValidationPosition = workflow.indexOf(
     "      - name: Validate Backend runtime configuration\n",
   );
@@ -1161,13 +1214,20 @@ test("deployment contract is the exact repository handoff classification", () =>
   const deploymentPosition = workflow.indexOf(
     "      - name: Deploy Worker, static assets, and Container\n",
   );
+  const smokeTestPosition = workflow.indexOf("      - name: Smoke test\n");
+  const stagingCriticalPosition = workflow.indexOf(
+    "      - name: Run staging critical journey\n",
+  );
   assert.ok(
-    backendValidationPosition < preMigrationMainIdentityPosition &&
+    browserInstallPosition < frontendBuildPosition &&
+      backendValidationPosition < preMigrationMainIdentityPosition &&
       preMigrationMainIdentityPosition < migrationPosition &&
       migrationPosition < postMigrationMainIdentityPosition &&
       postMigrationMainIdentityPosition < secretFilePosition &&
-      secretFilePosition < deploymentPosition,
-    "runtime validation, pre-migration guard, migration, post-migration guard, secret materialization, and traffic-switch order",
+      secretFilePosition < deploymentPosition &&
+      deploymentPosition < smokeTestPosition &&
+      smokeTestPosition < stagingCriticalPosition,
+    "browser install, runtime validation, migration, traffic switch, smoke, and staging critical journey order",
   );
 
   const expectedStepSecretSources = [
@@ -1176,6 +1236,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     "NEON_MIGRATION_DATABASE_URL",
     ...Object.values(workerSecretSources),
     ...Object.values(cloudflareDeploySecretSources),
+    "STAGING_E2E_INVITE_TOKEN",
   ].sort();
   assert.deepEqual(
     matches(deployJob, /\$\{\{ secrets\.([A-Z][A-Z0-9_]*) \}\}/g).sort(),
@@ -1195,6 +1256,10 @@ test("deployment contract is the exact repository handoff classification", () =>
     [
       "dependency installation",
       extractStep(workflow, "Install JavaScript dependencies"),
+    ],
+    [
+      "staging Chromium installation",
+      extractStep(workflow, "Install staging Chromium"),
     ],
     ["Frontend build", extractStep(workflow, "Build static frontend")],
   ]) {

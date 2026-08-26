@@ -38,12 +38,22 @@ Productionのbatch size、実行cadence、起動owner、job経路は未決です
 1. commit SHA、Terraform Plan/Apply runとapprover、Cloudflare deployment/version、Container rollout、migration workflow runをrelease記録へ残す。
 2. `/healthz`と`/readyz`が継続して200。
 3. Workers Logs/Tracesでstartup、DB connection、5xx、telemetry export failureが増えておらず、Backend span / metricが承認済みcollectorへ到達する。
-4. 匿名session、Goal Draft autosave、Goal開始、P/D/C/A autosave、Cycle完了後に次CycleではなくGoal Reviewが開くことを検証dataで確認。
-5. Reviewから目標維持/更新で次Cycleを開始でき、Goal TimelineでVersion markerとCompleted/Canceled CycleがGoal単位に表示されることを確認。
+4. Deploy workflowのself-cleaning critical journeyが、unique anonymous accountでGoal Draft autosave、Goal開始、P/D/C/A autosave、Cycle完了、Goal Review、次Cycle、HistoryのGoal V1/Cycle 1/Cycle 2まで成功したことを確認。
+5. 同journeyの公開account-delete API cleanupが成功し、session再確認が401へ収束したことを確認。Raw account ID、CSRF、Invite Token、Goal/Frame本文をrelease記録へ転記しない。
 6. Google login、Turnstile、Goal Refine、Action Generate/Refineを最小回数確認し、provider error/spendも確認。
 7. Neon connection/compute、latency、AI cost/budget、rate-limit拒否が決定済みthreshold内。
 
 Production userの本文、email、token、raw user ID/IPを確認用logへ追加しません。
+
+## Staging critical journey cleanup
+
+`Deploy Staging`は、GitHub repository・run ID・対象commitから同一run内で安定するUUIDv7 bootstrap IDを作り、Raw IDを表示しません。Browser pageを閉じてからsessionを更新し、CSRF、`X-Fukamu-Expected-User-ID`、`{ "confirmed": true }`を使う公開`DELETE /api/v1/account`だけでcleanupします。204とresponse identityを確認できるまで1、2、4、8、16秒のbackoffで再試行し、その後`GET /api/v1/session`が401であることを確認します。
+
+Cleanupが収束しない場合、workflowは失敗し、`sha256:<64 lowercase hex>`のaccount correlationだけをannotationへ記録します。Raw account ID、session/CSRF、Invite Token、Goal/Frame本文、response body、screenshot、trace、videoを記録しません。次の順で復旧します。
+
+1. `ANONYMOUS_BOOTSTRAP_TTL_MINUTES`内に同じfailed `Deploy Staging` jobをrerunする。同じGitHub run IDとcommitなので、未削除accountなら新しいsessionでresumeし、既に削除済みならcascade削除済みbootstrapから新しい検証accountを作り、いずれも同じ公開delete経路でcleanupする。
+2. 再試行中はWorkers Logsのroute template、status、固定error class/code、request/trace IDだけを確認し、hashed correlationからRaw IDを復元しようとしない。
+3. TTL内のrerunでも失敗する場合は新規deployを止め、schema互換なら直前Wrangler deploymentへのrollback、非互換ならforward fixを選ぶ。Migrationを自動downせず、SQLの手動DELETE/UPDATE、Raw DB correction、別の管理用削除経路を作らない。
 
 ## Logs / error investigation
 

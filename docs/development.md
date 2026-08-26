@@ -182,6 +182,12 @@ export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fu
 
 Playwright自身の既定portは55432です。このリポジトリのDocker例は5432なので、上記のように `TEST_DATABASE_URL` を明示してください。E2EではGoogle Identity、Turnstile、OpenAIのtest doubleを使い、外部APIを呼びません。
 
+### Staging post-deploy critical journey
+
+`./scripts/check-staging-critical.sh`は通常のlocal checkではなく、`Deploy Staging`が実際のStaging traffic切替とsmoke testの後にだけ実行します。`STAGING_BASE_URL`と`STAGING_E2E_INVITE_TOKEN`はGitHub `staging` Environmentからstep scopeで渡し、引数にはしません。HarnessはPlaywright test reporterを使わず、trace、screenshot、video、artifactを作らず、debug modeを無効化します。成功・失敗にかかわらず公開account-delete APIで検証accountを削除します。
+
+Localから日常的に実行せず、Production originやProduction dataへ向けません。障害調査でOperations ownerが直接実行する場合も、承認済みsecret managerから環境へ注入し、shell history、process argument、terminal recordingへRaw Invite Tokenを残さず、[`operations.md`](operations.md#staging-critical-journey-cleanup)のcleanup確認まで完了させます。
+
 ### Commit前の必須gate
 
 Commitへ含める変更をすべてstageし、unstaged/untracked fileがない状態で次を実行します。この1コマンドはNode/pnpm/Go/Terraformの標準version、frozen lockfile install、CI再利用・権限modelのnegative fixture、actionlint 1.7.12、文書・設定・securityを含む全scopeの品質check、CI設定のPlaywright E2Eを検証します。sqlc生成物は、検証開始時点から`sqlc generate`後に差分が増えないことも確認します。

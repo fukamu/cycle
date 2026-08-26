@@ -777,6 +777,8 @@ test_sqlc_runner
 test_clean
 test_reset_local_db
 test_admission_helpers
+node --test "${script_dir}/staging-critical.test.mjs"
+bash "${script_dir}/check-staging-critical.sh"
 bash "${script_dir}/check-ci-security-model.sh"
 bash "${script_dir}/check-security.sh"
 bash "${script_dir}/check-docs-config.sh"
