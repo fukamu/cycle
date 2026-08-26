@@ -6,13 +6,16 @@ on:
     branches: [main]
 
 permissions:
-  actions: read
   contents: read
-  pull-requests: read
 
 jobs:
   reuse_pr_ci:
     name: Reuse verified PR CI
+    if: github.event_name == 'push'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     outputs:
       reuse_pr_ci: ${{ steps.resolve.outputs.reuse_pr_ci }}
@@ -21,6 +24,8 @@ jobs:
       tested_tree: ${{ steps.resolve.outputs.tested_tree }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Resolve reusable PR CI attestation
         id: resolve
         shell: bash
@@ -48,41 +53,97 @@ jobs:
           fi
 
   workflow:
-    needs: reuse_pr_ci
-    if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
+    needs: [reuse_pr_ci, quality]
+    if: >-
+      always() &&
+      (github.event_name == 'pull_request' ||
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
+      needs.quality.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Test CI reuse resolver
         run: bash .github/scripts/resolve-ci-reuse.test.sh
       - name: Validate GitHub Actions workflows
         uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -color
-      - name: Validate Bash scripts
-        run: bash ./scripts/check-shell.sh
-
-  frontend:
+  quality:
+    name: Security, configuration, and documentation
     needs: reuse_pr_ci
-    if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
+    if: >-
+      always() &&
+      (github.event_name == 'pull_request' ||
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run security gates
+        run: bash ./scripts/check-security.sh
       - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
           runtime: node@24
           cache: true
           install: false
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter fukamu-cycle-frontend run format:check
-      - run: pnpm --filter fukamu-cycle-frontend run lint
-      - run: pnpm --filter fukamu-cycle-frontend run typecheck
-      - run: pnpm --filter fukamu-cycle-frontend test
-      - run: pnpm --filter fukamu-cycle-frontend run build
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify dependency install preserved candidate tree
+        run: |
+          set -euo pipefail
+          git diff --quiet --
+          git diff --cached --quiet --
+          untracked_files="$(git ls-files --others --exclude-standard)"
+          [[ -z "${untracked_files}" ]]
+      - name: Validate Bash scripts and negative fixtures
+        run: bash ./scripts/check-shell.sh
+      - name: Validate documentation
+        run: bash ./scripts/check-docs.sh
+      - name: Validate configuration parity
+        run: bash ./scripts/check-config-parity.sh
+
+  frontend:
+    needs: [reuse_pr_ci, quality]
+    if: >-
+      always() &&
+      (github.event_name == 'pull_request' ||
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
+      needs.quality.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
+        with:
+          runtime: node@24
+          cache: true
+          install: false
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify dependency install preserved candidate tree
+        run: |
+          set -euo pipefail
+          git diff --quiet --
+          git diff --cached --quiet --
+          untracked_files="$(git ls-files --others --exclude-standard)"
+          [[ -z "${untracked_files}" ]]
+      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run format:check
+      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run lint
+      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run typecheck
+      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match test
+      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
 
   backend:
-    needs: reuse_pr_ci
-    if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
+    needs: [reuse_pr_ci, quality]
+    if: >-
+      always() &&
+      (github.event_name == 'pull_request' ||
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
+      needs.quality.result == 'success'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -105,33 +166,50 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.6'
+          go-version: "1.26.6"
           cache-dependency-path: backend/go.sum
-      - run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+      - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
       - run: sqlc compile
       - run: sqlc generate
       - run: git diff --exit-code
+      - run: test -z "$(git ls-files --others --exclude-standard -- internal/infrastructure/postgres/generated)"
       - run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
-      - run: go test ./...
-      - run: go build ./cmd/server
-      - run: go build ./cmd/migrate
-      - run: go build ./cmd/configcheck
+      - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go vet ./...
+      - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go test ./...
+      - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build ./cmd/server
+      - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build ./cmd/migrate
+      - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build ./cmd/cleanup
+      - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build ./cmd/configcheck
 
   infrastructure:
-    needs: reuse_pr_ci
-    if: needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true'
+    needs: [reuse_pr_ci, quality]
+    if: >-
+      always() &&
+      (github.event_name == 'pull_request' ||
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
+      needs.quality.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
           runtime: node@24
           cache: true
           install: false
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify dependency install preserved candidate tree
+        run: |
+          set -euo pipefail
+          git diff --quiet --
+          git diff --cached --quiet --
+          untracked_files="$(git ls-files --others --exclude-standard)"
+          [[ -z "${untracked_files}" ]]
       - run: docker compose --file compose.local.yaml config --quiet
       - name: Audit Docker build contexts
         run: bash ./scripts/check-docker-context.sh
@@ -144,16 +222,18 @@ jobs:
         working-directory: infra/terraform/staging
       - run: terraform validate
         working-directory: infra/terraform/staging
-      - run: pnpm --filter fukamu-cycle-frontend run build
-      - run: pnpm --filter fukamu-cycle-cloudflare run check
-      - run: pnpm --filter fukamu-cycle-cloudflare run deploy:dry-run
+      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
+      - run: pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match run check
+      - run: pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match run deploy:dry-run
 
   e2e:
-    needs: [reuse_pr_ci, workflow, frontend, backend, infrastructure]
+    needs: [reuse_pr_ci, workflow, quality, frontend, backend, infrastructure]
     if: >-
       always() &&
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true' &&
+      (github.event_name == 'pull_request' ||
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
       needs.workflow.result == 'success' &&
+      needs.quality.result == 'success' &&
       needs.frontend.result == 'success' &&
       needs.backend.result == 'success' &&
       needs.infrastructure.result == 'success'
@@ -174,6 +254,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
           runtime: node@24
@@ -181,25 +263,34 @@ jobs:
           install: false
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.6'
+          go-version: "1.26.6"
           cache-dependency-path: backend/go.sum
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter fukamu-cycle-frontend exec playwright install --with-deps chromium
-      - run: pnpm --filter fukamu-cycle-frontend run build
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify dependency install preserved candidate tree
+        run: |
+          set -euo pipefail
+          git diff --quiet --
+          git diff --cached --quiet --
+          untracked_files="$(git ls-files --others --exclude-standard)"
+          [[ -z "${untracked_files}" ]]
+      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match exec playwright install --with-deps chromium
+      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
         env:
           VITE_GOOGLE_WEB_CLIENT_ID: fukamu-cycle-e2e-client
-      - run: pnpm --filter fukamu-cycle-frontend run test:e2e
+      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run test:e2e
         env:
           TEST_DATABASE_URL: postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable
 
   attest_pr_ci:
     name: Attest tested PR tree
-    needs: [reuse_pr_ci, workflow, frontend, backend, infrastructure, e2e]
+    needs:
+      [reuse_pr_ci, workflow, quality, frontend, backend, infrastructure, e2e]
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      needs.reuse_pr_ci.result == 'success' &&
+      needs.reuse_pr_ci.result == 'skipped' &&
       needs.workflow.result == 'success' &&
+      needs.quality.result == 'success' &&
       needs.frontend.result == 'success' &&
       needs.backend.result == 'success' &&
       needs.infrastructure.result == 'success' &&
@@ -209,6 +300,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Write tested tree attestation
         id: metadata
         shell: bash

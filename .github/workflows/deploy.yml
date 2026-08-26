@@ -19,6 +19,10 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.name == 'Terraform Apply Staging' &&
+       github.event.workflow_run.path == '.github/workflows/terraform-apply.yml' &&
+       github.event.workflow_run.event == 'workflow_dispatch' &&
+       github.event.workflow_run.status == 'completed' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
@@ -42,24 +46,61 @@ jobs:
             fi
             commit_sha="${GITHUB_SHA}"
           else
+            if [[ ! "${APPLY_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              echo "::error::Terraform Apply workflow run ID must be numeric: ${APPLY_RUN_ID}"
+              exit 1
+            fi
             artifacts_json="$(
               gh api \
                 -H 'Accept: application/vnd.github+json' \
                 "/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}/artifacts?per_page=100"
             )"
-            mapfile -t artifact_names < <(
-              jq -r \
-                '.artifacts[]
-                 | select(.expired == false)
-                 | .name
-                 | select(startswith("terraform-apply-staging-"))' \
+            artifact_name="$(
+              jq -ser \
+                --arg run_id "${APPLY_RUN_ID}" \
+                --arg prefix "terraform-apply-staging-" \
+                '
+                  if (
+                    length == 1 and
+                    (.[0] | type) == "object" and
+                    (.[0].total_count | type) == "number" and
+                    (.[0].total_count | floor) == .[0].total_count and
+                    .[0].total_count >= 0 and
+                    (.[0].artifacts | type) == "array" and
+                    .[0].total_count == (.[0].artifacts | length) and
+                    .[0].total_count <= 100 and
+                    all(.[0].artifacts[];
+                      (type == "object") and
+                      (.id | type) == "number" and
+                      (.id | floor) == .id and
+                      .id > 0 and
+                      (.name | type) == "string" and
+                      (.expired | type) == "boolean" and
+                      (.workflow_run | type) == "object" and
+                      (.workflow_run.id | type) == "number" and
+                      (.workflow_run.id | floor) == .workflow_run.id and
+                      (.workflow_run.id | tostring) == $run_id
+                    )
+                  ) then
+                    [
+                      .[0].artifacts[]
+                      | select(
+                          .expired == false and
+                          (.name | startswith($prefix))
+                        )
+                    ] as $matches
+                    | if ($matches | length) == 1 then
+                        $matches[0].name
+                      else
+                        error("expected exactly one deployment metadata artifact")
+                      end
+                  else
+                    error("invalid or paginated artifact response")
+                  end
+                ' \
                 <<< "${artifacts_json}"
-            )
-            if [[ "${#artifact_names[@]}" -ne 1 ]]; then
-              echo "::error::Expected exactly one Terraform Apply deployment metadata artifact in run ${APPLY_RUN_ID}."
-              exit 1
-            fi
-            commit_sha="${artifact_names[0]#terraform-apply-staging-}"
+            )"
+            commit_sha="${artifact_name#terraform-apply-staging-}"
           fi
 
           if [[ ! "${commit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -130,18 +171,6 @@ jobs:
       RATE_AI_PER_USER_MINUTE: ${{ vars.RATE_AI_PER_USER_MINUTE }}
       RATE_AI_PER_SESSION_MINUTE: ${{ vars.RATE_AI_PER_SESSION_MINUTE }}
       RATE_AI_PER_IP_MINUTE: ${{ vars.RATE_AI_PER_IP_MINUTE }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-      MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      SESSION_TOKEN_PEPPER: ${{ secrets.SESSION_TOKEN_PEPPER }}
-      CSRF_TOKEN_PEPPER: ${{ secrets.CSRF_TOKEN_PEPPER }}
-      BOOTSTRAP_ID_PEPPER: ${{ secrets.BOOTSTRAP_ID_PEPPER }}
-      RATE_LIMIT_HMAC_SECRET: ${{ secrets.RATE_LIMIT_HMAC_SECRET }}
-      CURSOR_SIGNING_SECRET: ${{ secrets.CURSOR_SIGNING_SECRET }}
-      TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
-      BETA_ADMISSION_COOKIE_KEY: ${{ secrets.BETA_ADMISSION_COOKIE_KEY }}
     steps:
       - name: Verify commit has successful CI
         shell: bash
@@ -151,18 +180,67 @@ jobs:
           set -euo pipefail
           successful_runs="$(
             gh api \
+              --method GET \
               -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${COMMIT_SHA}&branch=main&status=success&per_page=1" \
-              --jq '.total_count'
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="${COMMIT_SHA}" \
+              -f branch=main \
+              -f event=push \
+              -f status=completed \
+              -f per_page=100 \
+              | jq -er \
+                --arg commit_sha "${COMMIT_SHA}" \
+                --arg repository "${GITHUB_REPOSITORY}" \
+                '
+                  . as $root
+                  | if (
+                      ($root | type) == "object" and
+                      ($root.total_count | type) == "number" and
+                      $root.total_count >= 0 and
+                      ($root.workflow_runs | type) == "array" and
+                      $root.total_count == ($root.workflow_runs | length) and
+                      $root.total_count <= 100 and
+                      all($root.workflow_runs[];
+                        (type == "object") and
+                        (.name | type) == "string" and
+                        (.path | type) == "string" and
+                        (.event | type) == "string" and
+                        (.status | type) == "string" and
+                        (.conclusion | type) == "string" and
+                        (.head_sha | type) == "string" and
+                        (.head_branch | type) == "string" and
+                        (.head_repository | type) == "object" and
+                        (.head_repository.full_name | type) == "string"
+                      )
+                    ) then
+                      [
+                        $root.workflow_runs[]
+                        | select(
+                            .name == "CI" and
+                            .path == ".github/workflows/ci.yml" and
+                            .event == "push" and
+                            .status == "completed" and
+                            .conclusion == "success" and
+                            .head_sha == $commit_sha and
+                            .head_branch == "main" and
+                            .head_repository.full_name == $repository
+                          )
+                      ]
+                      | length
+                    else
+                      error("invalid CI workflow-run response")
+                    end
+                '
           )"
-          if [[ "${successful_runs}" -lt 1 ]]; then
-            echo "::error::No successful CI run found for main commit ${COMMIT_SHA}."
+          if [[ ! "${successful_runs}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::No exact successful main push CI run found for commit ${COMMIT_SHA}."
             exit 1
           fi
 
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.COMMIT_SHA }}
+          persist-credentials: false
 
       - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
         with:
@@ -177,11 +255,31 @@ jobs:
 
       - name: Validate required deployment inputs
         env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+          SESSION_TOKEN_PEPPER: ${{ secrets.SESSION_TOKEN_PEPPER }}
+          CSRF_TOKEN_PEPPER: ${{ secrets.CSRF_TOKEN_PEPPER }}
+          BOOTSTRAP_ID_PEPPER: ${{ secrets.BOOTSTRAP_ID_PEPPER }}
+          RATE_LIMIT_HMAC_SECRET: ${{ secrets.RATE_LIMIT_HMAC_SECRET }}
+          CURSOR_SIGNING_SECRET: ${{ secrets.CURSOR_SIGNING_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}
+          BETA_ADMISSION_COOKIE_KEY: ${{ secrets.BETA_ADMISSION_COOKIE_KEY }}
         run: node ./scripts/validate-deploy-inputs.mjs
 
       - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify dependency install preserved candidate tree
+        run: |
+          set -euo pipefail
+          git diff --quiet --
+          git diff --cached --quiet --
+          untracked_files="$(git ls-files --others --exclude-standard)"
+          [[ -z "${untracked_files}" ]]
 
       - name: Build static frontend
         env:
@@ -189,9 +287,10 @@ jobs:
           VITE_APP_REFERRAL_URL: ${{ env.APP_REFERRAL_URL }}
           VITE_GOOGLE_WEB_CLIENT_ID: ${{ env.GOOGLE_WEB_CLIENT_ID }}
           VITE_TURNSTILE_SITE_KEY: ${{ env.TURNSTILE_SITE_KEY }}
-        run: pnpm --filter fukamu-cycle-frontend run build
+        run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
 
       - name: Validate Backend runtime configuration
+        shell: bash
         working-directory: backend
         env:
           APP_ENV: production
@@ -199,23 +298,83 @@ jobs:
           STATIC_DIR: ""
           AI_PROVIDER: openai
           AI_PRICING_MODEL: ${{ env.AI_MODEL }}
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+          SESSION_TOKEN_PEPPER: ${{ secrets.SESSION_TOKEN_PEPPER }}
+          CSRF_TOKEN_PEPPER: ${{ secrets.CSRF_TOKEN_PEPPER }}
+          BOOTSTRAP_ID_PEPPER: ${{ secrets.BOOTSTRAP_ID_PEPPER }}
+          RATE_LIMIT_HMAC_SECRET: ${{ secrets.RATE_LIMIT_HMAC_SECRET }}
+          CURSOR_SIGNING_SECRET: ${{ secrets.CURSOR_SIGNING_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
           TURNSTILE_ENABLED: "true"
           TURNSTILE_EXPECTED_ACTION: anonymous_bootstrap
-        run: go run ./cmd/configcheck
+        run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go run ./cmd/configcheck
+
+      - name: Re-verify deployment commit is still main HEAD
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_main_sha="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
+          if [[ ! "${current_main_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Current main ref did not resolve to a valid commit SHA: ${current_main_sha}"
+            exit 1
+          fi
+          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
+            echo "::error::Deployment commit ${COMMIT_SHA} became stale before migration; current main is ${current_main_sha}."
+            exit 1
+          fi
 
       - name: Apply database migrations
+        shell: bash
         working-directory: backend
         env:
-          DATABASE_URL: ${{ env.MIGRATION_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}
           MIGRATIONS_DIR: migrations
-        run: go run ./cmd/migrate
+        run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go run ./cmd/migrate
+
+      - name: Re-verify deployment commit after migrations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_main_sha="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
+          if [[ ! "${current_main_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Current main ref did not resolve to a valid commit SHA: ${current_main_sha}"
+            exit 1
+          fi
+          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
+            echo "::error::Deployment commit ${COMMIT_SHA} became stale after migration; refusing secret materialization and traffic switch. Current main is ${current_main_sha}."
+            exit 1
+          fi
 
       - name: Create ephemeral Worker secrets file
         shell: bash
         env:
           SECRETS_FILE: ${{ runner.temp }}/fukamu-cycle-worker-secrets.json
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+          SESSION_TOKEN_PEPPER: ${{ secrets.SESSION_TOKEN_PEPPER }}
+          CSRF_TOKEN_PEPPER: ${{ secrets.CSRF_TOKEN_PEPPER }}
+          BOOTSTRAP_ID_PEPPER: ${{ secrets.BOOTSTRAP_ID_PEPPER }}
+          RATE_LIMIT_HMAC_SECRET: ${{ secrets.RATE_LIMIT_HMAC_SECRET }}
+          CURSOR_SIGNING_SECRET: ${{ secrets.CURSOR_SIGNING_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+          BETA_ADMISSION_COOKIE_KEY: ${{ secrets.BETA_ADMISSION_COOKIE_KEY }}
         run: |
           node - <<'NODE'
           const fs = require("node:fs");
@@ -230,6 +389,9 @@ jobs:
 
       - name: Deploy Worker, static assets, and Container
         shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
           variable_names=(
@@ -259,7 +421,7 @@ jobs:
             )
           fi
           variable_args+=(--var "AI_PRICING_MODEL:${AI_MODEL}")
-          pnpm --filter fukamu-cycle-cloudflare exec wrangler deploy \
+          pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \
             "${variable_args[@]}" \
             --secrets-file "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json" \
             --containers-rollout=immediate

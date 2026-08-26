@@ -5592,7 +5592,7 @@ Thresholdは運用Configurationとする。
 
 ## 43.1 Decision
 
-**[設計判断][MVP]** 日本語本文の可読性、初期表示速度、Font File Size、FOIT/FOUT、CLS、OS最適化を総合し、MVPは**日本語System Font優先のFont Stack**を採用し、日本語Web Fontを必須downloadにしない。
+**[設計判断]\[MVP]** 日本語本文の可読性、初期表示速度、Font File Size、FOIT/FOUT、CLS、OS最適化を総合し、MVPは**日本語System Font優先のFont Stack**を採用し、日本語Web Fontを必須downloadにしない。
 
 ```css
 :root,

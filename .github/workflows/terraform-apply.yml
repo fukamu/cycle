@@ -56,43 +56,106 @@ jobs:
               -H 'Accept: application/vnd.github+json' \
               "/repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}"
           )"
-          if ! jq -e \
-            --arg repository "${GITHUB_REPOSITORY}" \
-            '.name == "Terraform Plan Staging" and
-             .path == ".github/workflows/terraform-plan.yml" and
-             .conclusion == "success" and
-             .head_branch == "main" and
-             .head_repository.full_name == $repository' \
-            <<< "${plan_run_json}" > /dev/null; then
-            echo "::error::Run ${PLAN_RUN_ID} is not a successful main Terraform Plan Staging run from this repository."
-            exit 1
-          fi
+          plan_head_sha="$(
+            jq -ser \
+              --arg run_id "${PLAN_RUN_ID}" \
+              --arg repository "${GITHUB_REPOSITORY}" \
+              '
+                if (
+                  length == 1 and
+                  (.[0] | type) == "object" and
+                  (.[0].id | type) == "number" and
+                  (.[0].id | floor) == .[0].id and
+                  .[0].id > 0 and
+                  (.[0].id | tostring) == $run_id and
+                  (.[0].name | type) == "string" and
+                  .[0].name == "Terraform Plan Staging" and
+                  (.[0].path | type) == "string" and
+                  .[0].path == ".github/workflows/terraform-plan.yml" and
+                  (.[0].event | type) == "string" and
+                  (.[0].event == "workflow_run" or
+                   .[0].event == "workflow_dispatch") and
+                  (.[0].status | type) == "string" and
+                  .[0].status == "completed" and
+                  (.[0].conclusion | type) == "string" and
+                  .[0].conclusion == "success" and
+                  (.[0].head_sha | type) == "string" and
+                  (.[0].head_sha | test("^[0-9a-f]{40}$")) and
+                  (.[0].head_branch | type) == "string" and
+                  .[0].head_branch == "main" and
+                  (.[0].head_repository | type) == "object" and
+                  (.[0].head_repository.full_name | type) == "string" and
+                  .[0].head_repository.full_name == $repository
+                ) then
+                  .[0].head_sha
+                else
+                  error("invalid Terraform Plan workflow run response")
+                end
+              ' \
+              <<< "${plan_run_json}"
+          )"
 
           artifacts_json="$(
             gh api \
               -H 'Accept: application/vnd.github+json' \
               "/repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}/artifacts?per_page=100"
           )"
-          mapfile -t artifact_names < <(
-            jq -r \
-              '.artifacts[]
-               | select(.expired == false)
-               | .name
-               | select(startswith("terraform-plan-staging-"))' \
+          artifact_name="$(
+            jq -ser \
+              --arg run_id "${PLAN_RUN_ID}" \
+              --arg prefix "terraform-plan-staging-" \
+              '
+                if (
+                  length == 1 and
+                  (.[0] | type) == "object" and
+                  (.[0].total_count | type) == "number" and
+                  (.[0].total_count | floor) == .[0].total_count and
+                  .[0].total_count >= 0 and
+                  (.[0].artifacts | type) == "array" and
+                  .[0].total_count == (.[0].artifacts | length) and
+                  .[0].total_count <= 100 and
+                  all(.[0].artifacts[];
+                    (type == "object") and
+                    (.id | type) == "number" and
+                    (.id | floor) == .id and
+                    .id > 0 and
+                    (.name | type) == "string" and
+                    (.expired | type) == "boolean" and
+                    (.workflow_run | type) == "object" and
+                    (.workflow_run.id | type) == "number" and
+                    (.workflow_run.id | floor) == .workflow_run.id and
+                    (.workflow_run.id | tostring) == $run_id
+                  )
+                ) then
+                  [
+                    .[0].artifacts[]
+                    | select(
+                        .expired == false and
+                        (.name | startswith($prefix))
+                      )
+                  ] as $matches
+                  | if ($matches | length) == 1 then
+                      $matches[0].name
+                    else
+                      error("expected exactly one saved Terraform plan artifact")
+                    end
+                else
+                  error("invalid or paginated artifact response")
+                end
+              ' \
               <<< "${artifacts_json}"
-          )
-          if [[ "${#artifact_names[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one unexpired staging Terraform plan artifact in run ${PLAN_RUN_ID}."
-            exit 1
-          fi
+          )"
 
-          artifact_name="${artifact_names[0]}"
           commit_sha="${artifact_name#terraform-plan-staging-}"
           if [[ ! "${commit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Plan artifact name does not contain a valid commit SHA: ${artifact_name}"
             exit 1
           fi
 
+          if [[ "${commit_sha}" != "${plan_head_sha}" ]]; then
+            echo "::error::Plan artifact commit ${commit_sha} does not match workflow run head ${plan_head_sha}."
+            exit 1
+          fi
           current_main_sha="$(
             gh api \
               -H 'Accept: application/vnd.github+json' \
@@ -149,6 +212,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.COMMIT_SHA }}
+          persist-credentials: false
 
       - name: Download approved saved plan
         uses: actions/download-artifact@v8
@@ -214,6 +278,27 @@ jobs:
       - name: Initialize Terraform
         working-directory: infra/terraform/staging
         run: terraform init -input=false -backend-config="${RUNNER_TEMP}/fukamu-cycle-staging-backend.hcl"
+
+      - name: Re-verify approved plan is still main HEAD
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_main_sha="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
+          if [[ ! "${current_main_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Current main ref did not resolve to a valid commit SHA: ${current_main_sha}"
+            exit 1
+          fi
+          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
+            echo "::error::Approved plan commit ${COMMIT_SHA} became stale before apply; current main is ${current_main_sha}."
+            exit 1
+          fi
 
       - name: Apply approved saved plan
         working-directory: infra/terraform/staging

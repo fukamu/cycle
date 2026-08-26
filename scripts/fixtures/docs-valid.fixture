@@ -1,0 +1,16 @@
+# Documentation fixture
+
+[Inline guide](docs/guide.md#quick-start)
+
+[Reference guide][guide]
+
+[guide]: docs/guide.md#quick-start
+
+```text
+[ignored link](missing.md)
+```
+
+```mermaid
+flowchart LR
+    A[Start] --> B[Done]
+```

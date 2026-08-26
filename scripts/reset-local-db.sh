@@ -112,7 +112,7 @@ host_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "54
 [[ "${host_port}" =~ ^[0-9]+$ ]] \
   || die "Container '${container_name}' does not expose PostgreSQL to a local host port. No database was changed."
 
-go_version="$(go env GOVERSION)"
+go_version="$(GOENV=off GOTOOLCHAIN=local go env GOVERSION)"
 go_version="${go_version#go}"
 [[ "${go_version}" == "1.26.6" ]] \
   || die "Go 1.26.6 is required before reset so migrations can run. No database was changed."
@@ -129,7 +129,8 @@ encoded_password="$(urlencode "${postgres_password}")"
 database_url="postgres://${encoded_user}:${encoded_password}@127.0.0.1:${host_port}/${database_name}?sslmode=disable"
 (
   cd -- "${repo_root}/backend"
-  DATABASE_URL="${database_url}" MIGRATIONS_DIR=migrations go run ./cmd/migrate
+  GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly \
+    DATABASE_URL="${database_url}" MIGRATIONS_DIR=migrations go run ./cmd/migrate
 ) || die "Migration failed. The local database exists but may be empty or partially migrated."
 
 printf "Local database '%s' was recreated and migrated.\n" "${database_name}"

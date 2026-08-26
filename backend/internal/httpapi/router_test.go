@@ -64,12 +64,12 @@ func TestPathUUIDValidationRejectsOtherUUIDVersions(t *testing.T) {
 
 func TestIdempotencyKeyRequiresCanonicalUUIDv7(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/", nil)
-	request.Header.Set("Idempotency-Key", "123e4567-e89b-42d3-a456-426614174000")
+	request.Header.Set("Idempotency-Key", "00000000-0000-4000-8000-000000000000")
 	if got := idempotencyKey(request); got != "" {
 		t.Fatalf("UUID v4 key = %q", got)
 	}
-	request.Header.Set("Idempotency-Key", "0198c20b-7b95-7000-8000-000000000001")
-	if got := idempotencyKey(request); got != "0198c20b-7b95-7000-8000-000000000001" {
+	request.Header.Set("Idempotency-Key", "00000000-0000-7000-8000-000000000000")
+	if got := idempotencyKey(request); got != "00000000-0000-7000-8000-000000000000" {
 		t.Fatalf("UUID v7 key = %q", got)
 	}
 }

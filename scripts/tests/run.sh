@@ -24,6 +24,21 @@ assert_file_contains() {
     || fail "Expected ${file} to contain: ${expected}"
 }
 
+assert_lines_in_order() {
+  local file="$1"
+  shift
+  local previous=0
+  local expected
+  local line_number
+  for expected in "$@"; do
+    line_number="$(awk -v expected="${expected}" '$0 == expected { print NR; exit }' "${file}")"
+    [[ -n "${line_number}" ]] || fail "Expected ${file} to contain: ${expected}"
+    ((line_number > previous)) \
+      || fail "Expected ${file} line after the preceding contract: ${expected}"
+    previous="${line_number}"
+  done
+}
+
 assert_failure() {
   local description="$1"
   shift
@@ -67,9 +82,11 @@ EOF
   cat >"${bin}/go" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ "${GOENV:-}" == "off" && "${GOTOOLCHAIN:-}" == "local" ]]
 if [[ "${1:-}" == "env" && "${2:-}" == "GOVERSION" ]]; then
   printf '%s\n' 'go1.26.6'
 else
+  [[ "${GOWORK:-}" == "off" && "${GOFLAGS:-}" == "-mod=readonly" ]]
   printf 'go %s\n' "$*" >>"${TEST_COMMAND_LOG}"
 fi
 EOF
@@ -85,7 +102,7 @@ EOF
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
     bash "${fixture}/scripts/setup.sh" >/dev/null
   assert_file_contains "${log}" "pnpm install --frozen-lockfile"
-  assert_file_contains "${log}" "pnpm --filter fukamu-cycle-cloudflare run types"
+  assert_file_contains "${log}" "pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match run types"
   assert_file_contains "${log}" "go mod download"
 
   assert_failure "setup with wrong pnpm version" \
@@ -152,11 +169,11 @@ EOF
 
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
     bash "${fixture}/scripts/check.sh" --scope frontend >/dev/null
-  assert_file_contains "${log}" "--filter fukamu-cycle-frontend run format:check"
-  assert_file_contains "${log}" "--filter fukamu-cycle-frontend run lint"
-  assert_file_contains "${log}" "--filter fukamu-cycle-frontend run typecheck"
-  assert_file_contains "${log}" "--filter fukamu-cycle-frontend test"
-  assert_file_contains "${log}" "--filter fukamu-cycle-frontend run build"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend --fail-if-no-match run format:check"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend --fail-if-no-match run lint"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend --fail-if-no-match run typecheck"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend --fail-if-no-match test"
+  assert_file_contains "${log}" "--filter fukamu-cycle-frontend --fail-if-no-match run build"
   assert_failure "E2E with a partial scope" \
     bash "${fixture}/scripts/check.sh" --scope frontend --e2e
   assert_failure "unknown check scope" \
@@ -164,9 +181,170 @@ EOF
   pass "check runs the frontend contract and rejects unsafe E2E scope"
 }
 
+test_full_check_quality_order() {
+  local fixture
+  fixture="$(new_fixture full-check-order)"
+  local bin="${fixture}/bin"
+  local log="${fixture}/commands.log"
+  mkdir -p -- \
+    "${bin}" \
+    "${fixture}/node_modules" \
+    "${fixture}/frontend/dist" \
+    "${fixture}/backend/internal/infrastructure/postgres/generated" \
+    "${fixture}/infra/terraform/staging" \
+    "${fixture}/cloudflare"
+  touch "${fixture}/frontend/dist/index.html"
+
+  cat >"${fixture}/scripts/check-security.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'security' >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${fixture}/scripts/check-docs.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'docs' >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${fixture}/scripts/check-config-parity.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'config' >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${fixture}/scripts/invoke-sqlc.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'sqlc %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${fixture}/scripts/check-docker-context.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'docker-context' >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${fixture}/scripts/check-shell.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'shell' >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${bin}/pnpm" <<'EOF'
+#!/usr/bin/env bash
+printf 'pnpm %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${bin}/go" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${GOENV:-}" == "off" ]]
+[[ "${GOWORK:-}" == "off" ]]
+[[ "${GOTOOLCHAIN:-}" == "local" ]]
+[[ "${GOFLAGS:-}" == "-mod=readonly" ]]
+printf 'go %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${bin}/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+for trusted_argument in \
+  --no-pager \
+  -c core.fsmonitor=false \
+  -c core.untrackedCache=false \
+  -c core.hooksPath=/dev/null; do
+  [[ "${1:-}" == "${trusted_argument}" ]]
+  shift
+done
+[[ "$*" == 'ls-files --others --exclude-standard -- internal/infrastructure/postgres/generated' ]]
+printf 'git %s\n' "$*" >>"${fixture_root}/commands.log"
+EOF
+  cat >"${bin}/gofmt" <<'EOF'
+#!/usr/bin/env bash
+printf 'gofmt %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "context" && "${2:-}" == "inspect" ]]; then
+  printf '%s\n' 'unix:///var/run/docker.sock'
+else
+  printf 'docker %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+fi
+EOF
+  cat >"${bin}/terraform" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "version" && "${2:-}" == "-json" ]]; then
+  printf '%s\n' '{"terraform_version":"1.15.8"}'
+else
+  printf 'terraform %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+fi
+EOF
+  chmod +x \
+    "${fixture}/scripts/check-security.sh" \
+    "${fixture}/scripts/check-docs.sh" \
+    "${fixture}/scripts/check-config-parity.sh" \
+    "${fixture}/scripts/invoke-sqlc.sh" \
+    "${fixture}/scripts/check-docker-context.sh" \
+    "${fixture}/scripts/check-shell.sh" \
+    "${bin}/pnpm" "${bin}/go" "${bin}/git" "${bin}/gofmt" \
+    "${bin}/docker" "${bin}/terraform"
+
+  PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    bash "${fixture}/scripts/check.sh" >/dev/null
+  [[ "$(sed -n '1,3p' "${log}")" == $'security\ndocs\nconfig' ]] \
+    || fail "full check did not run security, documentation, and configuration before candidate commands"
+  assert_lines_in_order "${log}" \
+    "security" \
+    "docs" \
+    "config" \
+    "pnpm --filter fukamu-cycle-frontend --fail-if-no-match run format:check" \
+    "go vet ./..." \
+    "docker-context"
+  pass "full check runs security first and all repository quality gates before candidate commands"
+}
+
+test_shell_file_inventory_failure() {
+  local fixture
+  fixture="$(new_fixture shell-file-inventory)"
+  local bin="${fixture}/bin"
+  local tmpdir="${fixture}/tmp"
+  mkdir -p -- "${bin}" "${tmpdir}" "${fixture}/.github/scripts"
+  printf '%s\n' '#!/usr/bin/env bash' >"${fixture}/.github/scripts/fixture.sh"
+
+  cat >"${bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+if [[ "${1:-}" == "context" && "${2:-}" == "inspect" ]]; then
+  printf '%s\n' 'unix:///var/run/docker.sock'
+else
+  : >"${fixture_root}/unexpected-shell-scanner-run"
+fi
+EOF
+  cat >"${bin}/find" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+printf '%s\0' "${fixture_root}/scripts/check-shell.sh"
+exit 23
+EOF
+  chmod 700 "${bin}/docker" "${bin}/find"
+
+  assert_failure \
+    "shell check with a partial failed file inventory" \
+    env PATH="${bin}:${PATH}" TMPDIR="${tmpdir}" \
+    bash "${fixture}/scripts/check-shell.sh"
+  [[ ! -e "${fixture}/unexpected-shell-scanner-run" ]] \
+    || fail "shell check consumed a partial failed inventory"
+  if find "${tmpdir}" -mindepth 1 -print -quit | grep -q .; then
+    fail "shell check did not clean its failed inventory manifest"
+  fi
+  pass "shell check fails closed before scanners when file enumeration returns partial output"
+}
+
 test_backend_command_build_targets() {
   assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    go build -o \"\${repo_root}/.tmp/check/cleanup\" ./cmd/cleanup"
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go vet ./..."
+  assert_file_contains "${repo_root}/scripts/check.sh" \
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go test -count=1 ./..."
+  assert_file_contains "${repo_root}/scripts/check.sh" \
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o \"\${repo_root}/.tmp/check/server\" ./cmd/server"
+  assert_file_contains "${repo_root}/scripts/check.sh" \
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o \"\${repo_root}/.tmp/check/migrate\" ./cmd/migrate"
+  assert_file_contains "${repo_root}/scripts/check.sh" \
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o \"\${repo_root}/.tmp/check/cleanup\" ./cmd/cleanup"
+  assert_file_contains "${repo_root}/scripts/check.sh" \
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o \"\${repo_root}/.tmp/check/configcheck\" ./cmd/configcheck"
   pass "check builds the retention cleanup maintenance command"
 }
 
@@ -181,22 +359,37 @@ test_before_commit_check() {
   cat >"${bin}/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'git %s\n' "$*" >>"${TEST_COMMAND_LOG}"
+fixture_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+for trusted_argument in \
+  --no-pager \
+  -c core.fsmonitor=false \
+  -c core.untrackedCache=false \
+  -c core.hooksPath=/dev/null; do
+  [[ "${1:-}" == "${trusted_argument}" ]]
+  shift
+done
+printf 'git %s\n' "$*" >>"${fixture_root}/commands.log"
 case "$*" in
-  'diff --cached --quiet --')
-    [[ "${FAKE_NO_STAGED_CHANGES:-false}" == "true" ]] && exit 0
+  'diff --no-ext-diff --no-textconv --cached --quiet --')
+    [[ -e "${fixture_root}/fake-staged-inspection-error" ]] && exit 128
+    [[ -e "${fixture_root}/fake-no-staged-changes" ]] && exit 0
     exit 1
     ;;
-  'diff --quiet --')
-    [[ "${FAKE_UNSTAGED_CHANGES:-false}" == "true" ]] && exit 1
+  'diff --no-ext-diff --no-textconv --quiet --')
+    [[ -e "${fixture_root}/fake-unstaged-changes" ]] && exit 1
     exit 0
     ;;
   'ls-files --others --exclude-standard')
-    [[ "${FAKE_UNTRACKED_FILES:-false}" == "true" ]] && printf '%s\n' 'untracked.txt'
+    [[ -e "${fixture_root}/fake-untracked-files" ]] && printf '%s\n' 'untracked.txt'
     exit 0
     ;;
   'write-tree') printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
-  'diff --check' | 'diff --cached --check') ;;
+  'diff --no-ext-diff --no-textconv --check' | 'diff --no-ext-diff --no-textconv --cached --check')
+    if [[ -e "${fixture_root}/fake-diff-check-secret-output" ]]; then
+      printf '%s\n' '+SENSITIVE_SENTINEL' >&2
+      exit 1
+    fi
+    ;;
   *) exit 1 ;;
 esac
 EOF
@@ -215,7 +408,11 @@ fi
 EOF
   cat >"${bin}/go" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
 [[ "${1:-}" == "env" && "${2:-}" == "GOVERSION" ]]
+[[ "${GOENV:-}" == "off" ]]
+[[ "${GOTOOLCHAIN:-}" == "local" ]]
+printf 'go env GOVERSION GOENV=%s GOTOOLCHAIN=%s\n' "${GOENV}" "${GOTOOLCHAIN}" >>"${TEST_COMMAND_LOG}"
 printf '%s\n' 'go1.26.6'
 EOF
   cat >"${bin}/docker" <<'EOF'
@@ -233,7 +430,11 @@ exit 0
 EOF
   cat >"${bin}/terraform" <<'EOF'
 #!/usr/bin/env bash
-exit 0
+if [[ "${1:-}" == "version" && "${2:-}" == "-json" ]]; then
+  printf '{"terraform_version":"%s"}\n' "${FAKE_TERRAFORM_VERSION:-1.15.8}"
+else
+  exit 0
+fi
 EOF
   cat >"${fixture}/.github/scripts/resolve-ci-reuse.test.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -243,22 +444,71 @@ EOF
 #!/usr/bin/env bash
 printf 'check CI=%s %s\n' "${CI:-}" "$*" >>"${TEST_COMMAND_LOG}"
 EOF
+  cat >"${fixture}/scripts/check-security.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' 'security' >>"${TEST_COMMAND_LOG}"
+[[ "${FAKE_SECURITY_FAILURE:-false}" != "true" ]]
+EOF
   chmod +x \
     "${bin}/git" "${bin}/node" "${bin}/pnpm" "${bin}/go" "${bin}/docker" \
     "${bin}/jq" "${bin}/terraform" "${fixture}/scripts/check.sh" \
+    "${fixture}/scripts/check-security.sh" \
     "${fixture}/.github/scripts/resolve-ci-reuse.test.sh"
 
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" TEST_DATABASE_URL="${test_database_url}" \
     bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
-  assert_file_contains "${log}" "pnpm install --frozen-lockfile"
+  assert_file_contains "${log}" "pnpm install --frozen-lockfile --ignore-scripts"
   assert_file_contains "${log}" "resolve-ci-reuse test"
   grep -Fq -- 'rhysd/actionlint:1.7.12 -color' "${log}" \
     || fail "before-commit check did not run pinned actionlint"
   assert_file_contains "${log}" "check CI=true --e2e"
-  [[ "$(grep -Fxc -- 'git diff --check' "${log}")" == "2" ]] \
+  assert_lines_in_order "${log}" \
+    "security" \
+    "git write-tree" \
+    "git diff --no-ext-diff --no-textconv --check" \
+    "git diff --no-ext-diff --no-textconv --cached --check" \
+    "go env GOVERSION GOENV=off GOTOOLCHAIN=local" \
+    "pnpm install --frozen-lockfile --ignore-scripts" \
+    "resolve-ci-reuse test" \
+    "docker run --rm --volume ${fixture}:/repo:ro --workdir /repo rhysd/actionlint:1.7.12 -color" \
+    "check CI=true --e2e"
+  [[ "$(grep -Fxc -- 'git diff --no-ext-diff --no-textconv --check' "${log}")" == "2" ]] \
     || fail "before-commit check did not validate unstaged whitespace before and after checks"
-  [[ "$(grep -Fxc -- 'git diff --cached --check' "${log}")" == "2" ]] \
+  [[ "$(grep -Fxc -- 'git diff --no-ext-diff --no-textconv --cached --check' "${log}")" == "2" ]] \
     || fail "before-commit check did not validate staged whitespace before and after checks"
+
+  # shellcheck disable=SC2016 # The exact source contract must remain literal.
+  assert_file_contains "${repo_root}/scripts/lib/common.sh" \
+    '  go_version="$(GOENV=off GOTOOLCHAIN=local go env GOVERSION)"'
+
+  : >"${log}"
+  printf '%s\n' 'go 99.0.0' 'toolchain go99.0.0' >"${fixture}/go.work"
+  assert_failure "security failure before candidate-selected Go toolchain probe" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    TEST_DATABASE_URL="${test_database_url}" FAKE_SECURITY_FAILURE=true \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  assert_file_contains "${log}" "security"
+  if grep -Fq -- "go env GOVERSION" "${log}"; then
+    fail "before-commit probed the candidate-selected Go toolchain before security passed"
+  fi
+  if grep -Fq -- "git diff --no-ext-diff --no-textconv --check" "${log}" || grep -Fq -- "git diff --no-ext-diff --no-textconv --cached --check" "${log}"; then
+    fail "before-commit inspected printable candidate diffs before security passed"
+  fi
+
+  : >"${log}"
+  touch "${fixture}/fake-diff-check-secret-output"
+  assert_failure "security failure before printable diff diagnostics" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    TEST_DATABASE_URL="${test_database_url}" FAKE_SECURITY_FAILURE=true \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  rm -- "${fixture}/fake-diff-check-secret-output"
+  if grep -Fq -- "git diff --no-ext-diff --no-textconv --check" "${log}" || grep -Fq -- "git diff --no-ext-diff --no-textconv --cached --check" "${log}"; then
+    fail "before-commit ran printable diff diagnostics after the secret gate failed"
+  fi
+  if grep -Fq -- '+SENSITIVE_SENTINEL' "${test_root}/last-output"; then
+    fail "before-commit exposed candidate content before the secret gate passed"
+  fi
 
   assert_failure "before-commit check without a disposable database" \
     env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" TEST_DATABASE_URL= \
@@ -267,18 +517,40 @@ EOF
     env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
     TEST_DATABASE_URL='postgres://user:password@database.example.com:5432/app_test' \
     bash "${fixture}/scripts/check-before-commit.sh"
+  assert_failure "before-commit check with wrong Terraform version" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    TEST_DATABASE_URL="${test_database_url}" FAKE_TERRAFORM_VERSION=1.15.7 \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  : >"${log}"
+  touch "${fixture}/fake-staged-inspection-error"
+  assert_failure "before-commit check with a staged inspection error" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    TEST_DATABASE_URL="${test_database_url}" \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  rm -- "${fixture}/fake-staged-inspection-error"
+  [[ "$(grep -Fxc -- 'security' "${log}")" == "1" ]] \
+    || fail "before-commit did not run exactly one secret gate before the staged inspection"
+  if grep -Fq -- 'go env GOVERSION' "${log}" || grep -Fq -- 'pnpm install' "${log}"; then
+    fail "before-commit continued to candidate-selected tools after an abnormal staged-diff status"
+  fi
+  touch "${fixture}/fake-no-staged-changes"
   assert_failure "before-commit check without staged changes" \
     env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
-    TEST_DATABASE_URL="${test_database_url}" FAKE_NO_STAGED_CHANGES=true \
+    TEST_DATABASE_URL="${test_database_url}" \
     bash "${fixture}/scripts/check-before-commit.sh"
+  rm -- "${fixture}/fake-no-staged-changes"
+  touch "${fixture}/fake-unstaged-changes"
   assert_failure "before-commit check with unstaged changes" \
     env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
-    TEST_DATABASE_URL="${test_database_url}" FAKE_UNSTAGED_CHANGES=true \
+    TEST_DATABASE_URL="${test_database_url}" \
     bash "${fixture}/scripts/check-before-commit.sh"
+  rm -- "${fixture}/fake-unstaged-changes"
+  touch "${fixture}/fake-untracked-files"
   assert_failure "before-commit check with untracked files" \
     env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
-    TEST_DATABASE_URL="${test_database_url}" FAKE_UNTRACKED_FILES=true \
+    TEST_DATABASE_URL="${test_database_url}" \
     bash "${fixture}/scripts/check-before-commit.sh"
+  rm -- "${fixture}/fake-untracked-files"
   assert_failure "unknown before-commit option" \
     bash "${fixture}/scripts/check-before-commit.sh" --quick
   pass "before-commit check validates the exact staged tree with the CI-equivalent gate"
@@ -423,8 +695,13 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == "env" && "${2:-}" == "GOVERSION" ]]; then
+  [[ "${GOENV:-}" == "off" && "${GOTOOLCHAIN:-}" == "local" ]]
   printf '%s\n' 'go1.26.6'
 elif [[ "${1:-}" == "run" ]]; then
+  [[ "${GOENV:-}" == "off" ]]
+  [[ "${GOWORK:-}" == "off" ]]
+  [[ "${GOTOOLCHAIN:-}" == "local" ]]
+  [[ "${GOFLAGS:-}" == "-mod=readonly" ]]
   expected='postgres://dev%20user:p%40ss%3Aword@127.0.0.1:55432/fukamu_cycle_test?sslmode=disable'
   [[ "${DATABASE_URL:-}" == "${expected}" && "${MIGRATIONS_DIR:-}" == "migrations" ]]
   printf 'go %s\n' "$*" >>"${TEST_COMMAND_LOG}"
@@ -491,6 +768,8 @@ test_admission_helpers() {
 test_setup
 test_import_env
 test_frontend_check
+test_full_check_quality_order
+test_shell_file_inventory_failure
 test_backend_command_build_targets
 test_before_commit_check
 test_local_app
@@ -498,5 +777,8 @@ test_sqlc_runner
 test_clean
 test_reset_local_db
 test_admission_helpers
+bash "${script_dir}/check-ci-security-model.sh"
+bash "${script_dir}/check-security.sh"
+bash "${script_dir}/check-docs-config.sh"
 
 printf '%s\n' "Bash script tests passed."

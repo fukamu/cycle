@@ -68,8 +68,11 @@ forbidden_paths=(
   "infra/terraform/staging/backend.hcl"
   "infra/terraform/staging/fukamu-cycle-staging-backend.hcl"
   "infra/terraform/staging/terraform.tfvars"
+  "infra/terraform/staging/terraform.tfvars.json"
   "infra/terraform/staging/audit.tfvars"
   "infra/terraform/staging/audit.tfvars.json"
+  "infra/terraform/staging/override.auto.tfvars"
+  "infra/terraform/staging/override.auto.tfvars.json"
   "infra/terraform/staging/crash.log"
   "infra/terraform/staging/crash.context-audit.log"
 )

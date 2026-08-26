@@ -53,11 +53,11 @@ if [[ "${skip_install}" == "false" ]]; then
     cd -- "${repo_root}"
     pnpm install --frozen-lockfile
     XDG_CONFIG_HOME="${repo_root}/cloudflare/.wrangler/config" \
-      pnpm --filter fukamu-cycle-cloudflare run types
+      pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match run types
   )
   (
     cd -- "${repo_root}/backend"
-    go mod download
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go mod download
   )
 fi
 

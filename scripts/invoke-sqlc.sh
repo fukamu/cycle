@@ -119,7 +119,8 @@ for command_name in "${commands[@]}"; do
       if [[ ! -x "${managed_sqlc}" ]]; then
         printf 'Building temporary sqlc %s tool with Go.\n' "${required_version}"
         mkdir -p -- "${managed_tool_dir}"
-        GOBIN="${managed_tool_dir}" go install "${go_package}"
+        GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly \
+          GOBIN="${managed_tool_dir}" go install "${go_package}"
       fi
       printf 'Running sqlc %s with temporary tool %s.\n' "${command_name}" "${managed_sqlc}"
       "${managed_sqlc}" "${command_name}"
