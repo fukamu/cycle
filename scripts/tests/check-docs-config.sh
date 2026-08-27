@@ -166,12 +166,65 @@ write_valid_design_trace() {
   done
 }
 
+enable_operational_documentation_topology() {
+  local fixture="$1"
+  local omitted_target="${2:-}"
+  local target
+  mkdir -p -- "${fixture}/config"
+  printf '%s\n' '{}' >"${fixture}/config/deployment-contract.json"
+  printf '%s\n' '# Repository instructions' >"${fixture}/AGENTS.md"
+  write_valid_design_trace "${fixture}"
+  for target in \
+    'docs/closed-beta-admission.md' \
+    'docs/database.md' \
+    'docs/development.md' \
+    'docs/environment.md' \
+    'docs/operations.md'; do
+    printf '# %s\n' "${target}" >"${fixture}/${target}"
+  done
+  for target in \
+    'AGENTS.md' \
+    'docs/closed-beta-admission.md' \
+    'docs/database.md' \
+    'docs/design.md' \
+    'docs/development.md' \
+    'docs/environment.md' \
+    'docs/operations.md'; do
+    [[ "${target}" == "${omitted_target}" ]] && continue
+    printf '[Canonical owner](%s)\n' "${target}" >>"${fixture}/README.md"
+  done
+  git -C "${fixture}" add --all \
+    || fail "operational documentation fixture update failed"
+}
+
 test_docs_gate() {
   local fixture
   local output
   fixture="$(new_docs_fixture valid)"
   bash "${fixture}/scripts/check-docs.sh" >/dev/null \
     || fail "documentation gate rejected parser-semantic links, headings, comments, escapes, newlines, or fences"
+
+  fixture="$(new_docs_fixture operational-topology)"
+  enable_operational_documentation_topology "${fixture}"
+  bash "${fixture}/scripts/check-docs.sh" >/dev/null \
+    || fail "documentation gate rejected the canonical operational navigation"
+
+  fixture="$(new_docs_fixture missing-operational-owner-link)"
+  enable_operational_documentation_topology "${fixture}" 'docs/operations.md'
+  assert_failure_contains \
+    "README missing a canonical operational owner" \
+    "README_NAVIGATION_MISSING" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture obsolete-operational-document)"
+  enable_operational_documentation_topology "${fixture}"
+  printf '%s\n' '# Obsolete deployment document' >"${fixture}/docs/deployment.md"
+  git -C "${fixture}" add --all \
+    || fail "obsolete operational document fixture update failed"
+  assert_failure_contains \
+    "obsolete operational document" \
+    "OBSOLETE_OPERATIONAL_DOCUMENT" \
+    bash "${fixture}/scripts/check-docs.sh"
 
   fixture="$(new_docs_fixture ignored-markdown-source)"
   mkdir -p -- "${fixture}/.vscode"

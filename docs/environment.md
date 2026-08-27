@@ -1,6 +1,6 @@
 # 環境変数
 
-この文書は環境変数の運用上の一覧です。Typed validationとdefaultは [`backend/internal/config/config.go`](../backend/internal/config/config.go)、Cloudflareへの受け渡しは [`cloudflare/src/index.ts`](../cloudflare/src/index.ts)、deploy入力の分類とmappingは [`deployment-contract.json`](../config/deployment-contract.json) が実装根拠です。Deploy workflowはこのcontractと同じBackend config checker、Closed Beta parserを実行します。上位仕様は [`design.md`](design.md) です。
+この文書は環境変数名、意味、scope、secret / public分類の運用上のSource of Truthです。Typed validationとdefaultは [`backend/internal/config/config.go`](../backend/internal/config/config.go)、Cloudflareへの受け渡しは [`cloudflare/src/index.ts`](../cloudflare/src/index.ts)、deploy入力の分類とmappingは [`deployment-contract.json`](../config/deployment-contract.json) が実装根拠です。Deploy workflowはこのcontractと同じBackend config checker、Closed Beta parserを実行します。上位仕様は [`design.md`](design.md)、bootstrapとrelease手順は [`operations.md`](operations.md) です。
 
 ## Environment / secret rules
 
@@ -27,7 +27,7 @@ Closed Beta AdmissionはCloudflare Workerだけが使用する一時的な公開
 
 ## Backend runtime
 
-Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](deployment.md) のinput sheetに従い全項目をGitHub Environmentへ明示します。
+Stagingではdefaultを承認済み運用値とみなさず、[`operations.md`のDeployment input sheet](operations.md#deployment-input-sheet)に従い全項目をGitHub Environmentへ明示します。
 
 | Variable | Purpose / code default | Requirement | Exposure / Staging source |
 |---|---|---|---|

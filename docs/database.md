@@ -25,6 +25,18 @@ Migration runnerは `DATABASE_URL` と、任意の `MIGRATIONS_DIR`（default `m
 
 Migration runnerは、正常に適用した各fileについて`migration_version`、`migration_direction`、`migration_file`、`migration_duration_ms`をJSON logへ記録します。完了logには`migration_applied_count`と`migration_no_change`を記録し、未適用fileがなかった実行も判別できます。Database URL、SQL本文、接続credentialはlogへ記録しません。
 
+## Local PostgreSQL
+
+ローカルにPostgreSQLがなければ、Repositoryで固定したimageを使って開発DBを起動できます。
+
+```bash
+docker run --name fukamu-cycle-postgres -e POSTGRES_USER=fukamu_cycle -e POSTGRES_PASSWORD=fukamu_cycle -e POSTGRES_DB=fukamu_cycle -p 5432:5432 -d postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
+```
+
+同名containerが停止中なら、`docker inspect --format '{{.Config.Image}}' fukamu-cycle-postgres`で上のexact imageと一致することを確認した場合だけ`docker start fukamu-cycle-postgres`を使います。異なるimageは再利用せず、保持dataの要否を確認するまでremoveしません。
+
+PostgreSQL 18以降の公式imageは`PGDATA=/var/lib/postgresql/18/docker`を使い、volume mount先が`/var/lib/postgresql`へ変わりました。`compose.local.yaml`の破棄可能DBも親directoryへtmpfsをmountします。17以前の`/var/lib/postgresql/data`を新規設定へ流用しません。
+
 ## Schema変更手順
 
 1. 変更が保存データ、ユーザー挙動、API制約、認証・削除仕様に影響するか確認する。影響する場合は、先に [`design.md`](design.md) との整合性と更新要否を判断する。
@@ -94,6 +106,20 @@ export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fu
 `createdb` は初回だけです。integration testはapplication tableにdown/up SQLを適用して初期化するため、保持したいデータがあるDBを絶対に指定しないでください。CIはjobごとのPostgreSQL service `fukamu_cycle_test` を使い、productionへ接続しません。
 
 `./scripts/local-app.sh`で起動する`fukamu_cycle_local`は、`fukamu-cycle-local` Compose project内のtmpfsだけを使う手動実機確認用DBです。Host port、既存の`fukamu-cycle-postgres`、`.env`の`DATABASE_URL`を使用せず、終了時に破棄されます。保持したいデータを保存しないでください。
+
+## Database troubleshooting
+
+Secret値や完全なDatabase URLを共有せず、対象environment、host / database名、migration version、固定error class / codeだけを記録します。
+
+| Symptom | Check | Response |
+|---|---|---|
+| Connection refused | PostgreSQL process / container、published port、`/readyz` | Local containerをstartし、`.env`のhost / port / databaseを合わせる |
+| Password authentication failed | Container作成時のuserとlocal envを値の転記なしで比較 | Local credentialを修正する。Production secretをlocalへcopyしない |
+| Database does not exist | Local database一覧 | 開発用または`*_test` DBを明示作成する。Testに開発DBを使わない |
+| Migration fileが見つからない | Working directory、`MIGRATIONS_DIR`、migration directory | `backend`から実行するか正しいdirectoryを設定する |
+| Migrationがdirty / error | Migration logと`schema_migrations`をread-only確認 | Productionでforce / down / resetせず、原因とbackupを確認してforward migrationまたは個別runbookで復旧 |
+| Integration testで開発dataが消えた | Shell historyのhost / database名だけを確認 | Test専用DBへ切り替え、失われたdataは既存backupから復元する |
+| Reset scriptが拒否 | `--dry-run`のguard error、Docker context / image / DB名 | Safety条件を満たすlocal Dockerだけで実行し、guardを削除しない |
 
 ## Seedと開発データ
 

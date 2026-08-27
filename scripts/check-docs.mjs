@@ -72,6 +72,7 @@ if (documents.size === 0 && problems.length === 0) {
 }
 
 validateDesignLegacyTrace();
+await validateOperationalDocumentationTopology();
 
 const mermaid = installedTools.has("mermaid") ? await loadMermaid() : null;
 if (mermaid !== null) await validateMermaidBlocks(mermaid);
@@ -285,6 +286,84 @@ function validateDesignLegacyTrace() {
     line,
     "DESIGN_LEGACY_TRACE_SEQUENCE",
     `legacy trace rows must contain each section from 0 through 54 exactly once in order; found [${values.join(", ")}]`,
+  );
+}
+
+async function validateOperationalDocumentationTopology() {
+  const retiredPaths = [
+    "docs/ai-evaluation.md",
+    "docs/deployment.md",
+    "docs/troubleshooting.md",
+    "infra/terraform/staging/README.md",
+  ];
+  for (const retiredPath of retiredPaths) {
+    const path = resolve(canonicalRoot, retiredPath);
+    if (!documents.has(path)) continue;
+    addProblem(
+      path,
+      1,
+      "OBSOLETE_OPERATIONAL_DOCUMENT",
+      `${retiredPath} was consolidated by M32 and must not be restored`,
+    );
+  }
+
+  const deploymentContract = resolve(
+    canonicalRoot,
+    "config/deployment-contract.json",
+  );
+  if ((await lstat(deploymentContract).catch(() => null)) === null) return;
+
+  const readmePath = resolve(canonicalRoot, "README.md");
+  const readme = documents.get(readmePath);
+  if (readme === undefined) {
+    addProblem(
+      readmePath,
+      1,
+      "README_NAVIGATION_MISSING",
+      "README.md must link to every canonical documentation owner",
+    );
+    return;
+  }
+
+  const requiredTargets = [
+    "AGENTS.md",
+    "docs/closed-beta-admission.md",
+    "docs/database.md",
+    "docs/design.md",
+    "docs/development.md",
+    "docs/environment.md",
+    "docs/operations.md",
+  ];
+  for (const requiredTarget of requiredTargets) {
+    const targetPath = resolve(canonicalRoot, requiredTarget);
+    const linked = readme.links.some(
+      (link) => localLinkPath(readme.path, link.destination) === targetPath,
+    );
+    if (linked) continue;
+    addProblem(
+      readmePath,
+      1,
+      "README_NAVIGATION_MISSING",
+      `README.md must link to ${requiredTarget}`,
+    );
+  }
+}
+
+function localLinkPath(documentPath, destination) {
+  if (destination === "" || isExternal(destination)) return null;
+  const hash = destination.indexOf("#");
+  const pathPart = hash === -1 ? destination : destination.slice(0, hash);
+  const query = pathPart.indexOf("?");
+  const rawPath = query === -1 ? pathPart : pathPart.slice(0, query);
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(rawPath);
+  } catch {
+    return null;
+  }
+  return resolve(
+    isAbsolute(decodedPath) ? canonicalRoot : dirname(documentPath),
+    decodedPath.replace(/^[/\\]+/, ""),
   );
 }
 

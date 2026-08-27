@@ -7,14 +7,14 @@
 - Bash 5.0以上とGNU userland（Ubuntu 20.04/24.04、WSL2）
 - Node.js 24以上、pnpm 11.22.0（lock fileはrootの `pnpm-lock.yaml`）
 - Go 1.26.6
-- PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2`）
+- PostgreSQL（version、固定Docker image、起動方法は [`database.md`](database.md#local-postgresql)）
 - sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.26.6によるfallbackも利用可能）
 - Docker EngineとDocker Buildx（PostgreSQLの簡易起動、Cloudflare Container imageのbuild、InfrastructureのDocker build context監査に必要）
 - Chromium（E2Eを実行する場合）
 - Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
 - Python 3と`curl`、`jq`、`openssl`、`realpath`、`sha256sum`、`base64`、`tar`、`zip`、`script`、`sed`、`awk`、`find`、`sort`、`mktemp`
 
-CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.26.6、PostgreSQL 18.6を前提にし、Docker PostgreSQLは`postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2`へ固定しています。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
+CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.26.6と [`database.md`のPostgreSQL pin](database.md#構成)を前提にします。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
 
 sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1.31.1がHostにあればそれを使い、なければ`sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537`を`docker run --rm`で起動します。Docker serverも利用できない場合は、Goでpin済みの一時toolを`.tmp/tools`へbuildしてfallbackします。これによりsqlcをHostへ常設する必要はありません。Docker/Goはいずれも初回だけimageまたはmoduleのdownloadが必要で、一時toolは通常のsafe clean対象です。
 
@@ -77,25 +77,7 @@ source ./scripts/import-env.sh
 
 ## PostgreSQLの準備
 
-ローカルにPostgreSQL 18.6がなければ、Dockerで開発DBを起動できます。
-
-```bash
-docker run --name fukamu-cycle-postgres -e POSTGRES_USER=fukamu_cycle -e POSTGRES_PASSWORD=fukamu_cycle -e POSTGRES_DB=fukamu_cycle -p 5432:5432 -d postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
-```
-
-同名containerを以前作成して停止している場合は、`docker inspect --format '{{.Config.Image}}' fukamu-cycle-postgres`でimageが正確に`postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2`であることを確認してから`docker start fukamu-cycle-postgres`を使います。異なるimageのcontainerは再利用せず、保持dataの要否を確認してから別途処分してください。`docker rm`やvolume削除は通常の開発手順には含めません。
-
-PostgreSQL 18以降の公式Docker imageは`PGDATA=/var/lib/postgresql/18/docker`を使い、volume mount先が`/var/lib/postgresql`へ変わりました。`compose.local.yaml`の破棄可能DBも親directoryへtmpfsをmountします。17以前の`/var/lib/postgresql/data`を新規設定へ流用しません。
-
-Migrationを適用します。
-
-```bash
-source ./scripts/import-env.sh
-cd backend
-go run ./cmd/migrate
-```
-
-Migrationは再実行可能で、未適用分だけを適用します。seed処理はありません。画面を開くと匿名sessionだけが作成され、HomeからGoal Creation Draftを作って開始した時点でGoal v1とCycle 1が同一transactionで作成されます。
+固定imageによる開発DB起動は [`database.md`のLocal PostgreSQL](database.md#local-postgresql)、migration適用は [`database.md`のローカル適用](database.md#ローカル適用)に従います。既存containerのdata確認、PostgreSQL 18のvolume境界、seed / 初期dataの説明もDatabase正本だけを更新します。
 
 ## 開発サーバー
 
@@ -213,6 +195,26 @@ DB-backed collection endpointは、page内のitem数に比例してSQL round tri
 
 Frontendのroute別code splittingとasset sizeは`pnpm --filter fukamu-cycle-frontend run build`のchunk一覧で確認します。Mutation responseが遷移先と同じDTOを含む場合は、TanStack Query cacheへ反映してから遷移し、直後に同じresourceを再取得するnetwork round tripを避けます。Mutationの影響を受けるcollection/detail cacheは、引き続き明示的に更新またはinvalidateします。Auto SaveやAI提案Adoptも同じserver mutationとして扱い、成功responseをeditor local stateだけに反映しません。未保存入力はeditor/Browser Draft Cache、保存済みstateはTanStack Queryへ同期し、route往復の回帰testで古いfresh cacheが復元されないことを確認します。
 
+### AI quality evaluation
+
+AI qualityのcase group、rubric、release gateは [`design.md`](design.md) §49が唯一の仕様です。このsectionはRepository内の実行手順を所有します。
+
+次のBackend checkは、中央Prompt Registryのversion解決、operation boundary、`backend/testdata/ai_eval`にある5 fixture groupとJSONLを決定的に検証します。Pathやfile名を変える場合は同じ変更でtest runnerを更新します。
+
+```bash
+./scripts/check.sh --scope backend
+```
+
+ModelまたはPrompt Versionを変更する前に、次を行います。
+
+1. Prompt assetを新しいimmutable versionとして中央Registryへ追加し、旧versionを上書きしない。
+2. 対象modelと正式単価を固定し、§49の全fixtureをStaging用credentialで実行する。Production dataや実User本文を使わない。
+3. Structured Output、文字数、Action件数、禁止された捏造patternを自動確認する。
+4. Human reviewerが§49のrubricで採点し、critical failureが0件であることを確認する。
+5. Model、Prompt Version、実行日、latency、token、cost、採点結果をPull Requestへ添付する。Secretや不要なProvider response / User dataは添付しない。
+
+外部credentialがないlocal / CIではProvider quality判定を行わず、Fake Adapter、schema validation、context isolation、quota / budget、error pathのdeterministic checksを実行します。
+
 ### GitHub Actionsの更新
 
 Workflowで利用する公式Actionは、特別な互換性制約がない限り、Node.js runtimeとsecurity fixを含む最新のstable majorを使います。更新時は各Actionの公式release noteでbreaking changeとGitHub-hosted runnerの要件を確認し、`.github/workflows/ci.yml`のactionlintを通します。Stable majorを据え置く必要がある場合は、理由と解除条件を該当Workflowへcommentで記録します。
@@ -224,6 +226,54 @@ CI全体の既定権限は`contents: read`だけです。GitHub APIで再利用�
 Manual Terraform PlanとDeployはAPI応答のschemaと非paginationをfail-closedに確認し、同一repository・main・commitのexactな`CI` workflow path/nameを持つcompleted/success `push` runだけを受け入れます。PR run、forkの`main` branch、別workflow、曖昧または101件以上の応答は成功CIとして扱いません。
 
 直接push、複数・不明な関連PR、base更新後にPR CIを再実行せずmergeした場合、API障害・schemaや件数の曖昧さ、artifact欠落・期限切れ・重複・破損、job不一致、tree不一致では再利用せず、mainで全CIを実行します。PRの変更fileを100件以内で全件照合できない場合もfallbackします。また`.github/`、`scripts/`、package/workspace manifestとlockfile、test・lint・build設定、secret scanやconfiguration gateのpolicy fileなどCIの信頼境界自体を変更したPRは、attestationがあっても再利用せずmainの新しい制御面で全CIを実行します。高速化のためにこのfail-safe fallbackやtree完全一致を緩和してはいけません。
+
+## 開発時troubleshooting
+
+まず秘密値を貼らず、実行command、exit code、対象環境、直前変更、固定`error_class` / `error_code`を記録します。Database固有の症状は [`database.md`のtroubleshooting](database.md#database-troubleshooting)、Staging / Productionは [`operations.md`のCloud troubleshooting](operations.md#cloud-troubleshooting)へ進みます。
+
+### Setup / dependency install
+
+| Symptom | Check | Response |
+|---|---|---|
+| `go`が見つからない、またはsetupがversionで停止 | `command -v go`; `go env GOVERSION` | [前提環境](#前提環境)のGoへ合わせてterminalを開き直す。Version guardを外さない |
+| `pnpm install`失敗 | Node / pnpm version、最初のpnpm error | Lockfileを手編集せず標準versionへ合わせる。必要な場合だけ`clean.sh --all`後にsetupを再実行 |
+| 同名PostgreSQL container error | `docker ps -a --filter name=fukamu-cycle-postgres` | 停止中ならimageを確認してstartする。保持data確認前にremoveしない |
+| Bash versionで停止 | `bash --version`; `command -v bash` | Bash 5以上のUbuntu / WSL2で実行する |
+| Docker profileがremote contextを拒否 | `docker context inspect` | Local Docker contextへ戻す。Safety guardを削除しない |
+
+### Development server / build
+
+| Symptom | Check | Response |
+|---|---|---|
+| Backendが`invalid configuration`で終了 | Errorのkey名、現在terminalでenvをimportしたか | `source ./scripts/import-env.sh`後、[`environment.md`](environment.md)に従ってlocal値を修正 |
+| OTLP設定で終了 | Errorのkey名だけを確認 | Local / Testではendpoint / headerを空にし、未承認`OTEL_*`をprocessから除く。Header値を表示しない |
+| Port 8080 / 5173が使用中 | `ss --tcp --listening --numeric --process` | 所有processを確認して停止する。無関係なprocessをkillしない |
+| FrontendからAPI 404 / connection refused | Browser Network、local `/healthz` | Backendを起動し、開発時はVite originを使う |
+| Go static fallbackが404 | `frontend/dist/index.html`と`STATIC_DIR` | Frontendをbuildし、absolute `STATIC_DIR`でBackendを再起動 |
+| Frontend build / typecheck失敗 | `./scripts/check.sh --scope frontend` | 最初のerrorを修正する。Stale dependencyならfull clean後にsetup |
+| Format / lintだけ失敗 | Frontend format check / lint | Formatterを実行して差分をreviewし、lint errorを個別修正 |
+| Docker実機profileがreadyにならない | Compose logsの最初のerror | `./scripts/local-app.sh --down`で専用resourceだけを片付けて再実行 |
+
+### Test / E2E
+
+| Symptom | Check | Response |
+|---|---|---|
+| Go integration testがskip | `TEST_DATABASE_URL`の有無 | 消去可能な`*_test` DBだけを設定する |
+| E2EがDBへ接続できない | Docker published portとURL | Playwright既定portへ依存せず`TEST_DATABASE_URL`を明示する |
+| E2EがGoを起動できない | `command -v go`、optional binary path | 標準Goを使うか、実在するprebuilt binaryを指定する |
+| Prebuilt serverでreadiness失敗 | Test DBのmigration version | Prebuilt server指定時は破棄可能DBへmigrationを先に適用する |
+| Chromiumがない | Browser executable error | `pnpm --filter fukamu-cycle-frontend exec playwright install chromium` |
+| CIだけ不安定 | Job logとPlaywright artifact | Worker 1を維持して根因を修正し、retry増加だけで隠さない |
+
+### Local authentication / AI
+
+| Symptom | Check | Response |
+|---|---|---|
+| Google buttonが出ない / login失敗 | Public client ID、origin、Browser Network | Frontend / Backendのclient IDとauthorized originを合わせる。Secretは使わない |
+| Login後にsessionがない | Cookie属性、origin、server error code | `PUBLIC_ORIGIN`と実originを一致させる |
+| Anonymous session作成失敗 | Turnstile site / secret、hostname / action | 対応値を揃え、期限切れtokenを再利用しない。Productionで無効化しない |
+| Local AIが外部APIを呼ばない | `APP_ENV`とkeyの有無だけを確認 | Keyが空のdevelopment / testは仕様どおりFake。通常testでは外部keyを設定しない |
+| AI model / Prompt候補の品質確認 | [AI quality evaluation](#ai-quality-evaluation) | Deterministic gateとreviewer rubricを通し、Production dataを使わない |
 
 ## クリーンアップ
 
@@ -253,4 +303,4 @@ Manual Terraform PlanとDeployはAPI応答のschemaと非paginationをfail-close
 
 各serverを `Ctrl+C` で停止します。BackendはHTTP requestをdrainした後にin-memory trace / metric providerをflushします。Docker DBも止める場合は `docker stop fukamu-cycle-postgres` を実行します。containerをstopしてもDBデータは保持されます。
 
-問題が解決しない場合は [`troubleshooting.md`](troubleshooting.md) を参照してください。
+解決しないlocal問題は上の切り分け結果と最初のerrorを共有し、仕様判断が必要なら [`design.md`](design.md) を確認します。Cloud resourceやProduction dataへ試行錯誤の変更を加えません。

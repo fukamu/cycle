@@ -6,15 +6,14 @@
 
 アプリケーション要件・仕様・設計の最上位Source of Truthは [`docs/design.md`](docs/design.md) です。実装都合で仕様を変更してはいけません。
 
-| テーマ                             | 参照先                                               |
-| ---------------------------------- | ---------------------------------------------------- |
-| Repository入口                     | [`README.md`](README.md)                             |
-| Local development / checks / clean | [`docs/development.md`](docs/development.md)         |
-| Environment variables              | [`docs/environment.md`](docs/environment.md)         |
-| Database / Migration               | [`docs/database.md`](docs/database.md)               |
-| Deployment                         | [`docs/deployment.md`](docs/deployment.md)           |
-| Production operations              | [`docs/operations.md`](docs/operations.md)           |
-| Troubleshooting                    | [`docs/troubleshooting.md`](docs/troubleshooting.md) |
+| テーマ                                              | 参照先                                                       |
+| --------------------------------------------------- | ------------------------------------------------------------ |
+| Repository入口                                      | [`README.md`](README.md)                                     |
+| Local development / checks / AI evaluation / clean  | [`docs/development.md`](docs/development.md)                 |
+| Environment variables                               | [`docs/environment.md`](docs/environment.md)                 |
+| Database / Migration                                 | [`docs/database.md`](docs/database.md)                       |
+| Cloud deployment / operations / troubleshooting     | [`docs/operations.md`](docs/operations.md)                   |
+| Temporary Closed Beta admission                     | [`docs/closed-beta-admission.md`](docs/closed-beta-admission.md) |
 
 同じruleを複数文書へcopyせず、専門のSource of Truthへlinkしてください。
 

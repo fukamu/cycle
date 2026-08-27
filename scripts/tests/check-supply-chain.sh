@@ -151,7 +151,7 @@ replace_first "${fixture}/compose.local.yaml" \
 assert_policy_failure "local build alias used by a pull-only service" "${fixture}"
 
 fixture="$(new_fixture mutable-documentation)"
-replace_first "${fixture}/README.md" \
+replace_first "${fixture}/docs/database.md" \
   "${postgres_pin}" 'postgres:18.6-alpine3.24'
 assert_policy_failure "documentation with a mutable copied image command" "${fixture}"
 

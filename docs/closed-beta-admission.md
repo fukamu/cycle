@@ -120,7 +120,7 @@ Deploy後:
 | Frontend | `frontend/src/features/beta-admission/`、`SessionProvider.tsx`のimport・`BETA_ADMISSION_REQUIRED`分岐・専用retry判定、対応するFrontend test |
 | Bash helpers | `scripts/new-beta-invite.sh`、`scripts/new-beta-admission-key.sh`、`scripts/tests/run.sh`のAdmission helper test |
 | Deploy workflow | `.github/workflows/deploy.yml`の`BETA_*` Environment/secret入力、validation、ephemeral secrets file追加、Wrangler `--var`組立 |
-| Documents | `docs/environment.md`、`docs/deployment.md`、`docs/operations.md`のAdmission記述と導線、および役目を終えたこのrunbook |
+| Documents | `docs/environment.md`、`docs/operations.md`のAdmission記述と導線、および役目を終えたこのrunbook |
 | External settings | 新codeのdeployとrollback可否確認後、別途承認された外部操作としてGitHub EnvironmentとCloudflare Workerから`BETA_*` variable/secretを削除 |
 
 現在のAdmission固有依存は上表のWorker ingress、Frontend feature、helper、workflow、generated type、文書に限定されます。Go Backend、Domain、Database schema/migration、`infra/terraform/`にはAdmission固有状態も依存もないため、物理撤去でschema/data migrationを作成しません。

@@ -324,14 +324,12 @@ done
 plan_workflow="${repo_root}/.github/workflows/terraform-plan.yml"
 apply_workflow="${repo_root}/.github/workflows/terraform-apply.yml"
 backend_template="${repo_root}/infra/terraform/staging/backend.hcl.example"
-terraform_readme="${repo_root}/infra/terraform/staging/README.md"
-deployment_doc="${repo_root}/docs/deployment.md"
 environment_doc="${repo_root}/docs/environment.md"
 operations_doc="${repo_root}/docs/operations.md"
 
 for file in \
   "${plan_workflow}" "${apply_workflow}" "${backend_template}" \
-  "${terraform_readme}" "${deployment_doc}" "${environment_doc}" "${operations_doc}"; do
+  "${environment_doc}" "${operations_doc}"; do
   [[ -f "${file}" && ! -L "${file}" ]] || fail "Terraform recovery contract input is missing or a symlink: ${file}"
 done
 
@@ -362,14 +360,13 @@ for file in "${recovery_script}" "${plan_workflow}" "${apply_workflow}"; do
   fi
 done
 
-assert_contains "${terraform_readme}" 'Object Read Only'
-assert_contains "${terraform_readme}" 'Object Read & Write'
-assert_contains "${deployment_doc}" 'fukamu-cycle/staging/state-backups/<commit-sha>/<utc-timestamp>.tfstate'
-assert_contains "${deployment_doc}" 'fukamu-cycle/staging/state-restore-drills/'
-assert_contains "${deployment_doc}" 'automatic snapshot deletion is disabled'
 assert_contains "${environment_doc}" 'Object Read Only'
 assert_contains "${environment_doc}" 'Object Read & Write'
+assert_contains "${operations_doc}" 'Object Read Only'
 assert_contains "${operations_doc}" 'staging-terraform-apply'
 assert_contains "${operations_doc}" 'Object Read & Write'
+assert_contains "${operations_doc}" 'fukamu-cycle/staging/state-backups/<commit-sha>/<utc-timestamp>.tfstate'
+assert_contains "${operations_doc}" 'fukamu-cycle/staging/state-restore-drills/'
+assert_contains "${operations_doc}" 'automatic snapshot deletion is disabled'
 
 printf '%s\n' "Terraform state recovery tests passed."
