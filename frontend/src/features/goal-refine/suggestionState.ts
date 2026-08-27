@@ -1,9 +1,9 @@
-import type { SimpleSaveState } from "../../shared/hooks/useDraftAutoSave";
+import type { AutoSaveState } from "../../shared/autosave/autoSaveCoordinator";
 
 export function isGoalSuggestionStale(
   currentBody: string,
   sourceBody: string,
-  saveState: SimpleSaveState,
+  saveState: AutoSaveState,
 ): boolean {
-  return saveState !== "saved" || currentBody !== sourceBody;
+  return saveState.kind !== "saved" || currentBody !== sourceBody;
 }

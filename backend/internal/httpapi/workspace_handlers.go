@@ -1,15 +1,20 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/identifier"
 )
 
 type createDraftRequest struct {
@@ -17,53 +22,97 @@ type createDraftRequest struct {
 }
 type saveDraftRequest struct {
 	Body             string `json:"body"`
-	ExpectedRevision int64  `json:"expectedRevision" validate:"gte=0"`
+	ExpectedRevision int64  `json:"expectedRevision"`
+}
+type saveReviewRequest struct {
+	Body                  string `json:"body"`
+	ExpectedReviewDraftID string `json:"expectedReviewDraftId"`
+	ExpectedRevision      int64  `json:"expectedRevision"`
 }
 type startGoalRequest struct {
-	OperationID           string `json:"operationId" validate:"required,uuid_v7"`
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
+	OperationID           string `json:"operationId"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
 }
 type refineGoalRequest struct {
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
-	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty" validate:"omitempty,gte=0"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
+	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty"`
 }
 type adoptSuggestionRequest struct {
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
-	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty" validate:"omitempty,gte=0"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
+	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty"`
 }
 type continueReviewRequest struct {
-	OperationID           string `json:"operationId" validate:"required,uuid_v7"`
-	ExpectedGoalRevision  int64  `json:"expectedGoalRevision" validate:"gte=0"`
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
+	OperationID           string `json:"operationId"`
+	ExpectedGoalRevision  int64  `json:"expectedGoalRevision"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
 }
 type saveFrameRequest struct {
 	Content               string `json:"content"`
-	ExpectedFrameRevision int64  `json:"expectedFrameRevision" validate:"gte=0"`
+	ExpectedFrameRevision int64  `json:"expectedFrameRevision"`
 }
 type actionGenerateRequest struct {
-	ExpectedContentRevision int64 `json:"expectedContentRevision" validate:"gte=0"`
+	ExpectedContentRevision int64 `json:"expectedContentRevision"`
 	ConfirmReplace          bool  `json:"confirmReplace"`
 }
 type actionRefineRequest struct {
-	ExpectedContentRevision int64 `json:"expectedContentRevision" validate:"gte=0"`
+	ExpectedContentRevision int64 `json:"expectedContentRevision"`
 }
 type completeCycleRequest struct {
-	OperationID             string `json:"operationId" validate:"required,uuid_v7"`
-	ExpectedGoalRevision    int64  `json:"expectedGoalRevision" validate:"gte=0"`
-	ExpectedContentRevision int64  `json:"expectedContentRevision" validate:"gte=0"`
+	OperationID             string `json:"operationId"`
+	ExpectedGoalRevision    int64  `json:"expectedGoalRevision"`
+	ExpectedContentRevision int64  `json:"expectedContentRevision"`
 }
+type optionalJSONField[T any] struct {
+	Value   T
+	Present bool
+	Null    bool
+}
+
+func (field *optionalJSONField[T]) UnmarshalJSON(data []byte) error {
+	field.Present = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		field.Null = true
+		return nil
+	}
+	return json.Unmarshal(data, &field.Value)
+}
+
 type terminateGoalRequest struct {
-	OperationID                  string      `json:"operationId" validate:"required,uuid_v7"`
-	Outcome                      goal.Status `json:"outcome" validate:"required,oneof=achieved ended"`
-	ExpectedGoalRevision         int64       `json:"expectedGoalRevision" validate:"gte=0"`
-	ExpectedState                goal.Status `json:"expectedState" validate:"required,oneof=active_cycle goal_review"`
-	ActiveCycleID                string      `json:"activeCycleId,omitempty" validate:"omitempty,uuid_v7"`
-	ExpectedCycleContentRevision *int64      `json:"expectedCycleContentRevision,omitempty" validate:"omitempty,gte=0"`
-	ConfirmDiscardReviewDraft    bool        `json:"confirmDiscardReviewDraft,omitempty"`
+	OperationID                  string                    `json:"operationId"`
+	Outcome                      goal.Status               `json:"outcome"`
+	ExpectedGoalRevision         *int64                    `json:"expectedGoalRevision"`
+	ExpectedState                goal.Status               `json:"expectedState"`
+	ActiveCycleID                optionalJSONField[string] `json:"activeCycleId"`
+	ExpectedCycleContentRevision optionalJSONField[int64]  `json:"expectedCycleContentRevision"`
+	ConfirmDiscardReviewDraft    optionalJSONField[bool]   `json:"confirmDiscardReviewDraft"`
 }
+
+func (input terminateGoalRequest) variant() (string, *int64, bool, error) {
+	switch input.ExpectedState {
+	case goal.StatusActiveCycle:
+		if !input.ActiveCycleID.Present || input.ActiveCycleID.Null ||
+			!identifier.IsCanonicalUUIDv7(input.ActiveCycleID.Value) ||
+			!input.ExpectedCycleContentRevision.Present || input.ExpectedCycleContentRevision.Null ||
+			input.ExpectedCycleContentRevision.Value < 0 ||
+			input.ConfirmDiscardReviewDraft.Present {
+			return "", nil, false, errRequestValidation
+		}
+		revision := input.ExpectedCycleContentRevision.Value
+		return input.ActiveCycleID.Value, &revision, false, nil
+	case goal.StatusGoalReview:
+		if input.ActiveCycleID.Present || input.ExpectedCycleContentRevision.Present ||
+			!input.ConfirmDiscardReviewDraft.Present || input.ConfirmDiscardReviewDraft.Null {
+			return "", nil, false, errRequestValidation
+		}
+		return "", nil, input.ConfirmDiscardReviewDraft.Value, nil
+	default:
+		return "", nil, false, errRequestValidation
+	}
+}
+
 type deleteGoalRequest struct {
 	Confirmed            bool  `json:"confirmed"`
-	ExpectedGoalRevision int64 `json:"expectedGoalRevision" validate:"gte=0"`
+	ExpectedGoalRevision int64 `json:"expectedGoalRevision"`
 }
 
 func (server *api) getHome(writer http.ResponseWriter, request *http.Request) {
@@ -104,7 +153,9 @@ func (server *api) saveGoalDraft(writer http.ResponseWriter, request *http.Reque
 		server.writeError(writer, request, err, nil)
 		return
 	}
+	startedAt := time.Now()
 	view, err := server.dependencies.Workspace.SaveDraft(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), input.Body, input.ExpectedRevision)
+	server.observeAutosave(request, "creation_draft", startedAt, err, errors.Is(err, workspace.ErrDraftRevisionConflict))
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalDraftSaveFailed), nil)
 		return
@@ -126,7 +177,7 @@ func (server *api) startGoal(writer http.ResponseWriter, request *http.Request) 
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	view, err := server.dependencies.Workspace.StartGoal(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), input.OperationID, input.ExpectedDraftRevision)
+	view, err := server.dependencies.Workspace.StartGoal(request.Context(), currentUserID(request), sessionID(request), chi.URLParam(request, "draftId"), input.OperationID, input.ExpectedDraftRevision)
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalStartFailed), nil)
 		return
@@ -238,12 +289,14 @@ func (server *api) getGoalReview(writer http.ResponseWriter, request *http.Reque
 }
 
 func (server *api) saveGoalReview(writer http.ResponseWriter, request *http.Request) {
-	var input saveDraftRequest
+	var input saveReviewRequest
 	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	view, err := server.dependencies.Workspace.SaveReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.Body, input.ExpectedRevision)
+	startedAt := time.Now()
+	view, err := server.dependencies.Workspace.SaveReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.ExpectedReviewDraftID, input.Body, input.ExpectedRevision)
+	server.observeAutosave(request, "review_draft", startedAt, err, errors.Is(err, workspace.ErrReviewRevisionConflict))
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalReviewDraftSaveFailed), nil)
 		return
@@ -271,11 +324,20 @@ func (server *api) terminateGoal(writer http.ResponseWriter, request *http.Reque
 		server.writeError(writer, request, err, nil)
 		return
 	}
+	if input.Outcome != goal.StatusAchieved && input.Outcome != goal.StatusEnded {
+		server.writeError(writer, request, workspace.ErrInvalidGoalOutcome, nil)
+		return
+	}
+	activeCycleID, expectedCycleContentRevision, confirmDiscardReviewDraft, err := input.variant()
+	if err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
 	view, err := server.dependencies.Workspace.Terminate(request.Context(), workspace.TerminateInput{
 		UserID: currentUserID(request), GoalID: chi.URLParam(request, "goalId"), OperationID: input.OperationID,
-		Outcome: input.Outcome, ExpectedGoalRevision: input.ExpectedGoalRevision, ExpectedState: input.ExpectedState,
-		ActiveCycleID: input.ActiveCycleID, ExpectedCycleContentRevision: input.ExpectedCycleContentRevision,
-		ConfirmDiscardReviewDraft: input.ConfirmDiscardReviewDraft,
+		Outcome: input.Outcome, ExpectedGoalRevision: *input.ExpectedGoalRevision, ExpectedState: input.ExpectedState,
+		ActiveCycleID: activeCycleID, ExpectedCycleContentRevision: expectedCycleContentRevision,
+		ConfirmDiscardReviewDraft: confirmDiscardReviewDraft,
 	})
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalTerminationFailed), nil)
@@ -336,10 +398,12 @@ func (server *api) saveGoalCycleFrame(writer http.ResponseWriter, request *http.
 		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
+	startedAt := time.Now()
 	view, err := server.dependencies.Workspace.SaveFrame(request.Context(), workspace.SaveFrameInput{
 		UserID: currentUserID(request), GoalID: chi.URLParam(request, "goalId"), CycleID: chi.URLParam(request, "cycleId"),
 		Frame: frame, Content: input.Content, ExpectedFrameRevision: input.ExpectedFrameRevision,
 	})
+	server.observeAutosave(request, "cycle_frame", startedAt, err, errors.Is(err, cycle.ErrRevisionConflict))
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errFrameSaveFailed), nil)
 		return
@@ -353,7 +417,21 @@ func (server *api) generateAction(writer http.ResponseWriter, request *http.Requ
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	server.runActionAI(writer, request, "action_generate", input.ExpectedContentRevision, input.ConfirmReplace)
+	key := idempotencyKey(request)
+	if key == "" {
+		server.writeError(writer, request, errRequestValidation, nil)
+		return
+	}
+	view, err := server.dependencies.Workspace.GenerateAction(request.Context(), workspace.ActionGenerateInput{
+		UserID: currentUserID(request), GoalID: chi.URLParam(request, "goalId"), CycleID: chi.URLParam(request, "cycleId"),
+		ExpectedContentRevision: input.ExpectedContentRevision, ConfirmReplace: input.ConfirmReplace,
+		IdempotencyKey: key, SessionID: sessionID(request), RemoteAddress: server.remoteIP(request),
+	})
+	if err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
 }
 
 func (server *api) refineAction(writer http.ResponseWriter, request *http.Request) {
@@ -362,19 +440,15 @@ func (server *api) refineAction(writer http.ResponseWriter, request *http.Reques
 		server.writeError(writer, request, err, nil)
 		return
 	}
-	server.runActionAI(writer, request, "action_refine", input.ExpectedContentRevision, false)
-}
-
-func (server *api) runActionAI(writer http.ResponseWriter, request *http.Request, operation string, revision int64, confirmReplace bool) {
 	key := idempotencyKey(request)
 	if key == "" {
 		server.writeError(writer, request, errRequestValidation, nil)
 		return
 	}
-	view, err := server.dependencies.Workspace.RunActionAI(request.Context(), workspace.ActionAIInput{
+	view, err := server.dependencies.Workspace.RefineAction(request.Context(), workspace.ActionRefineInput{
 		UserID: currentUserID(request), GoalID: chi.URLParam(request, "goalId"), CycleID: chi.URLParam(request, "cycleId"),
-		Operation: operation, ExpectedContentRevision: revision, ConfirmReplace: confirmReplace,
-		IdempotencyKey: key, SessionID: sessionID(request), RemoteAddress: server.remoteIP(request),
+		ExpectedContentRevision: input.ExpectedContentRevision,
+		IdempotencyKey:          key, SessionID: sessionID(request), RemoteAddress: server.remoteIP(request),
 	})
 	if err != nil {
 		server.writeError(writer, request, err, nil)
@@ -401,10 +475,26 @@ func (server *api) completeGoalCycle(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, http.StatusOK, view.Replay)
 		return
 	}
-	if !view.Replayed && server.dependencies.Metrics != nil {
-		server.dependencies.Metrics.CycleCompleted(request.Context())
-	}
 	writeJSON(writer, http.StatusOK, view)
+}
+
+func (server *api) observeAutosave(
+	request *http.Request,
+	resourceType string,
+	startedAt time.Time,
+	err error,
+	conflict bool,
+) {
+	if server.dependencies.Metrics == nil {
+		return
+	}
+	result := "success"
+	if conflict {
+		result = "conflict"
+	} else if err != nil {
+		result = "failure"
+	}
+	server.dependencies.Metrics.ObserveAutosave(request.Context(), resourceType, result, time.Since(startedAt))
 }
 
 func goalListQuery(request *http.Request) (string, int, error) {
@@ -433,7 +523,7 @@ func pageLimit(request *http.Request) (int, error) {
 
 func idempotencyKey(request *http.Request) string {
 	value := strings.ToLower(strings.TrimSpace(request.Header.Get("Idempotency-Key")))
-	if !isCanonicalUUIDv7(value) {
+	if !identifier.IsCanonicalUUIDv7(value) {
 		return ""
 	}
 	return value

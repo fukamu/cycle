@@ -2,13 +2,12 @@ package account
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"errors"
 	"time"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 const tokenBytes = 32
@@ -37,7 +36,12 @@ type GoogleVerifier interface {
 type Repository interface {
 	UpgradeGoogle(context.Context, UpgradeRecord) (AuthResult, error)
 	LoginGoogle(context.Context, LoginRecord) (AuthResult, error)
-	DeleteAccount(context.Context, user.ID, time.Time) error
+	DeleteAccount(context.Context, user.ID, time.Time) (DeleteResult, error)
+}
+
+type Observer interface {
+	AIUnattributedCost(context.Context, float64)
+	AICostSettlement(context.Context, string, string, int64)
 }
 
 type UpgradeRecord struct {
@@ -69,6 +73,11 @@ type AuthResult struct {
 	GoogleEmail *string
 }
 
+type DeleteResult struct {
+	UnattributedCostUSD      float64
+	SettlementOperationCount int64
+}
+
 type View struct {
 	UserID          user.ID
 	GoogleConnected bool
@@ -82,6 +91,7 @@ type Settings struct {
 	CSRFHashKey    []byte
 	IdleTTL        time.Duration
 	AbsoluteTTL    time.Duration
+	Observer       Observer
 }
 
 type Service struct {
@@ -142,8 +152,22 @@ func (service *Service) Delete(ctx context.Context, userID user.ID, confirmed bo
 	if !confirmed {
 		return ErrDeleteConfirmationRequired
 	}
-	if err := service.repository.DeleteAccount(ctx, userID, service.clock.Now().UTC()); err != nil {
+	now := service.clock.Now().UTC()
+	result, err := service.repository.DeleteAccount(ctx, userID, now)
+	if service.settings.Observer != nil && result.SettlementOperationCount > 0 {
+		settlementResult := "success"
+		if err != nil {
+			settlementResult = "failure"
+		}
+		service.settings.Observer.AICostSettlement(
+			context.WithoutCancel(ctx), "account_delete", settlementResult, result.SettlementOperationCount,
+		)
+	}
+	if err != nil {
 		return errors.Join(ErrAccountDeleteFailed, err)
+	}
+	if service.settings.Observer != nil && result.UnattributedCostUSD > 0 {
+		service.settings.Observer.AIUnattributedCost(context.WithoutCancel(ctx), result.UnattributedCostUSD)
 	}
 	return nil
 }
@@ -175,8 +199,8 @@ func (service *Service) createSession(ctx context.Context, operation func(sessio
 	now := service.clock.Now().UTC()
 	material := sessionMaterial{
 		id: sessionID, token: token, csrf: csrf,
-		tokenHash: keyedHash(service.settings.SessionHashKey, token),
-		csrfHash:  keyedHash(service.settings.CSRFHashKey, csrf),
+		tokenHash: securehash.HMACSHA256(service.settings.SessionHashKey, []byte(token)),
+		csrfHash:  securehash.HMACSHA256(service.settings.CSRFHashKey, []byte(csrf)),
 		now:       now, idleExpiresAt: now.Add(service.settings.IdleTTL), absoluteExpiresAt: now.Add(service.settings.AbsoluteTTL),
 	}
 	result, err := operation(material)
@@ -188,10 +212,4 @@ func (service *Service) createSession(ctx context.Context, operation func(sessio
 		GoogleEmail:  result.GoogleEmail,
 		SessionToken: token, CSRFToken: csrf,
 	}, nil
-}
-
-func keyedHash(key []byte, value string) []byte {
-	hash := hmac.New(sha256.New, key)
-	_, _ = hash.Write([]byte(value))
-	return hash.Sum(nil)
 }

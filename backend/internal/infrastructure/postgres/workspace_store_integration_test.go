@@ -27,7 +27,7 @@ func TestWorkspaceStoreEnforcesConfigurableProgressingGoalBoundary(t *testing.T)
 			if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 				t.Fatal(err)
 			}
-			store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+			store := NewWorkspaceStore(pool)
 			fixtures := progressingGoalFixtures()
 			for index := 0; index < test.limit; index++ {
 				startProgressingGoal(t, store, userID, fixtures[index], test.limit, now.Add(time.Duration(index)*time.Minute))
@@ -52,10 +52,10 @@ VALUES($1,$2,'review',$3,$4,$5,$6,$7,$7)`,
 			}
 
 			overflow := fixtures[test.limit]
-			if _, err := store.CreateDraft(context.Background(), userID, overflow.draftID, overflow.body, now.Add(time.Hour)); err != nil {
+			if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, overflow.draftID, overflow.body, now.Add(time.Hour)); err != nil {
 				t.Fatal(err)
 			}
-			_, err := store.StartGoal(context.Background(), overflow.startInput(userID, now.Add(time.Hour)), test.limit)
+			_, err := executeGoalStartUseCase(store, context.Background(), overflow.startInput(userID, now.Add(time.Hour)), test.limit)
 			if !errors.Is(err, workspace.ErrGoalActiveLimit) {
 				t.Fatalf("overflow start error = %v, want %v", err, workspace.ErrGoalActiveLimit)
 			}
@@ -91,7 +91,7 @@ func TestWorkspaceStoreHomeOrdersProgressingGoalsByCreationTime(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool)
 	fixtures := progressingGoalFixtures()
 	for index := 0; index < 3; index++ {
 		startProgressingGoal(t, store, userID, fixtures[index], 3, now.Add(time.Duration(index)*time.Minute))
@@ -122,11 +122,11 @@ func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool)
 	fixtures := progressingGoalFixtures()
 	first := startProgressingGoal(t, store, userID, fixtures[0], 2, now)
 	startProgressingGoal(t, store, userID, fixtures[1], 2, now.Add(time.Minute))
-	if _, err := store.CreateDraft(context.Background(), userID, fixtures[2].draftID, fixtures[2].body, now.Add(2*time.Minute)); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, fixtures[2].draftID, fixtures[2].body, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -143,12 +143,12 @@ func TestWorkspaceStoreSerializesTerminationAndStartAtFreeLimit(t *testing.T) {
 	terminateResult := make(chan error, 1)
 	go func() {
 		<-startBarrier
-		_, err := store.StartGoal(context.Background(), startInput, 2)
+		_, err := executeGoalStartUseCase(store, context.Background(), startInput, 2)
 		startResult <- err
 	}()
 	go func() {
 		<-startBarrier
-		_, err := store.Terminate(context.Background(), terminateInput)
+		_, err := executeTerminateGoalUseCase(store, context.Background(), terminateInput)
 		terminateResult <- err
 	}()
 	close(startBarrier)
@@ -184,13 +184,13 @@ func TestWorkspaceStoreSharesAIQuotaWithoutMixingContextAcrossProgressingGoals(t
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{
-		CursorSigningKey:      []byte("test-cursor-key"),
-		Provider:              "fake",
-		Model:                 "test",
-		GeneratePromptVersion: "action-generate-v1",
-		RollingLimit:          1,
-	})
+	settings := aiIntegrationApplicationSettings{
+		Entitlements: workspace.Entitlements{MaxAIOperationsPer24Hours: 1},
+		ActionAI: workspace.ActionAIUseCaseSettings{
+			Provider: "fake", Model: "test", GeneratePromptVersion: "action-generate-v1",
+		},
+	}
+	store := NewWorkspaceStore(pool)
 	fixtures := progressingGoalFixtures()
 	startProgressingGoal(t, store, userID, fixtures[0], 2, now)
 	startProgressingGoal(t, store, userID, fixtures[1], 2, now.Add(time.Minute))
@@ -199,23 +199,24 @@ content_revision=3,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_usage_events
-(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,quota_retain_until)
-VALUES($1,$2,$3,'action_generate','accepted','fake','test','action-generate-v1',$4,$5)`,
+(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
+VALUES($1,$2,$3,'action_generate','succeeded','fake','test','action-generate-v1',$4,$4,$5)`,
 		"81000000-0000-7000-8000-000000000001", userID, fixtures[0].goalID, now, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	var selected workspace.AISnapshot
-	_, err := store.BeginActionAI(context.Background(), workspace.ActionAIInput{
+	_, err := executeActionGenerateBeginUseCaseWithSettings(store, context.Background(), workspace.ActionGenerateInput{
 		UserID: userID, GoalID: fixtures[1].goalID, CycleID: fixtures[1].cycleID,
-		Operation: "action_generate", ExpectedContentRevision: 3,
-		IdempotencyKey: "82000000-0000-7000-8000-000000000001",
-		GenerationID:   "83000000-0000-7000-8000-000000000001",
-		Now:            now.Add(2 * time.Minute),
+		ExpectedContentRevision: 3,
+		IdempotencyKey:          "82000000-0000-7000-8000-000000000001",
+		GenerationID:            "83000000-0000-7000-8000-000000000001",
+		Now:                     now.Add(2 * time.Minute),
 	}, func(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
 		selected = snapshot
+		snapshot.CanonicalProviderInputHash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 		return snapshot, nil
-	})
+	}, settings)
 	if !errors.Is(err, workspace.ErrAIUserLimit) {
 		t.Fatalf("second-goal AI error = %v, want shared user quota error", err)
 	}
@@ -244,12 +245,14 @@ func progressingGoalFixtures() []progressingGoalFixture {
 		{draftID: "11000000-0000-7000-8000-000000000002", goalID: "21000000-0000-7000-8000-000000000002", versionID: "31000000-0000-7000-8000-000000000002", cycleID: "41000000-0000-7000-8000-000000000002", operationID: "51000000-0000-7000-8000-000000000002", body: "二つ目の目標"},
 		{draftID: "11000000-0000-7000-8000-000000000003", goalID: "21000000-0000-7000-8000-000000000003", versionID: "31000000-0000-7000-8000-000000000003", cycleID: "41000000-0000-7000-8000-000000000003", operationID: "51000000-0000-7000-8000-000000000003", body: "三つ目の目標"},
 		{draftID: "11000000-0000-7000-8000-000000000004", goalID: "21000000-0000-7000-8000-000000000004", versionID: "31000000-0000-7000-8000-000000000004", cycleID: "41000000-0000-7000-8000-000000000004", operationID: "51000000-0000-7000-8000-000000000004", body: "四つ目の目標"},
+		{draftID: "11000000-0000-7000-8000-000000000005", goalID: "21000000-0000-7000-8000-000000000005", versionID: "31000000-0000-7000-8000-000000000005", cycleID: "41000000-0000-7000-8000-000000000005", operationID: "51000000-0000-7000-8000-000000000005", body: "五つ目の目標"},
+		{draftID: "11000000-0000-7000-8000-000000000006", goalID: "21000000-0000-7000-8000-000000000006", versionID: "31000000-0000-7000-8000-000000000006", cycleID: "41000000-0000-7000-8000-000000000006", operationID: "51000000-0000-7000-8000-000000000006", body: "六つ目の目標"},
 	}
 }
 
 func (fixture progressingGoalFixture) startInput(userID string, now time.Time) workspace.StartGoalInput {
 	return workspace.StartGoalInput{
-		UserID: userID, DraftID: fixture.draftID, OperationID: fixture.operationID,
+		UserID: userID, SessionID: userID, DraftID: fixture.draftID, OperationID: fixture.operationID,
 		ExpectedDraftRevision: 0, RequestHash: "request-" + fixture.operationID,
 		GoalID: fixture.goalID, VersionID: fixture.versionID, CycleID: fixture.cycleID, Now: now,
 	}
@@ -257,10 +260,10 @@ func (fixture progressingGoalFixture) startInput(userID string, now time.Time) w
 
 func startProgressingGoal(t *testing.T, store *WorkspaceStore, userID string, fixture progressingGoalFixture, limit int, now time.Time) workspace.StartGoalResult {
 	t.Helper()
-	if _, err := store.CreateDraft(context.Background(), userID, fixture.draftID, fixture.body, now); err != nil {
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, fixture.draftID, fixture.body, now); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.StartGoal(context.Background(), fixture.startInput(userID, now), limit)
+	result, err := executeGoalStartUseCase(store, context.Background(), fixture.startInput(userID, now), limit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,8 +299,8 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'request-hash',$5,$5)`, []any{cycleID, userI
 		}
 	}
 
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	page, err := store.ListGoals(context.Background(), userID, "all", "", 20)
+	store := NewWorkspaceStore(pool)
+	page, err := executeGoalListUseCase(store, context.Background(), userID, "all", "", 20, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +311,7 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'request-hash',$5,$5)`, []any{cycleID, userI
 		t.Fatalf("next cursor = %q, want nil", *page.NextCursor)
 	}
 
-	cycles, err := store.ListCycles(context.Background(), userID, goalID, "", 20)
+	cycles, err := executeCycleListUseCase(store, context.Background(), userID, goalID, "", 20, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,11 +335,11 @@ func TestWorkspaceStoreDuplicateCreationDraftReturnsExistingIdentifier(t *testin
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	if _, err := store.CreateDraft(context.Background(), userID, firstDraft, "", now); err != nil {
+	store := NewWorkspaceStore(pool)
+	if _, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, firstDraft, "", now); err != nil {
 		t.Fatal(err)
 	}
-	_, err := store.CreateDraft(context.Background(), userID, secondDraft, "", now)
+	_, err := executeGoalDraftCreateUseCase(store, context.Background(), userID, secondDraft, "", now)
 	var conflict *workspace.DraftAlreadyExistsError
 	if !errors.As(err, &conflict) || conflict.DraftID != firstDraft {
 		t.Fatalf("duplicate draft error = %#v", err)
@@ -386,15 +389,15 @@ VALUES($1,$2,$3,$4,1,'active',$5,$6,'active-hash',$5,$5)`, []any{activeCycle, us
 		}
 	}
 
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	first, err := store.ListGoals(context.Background(), userID, "all", "", 2)
+	store := NewWorkspaceStore(pool)
+	first, err := executeGoalListUseCase(store, context.Background(), userID, "all", "", 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(first.Items) != 2 || first.Items[0].ID != activeGoalID || first.Items[1].ID != latestGoalID || first.NextCursor == nil {
 		t.Fatalf("first page = %#v", first)
 	}
-	second, err := store.ListGoals(context.Background(), userID, "all", *first.NextCursor, 2)
+	second, err := executeGoalListUseCase(store, context.Background(), userID, "all", *first.NextCursor, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +420,6 @@ func TestWorkspaceCommandReplayConvergesAfterLaterStateTransition(t *testing.T) 
 		startOperation    = "50000000-0000-7000-8000-000000000001"
 		reviewDraftID     = "60000000-0000-7000-8000-000000000001"
 		completeOperation = "70000000-0000-7000-8000-000000000001"
-		nextVersionID     = "80000000-0000-7000-8000-000000000001"
 		nextCycleID       = "90000000-0000-7000-8000-000000000001"
 		continueOperation = "a0000000-0000-7000-8000-000000000001"
 		generationID      = "b0000000-0000-7000-8000-000000000001"
@@ -430,42 +432,59 @@ func TestWorkspaceCommandReplayConvergesAfterLaterStateTransition(t *testing.T) 
 VALUES($1,$2,'creation','目標本文',$3,$3)`, draftID, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
+	store := NewWorkspaceStore(pool)
 	startInput := workspace.StartGoalInput{
-		UserID: userID, DraftID: draftID, OperationID: startOperation, ExpectedDraftRevision: 0,
+		UserID: userID, SessionID: userID, DraftID: draftID, OperationID: startOperation, ExpectedDraftRevision: 0,
 		RequestHash: "start-hash", GoalID: goalID, VersionID: versionID, CycleID: cycleID, Now: now,
 	}
-	if _, err := store.StartGoal(context.Background(), startInput, 1); err != nil {
+	if _, err := executeGoalStartUseCase(store, context.Background(), startInput, 1); err != nil {
 		t.Fatal(err)
 	}
-	startReplay, err := store.StartGoal(context.Background(), startInput, 1)
+	startReplay, err := executeGoalStartUseCase(store, context.Background(), startInput, 1)
 	if err != nil || !startReplay.Replayed || startReplay.Goal.ID != goalID || startReplay.Cycle.ID != cycleID {
 		t.Fatalf("start replay = %#v, error = %v", startReplay, err)
 	}
 
-	actionInput := workspace.ActionAIInput{
-		UserID: userID, GoalID: goalID, CycleID: cycleID, Operation: "action_generate",
+	actionInput := workspace.ActionGenerateInput{
+		UserID: userID, GoalID: goalID, CycleID: cycleID,
 		ExpectedContentRevision: 0, IdempotencyKey: idempotencyKey,
 	}
 	if _, err = pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,goal_id,goal_version_id,cycle_id,target_revision,idempotency_key,input_hash,
-output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,applied_at,started_at,finished_at)
-VALUES($1,$2,'action_generate','succeeded',$3,$4,$5,0,$6,$7,'次の行動','fake','test','action-generate-v1',$8,0,1,$9,$9,$9)`,
-		generationID, userID, goalID, versionID, cycleID, idempotencyKey, hashActionAIRequest(actionInput), now.Format("2006-01-02"), now); err != nil {
+output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,context_changed,applied_at,started_at,finished_at)
+VALUES($1,$2,'action_generate','succeeded',$3,$4,$5,0,$6,$7,'次の行動','fake','test','action-generate-v1',$8,0,1,true,$9,$9,$9)`,
+		generationID, userID, goalID, versionID, cycleID, idempotencyKey, actionGenerateRequestHashFixture(actionInput), now.Format("2006-01-02"), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(context.Background(), `INSERT INTO ai_usage_events
+(operation_id,user_id,goal_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
+VALUES($1,$2,$3,'action_generate','succeeded','fake','test','action-generate-v1',$4,$4,$5)`,
+		generationID, userID, goalID, now, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = pool.Exec(context.Background(), `UPDATE pdca_cycles SET action='次の行動',content_revision=1,
 action_revision=1,action_last_ai_applied_content_revision=1 WHERE id=$1`, cycleID); err != nil {
 		t.Fatal(err)
 	}
-	actionReplay, err := store.BeginActionAI(context.Background(), actionInput, nil)
-	if err != nil || actionReplay.ReplayedOutput == nil || *actionReplay.ReplayedOutput != "次の行動" || actionReplay.ReplayedContentRevision != 1 {
+	actionReplay, err := executeActionGenerateBeginUseCase(store, context.Background(), actionInput, nil)
+	if err != nil || actionReplay.ReplayedOutput == nil || *actionReplay.ReplayedOutput != "次の行動" ||
+		!actionReplay.ReplayedContextChanged || actionReplay.ReplayedContentRevision != 1 {
 		t.Fatalf("action replay = %#v, error = %v", actionReplay, err)
 	}
 	differentRequest := actionInput
 	differentRequest.ConfirmReplace = true
-	if _, err = store.BeginActionAI(context.Background(), differentRequest, nil); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
+	if _, err = executeActionGenerateBeginUseCase(store, context.Background(), differentRequest, nil); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
 		t.Fatalf("action replay with different request error = %v", err)
+	}
+	var actionGenerationCount, actionUsageCount int64
+	if err = pool.QueryRow(context.Background(), `SELECT
+(SELECT count(*) FROM ai_generations WHERE user_id=$1 AND operation_type='action_generate' AND idempotency_key=$2),
+(SELECT count(*) FROM ai_usage_events WHERE user_id=$1 AND operation_type='action_generate')`,
+		userID, idempotencyKey).Scan(&actionGenerationCount, &actionUsageCount); err != nil {
+		t.Fatal(err)
+	}
+	if actionGenerationCount != 1 || actionUsageCount != 1 {
+		t.Fatalf("action replay counts generation/usage = %d/%d", actionGenerationCount, actionUsageCount)
 	}
 
 	if _, err = pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',
@@ -473,24 +492,23 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 		t.Fatal(err)
 	}
 	completeInput := workspace.CompleteCycleInput{
-		UserID: userID, GoalID: goalID, CycleID: cycleID, ReviewDraftID: reviewDraftID,
+		UserID: userID, GoalID: goalID, CycleID: cycleID,
 		OperationID: completeOperation, ExpectedGoalRevision: 0, ExpectedContentRevision: 4,
-		RequestHash: "complete-hash", Now: now.Add(time.Minute),
 	}
-	if _, err = store.CompleteCycle(context.Background(), completeInput); err != nil {
+	if _, err = executeCycleCompleteUseCase(store, context.Background(), completeInput, now.Add(time.Minute), reviewDraftID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.GetDraft(context.Background(), userID, reviewDraftID); !errors.Is(err, workspace.ErrDraftTypeMismatch) {
 		t.Fatalf("review draft read through creation endpoint error = %v", err)
 	}
-	if _, err = store.ContinueReview(context.Background(), workspace.ContinueReviewInput{
+	if _, err = executeContinueReviewUseCase(store, context.Background(), workspace.ContinueReviewInput{
 		UserID: userID, GoalID: goalID, OperationID: continueOperation, ExpectedGoalRevision: 1,
-		ExpectedDraftRevision: 0, RequestHash: "continue-hash", VersionID: nextVersionID,
+		ExpectedDraftRevision: 0, RequestHash: "continue-hash",
 		CycleID: nextCycleID, Now: now.Add(2 * time.Minute),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	completeReplay, err := store.CompleteCycle(context.Background(), completeInput)
+	completeReplay, err := executeCycleCompleteUseCase(store, context.Background(), completeInput, now.Add(time.Minute), reviewDraftID)
 	if err != nil || completeReplay.Replay == nil || !completeReplay.Replay.Replayed {
 		t.Fatalf("complete replay = %#v, error = %v", completeReplay, err)
 	}
@@ -521,18 +539,39 @@ VALUES($1,$2,'creation','元の目標',$3,$3)`, draftID, userID, now); err != ni
 	}
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
-output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,started_at,finished_at)
-VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,$5,'元の目標','改善した目標','fake','test','goal-refine-v1',$6,0,1,$7,$7)`,
-		generationID, userID, draftID, idempotencyKey, hashGoalRefineRequest(refineInput), now.Format("2006-01-02"), now); err != nil {
+output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,context_changed,started_at,finished_at)
+VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,$5,'元の目標','改善した目標','fake','test','goal-refine-v1',$6,0,1,true,$7,$7)`,
+		generationID, userID, draftID, idempotencyKey, goalRefineRequestHashFixture(refineInput), now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	if _, err := store.SaveDraft(context.Background(), userID, draftID, "利用者が後から編集", 0, now.Add(time.Minute)); err != nil {
+	store := NewWorkspaceStore(pool)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_usage_events
+(operation_id,user_id,operation_type,status,provider,model,prompt_version,accepted_at,provider_usage_finalized_at,quota_retain_until)
+VALUES($1,$2,'goal_refine','succeeded','fake','test','goal-refine-v1',$3,$3,$4)`,
+		generationID, userID, now, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := store.BeginGoalRefine(context.Background(), refineInput, nil)
-	if err != nil || replayed.ReplayedOutput == nil || *replayed.ReplayedOutput != "改善した目標" {
+	if _, err := executeGoalDraftSaveUseCase(store, context.Background(), userID, draftID, "利用者が後から編集", 0, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := executeGoalRefineBeginUseCase(store, context.Background(), refineInput, nil)
+	if err != nil || replayed.ReplayedOutput == nil || *replayed.ReplayedOutput != "改善した目標" || !replayed.ReplayedContextChanged {
 		t.Fatalf("goal refine replay = %#v, error = %v", replayed, err)
+	}
+	differentRequest := refineInput
+	differentRequest.ExpectedDraftRevision = 1
+	if _, err = executeGoalRefineBeginUseCase(store, context.Background(), differentRequest, nil); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
+		t.Fatalf("goal refine replay with different request error = %v", err)
+	}
+	var goalGenerationCount, goalUsageCount int64
+	if err = pool.QueryRow(context.Background(), `SELECT
+(SELECT count(*) FROM ai_generations WHERE user_id=$1 AND operation_type='goal_refine' AND idempotency_key=$2),
+(SELECT count(*) FROM ai_usage_events WHERE user_id=$1 AND operation_type='goal_refine')`,
+		userID, idempotencyKey).Scan(&goalGenerationCount, &goalUsageCount); err != nil {
+		t.Fatal(err)
+	}
+	if goalGenerationCount != 1 || goalUsageCount != 1 {
+		t.Fatalf("goal refine replay counts generation/usage = %d/%d", goalGenerationCount, goalUsageCount)
 	}
 }
 
@@ -550,51 +589,49 @@ func TestReviewGoalAIResolvesDraftByGoalInsideTransaction(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{
-		CursorSigningKey:  []byte("test-cursor-key"),
-		Provider:          "fake",
-		Model:             "test",
-		GoalPromptVersion: "goal-refine-v1",
-		RollingLimit:      10,
-		MonthlyBudgetUSD:  100,
-		ReservationUSD:    0.01,
-		LeaseDuration:     time.Minute,
-		RateHashKey:       []byte("test-rate-key"),
-	})
+	settings := aiIntegrationApplicationSettings{
+		Entitlements: workspace.Entitlements{MaxAIOperationsPer24Hours: 10},
+		GoalDraft: workspace.GoalDraftUseCaseSettings{
+			Provider: "fake", Model: "test", GoalPromptVersion: "goal-refine-v1",
+			MonthlyBudgetUSD: 100, ReservationUSD: 0.01, LeaseDuration: time.Minute,
+			RateHashKey: []byte("test-rate-key"),
+		},
+	}
+	store := NewWorkspaceStore(pool)
 	fixture := progressingGoalFixtures()[0]
 	started := startProgressingGoal(t, store, userID, fixture, 2, now)
 	if _, err := pool.Exec(context.Background(), `UPDATE pdca_cycles SET plan='P',do_text='D',check_text='C',action='A',
 content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revision=1 WHERE id=$1`, fixture.cycleID); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := store.CompleteCycle(context.Background(), workspace.CompleteCycleInput{
-		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: reviewDraftID,
+	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
+		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		OperationID: completeOperation, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
-		RequestHash: "complete-review-ai", Now: now.Add(time.Minute),
-	})
+	}, now.Add(time.Minute), reviewDraftID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	expectedGoalRevision := completed.Goal.Revision
-	snapshot, err := store.BeginGoalRefine(context.Background(), workspace.GoalRefineInput{
+	snapshot, err := executeGoalRefineBeginUseCaseWithSettings(store, context.Background(), workspace.GoalRefineInput{
 		UserID: userID, GoalID: fixture.goalID, ExpectedDraftRevision: completed.ReviewDraft.Revision,
 		ExpectedGoalRevision: &expectedGoalRevision, IdempotencyKey: refineIdempotency,
 		GenerationID: generationID, Now: now.Add(2 * time.Minute),
 	}, func(_ context.Context, snapshot workspace.AISnapshot) (workspace.AISnapshot, error) {
+		snapshot.CanonicalProviderInputHash = "9999999999999999999999999999999999999999999999999999999999999999"
 		return snapshot, nil
-	})
+	}, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if snapshot.GoalID != fixture.goalID || snapshot.SourceText != completed.ReviewDraft.Body {
 		t.Fatalf("review snapshot = %#v", snapshot)
 	}
-	if _, err = store.FinishGoalRefine(context.Background(), snapshot, workspace.AIProviderResult{
-		Output: "改善した目標", InputTokens: 10, OutputTokens: 4, CostUSD: 0.01, Attempts: 1,
-	}, nil, now.Add(3*time.Minute)); err != nil {
+	if _, err = executeGoalRefineFinishUseCaseWithSettings(store, context.Background(), snapshot, workspace.AIExecutionResult{
+		Output: "改善した目標", Usage: workspace.AIUsage{InputTokens: 10, OutputTokens: 4, CostUSD: 0.01}, Attempts: 1,
+	}, nil, now.Add(3*time.Minute), settings); err != nil {
 		t.Fatal(err)
 	}
-	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, "", fixture.goalID, generationID,
+	adopted, err := executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, "", fixture.goalID, generationID,
 		completed.ReviewDraft.Revision, &expectedGoalRevision, now.Add(4*time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -624,23 +661,23 @@ VALUES($1,$2,'creation','元の目標',$3,$3)`, draftID, userID, now); err != ni
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
 output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,started_at,finished_at)
-VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改善した目標','fake','test','goal-refine-v1',$5,0,1,$6,$6)`,
+VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','元の目標','改善した目標','fake','test','goal-refine-v1',$5,0,1,$6,$6)`,
 		generationID, userID, draftID, idempotencyKey, now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(time.Minute))
+	store := NewWorkspaceStore(pool)
+	adopted, err := executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(time.Minute))
 	if err != nil || adopted.Revision != 1 || adopted.Replayed {
 		t.Fatalf("adopted = %#v, error = %v", adopted, err)
 	}
-	replayed, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(2*time.Minute))
+	replayed, err := executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(2*time.Minute))
 	if err != nil || !replayed.Replayed || replayed.Body != "改善した目標" {
 		t.Fatalf("adopt replay = %#v, error = %v", replayed, err)
 	}
-	if _, err = store.SaveDraft(context.Background(), userID, draftID, "利用者が編集", 1, now.Add(3*time.Minute)); err != nil {
+	if _, err = executeGoalDraftSaveUseCase(store, context.Background(), userID, draftID, "利用者が編集", 1, now.Add(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(4*time.Minute))
+	_, err = executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, draftID, "", generationID, 0, nil, now.Add(4*time.Minute))
 	if !errors.Is(err, workspace.ErrAIResultAlreadyAdopted) {
 		t.Fatalf("adopt after edit error = %v", err)
 	}
@@ -666,19 +703,19 @@ VALUES($1,$2,'creation','元の目標',$3,$3)`, draftID, userID, now); err != ni
 	if _, err := pool.Exec(context.Background(), `INSERT INTO ai_generations
 (id,user_id,operation_type,status,source_goal_draft_id,target_revision,idempotency_key,input_hash,source_text,
 output,provider,model,prompt_version,budget_month_utc,budget_reserved_cost_usd,attempt_count,started_at,finished_at)
-VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'input-hash','元の目標','改善した目標','fake','test','goal-refine-v1',$5,0,1,$6,$6)`,
+VALUES($1,$2,'goal_refine','succeeded',$3,0,$4,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','元の目標','改善した目標','fake','test','goal-refine-v1',$5,0,1,$6,$6)`,
 		generationID, userID, draftID, idempotencyKey, now.Format("2006-01-02"), now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewWorkspaceStore(pool, WorkspaceStoreSettings{CursorSigningKey: []byte("test-cursor-key")})
-	if _, err := store.SaveDraft(context.Background(), userID, draftID, "一時的な変更", 0, now.Add(time.Minute)); err != nil {
+	store := NewWorkspaceStore(pool)
+	if _, err := executeGoalDraftSaveUseCase(store, context.Background(), userID, draftID, "一時的な変更", 0, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SaveDraft(context.Background(), userID, draftID, "元の目標", 1, now.Add(2*time.Minute)); err != nil {
+	if _, err := executeGoalDraftSaveUseCase(store, context.Background(), userID, draftID, "元の目標", 1, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
-	adopted, err := store.AdoptGoalSuggestion(context.Background(), userID, draftID, "", generationID, 2, nil, now.Add(3*time.Minute))
+	adopted, err := executeGoalSuggestionAdoptUseCase(store, context.Background(), userID, draftID, "", generationID, 2, nil, now.Add(3*time.Minute))
 	if err != nil || adopted.Body != "改善した目標" || adopted.Revision != 3 {
 		t.Fatalf("adopted = %#v, error = %v", adopted, err)
 	}

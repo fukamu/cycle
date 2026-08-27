@@ -2,7 +2,12 @@ package workspace
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 const (
@@ -15,8 +20,36 @@ type contextFieldSpec struct {
 	minimum float64
 }
 
-func (service *Service) selectAIContext(ctx context.Context, snapshot AISnapshot) (AISnapshot, error) {
-	if service.settings.TokenCounter == nil || service.settings.MaxInputTokens <= 0 || service.settings.Model == "" {
+func (service *Service) selectAIContextForUser(userID string) AIContextSelector {
+	return func(ctx context.Context, snapshot AISnapshot) (AISnapshot, error) {
+		limits, err := service.entitlements.Limits(ctx, user.ID(userID))
+		if err != nil {
+			return AISnapshot{}, err
+		}
+		switch snapshot.Operation {
+		case domainai.OperationGoalRefine:
+			snapshot.MaxOutputTokens = int64(limits.GoalRefineOutputTokens)
+		case domainai.OperationActionGenerate, domainai.OperationActionRefine:
+			snapshot.MaxOutputTokens = int64(limits.ActionOutputTokens)
+		default:
+			return AISnapshot{}, ErrAIInputBudget
+		}
+		if snapshot.MaxOutputTokens <= 0 {
+			return AISnapshot{}, ErrAIInputBudget
+		}
+		selected, err := service.selectAIContext(ctx, snapshot, limits.MaxAIInputTokens)
+		if err != nil {
+			return AISnapshot{}, err
+		}
+		if err = service.setCanonicalProviderInputHash(&selected); err != nil {
+			return AISnapshot{}, err
+		}
+		return selected, nil
+	}
+}
+
+func (service *Service) selectAIContext(ctx context.Context, snapshot AISnapshot, maxInputTokens int) (AISnapshot, error) {
+	if service.settings.TokenCounter == nil || maxInputTokens <= 0 || service.settings.Model == "" {
 		return AISnapshot{}, ErrAIInputBudget
 	}
 	if err := assertSameGoalContext(snapshot); err != nil {
@@ -33,7 +66,7 @@ func (service *Service) selectAIContext(ctx context.Context, snapshot AISnapshot
 		candidates = candidates[:maximum]
 	}
 	selected.PastCycles = nil
-	if selected.Operation == "action_generate" && selected.CurrentCycle != nil {
+	if selected.Operation == domainai.OperationActionGenerate && selected.CurrentCycle != nil {
 		selected.CurrentCycle.Action = ""
 	}
 
@@ -41,8 +74,8 @@ func (service *Service) selectAIContext(ctx context.Context, snapshot AISnapshot
 	if err != nil {
 		return AISnapshot{}, err
 	}
-	if baseTokens > service.settings.MaxInputTokens {
-		selected, err = service.truncateCurrentInput(ctx, selected)
+	if baseTokens > maxInputTokens {
+		selected, err = service.truncateCurrentInput(ctx, selected, maxInputTokens)
 		if err != nil {
 			return AISnapshot{}, err
 		}
@@ -55,7 +88,7 @@ func (service *Service) selectAIContext(ctx context.Context, snapshot AISnapshot
 		if countErr != nil {
 			return AISnapshot{}, countErr
 		}
-		if count > service.settings.MaxInputTokens {
+		if count > maxInputTokens {
 			break
 		}
 		selected = withCandidate
@@ -87,7 +120,7 @@ func cloneAISnapshot(snapshot AISnapshot) AISnapshot {
 	return cloned
 }
 
-func (service *Service) truncateCurrentInput(ctx context.Context, snapshot AISnapshot) (AISnapshot, error) {
+func (service *Service) truncateCurrentInput(ctx context.Context, snapshot AISnapshot, maxInputTokens int) (AISnapshot, error) {
 	specs := currentFieldSpecs(snapshot.Operation)
 	if len(specs) == 0 {
 		return AISnapshot{}, ErrAIInputBudget
@@ -101,7 +134,7 @@ func (service *Service) truncateCurrentInput(ctx context.Context, snapshot AISna
 	if err != nil {
 		return AISnapshot{}, err
 	}
-	available := service.settings.MaxInputTokens - fixedTokens
+	available := maxInputTokens - fixedTokens
 	if available <= 0 {
 		return AISnapshot{}, ErrAIInputBudget
 	}
@@ -153,10 +186,10 @@ func (service *Service) truncateCurrentInput(ctx context.Context, snapshot AISna
 		if countErr != nil {
 			return AISnapshot{}, countErr
 		}
-		if count <= service.settings.MaxInputTokens {
+		if count <= maxInputTokens {
 			return truncated, nil
 		}
-		excess := count - service.settings.MaxInputTokens
+		excess := count - maxInputTokens
 		largest := -1
 		for index := range allocations {
 			if allocations[index] > 0 && (largest < 0 || allocations[index] > allocations[largest]) {
@@ -174,13 +207,13 @@ func (service *Service) truncateCurrentInput(ctx context.Context, snapshot AISna
 	return AISnapshot{}, ErrAIInputBudget
 }
 
-func currentFieldSpecs(operation string) []contextFieldSpec {
+func currentFieldSpecs(operation domainai.OperationType) []contextFieldSpec {
 	switch operation {
-	case "goal_refine":
+	case domainai.OperationGoalRefine:
 		return []contextFieldSpec{{"source", 0.7}, {"goal", 0.3}}
-	case "action_generate":
+	case domainai.OperationActionGenerate:
 		return []contextFieldSpec{{"goal", 0.1}, {"plan", 0.1}, {"do", 0.1}, {"check", 0.1}}
-	case "action_refine":
+	case domainai.OperationActionRefine:
 		return []contextFieldSpec{{"action", 0.4}, {"goal", 0.2}, {"plan", 0.133}, {"do", 0.133}, {"check", 0.133}}
 	default:
 		return nil
@@ -224,12 +257,19 @@ func setContextField(snapshot *AISnapshot, name, value string) {
 }
 
 func (service *Service) countProviderInput(ctx context.Context, snapshot AISnapshot) (int, error) {
-	request := providerRequestFromSnapshot(snapshot, service.outputTokenLimit(snapshot.Operation))
-	encoded, err := json.Marshal(request)
+	encoded, err := service.providerLogicalInputJSON(snapshot)
 	if err != nil {
 		return 0, err
 	}
-	instructionTokens, err := service.settings.TokenCounter.Count(ctx, service.settings.Model, service.instructions(snapshot.Operation))
+	operationSettings, err := service.aiOperationSettings(snapshot.Operation)
+	if err != nil {
+		return 0, err
+	}
+	instructions := operationSettings.instructions
+	if service.settings.MaxProviderAttempts > 1 {
+		instructions += invalidResponseRetryInstruction
+	}
+	instructionTokens, err := service.settings.TokenCounter.Count(ctx, service.settings.Model, instructions)
 	if err != nil {
 		return 0, err
 	}
@@ -240,50 +280,136 @@ func (service *Service) countProviderInput(ctx context.Context, snapshot AISnaps
 	return instructionTokens + inputTokens + providerInputTokenOverhead, nil
 }
 
-func (service *Service) instructions(operation string) string {
+type aiOperationSettings struct {
+	instructions  string
+	promptVersion string
+}
+
+func (service *Service) aiOperationSettings(operation domainai.OperationType) (aiOperationSettings, error) {
 	switch operation {
-	case "goal_refine":
-		return service.settings.GoalRefineInstructions
-	case "action_generate":
-		return service.settings.ActionGenerateInstructions
-	case "action_refine":
-		return service.settings.ActionRefineInstructions
+	case domainai.OperationGoalRefine:
+		return aiOperationSettings{service.settings.GoalRefineInstructions, service.settings.GoalPromptVersion}, nil
+	case domainai.OperationActionGenerate:
+		return aiOperationSettings{service.settings.ActionGenerateInstructions, service.settings.GeneratePromptVersion}, nil
+	case domainai.OperationActionRefine:
+		return aiOperationSettings{service.settings.ActionRefineInstructions, service.settings.RefinePromptVersion}, nil
 	default:
-		return ""
+		return aiOperationSettings{}, ErrAIInputBudget
 	}
 }
 
-func (service *Service) outputTokenLimit(operation string) int64 {
-	if operation == "goal_refine" {
-		return int64(service.settings.GoalRefineMaxOutputTokens)
+func (service *Service) refineGoalAIInput(snapshot AISnapshot) RefineGoalAIInput {
+	settings, _ := service.aiOperationSettings(domainai.OperationGoalRefine)
+	return RefineGoalAIInput{
+		Instructions: settings.instructions, GoalBody: snapshot.GoalBody, SourceText: snapshot.SourceText,
+		PastCycles: aiInputCycles(snapshot.PastCycles), MaxOutputTokens: snapshot.MaxOutputTokens,
 	}
-	return int64(service.settings.ActionMaxOutputTokens)
 }
 
-func providerRequestFromSnapshot(snapshot AISnapshot, maxOutputTokens int64) AIProviderRequest {
-	request := AIProviderRequest{
-		Operation: snapshot.Operation, GoalBody: snapshot.GoalBody,
-		PastCycles: []AIProviderCycle{}, MaxOutputTokens: maxOutputTokens,
+func (service *Service) generateActionAIInput(snapshot AISnapshot) GenerateActionAIInput {
+	settings, _ := service.aiOperationSettings(domainai.OperationActionGenerate)
+	return GenerateActionAIInput{
+		Instructions: settings.instructions, GoalBody: snapshot.GoalBody,
+		CurrentCycle: aiInputCurrentCycle(snapshot.CurrentCycle), PastCycles: aiInputCycles(snapshot.PastCycles),
+		MaxOutputTokens: snapshot.MaxOutputTokens,
 	}
-	if snapshot.Operation == "goal_refine" {
-		request.SourceText = snapshot.SourceText
-	}
-	if snapshot.CurrentCycle != nil {
-		request.CurrentCycle = providerCycle(*snapshot.CurrentCycle, false)
-	}
-	for _, item := range snapshot.PastCycles {
-		request.PastCycles = append(request.PastCycles, *providerCycle(item, true))
-	}
-	return request
 }
 
-func providerCycle(item AIContextCycle, includeGoalBody bool) *AIProviderCycle {
+func (service *Service) refineActionAIInput(snapshot AISnapshot) RefineActionAIInput {
+	settings, _ := service.aiOperationSettings(domainai.OperationActionRefine)
+	return RefineActionAIInput{
+		Instructions: settings.instructions, GoalBody: snapshot.GoalBody,
+		CurrentCycle: aiInputCurrentCycle(snapshot.CurrentCycle), PastCycles: aiInputCycles(snapshot.PastCycles),
+		MaxOutputTokens: snapshot.MaxOutputTokens,
+	}
+}
+
+func (service *Service) providerLogicalInputJSON(snapshot AISnapshot) ([]byte, error) {
+	switch snapshot.Operation {
+	case domainai.OperationGoalRefine:
+		return json.Marshal(service.refineGoalAIInput(snapshot))
+	case domainai.OperationActionGenerate:
+		return json.Marshal(service.generateActionAIInput(snapshot))
+	case domainai.OperationActionRefine:
+		return json.Marshal(service.refineActionAIInput(snapshot))
+	default:
+		return nil, ErrAIInputBudget
+	}
+}
+
+func aiInputCurrentCycle(item *AIContextCycle) *AIInputCycle {
+	if item == nil {
+		return nil
+	}
+	return aiInputCycle(*item, false)
+}
+
+func aiInputCycles(items []AIContextCycle) []AIInputCycle {
+	result := make([]AIInputCycle, len(items))
+	for index, item := range items {
+		result[index] = *aiInputCycle(item, true)
+	}
+	return result
+}
+
+func aiInputCycle(item AIContextCycle, includeGoalBody bool) *AIInputCycle {
 	goalBody := ""
 	if includeGoalBody {
 		goalBody = item.GoalBody
 	}
-	return &AIProviderCycle{
+	return &AIInputCycle{
 		SequenceNumber: item.SequenceNumber, Status: item.Status, GoalBody: goalBody,
 		Plan: item.Plan, Do: item.Do, Check: item.Check, Action: item.Action,
 	}
+}
+
+func (service *Service) setCanonicalProviderInputHash(snapshot *AISnapshot) error {
+	hash, err := service.canonicalProviderInputHash(*snapshot)
+	if err != nil {
+		return err
+	}
+	snapshot.CanonicalProviderInputHash = hash
+	return nil
+}
+
+func (service *Service) verifyCanonicalProviderInputHash(snapshot *AISnapshot) error {
+	if snapshot.CanonicalProviderInputHash == "" {
+		return ErrAIContextIsolation
+	}
+	hash, err := service.canonicalProviderInputHash(*snapshot)
+	if err != nil {
+		return err
+	}
+	if snapshot.CanonicalProviderInputHash != hash {
+		return ErrAIContextIsolation
+	}
+	return nil
+}
+
+func (service *Service) canonicalProviderInputHash(snapshot AISnapshot) (string, error) {
+	selectedContext, err := service.providerLogicalInputJSON(snapshot)
+	if err != nil {
+		return "", err
+	}
+	settings, err := service.aiOperationSettings(snapshot.Operation)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := json.Marshal(struct {
+		PromptVersion      string                 `json:"promptVersion"`
+		OperationType      domainai.OperationType `json:"operationType"`
+		Model              string                 `json:"model"`
+		TargetRevision     int64                  `json:"targetRevision"`
+		SourceGoalRevision int64                  `json:"sourceGoalRevision"`
+		SelectedContext    json.RawMessage        `json:"selectedContext"`
+		ContextCycleIDs    []string               `json:"contextCycleIds"`
+	}{
+		settings.promptVersion, snapshot.Operation, service.settings.Model,
+		snapshot.TargetRevision, snapshot.SourceGoalRevision, selectedContext, aiContextCycleIDs(snapshot.PastCycles),
+	})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(canonical)
+	return hex.EncodeToString(digest[:]), nil
 }

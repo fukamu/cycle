@@ -1,6 +1,14 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import { newUUIDv7 } from "../src/shared/id/uuid";
+import { expectAPIError, getSession, requestFromPage } from "./support/api";
+import {
+  completeCurrentCycle,
+  createAndCompleteGoal,
+  createProgressingGoal,
+  saveFrame,
+  saveText,
+} from "./support/workspace";
 
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
@@ -9,14 +17,45 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await page.goto("/");
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
   const goal = page.getByRole("textbox", { name: "あなたの目標" });
-  await expect(goal).toHaveAttribute("maxlength", "80");
+  await expect(goal).not.toHaveAttribute("maxlength");
   await expect(page.getByText("0 / 80")).toBeVisible();
+  const maximumGoal = "😀".repeat(80);
+  await saveText(page, goal, maximumGoal, "/api/v1/goal-drafts/");
+  await expect(goal).toHaveValue(maximumGoal);
+  await expect(page.getByText("80 / 80")).toBeVisible();
+  await goal.fill(`${maximumGoal}😀`);
+  await expect(goal).toHaveValue(maximumGoal);
   await saveText(page, goal, goalText, "/api/v1/goal-drafts/");
+  await page.getByRole("button", { name: "AIで目標を整える" }).click();
+  await expect(
+    page.getByRole("heading", { name: "AIからの提案" }),
+  ).toBeVisible();
+  await expect(goal).toHaveValue(goalText);
+  const adoptResponse = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "POST" &&
+      candidate.url().includes("/refinements/") &&
+      candidate.url().endsWith("/adopt") &&
+      candidate.ok(),
+  );
+  await page.getByRole("button", { name: "提案を採用" }).click();
+  await adoptResponse;
+  await expect(page.getByRole("heading", { name: "AIからの提案" })).toHaveCount(
+    0,
+  );
+  await expect(goal).toHaveValue(goalText);
+  await expect(page.getByText("保存済み")).toBeVisible();
   await page.getByRole("button", { name: "この目標で始める" }).click();
   await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
   const planEditor = page.getByRole("textbox", { name: "P — Plan" });
-  await expect(planEditor).toHaveAttribute("maxlength", "200");
+  await expect(planEditor).not.toHaveAttribute("maxlength");
   await expect(page.getByText("0 / 200")).toBeVisible();
+  const maximumFrame = "😀".repeat(200);
+  await saveFrame(page, "P — Plan", maximumFrame, "P");
+  await expect(planEditor).toHaveValue(maximumFrame);
+  await expect(page.getByText("200 / 200")).toBeVisible();
+  await planEditor.fill(`${maximumFrame}😀`);
+  await expect(planEditor).toHaveValue(maximumFrame);
 
   await saveFrame(
     page,
@@ -104,6 +143,159 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });
 
+test("cycle completion reuses its operation after committed response loss and converges to the current workspace", async ({
+  page,
+}) => {
+  await createProgressingGoal(page, "応答喪失後も一度だけ完了する目標");
+  const workspaceRoute = new URL(page.url()).pathname.match(
+    /^\/goals\/([^/]+)\/cycles\/([^/]+)$/,
+  );
+  expect(workspaceRoute).not.toBeNull();
+  const [, goalId, cycleId] = workspaceRoute!;
+
+  await saveFrame(page, "P — Plan", "応答喪失を再現する計画", "D");
+  await saveFrame(page, "D — Do", "Backendまで完了requestを届けた", "C");
+  await saveFrame(page, "C — Check", "browser responseだけ失った", "A");
+  await saveFrame(page, "A — Action", "同じcommandとして再試行する", "A");
+
+  type CompletionRequest = {
+    readonly operationId: string;
+    readonly expectedGoalRevision: number;
+    readonly expectedContentRevision: number;
+  };
+  const completionRequests: CompletionRequest[] = [];
+  let firstCommitStatus: number | undefined;
+  let firstRequestCSRFToken: string | undefined;
+  let markSecondRequestSeen!: () => void;
+  const secondRequestSeen = new Promise<void>((resolve) => {
+    markSecondRequestSeen = resolve;
+  });
+  await page.route(
+    `**/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
+    async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      completionRequests.push(
+        route.request().postDataJSON() as CompletionRequest,
+      );
+      if (completionRequests.length === 1) {
+        firstRequestCSRFToken = route.request().headers()["x-csrf-token"];
+        const committedResponse = await route.fetch();
+        firstCommitStatus = committedResponse.status();
+        await committedResponse.dispose();
+        await route.abort("connectionfailed");
+        return;
+      }
+      if (completionRequests.length === 2) markSecondRequestSeen();
+      await route.continue();
+    },
+  );
+
+  await page.getByRole("button", { name: "サイクルを完了" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "サイクルを完了" })
+    .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "サイクルを完了できませんでした",
+  );
+  expect(firstCommitStatus).toBe(200);
+  expect(completionRequests).toHaveLength(1);
+  expect(firstRequestCSRFToken).toBeTruthy();
+
+  const reviewResult = await requestFromPage(page, {
+    path: `/api/v1/goals/${goalId}/review`,
+  });
+  expect(reviewResult.status).toBe(200);
+  const review = reviewResult.payload as {
+    readonly goal: { readonly revision: number };
+    readonly reviewDraft: { readonly revision: number };
+  };
+  const continueResult = await requestFromPage(page, {
+    path: `/api/v1/goals/${goalId}/review/continue`,
+    method: "POST",
+    csrfToken: firstRequestCSRFToken,
+    body: {
+      operationId: newUUIDv7(),
+      expectedGoalRevision: review.goal.revision,
+      expectedDraftRevision: review.reviewDraft.revision,
+    },
+  });
+  expect(continueResult.status).toBe(200);
+  const continued = continueResult.payload as {
+    readonly cycle: {
+      readonly id: string;
+      readonly sequenceNumber: number;
+      readonly status: string;
+    };
+  };
+  expect(continued.cycle).toMatchObject({
+    sequenceNumber: 2,
+    status: "active",
+  });
+
+  await page.getByRole("button", { name: "サイクルを完了" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "サイクルを完了" })
+    .click();
+  await secondRequestSeen;
+  expect(completionRequests).toHaveLength(2);
+  expect(completionRequests[1].operationId).toBe(
+    completionRequests[0].operationId,
+  );
+  expect(completionRequests[1]).toEqual(completionRequests[0]);
+
+  await expect(page).toHaveURL(`/goals/${goalId}/cycles/${continued.cycle.id}`);
+  await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
+
+  const goalResult = await requestFromPage(page, {
+    path: `/api/v1/goals/${goalId}`,
+  });
+  expect(goalResult).toMatchObject({
+    status: 200,
+    payload: {
+      goal: {
+        id: goalId,
+        status: "active_cycle",
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: continued.cycle.id,
+          cycleSequenceNumber: 2,
+        },
+      },
+    },
+  });
+  const cyclesResult = await requestFromPage(page, {
+    path: `/api/v1/goals/${goalId}/cycles?limit=20`,
+  });
+  expect(cyclesResult.status).toBe(200);
+  const cycles = cyclesResult.payload as {
+    readonly items: ReadonlyArray<{
+      readonly id: string;
+      readonly sequenceNumber: number;
+      readonly status: string;
+    }>;
+  };
+  expect(cycles.items).toHaveLength(2);
+  expect(cycles.items).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: cycleId,
+        sequenceNumber: 1,
+        status: "completed",
+      }),
+      expect.objectContaining({
+        id: continued.cycle.id,
+        sequenceNumber: 2,
+        status: "active",
+      }),
+    ]),
+  );
+});
+
 test("a failed autosave keeps the browser draft and retry persists it", async ({
   page,
 }) => {
@@ -125,7 +317,7 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   const browserDraftBodies = await page.evaluate(
     () =>
       new Promise<string[]>((resolve, reject) => {
-        const open = indexedDB.open("fukamu-cycle-browser-drafts-v2", 1);
+        const open = indexedDB.open("fukamu-cycle-browser-drafts-v2");
         open.onerror = () => reject(open.error);
         open.onsuccess = () => {
           const database = open.result;
@@ -406,9 +598,23 @@ test("goal review termination discards an unversioned change explicitly", async 
   await page.getByRole("button", { name: "目標を達成として終了" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText(
-    "この変更案は、次のサイクルを開始しないため保存されません",
+    "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません",
   );
   await dialog.getByRole("button", { name: "目標を達成" }).click();
+  await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
+});
+
+test("goal review termination explicitly covers cross-tab changes without local edits", async ({
+  page,
+}) => {
+  await createAndCompleteGoal(page);
+  await page.getByRole("button", { name: "目標を終了" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText(
+    "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません",
+  );
+  await expect(dialog).toContainText("現在の目標のまま終了します");
+  await dialog.getByRole("button", { name: "目標を終了" }).click();
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });
 
@@ -436,9 +642,21 @@ test("cross-user draft, goal, cycle, and delete access is rejected", async ({
     await expect(
       outsider.getByRole("button", { name: "新しい目標を設定" }),
     ).toBeVisible();
+    const outsiderSession = await getSession(outsider);
     await expectAPIError(
       outsider,
-      `/api/v1/goal-drafts/${draftPayload.draft.id}`,
+      { path: `/api/v1/goal-drafts/${draftPayload.draft.id}` },
+      404,
+      "GOAL_DRAFT_NOT_FOUND",
+    );
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goal-drafts/${draftPayload.draft.id}`,
+        method: "PATCH",
+        csrfToken: outsiderSession.csrfToken,
+        body: { body: "所有者外の変更", expectedRevision: 0 },
+      },
       404,
       "GOAL_DRAFT_NOT_FOUND",
     );
@@ -459,37 +677,76 @@ test("cross-user draft, goal, cycle, and delete access is rejected", async ({
 
     await expectAPIError(
       outsider,
-      `/api/v1/goals/${goalId}`,
+      { path: `/api/v1/goals/${goalId}` },
       404,
       "GOAL_NOT_FOUND",
     );
     await expectAPIError(
       outsider,
-      `/api/v1/goals/${goalId}/cycles/${cycleId}`,
+      { path: `/api/v1/goals/${goalId}/cycles/${cycleId}` },
+      404,
+      "GOAL_NOT_FOUND",
+    );
+
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goals/${goalId}/cycles/${cycleId}/frames/plan`,
+        method: "PATCH",
+        csrfToken: outsiderSession.csrfToken,
+        body: {
+          content: "所有者外の変更",
+          expectedFrameRevision: 0,
+        },
+      },
+      404,
+      "GOAL_NOT_FOUND",
+    );
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goals/${goalId}/cycles/${cycleId}/actions/generate`,
+        method: "POST",
+        csrfToken: outsiderSession.csrfToken,
+        idempotencyKey: newUUIDv7(),
+        body: {
+          expectedContentRevision: 0,
+          confirmReplace: false,
+        },
+      },
       404,
       "CYCLE_NOT_FOUND",
     );
-
-    const deleteAttempt = await outsider.evaluate(
-      async (input) => {
-        const sessionResponse = await fetch("/api/v1/session");
-        const session = (await sessionResponse.json()) as { csrfToken: string };
-        const response = await fetch(`/api/v1/goals/${input.targetGoalId}`, {
-          method: "DELETE",
-          credentials: "same-origin",
-          headers: {
-            "Content-Type": "application/json; charset=utf-8",
-            "X-CSRF-Token": session.csrfToken,
-            "Idempotency-Key": input.idempotencyKey,
-          },
-          body: JSON.stringify({ confirmed: true, expectedGoalRevision: 0 }),
-        });
-        const payload = (await response.json()) as { error: { code: string } };
-        return { status: response.status, code: payload.error.code };
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goals/${goalId}/termination`,
+        method: "POST",
+        csrfToken: outsiderSession.csrfToken,
+        body: {
+          operationId: newUUIDv7(),
+          outcome: "ended",
+          expectedGoalRevision: 0,
+          expectedState: "active_cycle",
+          activeCycleId: cycleId,
+          expectedCycleContentRevision: 0,
+        },
       },
-      { targetGoalId: goalId, idempotencyKey: newUUIDv7() },
+      404,
+      "GOAL_NOT_FOUND",
     );
-    expect(deleteAttempt).toEqual({ status: 404, code: "GOAL_NOT_FOUND" });
+    await expectAPIError(
+      outsider,
+      {
+        path: `/api/v1/goals/${goalId}`,
+        method: "DELETE",
+        csrfToken: outsiderSession.csrfToken,
+        idempotencyKey: newUUIDv7(),
+        body: { confirmed: true, expectedGoalRevision: 0 },
+      },
+      404,
+      "GOAL_NOT_FOUND",
+    );
 
     const ownerReadStatus = await owner.evaluate(async (targetGoalId) => {
       const response = await fetch(`/api/v1/goals/${targetGoalId}`);
@@ -501,95 +758,3 @@ test("cross-user draft, goal, cycle, and delete access is rejected", async ({
     await outsiderContext.close();
   }
 });
-
-async function createAndCompleteGoal(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "新しい目標を設定" }).click();
-  await saveText(
-    page,
-    page.getByRole("textbox", { name: "あなたの目標" }),
-    "確認用の目標",
-    "/api/v1/goal-drafts/",
-  );
-  await page.getByRole("button", { name: "この目標で始める" }).click();
-  await completeCurrentCycle(page, "確認");
-}
-
-async function completeCurrentCycle(page: Page, suffix: string) {
-  await saveFrame(page, "P — Plan", `計画 ${suffix}`, "D");
-  await saveFrame(page, "D — Do", `実行 ${suffix}`, "C");
-  await saveFrame(page, "C — Check", `確認 ${suffix}`, "A");
-  await saveFrame(page, "A — Action", `改善 ${suffix}`, "A");
-  await page.getByRole("button", { name: "サイクルを完了" }).click();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "サイクルを完了" })
-    .click();
-}
-
-async function createProgressingGoal(page: Page, goalText: string) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "新しい目標を設定" }).click();
-  await saveText(
-    page,
-    page.getByRole("textbox", { name: "あなたの目標" }),
-    goalText,
-    "/api/v1/goal-drafts/",
-  );
-  await page.getByRole("button", { name: "この目標で始める" }).click();
-  await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
-}
-
-async function saveFrame(
-  page: Page,
-  label: string,
-  content: string,
-  next: "P" | "D" | "C" | "A",
-) {
-  const frame = ({ P: "plan", D: "do", C: "check", A: "action" } as const)[
-    label[0] as "P" | "D" | "C" | "A"
-  ];
-  const response = page.waitForResponse(
-    (candidate) =>
-      candidate.request().method() === "PATCH" &&
-      candidate.url().endsWith(`/frames/${frame}`) &&
-      candidate.ok(),
-  );
-  await page.getByRole("textbox", { name: label }).fill(content);
-  if (next !== label[0])
-    await page.getByRole("tab", { name: new RegExp(`^${next}`) }).click();
-  else await page.getByRole("textbox", { name: label }).blur();
-  await response;
-  await expect(page.getByText("保存済み")).toBeVisible();
-}
-
-async function saveText(
-  page: Page,
-  editor: Locator,
-  content: string,
-  urlPart: string,
-) {
-  const response = page.waitForResponse(
-    (candidate) =>
-      candidate.request().method() === "PATCH" &&
-      candidate.url().includes(urlPart) &&
-      candidate.ok(),
-  );
-  await editor.fill(content);
-  await response;
-  await expect(page.getByText("保存済み")).toBeVisible();
-}
-
-async function expectAPIError(
-  page: Page,
-  path: string,
-  status: number,
-  code: string,
-) {
-  const result = await page.evaluate(async (targetPath) => {
-    const response = await fetch(targetPath);
-    const payload = (await response.json()) as { error: { code: string } };
-    return { status: response.status, code: payload.error.code };
-  }, path);
-  expect(result).toEqual({ status, code });
-}

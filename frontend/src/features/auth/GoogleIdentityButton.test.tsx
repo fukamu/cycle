@@ -43,8 +43,10 @@ describe("GoogleIdentityButton", () => {
       width: "320px",
       height: "44px",
     });
-    expect(
-      screen.queryByText("Google認証を読み込み中…"),
-    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Google認証を読み込み中…"),
+      ).not.toBeInTheDocument(),
+    );
   });
 });

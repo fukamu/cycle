@@ -1,7 +1,12 @@
 version: "2"
 sql:
   - engine: "postgresql"
-    schema: "migrations/000001_fukamu_cycle_baseline.up.sql"
+    schema:
+      - "migrations/000001_fukamu_cycle_baseline.up.sql"
+      - "migrations/000002_ai_usage_retention_margin.up.sql"
+      - "migrations/000003_ai_usage_settlement_exposure.up.sql"
+      - "migrations/000004_ai_generation_hash_split.up.sql"
+      - "migrations/000005_retention_cleanup_index.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:

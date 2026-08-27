@@ -24,59 +24,40 @@ func (q *Queries) CountProgressingGoals(ctx context.Context, userID pgtype.UUID)
 	return count, err
 }
 
-const getCreationGoalDraft = `-- name: GetCreationGoalDraft :one
-SELECT id, user_id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, created_at, updated_at
+const getGoalDraftByID = `-- name: GetGoalDraftByID :one
+SELECT id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, updated_at
 FROM goal_drafts
-WHERE id = $1 AND user_id = $2 AND draft_type = 'creation'
+WHERE id = $1::uuid AND user_id = $2::uuid
 `
 
-type GetCreationGoalDraftParams struct {
-	ID     pgtype.UUID
-	UserID pgtype.UUID
+type GetGoalDraftByIDParams struct {
+	DraftID pgtype.UUID
+	UserID  pgtype.UUID
 }
 
-func (q *Queries) GetCreationGoalDraft(ctx context.Context, arg GetCreationGoalDraftParams) (*GoalDraft, error) {
-	row := q.db.QueryRow(ctx, getCreationGoalDraft, arg.ID, arg.UserID)
-	var i GoalDraft
+type GetGoalDraftByIDRow struct {
+	ID                pgtype.UUID
+	DraftType         string
+	GoalID            pgtype.UUID
+	BaseGoalVersionID pgtype.UUID
+	ReviewCycleID     pgtype.UUID
+	Body              string
+	Revision          int64
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) GetGoalDraftByID(ctx context.Context, arg GetGoalDraftByIDParams) (*GetGoalDraftByIDRow, error) {
+	row := q.db.QueryRow(ctx, getGoalDraftByID, arg.DraftID, arg.UserID)
+	var i GetGoalDraftByIDRow
 	err := row.Scan(
 		&i.ID,
-		&i.UserID,
 		&i.DraftType,
 		&i.GoalID,
 		&i.BaseGoalVersionID,
 		&i.ReviewCycleID,
 		&i.Body,
 		&i.Revision,
-		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return &i, err
-}
-
-const getCurrentGoalVersion = `-- name: GetCurrentGoalVersion :one
-SELECT gv.id, gv.user_id, gv.goal_id, gv.version_number, gv.body, gv.created_by_operation_id, gv.created_at
-FROM goal_versions gv
-JOIN goals g ON g.id = gv.goal_id AND g.user_id = gv.user_id
-WHERE gv.goal_id = $1 AND gv.user_id = $2
-  AND gv.version_number = g.current_version_number
-`
-
-type GetCurrentGoalVersionParams struct {
-	GoalID pgtype.UUID
-	UserID pgtype.UUID
-}
-
-func (q *Queries) GetCurrentGoalVersion(ctx context.Context, arg GetCurrentGoalVersionParams) (*GoalVersion, error) {
-	row := q.db.QueryRow(ctx, getCurrentGoalVersion, arg.GoalID, arg.UserID)
-	var i GoalVersion
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.GoalID,
-		&i.VersionNumber,
-		&i.Body,
-		&i.CreatedByOperationID,
-		&i.CreatedAt,
 	)
 	return &i, err
 }
@@ -110,64 +91,398 @@ func (q *Queries) GetGoalReviewDraft(ctx context.Context, arg GetGoalReviewDraft
 	return &i, err
 }
 
-const getOwnedGoal = `-- name: GetOwnedGoal :one
-SELECT id, user_id, status, current_version_number, next_cycle_sequence_number, revision, terminal_at, terminal_operation_id, terminal_request_hash, created_at, updated_at
-FROM goals
-WHERE id = $1 AND user_id = $2
+const getGoalView = `-- name: GetGoalView :one
+SELECT
+    g.id AS goal_id,
+    g.status AS goal_status,
+    g.revision AS goal_revision,
+    g.next_cycle_sequence_number,
+    g.created_at AS goal_created_at,
+    g.terminal_at AS goal_terminal_at,
+    gv.id AS current_version_id,
+    gv.version_number AS current_version_number,
+    gv.body AS current_version_body,
+    gv.created_at AS current_version_created_at,
+    (
+        SELECT count(*)
+        FROM pdca_cycles counted
+        WHERE counted.user_id = g.user_id AND counted.goal_id = g.id
+    )::integer AS cycle_count,
+    active_cycle.id AS active_cycle_id,
+    active_cycle.sequence_number AS active_cycle_sequence_number,
+    review_draft.id AS review_draft_id,
+    trigger_cycle.id AS trigger_cycle_id,
+    trigger_cycle.sequence_number AS trigger_cycle_sequence_number,
+    (
+        CASE WHEN g.status IN ('active_cycle', 'goal_review') THEN 0 ELSE 1 END
+    )::smallint AS category,
+    (
+        CASE
+            WHEN g.status IN ('active_cycle', 'goal_review') THEN g.updated_at
+            ELSE g.terminal_at
+        END
+    )::timestamptz AS sort_time
+FROM goals g
+LEFT JOIN goal_versions gv
+    ON gv.user_id = g.user_id
+   AND gv.goal_id = g.id
+   AND gv.version_number = g.current_version_number
+LEFT JOIN pdca_cycles active_cycle
+    ON active_cycle.user_id = g.user_id
+   AND active_cycle.goal_id = g.id
+   AND active_cycle.status = 'active'
+LEFT JOIN goal_drafts review_draft
+    ON review_draft.user_id = g.user_id
+   AND review_draft.goal_id = g.id
+   AND review_draft.draft_type = 'review'
+LEFT JOIN pdca_cycles trigger_cycle
+    ON trigger_cycle.user_id = g.user_id
+   AND trigger_cycle.goal_id = g.id
+   AND trigger_cycle.id = review_draft.review_cycle_id
+WHERE g.id = $1::uuid
+  AND g.user_id = $2::uuid
 `
 
-type GetOwnedGoalParams struct {
-	ID     pgtype.UUID
+type GetGoalViewParams struct {
+	GoalID pgtype.UUID
 	UserID pgtype.UUID
 }
 
-func (q *Queries) GetOwnedGoal(ctx context.Context, arg GetOwnedGoalParams) (*Goal, error) {
-	row := q.db.QueryRow(ctx, getOwnedGoal, arg.ID, arg.UserID)
-	var i Goal
+type GetGoalViewRow struct {
+	GoalID                     pgtype.UUID
+	GoalStatus                 string
+	GoalRevision               int64
+	NextCycleSequenceNumber    int32
+	GoalCreatedAt              pgtype.Timestamptz
+	GoalTerminalAt             pgtype.Timestamptz
+	CurrentVersionID           pgtype.UUID
+	CurrentVersionNumber       *int32
+	CurrentVersionBody         *string
+	CurrentVersionCreatedAt    pgtype.Timestamptz
+	CycleCount                 int32
+	ActiveCycleID              pgtype.UUID
+	ActiveCycleSequenceNumber  *int32
+	ReviewDraftID              pgtype.UUID
+	TriggerCycleID             pgtype.UUID
+	TriggerCycleSequenceNumber *int32
+	Category                   int16
+	SortTime                   pgtype.Timestamptz
+}
+
+func (q *Queries) GetGoalView(ctx context.Context, arg GetGoalViewParams) (*GetGoalViewRow, error) {
+	row := q.db.QueryRow(ctx, getGoalView, arg.GoalID, arg.UserID)
+	var i GetGoalViewRow
+	err := row.Scan(
+		&i.GoalID,
+		&i.GoalStatus,
+		&i.GoalRevision,
+		&i.NextCycleSequenceNumber,
+		&i.GoalCreatedAt,
+		&i.GoalTerminalAt,
+		&i.CurrentVersionID,
+		&i.CurrentVersionNumber,
+		&i.CurrentVersionBody,
+		&i.CurrentVersionCreatedAt,
+		&i.CycleCount,
+		&i.ActiveCycleID,
+		&i.ActiveCycleSequenceNumber,
+		&i.ReviewDraftID,
+		&i.TriggerCycleID,
+		&i.TriggerCycleSequenceNumber,
+		&i.Category,
+		&i.SortTime,
+	)
+	return &i, err
+}
+
+const getHomeCreationGoalDraft = `-- name: GetHomeCreationGoalDraft :one
+SELECT id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, updated_at
+FROM goal_drafts
+WHERE user_id = $1::uuid AND draft_type = 'creation'
+`
+
+type GetHomeCreationGoalDraftRow struct {
+	ID                pgtype.UUID
+	DraftType         string
+	GoalID            pgtype.UUID
+	BaseGoalVersionID pgtype.UUID
+	ReviewCycleID     pgtype.UUID
+	Body              string
+	Revision          int64
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) GetHomeCreationGoalDraft(ctx context.Context, userID pgtype.UUID) (*GetHomeCreationGoalDraftRow, error) {
+	row := q.db.QueryRow(ctx, getHomeCreationGoalDraft, userID)
+	var i GetHomeCreationGoalDraftRow
 	err := row.Scan(
 		&i.ID,
-		&i.UserID,
-		&i.Status,
-		&i.CurrentVersionNumber,
-		&i.NextCycleSequenceNumber,
+		&i.DraftType,
+		&i.GoalID,
+		&i.BaseGoalVersionID,
+		&i.ReviewCycleID,
+		&i.Body,
 		&i.Revision,
-		&i.TerminalAt,
-		&i.TerminalOperationID,
-		&i.TerminalRequestHash,
-		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return &i, err
 }
 
-const listProgressingGoals = `-- name: ListProgressingGoals :many
-SELECT id, user_id, status, current_version_number, next_cycle_sequence_number, revision, terminal_at, terminal_operation_id, terminal_request_hash, created_at, updated_at
-FROM goals
-WHERE user_id = $1 AND status IN ('active_cycle', 'goal_review')
-ORDER BY updated_at DESC, id DESC
+const listGoalViews = `-- name: ListGoalViews :many
+SELECT
+    g.id AS goal_id,
+    g.status AS goal_status,
+    g.revision AS goal_revision,
+    g.next_cycle_sequence_number,
+    g.created_at AS goal_created_at,
+    g.terminal_at AS goal_terminal_at,
+    gv.id AS current_version_id,
+    gv.version_number AS current_version_number,
+    gv.body AS current_version_body,
+    gv.created_at AS current_version_created_at,
+    (
+        SELECT count(*)
+        FROM pdca_cycles counted
+        WHERE counted.user_id = g.user_id AND counted.goal_id = g.id
+    )::integer AS cycle_count,
+    active_cycle.id AS active_cycle_id,
+    active_cycle.sequence_number AS active_cycle_sequence_number,
+    review_draft.id AS review_draft_id,
+    trigger_cycle.id AS trigger_cycle_id,
+    trigger_cycle.sequence_number AS trigger_cycle_sequence_number,
+    (
+        CASE WHEN g.status IN ('active_cycle', 'goal_review') THEN 0 ELSE 1 END
+    )::smallint AS category,
+    (
+        CASE
+            WHEN g.status IN ('active_cycle', 'goal_review') THEN g.updated_at
+            ELSE g.terminal_at
+        END
+    )::timestamptz AS sort_time
+FROM goals g
+LEFT JOIN goal_versions gv
+    ON gv.user_id = g.user_id
+   AND gv.goal_id = g.id
+   AND gv.version_number = g.current_version_number
+LEFT JOIN pdca_cycles active_cycle
+    ON active_cycle.user_id = g.user_id
+   AND active_cycle.goal_id = g.id
+   AND active_cycle.status = 'active'
+LEFT JOIN goal_drafts review_draft
+    ON review_draft.user_id = g.user_id
+   AND review_draft.goal_id = g.id
+   AND review_draft.draft_type = 'review'
+LEFT JOIN pdca_cycles trigger_cycle
+    ON trigger_cycle.user_id = g.user_id
+   AND trigger_cycle.goal_id = g.id
+   AND trigger_cycle.id = review_draft.review_cycle_id
+WHERE g.user_id = $1::uuid
+  AND (
+      $2::text = 'all'
+      OR ($2::text = 'progressing' AND g.status IN ('active_cycle', 'goal_review'))
+      OR ($2::text = 'history' AND g.status IN ('achieved', 'ended'))
+  )
+  AND (
+      $3::smallint IS NULL
+      OR CASE WHEN g.status IN ('active_cycle', 'goal_review') THEN 0 ELSE 1 END
+          > $3::smallint
+      OR (
+          CASE WHEN g.status IN ('active_cycle', 'goal_review') THEN 0 ELSE 1 END
+              = $3::smallint
+          AND (
+              CASE
+                  WHEN g.status IN ('active_cycle', 'goal_review') THEN g.updated_at
+                  ELSE g.terminal_at
+              END,
+              g.id
+          ) < (
+              $4::timestamptz,
+              $5::uuid
+          )
+      )
+  )
+ORDER BY category ASC, sort_time DESC, g.id DESC
+LIMIT $6::integer
 `
 
-func (q *Queries) ListProgressingGoals(ctx context.Context, userID pgtype.UUID) ([]*Goal, error) {
-	rows, err := q.db.Query(ctx, listProgressingGoals, userID)
+type ListGoalViewsParams struct {
+	UserID        pgtype.UUID
+	Scope         string
+	AfterCategory *int16
+	AfterSortTime pgtype.Timestamptz
+	AfterGoalID   pgtype.UUID
+	FetchLimit    int32
+}
+
+type ListGoalViewsRow struct {
+	GoalID                     pgtype.UUID
+	GoalStatus                 string
+	GoalRevision               int64
+	NextCycleSequenceNumber    int32
+	GoalCreatedAt              pgtype.Timestamptz
+	GoalTerminalAt             pgtype.Timestamptz
+	CurrentVersionID           pgtype.UUID
+	CurrentVersionNumber       *int32
+	CurrentVersionBody         *string
+	CurrentVersionCreatedAt    pgtype.Timestamptz
+	CycleCount                 int32
+	ActiveCycleID              pgtype.UUID
+	ActiveCycleSequenceNumber  *int32
+	ReviewDraftID              pgtype.UUID
+	TriggerCycleID             pgtype.UUID
+	TriggerCycleSequenceNumber *int32
+	Category                   int16
+	SortTime                   pgtype.Timestamptz
+}
+
+func (q *Queries) ListGoalViews(ctx context.Context, arg ListGoalViewsParams) ([]*ListGoalViewsRow, error) {
+	rows, err := q.db.Query(ctx, listGoalViews,
+		arg.UserID,
+		arg.Scope,
+		arg.AfterCategory,
+		arg.AfterSortTime,
+		arg.AfterGoalID,
+		arg.FetchLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []*Goal{}
+	items := []*ListGoalViewsRow{}
 	for rows.Next() {
-		var i Goal
+		var i ListGoalViewsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.Status,
-			&i.CurrentVersionNumber,
+			&i.GoalID,
+			&i.GoalStatus,
+			&i.GoalRevision,
 			&i.NextCycleSequenceNumber,
-			&i.Revision,
-			&i.TerminalAt,
-			&i.TerminalOperationID,
-			&i.TerminalRequestHash,
-			&i.CreatedAt,
-			&i.UpdatedAt,
+			&i.GoalCreatedAt,
+			&i.GoalTerminalAt,
+			&i.CurrentVersionID,
+			&i.CurrentVersionNumber,
+			&i.CurrentVersionBody,
+			&i.CurrentVersionCreatedAt,
+			&i.CycleCount,
+			&i.ActiveCycleID,
+			&i.ActiveCycleSequenceNumber,
+			&i.ReviewDraftID,
+			&i.TriggerCycleID,
+			&i.TriggerCycleSequenceNumber,
+			&i.Category,
+			&i.SortTime,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHomeGoalViews = `-- name: ListHomeGoalViews :many
+SELECT
+    g.id AS goal_id,
+    g.status AS goal_status,
+    g.revision AS goal_revision,
+    g.next_cycle_sequence_number,
+    g.created_at AS goal_created_at,
+    g.terminal_at AS goal_terminal_at,
+    gv.id AS current_version_id,
+    gv.version_number AS current_version_number,
+    gv.body AS current_version_body,
+    gv.created_at AS current_version_created_at,
+    (
+        SELECT count(*)
+        FROM pdca_cycles counted
+        WHERE counted.user_id = g.user_id AND counted.goal_id = g.id
+    )::integer AS cycle_count,
+    active_cycle.id AS active_cycle_id,
+    active_cycle.sequence_number AS active_cycle_sequence_number,
+    review_draft.id AS review_draft_id,
+    trigger_cycle.id AS trigger_cycle_id,
+    trigger_cycle.sequence_number AS trigger_cycle_sequence_number,
+    (
+        CASE WHEN g.status IN ('active_cycle', 'goal_review') THEN 0 ELSE 1 END
+    )::smallint AS category,
+    (
+        CASE
+            WHEN g.status IN ('active_cycle', 'goal_review') THEN g.updated_at
+            ELSE g.terminal_at
+        END
+    )::timestamptz AS sort_time
+FROM goals g
+LEFT JOIN goal_versions gv
+    ON gv.user_id = g.user_id
+   AND gv.goal_id = g.id
+   AND gv.version_number = g.current_version_number
+LEFT JOIN pdca_cycles active_cycle
+    ON active_cycle.user_id = g.user_id
+   AND active_cycle.goal_id = g.id
+   AND active_cycle.status = 'active'
+LEFT JOIN goal_drafts review_draft
+    ON review_draft.user_id = g.user_id
+   AND review_draft.goal_id = g.id
+   AND review_draft.draft_type = 'review'
+LEFT JOIN pdca_cycles trigger_cycle
+    ON trigger_cycle.user_id = g.user_id
+   AND trigger_cycle.goal_id = g.id
+   AND trigger_cycle.id = review_draft.review_cycle_id
+WHERE g.user_id = $1::uuid
+  AND g.status IN ('active_cycle', 'goal_review')
+ORDER BY g.created_at ASC, g.id ASC
+`
+
+type ListHomeGoalViewsRow struct {
+	GoalID                     pgtype.UUID
+	GoalStatus                 string
+	GoalRevision               int64
+	NextCycleSequenceNumber    int32
+	GoalCreatedAt              pgtype.Timestamptz
+	GoalTerminalAt             pgtype.Timestamptz
+	CurrentVersionID           pgtype.UUID
+	CurrentVersionNumber       *int32
+	CurrentVersionBody         *string
+	CurrentVersionCreatedAt    pgtype.Timestamptz
+	CycleCount                 int32
+	ActiveCycleID              pgtype.UUID
+	ActiveCycleSequenceNumber  *int32
+	ReviewDraftID              pgtype.UUID
+	TriggerCycleID             pgtype.UUID
+	TriggerCycleSequenceNumber *int32
+	Category                   int16
+	SortTime                   pgtype.Timestamptz
+}
+
+func (q *Queries) ListHomeGoalViews(ctx context.Context, userID pgtype.UUID) ([]*ListHomeGoalViewsRow, error) {
+	rows, err := q.db.Query(ctx, listHomeGoalViews, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListHomeGoalViewsRow{}
+	for rows.Next() {
+		var i ListHomeGoalViewsRow
+		if err := rows.Scan(
+			&i.GoalID,
+			&i.GoalStatus,
+			&i.GoalRevision,
+			&i.NextCycleSequenceNumber,
+			&i.GoalCreatedAt,
+			&i.GoalTerminalAt,
+			&i.CurrentVersionID,
+			&i.CurrentVersionNumber,
+			&i.CurrentVersionBody,
+			&i.CurrentVersionCreatedAt,
+			&i.CycleCount,
+			&i.ActiveCycleID,
+			&i.ActiveCycleSequenceNumber,
+			&i.ReviewDraftID,
+			&i.TriggerCycleID,
+			&i.TriggerCycleSequenceNumber,
+			&i.Category,
+			&i.SortTime,
 		); err != nil {
 			return nil, err
 		}

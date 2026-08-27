@@ -1,6 +1,6 @@
 # 環境変数
 
-この文書は環境変数の運用上の一覧です。Typed validationとdefaultは [`backend/internal/config/config.go`](../backend/internal/config/config.go)、Cloudflareへの受け渡しは [`cloudflare/src/index.ts`](../cloudflare/src/index.ts)、deploy入力は [`deploy.yml`](../.github/workflows/deploy.yml) が実装根拠です。上位仕様は [`design.md`](design.md) です。
+この文書は環境変数名、意味、scope、secret / public分類の運用上のSource of Truthです。Typed validationとdefaultは [`backend/internal/config/config.go`](../backend/internal/config/config.go)、Cloudflareへの受け渡しは [`cloudflare/src/index.ts`](../cloudflare/src/index.ts)、deploy入力の分類とmappingは [`deployment-contract.json`](../config/deployment-contract.json) が実装根拠です。Deploy workflowはこのcontractと同じBackend config checker、Closed Beta parserを実行します。上位仕様は [`design.md`](design.md)、bootstrapとrelease手順は [`operations.md`](operations.md) です。
 
 ## Environment / secret rules
 
@@ -11,7 +11,7 @@ Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging L
 - Stagingのnon-secret configurationはGitHub `staging` Environment variablesからWrangler `--var`で登録します。
 - Staging runtime secretsはGitHub `staging` Environmentからdeploy時の一時`--secrets-file`経由でCloudflare Worker Secretsへ登録します。一時fileはworkflowの`always()` stepで削除します。
 - Neon migration direct URLはGitHub Actionsだけが使い、Worker/Containerへ渡しません。Runtimeにはpooled URLだけを渡します。
-- R2 backend credential、Terraform/Turnstile token、Cloudflare deploy tokenは用途別に分離します。
+- R2 backendはrepositoryのPlan用Object Read Only credentialと `staging-terraform-apply` EnvironmentのApply用Object Read & Write credentialを別tokenにし、Terraform/Turnstile token、Cloudflare deploy tokenとも分離します。
 - Session/CSRF/bootstrap pepper、rate-limit HMAC、cursor署名secretは環境ごと・用途ごとに異なる24文字以上の高entropy値にします。
 
 ## Temporary Closed Beta ingress
@@ -22,20 +22,22 @@ Closed Beta AdmissionはCloudflare Workerだけが使用する一時的な公開
 |---|---|---|
 | `BETA_ADMISSION_MODE` | `closed`で新規Anonymous bootstrap前にAdmissionを強制、`off`で無効化 | Worker-only non-secret。Staging workflowは未設定時`off`、初期Productionは`closed` |
 | `BETA_ADMISSION_COOKIE_TTL_DAYS` | Admission Cookie期限 | `closed`時のみ1〜730のinteger、Worker-only non-secret |
-| `BETA_INVITES` | 非個人Invite IDとSHA-256 Token digestのJSON array | `closed`時のみnon-empty、Worker-only non-secret。Raw Token禁止 |
+| `BETA_INVITES` | 非個人Invite IDとSHA-256 Token digestのJSON array | `closed`時のみ1〜1000件。entryはexactな`{id,digest}`、IDは1〜64文字の`[a-z0-9][a-z0-9_-]*`、digestは64文字lowercase hex、ID/digestは各unique。Worker-only non-secret、Raw Token禁止 |
 | `BETA_ADMISSION_COOKIE_KEY` | Admission Cookie HMAC-SHA-256署名 | `closed`時のみ32 random bytesのbase64url、**secret** |
 
 ## Backend runtime
 
-Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](deployment.md) のinput sheetに従い全項目をGitHub Environmentへ明示します。
+Stagingではdefaultを承認済み運用値とみなさず、[`operations.md`のDeployment input sheet](operations.md#deployment-input-sheet)に従い全項目をGitHub Environmentへ明示します。
 
 | Variable | Purpose / code default | Requirement | Exposure / Staging source |
 |---|---|---|---|
 | `APP_ENV` | profile、`development` | Stagingは`production`固定 | Container only、Worker code固定 |
-| `PUBLIC_ORIGIN` | origin、`http://localhost:5173` | Production profileはHTTPS | server only、GitHub variable |
+| `PUBLIC_ORIGIN` | canonical origin、`http://localhost:5173` | schemeとhostだけを指定し、credentials、path、末尾slash、query、fragmentは禁止。Production profileはHTTPS | server only、GitHub variable |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP base endpoint、空 | Development / Testは空。Production profileはcredentialを含まないabsolute HTTPS URLを必須とし、userinfo、query、fragmentを禁止。pathは許可 | server only、GitHub variable |
+| `OTEL_EXPORTER_OTLP_HEADERS` | OTLP request header、空 | Development / Testは空。Production profileはcomma-separated `key=value` header listを必須とする。Value内のcomma / spaceはpercent-encodeする。`Content-Type` / `Content-Length` / `Content-Encoding`を含むexporter・transport管理header、case-insensitive duplicate、decode後の空・control文字・`;`を拒否し、値をerror / logへ出さない | **secret**、GitHub secret |
 | `HTTP_ADDRESS` | listen、`:8080` | non-empty | Container only、Worker code固定 |
 | `STATIC_DIR` | GoによるSPA配信、空 | Cloudflareでは不要 | Local/legacy container only |
-| `DATABASE_URL` | PostgreSQL URL | 全環境必須 | **secret**、local `.env` / Staging `NEON_DATABASE_URL` pooled URL |
+| `DATABASE_URL` | PostgreSQL URL | `postgres`または`postgresql` scheme、host、database名を必須とし、全環境で設定 | **secret**、local `.env` / Staging `NEON_DATABASE_URL` pooled URL |
 | `DB_MAX_OPEN_CONNS` | pool max、`10` | positive | server only、GitHub variable |
 | `DB_MAX_IDLE_CONNS` | idle max、`5` | 0以上かつopen以下 | server only、GitHub variable |
 | `DB_CONN_MAX_LIFETIME_MINUTES` | lifetime、`30` | positive | server only、GitHub variable |
@@ -50,6 +52,8 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | `ANONYMOUS_BOOTSTRAP_TTL_MINUTES` | bootstrap idempotency TTL、`10` | positive | GitHub variable |
 | `MAX_PROGRESSING_GOALS` | 同時進行Goal上限、Free `2` | positive。Paid entitlementは`3`以上 | GitHub variable |
 
+OTLP endpoint、header credential ownerと実値は未決です。使用するpinned SDK defaultのsampler / export volumeをStagingで受入確認するまでStaging deployを行いません。Stagingは`APP_ENV=production`のため両方を必須とし、未設定または不正ならdeploy workflowのBackend config検証がmigration前に停止します。Collectorの到達可否はstartup、`/readyz`、Application requestの成否へ含めません。
+
 ## AI / authentication / abuse prevention
 
 | Variable | Purpose / code default | Requirement | Exposure / Staging source |
@@ -57,6 +61,7 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | `OPENAI_API_KEY` | OpenAI auth | Production profile必須 | **secret**、GitHub secret |
 | `AI_PROVIDER` | `openai` | `openai`のみ | Container code固定 |
 | `AI_MODEL` | model、`gpt-5.6-luna` | quality gate通過済み、price modelと一致 | GitHub variable |
+| `AI_REASONING_EFFORT` | reasoning effort、初期値`medium` | GPT-5.6は`none` / `low` / `medium` / `high` / `xhigh` / `max`。変更時は§49の評価必須 | GitHub variable。Productionでは明示必須 |
 | `AI_MAX_INPUT_TOKENS` | input max、`12000` | positive | GitHub variable |
 | `AI_GOAL_REFINE_MAX_OUTPUT_TOKENS` | Goal Refine output max、`400` | positive | GitHub variable |
 | `AI_ACTION_MAX_OUTPUT_TOKENS` | Action AI output max、`800` | positive | GitHub variable |
@@ -82,6 +87,8 @@ Stagingではdefaultを承認済み運用値とみなさず、[`deployment.md`](
 | `TURNSTILE_EXPECTED_ACTION` | `anonymous_bootstrap` | non-empty | Container code固定 |
 | `RATE_ANONYMOUS_CREATE_PER_IP_HOUR` | anon/IP/hour、`5` | positive | GitHub variable |
 | `RATE_ANONYMOUS_CREATE_PER_IP_24H` | anon/IP/24h、`20` | positive | GitHub variable |
+| `RATE_GOAL_START_PER_USER_MINUTE` | Goal開始/user/min、`5` | positive | GitHub variable |
+| `RATE_GOAL_START_PER_SESSION_MINUTE` | Goal開始/session/min、`5` | positive | GitHub variable |
 | `RATE_AI_PER_USER_MINUTE` | AI/user/min、`3` | positive | GitHub variable |
 | `RATE_AI_PER_SESSION_MINUTE` | AI/session/min、`3` | positive | GitHub variable |
 | `RATE_AI_PER_IP_MINUTE` | AI/IP/min、`10` | positive | GitHub variable |
@@ -107,6 +114,8 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 |---|---|---|
 | `MIGRATIONS_DIR` | migration directory、`migrations` | GitHub Actionsで明示 |
 | `NEON_MIGRATION_DATABASE_URL` | Staging direct URL | **GitHub secret**、workflowが`DATABASE_URL`へ一時mapping |
+| `STAGING_BASE_URL` | post-deploy critical journeyのcanonical origin | workflowが`PUBLIC_ORIGIN`からstep scopeで設定。固定Staging HTTPS originだけを許可 |
+| `STAGING_E2E_INVITE_TOKEN` | post-deploy critical journeyのClosed Beta admission | **GitHub `staging` Environment secret**。生成済みRaw Token形式を必須とし、専用harnessだけへstep scopeで渡す。argv/log/trace/screenshot/artifact、Frontend bundle、Worker/Containerへ渡さない |
 | `TEST_DATABASE_URL` | disposable integration/E2E DB | runtime/Production DBを指定禁止 |
 | `FUKAMU_CYCLE_GO_BINARY` | Playwright用Go executable | optional |
 | `FUKAMU_CYCLE_SERVER_BINARY` | prebuilt E2E server | optional、指定時は事前migration必要 |
@@ -114,16 +123,16 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 | `CI` | Playwright behavior | CIが自動設定 |
 | `CLOUDFLARE_ACCOUNT_ID` | Wrangler account | GitHub secret（値自体はcredentialではない） |
 | `CLOUDFLARE_API_TOKEN` | Wrangler deploy auth | **GitHub secret**、deploy最小権限 |
-| `AWS_ACCESS_KEY_ID` | R2 S3 backend access ID | **secret**、local operator environment / workflowが`TERRAFORM_R2_ACCESS_KEY_ID`から一時mapping |
-| `AWS_SECRET_ACCESS_KEY` | R2 S3 backend secret | **secret**、local operator environment / workflowが`TERRAFORM_R2_SECRET_ACCESS_KEY`から一時mapping |
+| `AWS_ACCESS_KEY_ID` | R2 S3 backend access ID | **secret**、PlanはrepositoryのObject Read Only、Applyは `staging-terraform-apply` EnvironmentのObject Read & Write `TERRAFORM_R2_ACCESS_KEY_ID`から一時mapping |
+| `AWS_SECRET_ACCESS_KEY` | R2 S3 backend secret | **secret**、PlanはrepositoryのObject Read Only、Applyは `staging-terraform-apply` EnvironmentのObject Read & Write `TERRAFORM_R2_SECRET_ACCESS_KEY`から一時mapping |
 
 ### Dockerローカル実機profile
 
 `compose.local.yaml`はRepositoryの`.env`をcontainerへ渡さず、development専用の非secret値を明示します。PostgreSQL URLとpepperは破棄可能な隔離環境だけで使用し、OpenAI、Google、Turnstileのcredentialは設定しません。このprofileをStaging / Productionへ転用してはいけません。
 
-## GitHub Terraform repository inputs
+## GitHub Terraform inputs
 
-Terraform PlanとApplyだけが使います。Application `staging` EnvironmentやWorker/Containerへ渡しません。
+Terraform PlanとApplyだけが使います。Application `staging` Environment、Worker、Containerへ渡しません。R2 secret名はscope間で同じですが、値は別tokenです。
 
 Repository secrets:
 
@@ -134,7 +143,17 @@ TERRAFORM_R2_SECRET_ACCESS_KEY
 ```
 
 - `TERRAFORM_CLOUDFLARE_API_TOKEN`: 対象accountのTurnstile Editだけにscopeする。
-- `TERRAFORM_R2_ACCESS_KEY_ID` / `TERRAFORM_R2_SECRET_ACCESS_KEY`: state bucketだけのObject Read/Write credential。PlanのlockfileとApplyのstate更新に必要。
+- Repositoryの `TERRAFORM_R2_ACCESS_KEY_ID` / `TERRAFORM_R2_SECRET_ACCESS_KEY`: state bucketだけの `Object Read Only` credential。Planは `-lock=false`でstateをreadし、lock/state/backup objectを書きません。
+
+GitHub `staging-terraform-apply` Environment secrets:
+
+```text
+TERRAFORM_R2_ACCESS_KEY_ID
+TERRAFORM_R2_SECRET_ACCESS_KEY
+```
+
+- Environmentの同名2 secrets: state bucketだけの別の `Object Read & Write` credential。Pre-Apply snapshot/checksum、isolated restore drill、lock、Apply state更新に必要です。
+- Apply jobはこのEnvironmentを参照するため、GitHubのscope precedenceによりEnvironment値がRepositoryのRead Only値を上書きします。Environment値が未設定・Read Only・不正ならsnapshot uploadが失敗し、Apply前に停止します。
 
 Repository variables:
 
@@ -146,13 +165,13 @@ TERRAFORM_APPLY_APPROVER
 
 - `TERRAFORM_CLOUDFLARE_ACCOUNT_ID`: 32文字lowercase hexadecimal account ID。credentialではない。
 - `TERRAFORM_R2_STATE_BUCKET`: manual bootstrap済みの専用private bucket名。credentialではない。
-- `TERRAFORM_APPLY_APPROVER`: Plan review後に`Terraform Apply Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorと照合する。
+- `TERRAFORM_APPLY_APPROVER`: Plan review後に `Terraform Apply Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorと照合する。
 
-GitHub Environment `staging-terraform-apply`はsecret/variableの保管場所ではありません。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateとしてEnvironmentを設定します。Workflow preflightはactorと`TERRAFORM_APPLY_APPROVER`を照合し、不一致・未設定ではApplyしません。
+GitHub Environment `staging-terraform-apply`はApply用R2 Read/Write secretの必須保管場所です。Deployment branchを `main`へ制限します。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateも設定します。Workflow preflightはactorと `TERRAFORM_APPLY_APPROVER`を照合し、不一致・未設定ではEnvironment credentialを使うApply jobへ進みません。
 
 ## GitHub `staging` Environment
 
-Exact required listは [`deploy.yml`](../.github/workflows/deploy.yml) の`Validate required deployment inputs`がenforceします。
+Runtime/deployのexact required listは [`deploy.yml`](../.github/workflows/deploy.yml) の`Validate required deployment inputs`がenforceします。Post-deploy専用`STAGING_E2E_INVITE_TOKEN`はtraffic切替後の`./scripts/check-staging-critical.sh`が値を表示せず検証します。
 
 Secrets:
 
@@ -162,13 +181,17 @@ CLOUDFLARE_API_TOKEN
 NEON_DATABASE_URL
 NEON_MIGRATION_DATABASE_URL
 OPENAI_API_KEY
+OTEL_EXPORTER_OTLP_HEADERS
 SESSION_TOKEN_PEPPER
 CSRF_TOKEN_PEPPER
 BOOTSTRAP_ID_PEPPER
 RATE_LIMIT_HMAC_SECRET
 CURSOR_SIGNING_SECRET
 TURNSTILE_SECRET_KEY
+STAGING_E2E_INVITE_TOKEN
 ```
+
+`STAGING_E2E_INVITE_TOKEN`は常に非個人Inviteとして専用発行し、Raw値をpassword managerからGitHub Environmentへ一度だけ登録します。`BETA_ADMISSION_MODE=closed`では対応する非個人Invite ID/digestを`BETA_INVITES`へ含めます。`off`でもworkflow配線を一定に保つためsecret自体は必須ですが、Application runtimeへは渡しません。
 
 Closed BetaをStagingで検証する場合だけ、secretへ`BETA_ADMISSION_COOKIE_KEY`を追加します。`BETA_ADMISSION_MODE=off`では不要です。
 
@@ -176,6 +199,7 @@ Variables:
 
 ```text
 PUBLIC_ORIGIN
+OTEL_EXPORTER_OTLP_ENDPOINT
 BETA_ADMISSION_MODE
 GOOGLE_WEB_CLIENT_ID
 TURNSTILE_SITE_KEY
@@ -188,6 +212,7 @@ SESSION_ACTIVITY_TOUCH_MINUTES
 ANONYMOUS_BOOTSTRAP_TTL_MINUTES
 MAX_PROGRESSING_GOALS
 AI_MODEL
+AI_REASONING_EFFORT
 AI_MAX_INPUT_TOKENS
 AI_GOAL_REFINE_MAX_OUTPUT_TOKENS
 AI_ACTION_MAX_OUTPUT_TOKENS
@@ -208,10 +233,14 @@ AI_PRICE_INPUT_USD_PER_MILLION
 AI_PRICE_OUTPUT_USD_PER_MILLION
 RATE_ANONYMOUS_CREATE_PER_IP_HOUR
 RATE_ANONYMOUS_CREATE_PER_IP_24H
+RATE_GOAL_START_PER_USER_MINUTE
+RATE_GOAL_START_PER_SESSION_MINUTE
 RATE_AI_PER_USER_MINUTE
 RATE_AI_PER_SESSION_MINUTE
 RATE_AI_PER_IP_MINUTE
 ```
+
+Stagingの`OTEL_EXPORTER_OTLP_ENDPOINT`と`OTEL_EXPORTER_OTLP_HEADERS`は、Operations ownerがcollector、credential ownerとpinned SDK defaultのsampler / export volumeを承認するまで設定せず、live deployを行いません。この2変数以外の`OTEL_*`は未承認のSDK overrideとして全profileで拒否します。Headerはephemeral secrets fileだけを経由してWorker Secretへ渡し、endpoint、workflow log、errorへcredentialを混在させません。Retention、dashboard、alert、notification、on-callの決定はProduction release blockerとして[`operations.md`](operations.md)で管理します。
 
 Staging deploy workflowはGitHub Environmentで`BETA_ADMISSION_MODE`が未設定の場合に明示的な`off`をWorkerへ渡します。Worker binding自体の欠落や未知のmodeは設定不備として新規利用開始をfail-closedにします。`closed`へ変更する場合だけ`BETA_ADMISSION_COOKIE_TTL_DAYS`と`BETA_INVITES`も追加し、上記のCookie key secretと同じdeployで反映します。
 

@@ -9,6 +9,7 @@ import (
 var (
 	ErrAnonymousCreationBlocked = errors.New("anonymous creation blocked")
 	ErrAntiAbuseUnavailable     = errors.New("anti-abuse service unavailable")
+	ErrRateLimitExceeded        = errors.New("rate limit exceeded")
 )
 
 type Clock interface {

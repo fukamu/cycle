@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 
 import { HomePage } from "../pages/HomePage";
 import { PageLoading } from "../shared/components/AsyncState";
@@ -42,69 +42,67 @@ function LazyPage({ children }: { readonly children: ReactNode }) {
 
 export function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<HomePage />} />
-          <Route
-            path="/goals/new"
-            element={
-              <LazyPage>
-                <NewGoalPage />
-              </LazyPage>
-            }
-          />
-          <Route
-            path="/goals/:goalId"
-            element={
-              <LazyPage>
-                <GoalWorkspacePage />
-              </LazyPage>
-            }
-          />
-          <Route
-            path="/goals/:goalId/cycles/:cycleId"
-            element={
-              <LazyPage>
-                <GoalWorkspacePage />
-              </LazyPage>
-            }
-          />
-          <Route
-            path="/goals/:goalId/review"
-            element={
-              <LazyPage>
-                <GoalReviewPage />
-              </LazyPage>
-            }
-          />
-          <Route
-            path="/history"
-            element={
-              <LazyPage>
-                <GoalHistoryPage />
-              </LazyPage>
-            }
-          />
-          <Route
-            path="/history/goals/:goalId"
-            element={
-              <LazyPage>
-                <GoalTimelinePage />
-              </LazyPage>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <LazyPage>
-                <SettingsPage />
-              </LazyPage>
-            }
-          />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <Routes>
+      <Route element={<AppLayout />}>
+        <Route path="/" element={<HomePage />} />
+        <Route
+          path="/goals/new"
+          element={
+            <LazyPage>
+              <NewGoalPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="/goals/:goalId"
+          element={
+            <LazyPage>
+              <GoalWorkspacePage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="/goals/:goalId/cycles/:cycleId"
+          element={
+            <LazyPage>
+              <GoalWorkspacePage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="/goals/:goalId/review"
+          element={
+            <LazyPage>
+              <GoalReviewPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="/history"
+          element={
+            <LazyPage>
+              <GoalHistoryPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="/history/goals/:goalId"
+          element={
+            <LazyPage>
+              <GoalTimelinePage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <LazyPage>
+              <SettingsPage />
+            </LazyPage>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
   );
 }

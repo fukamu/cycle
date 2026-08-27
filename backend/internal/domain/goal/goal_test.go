@@ -34,6 +34,48 @@ func TestGoalTextLimitUsesCodePoints(t *testing.T) {
 	}
 }
 
+func TestGoalTextUsesNonBMPCodePointBoundariesAndPreservesWhitespace(t *testing.T) {
+	atLimit := strings.Repeat("🌱", MaxGoalCodePoints)
+	if normalized, err := NormalizeText(atLimit, false); err != nil || normalized != atLimit {
+		t.Fatalf("80 non-BMP code points = %q, %v", normalized, err)
+	}
+	if _, err := NormalizeText(atLimit+"🌱", false); !errors.Is(err, ErrTextTooLong) {
+		t.Fatalf("81 non-BMP code points error = %v, want %v", err, ErrTextTooLong)
+	}
+
+	const input = "  目標\r\n本文\r末尾 \t"
+	const want = "  目標\n本文\n末尾 \t"
+	if normalized, err := NormalizeText(input, false); err != nil || normalized != want {
+		t.Fatalf("normalized goal text = %q, %v, want %q", normalized, err, want)
+	}
+}
+
+func TestUnicodeWhitespaceBlankSemanticsMatchFrontend(t *testing.T) {
+	if _, err := NormalizeText("\u0085", false); !errors.Is(err, ErrTextRequired) {
+		t.Fatalf("U+0085 Goal error = %v, want %v", err, ErrTextRequired)
+	}
+	if normalized, err := NormalizeText("\uFEFF", false); err != nil || normalized != "\uFEFF" {
+		t.Fatalf("U+FEFF Goal = %q, %v", normalized, err)
+	}
+}
+
+func TestSaveDraftTreatsSameBodyWithStaleRevisionAsNoOp(t *testing.T) {
+	draft, err := NewDraft("draft", "user", "保存済み目標", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft.Revision = 2
+	draft.UpdatedAt = now.Add(time.Minute)
+
+	saved, noOp, err := SaveDraft(draft, draft.Body, 1, now.Add(2*time.Minute))
+	if err != nil || !noOp || saved != draft {
+		t.Fatalf("stale same-body save = %#v, noOp = %t, error = %v", saved, noOp, err)
+	}
+	if _, _, err = SaveDraft(draft, "異なる目標", 1, now.Add(2*time.Minute)); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale different-body save error = %v, want %v", err, ErrStateConflict)
+	}
+}
+
 func TestReviewSameBodyKeepsVersionAndCreatesNextCycle(t *testing.T) {
 	current, version, draft := reviewFixture(t, "目標\r\n本文")
 	draft.Body = "目標\n本文"
@@ -43,6 +85,43 @@ func TestReviewSameBodyKeepsVersionAndCreatesNextCycle(t *testing.T) {
 	}
 	if result.VersionCreated || result.Version.VersionNumber != 1 || result.Cycle.SequenceNumber != 2 || result.Cycle.GoalVersionID != version.ID {
 		t.Fatalf("unexpected continue: %#v", result)
+	}
+}
+
+func TestReviewComparisonNormalizesAllLineEndingsWithoutTrimming(t *testing.T) {
+	t.Run("CRLF and lone CR are equivalent to LF", func(t *testing.T) {
+		current, version, draft := reviewFixture(t, "目標\r\n本文\r末尾")
+		draft.Body = "目標\n本文\n末尾"
+		result, err := ContinueReview(current, version, draft, "unused", "cycle-2", "continue", "hash", now.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.VersionCreated || result.Version.ID != version.ID || result.Cycle.GoalVersionID != version.ID {
+			t.Fatalf("newline-only review change created a version: %#v", result)
+		}
+	})
+
+	t.Run("trailing whitespace is an exact content change", func(t *testing.T) {
+		current, version, draft := reviewFixture(t, "目標\n本文")
+		draft.Body = "目標\n本文 \t"
+		result, err := ContinueReview(current, version, draft, "version-2", "cycle-2", "continue", "hash", now.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !result.VersionCreated || result.Version.Body != draft.Body || result.Cycle.GoalVersionID != result.Version.ID {
+			t.Fatalf("trailing-whitespace review change = %#v", result)
+		}
+	})
+}
+
+func TestReviewComparisonRequiresReviewCycleReference(t *testing.T) {
+	current, version, draft := reviewFixture(t, "目標")
+	draft.ReviewCycleID = nil
+	if _, _, err := ReviewBodyChanged(current, version, draft); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("Continue comparison error = %v, want %v", err, ErrStateConflict)
+	}
+	if _, err := ReviewDraftDiffersFromVersion(current, version, draft); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("discard comparison error = %v, want %v", err, ErrStateConflict)
 	}
 }
 

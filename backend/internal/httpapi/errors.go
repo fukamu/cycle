@@ -26,6 +26,7 @@ type apiError struct {
 }
 
 var (
+	errSessionIdentityChanged    = errors.New("authenticated session identity changed")
 	errAccountUpgradeFailed      = errors.New("account upgrade failed")
 	errGoogleLoginFailed         = errors.New("google login failed")
 	errGoalDraftSaveFailed       = errors.New("goal draft save failed")
@@ -65,16 +66,20 @@ func (server *api) writeError(writer http.ResponseWriter, request *http.Request,
 
 func classifyError(err error) (int, string, string) {
 	switch {
-	case errors.Is(err, errRequestValidation):
+	case errors.Is(err, errRequestValidation), errors.Is(err, workspace.ErrInvalidTerminationRequest):
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
 	case errors.Is(err, appsession.ErrSessionMissing):
 		return 401, "SESSION_MISSING", "セッションがありません。"
+	case errors.Is(err, errSessionIdentityChanged):
+		return 409, "SESSION_IDENTITY_CHANGED", "セッションの利用者が変更されています。ページを再読み込みしてください。"
 	case errors.Is(err, appsession.ErrSessionExpired):
 		return 401, "SESSION_EXPIRED", "セッションが切れました。入力内容は保持されています。"
 	case errors.Is(err, appsession.ErrCSRFInvalid):
 		return 403, "CSRF_INVALID", "ページを再読み込みして、もう一度お試しください。"
 	case errors.Is(err, appsession.ErrBootstrapID):
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
+	case errors.Is(err, ports.ErrRateLimitExceeded):
+		return 429, "RATE_LIMIT_EXCEEDED", "短時間に操作が続いています。時間を空けてもう一度お試しください。"
 	case errors.Is(err, ports.ErrAnonymousCreationBlocked):
 		return 403, "ANONYMOUS_CREATION_BLOCKED", "時間を空けてもう一度お試しください。"
 	case errors.Is(err, ports.ErrAntiAbuseUnavailable):
@@ -155,7 +160,7 @@ func classifyError(err error) (int, string, string) {
 		return 502, "AI_INVALID_RESPONSE", "AIの応答を確認できませんでした。"
 	case errors.Is(err, workspace.ErrAIProviderTimeout):
 		return 504, "AI_PROVIDER_TIMEOUT", "AI処理が時間内に完了しませんでした。"
-	case errors.Is(err, workspace.ErrAIProviderUnavailable):
+	case errors.Is(err, workspace.ErrAIProviderRejected), errors.Is(err, workspace.ErrAIProviderUnavailable):
 		return 503, "AI_PROVIDER_UNAVAILABLE", "AIサービスに接続できません。"
 	case errors.Is(err, workspace.ErrIdempotencyKeyReused):
 		return 409, "IDEMPOTENCY_KEY_REUSED", "同じ操作IDを別の内容には使用できません。"
@@ -208,6 +213,14 @@ func errorDetails(err error) map[string]any {
 	var aiRunning *workspace.AIOperationInProgressError
 	if errors.As(err, &aiRunning) && aiRunning.GenerationID != "" {
 		return map[string]any{"generationId": aiRunning.GenerationID}
+	}
+	var incomplete *workspace.CycleCompletionIncompleteError
+	if errors.As(err, &incomplete) {
+		missingFrames := make([]string, len(incomplete.MissingFrames))
+		for index, frame := range incomplete.MissingFrames {
+			missingFrames[index] = string(frame)
+		}
+		return map[string]any{"missingFrames": missingFrames}
 	}
 	return nil
 }

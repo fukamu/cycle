@@ -8,6 +8,7 @@ import (
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 func TestCreateAnonymousHashesCredentialsAndReturnsPlainTokens(t *testing.T) {
@@ -21,7 +22,8 @@ func TestCreateAnonymousHashesCredentialsAndReturnsPlainTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.UserID != "00000000-0000-7000-8000-000000000001" || view.SessionToken == "" || view.CSRFToken == "" {
+	if view.UserID != "00000000-0000-7000-8000-000000000001" || view.SessionToken == "" || view.CSRFToken == "" ||
+		!view.Created {
 		t.Fatalf("view = %#v", view)
 	}
 	if string(repository.created.SessionTokenHash) == view.SessionToken || string(repository.created.CSRFTokenHash) == view.CSRFToken {
@@ -29,6 +31,22 @@ func TestCreateAnonymousHashesCredentialsAndReturnsPlainTokens(t *testing.T) {
 	}
 	if repository.created.BootstrapExpires.Sub(repository.created.Now) != 10*time.Minute {
 		t.Fatalf("bootstrap TTL = %v", repository.created.BootstrapExpires.Sub(repository.created.Now))
+	}
+}
+
+func TestCreateAnonymousPropagatesRepositoryReplayWithoutChangingCredentials(t *testing.T) {
+	t.Parallel()
+	repository := &fakeRepository{replayed: true}
+	service := testService(repository)
+	view, err := service.CreateAnonymous(context.Background(), CreateAnonymousInput{
+		BootstrapID: "0198c20b-7b95-7000-8000-000000000001",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Created || view.UserID != repository.replayUserID ||
+		view.SessionToken == "" || view.CSRFToken == "" {
+		t.Fatalf("replayed view = %#v", view)
 	}
 }
 
@@ -52,7 +70,7 @@ func TestRefreshRotatesCSRFAndVerifyCSRF(t *testing.T) {
 		ID:              "00000000-0000-7000-8000-000000000009",
 		UserID:          user.ID("00000000-0000-7000-8000-000000000001"),
 		LastSeenAt:      testTime.Add(-time.Hour),
-		CSRFTokenHash:   keyedHash([]byte("csrf-key"), "token-2"),
+		CSRFTokenHash:   securehash.HMACSHA256([]byte("csrf-key"), []byte("token-2")),
 		GoogleConnected: true,
 		GoogleEmail:     &email,
 	}}
@@ -121,10 +139,12 @@ func (abuse fakeAbuse) VerifyAnonymousCreation(context.Context, ports.AnonymousA
 }
 
 type fakeRepository struct {
-	created     CreateAnonymousRecord
-	found       AuthenticatedSession
-	rotatedHash []byte
-	touched     bool
+	created      CreateAnonymousRecord
+	found        AuthenticatedSession
+	rotatedHash  []byte
+	touched      bool
+	replayed     bool
+	replayUserID user.ID
 }
 
 func (repository *fakeRepository) FindByTokenHash(context.Context, []byte, time.Time) (AuthenticatedSession, error) {
@@ -146,5 +166,11 @@ func (repository *fakeRepository) Touch(context.Context, string, time.Time, time
 
 func (repository *fakeRepository) CreateOrResumeAnonymous(_ context.Context, input CreateAnonymousRecord) (AnonymousRecord, error) {
 	repository.created = input
+	if repository.replayed {
+		if repository.replayUserID == "" {
+			repository.replayUserID = user.ID("00000000-0000-7000-8000-000000000009")
+		}
+		return AnonymousRecord{UserID: repository.replayUserID, Created: false}, nil
+	}
 	return AnonymousRecord{UserID: input.UserID, Created: true}, nil
 }

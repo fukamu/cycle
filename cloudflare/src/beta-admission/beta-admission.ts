@@ -58,7 +58,7 @@ export async function handleBetaAdmission(
 
   let config: ParsedConfig;
   try {
-    config = parseConfig(bindings);
+    config = parseBetaAdmissionConfig(bindings);
   } catch {
     if (url.pathname === sessionPath && hasCookie(request, sessionCookieName)) {
       return null;
@@ -184,7 +184,9 @@ async function redeem(
   });
 }
 
-function parseConfig(bindings: BetaAdmissionBindings): ParsedConfig {
+export function parseBetaAdmissionConfig(
+  bindings: BetaAdmissionBindings,
+): ParsedConfig {
   if (bindings.BETA_ADMISSION_MODE === "off") return { mode: "off" };
   if (bindings.BETA_ADMISSION_MODE !== "closed") {
     throw new Error("BETA_ADMISSION_MODE must be off or closed");

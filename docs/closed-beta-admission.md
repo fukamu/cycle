@@ -24,7 +24,7 @@ BETA_INVITES=<Invite entryのJSON array>
 BETA_ADMISSION_COOKIE_KEY=<32 random bytesのbase64url secret>
 ```
 
-未知のmodeや空AllowlistでClosed Betaを開始しません。`BETA_INVITES`の`id`は`beta-001`のような非個人識別子とし、氏名やemailを含めません。
+未知のmodeや空AllowlistでClosed Betaを開始しません。`BETA_INVITES`は1〜1000件のJSON arrayとし、各entryは追加fieldのない`{"id":"...","digest":"..."}`にします。`id`は1〜64文字のlowercase英数字で始まるlowercase英数字・`_`・`-`だけのuniqueな非個人識別子、`digest`は64文字lowercase hexadecimalかつuniqueとします。`id`へ氏名やemailを含めません。Deploy preflightとWorker runtimeは同じparserでこの境界を検証します。
 
 ## Cookie signing keyの初期設定
 
@@ -120,7 +120,7 @@ Deploy後:
 | Frontend | `frontend/src/features/beta-admission/`、`SessionProvider.tsx`のimport・`BETA_ADMISSION_REQUIRED`分岐・専用retry判定、対応するFrontend test |
 | Bash helpers | `scripts/new-beta-invite.sh`、`scripts/new-beta-admission-key.sh`、`scripts/tests/run.sh`のAdmission helper test |
 | Deploy workflow | `.github/workflows/deploy.yml`の`BETA_*` Environment/secret入力、validation、ephemeral secrets file追加、Wrangler `--var`組立 |
-| Documents | `docs/environment.md`、`docs/deployment.md`、`docs/operations.md`のAdmission記述と導線、および役目を終えたこのrunbook |
+| Documents | `docs/environment.md`、`docs/operations.md`のAdmission記述と導線、および役目を終えたこのrunbook |
 | External settings | 新codeのdeployとrollback可否確認後、別途承認された外部操作としてGitHub EnvironmentとCloudflare Workerから`BETA_*` variable/secretを削除 |
 
 現在のAdmission固有依存は上表のWorker ingress、Frontend feature、helper、workflow、generated type、文書に限定されます。Go Backend、Domain、Database schema/migration、`infra/terraform/`にはAdmission固有状態も依存もないため、物理撤去でschema/data migrationを作成しません。

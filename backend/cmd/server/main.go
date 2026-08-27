@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,16 +22,71 @@ import (
 	"github.com/fukamu/cycle/backend/internal/infrastructure/googleidentity"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/observability"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/postgres"
+	"github.com/fukamu/cycle/backend/internal/infrastructure/safelog"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/system"
 	turnstileinfra "github.com/fukamu/cycle/backend/internal/infrastructure/turnstile"
 )
 
+func maximumAIReservationUSD(maxInputTokens, maxOutputTokens, maxProviderAttempts int, inputUSDPerMillionTokens, outputUSDPerMillionTokens float64) float64 {
+	return (float64(maxInputTokens)*inputUSDPerMillionTokens +
+		float64(maxOutputTokens)*outputUSDPerMillionTokens) / 1_000_000 * float64(maxProviderAttempts)
+}
+
+type telemetryShutdowner interface {
+	Shutdown(context.Context) error
+}
+
+func newTelemetryShutdown(runtime telemetryShutdowner, logger *slog.Logger, timeout time.Duration) func() error {
+	var once sync.Once
+	var shutdownErr error
+	return func() error {
+		once.Do(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			shutdownErr = runtime.Shutdown(ctx)
+			if shutdownErr != nil && logger != nil {
+				logger.Error("telemetry shutdown failed", "error_class", "telemetry_shutdown_failed")
+			}
+		})
+		return shutdownErr
+	}
+}
+
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	os.Exit(run())
+}
+
+func run() (exitCode int) {
+	logger := safelog.NewJSON(os.Stdout)
 	settings, err := config.Load(os.LookupEnv)
 	if err != nil {
 		logger.Error("invalid configuration", "error_class", "configuration_invalid")
-		os.Exit(1)
+		return 1
+	}
+	telemetrySettings := observability.Settings{
+		Environment: settings.App.Environment,
+		Endpoint:    settings.Telemetry.OTLPEndpoint,
+		Headers:     settings.Telemetry.OTLPHeaders,
+	}
+	if err = observability.ValidateSettings(telemetrySettings); err != nil {
+		logger.Error("invalid telemetry configuration", "error_class", "telemetry_configuration_invalid")
+		return 1
+	}
+	telemetryStartupContext, cancelTelemetryStartup := context.WithTimeout(context.Background(), 10*time.Second)
+	telemetryRuntime, err := observability.Setup(telemetryStartupContext, logger, telemetrySettings)
+	cancelTelemetryStartup()
+	if err != nil {
+		logger.Error("telemetry unavailable", "error_class", "telemetry_startup_failed")
+		return 1
+	}
+	shutdownTelemetry := newTelemetryShutdown(telemetryRuntime, logger, 15*time.Second)
+	defer func() {
+		_ = shutdownTelemetry()
+	}()
+	metrics, err := observability.NewMetrics(telemetryRuntime.MeterProvider(), logger, settings.AI.WarningThresholds)
+	if err != nil {
+		logger.Error("metrics unavailable", "error_class", "metrics_startup_failed")
+		return 1
 	}
 	promptSet, err := prompts.Resolve(prompts.Versions{
 		GoalRefine: settings.AI.GoalPromptVersion, ActionGenerate: settings.AI.GeneratePromptVersion,
@@ -38,22 +94,19 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("invalid prompt configuration", "error_class", "prompt_configuration_invalid")
-		os.Exit(1)
-	}
-	observability.Setup()
-	metrics, err := observability.NewMetrics(logger, settings.AI.WarningThresholds)
-	if err != nil {
-		logger.Error("metrics unavailable", "error_class", "metrics_startup_failed")
-		os.Exit(1)
+		return 1
 	}
 	startupContext, cancelStartup := context.WithTimeout(context.Background(), 10*time.Second)
 	pool, err := postgres.Open(startupContext, settings.Database)
 	cancelStartup()
 	if err != nil {
 		logger.Error("database unavailable", "error_class", "database_startup_failed")
-		os.Exit(1)
+		return 1
 	}
-	defer pool.Close()
+	closePool := true
+	defer func() {
+		cleanupServerResources(shutdownTelemetry, pool.Close, closePool)
+	}()
 
 	random := system.RandomGenerator{}
 	var antiAbuse ports.AntiAbuseVerifier = system.AllowAnonymous{}
@@ -65,6 +118,7 @@ func main() {
 			turnstileinfra.Settings{
 				SecretKey: settings.Turnstile.SecretKey, ExpectedAction: settings.Turnstile.ExpectedAction,
 				ExpectedHost: settings.App.PublicOrigin.Hostname(), RateHashKey: []byte(settings.Session.RateLimitHMACSecret),
+				Observer: metrics,
 			},
 		)
 	}
@@ -77,36 +131,44 @@ func main() {
 			BootstrapTTL: settings.Session.AnonymousBootstrapTTL,
 		},
 	)
-	var aiProvider workspace.AIProvider = aiprovider.Fake{}
+	var goalRefiner workspace.GoalRefiner = aiprovider.Fake{}
+	var actionGenerator workspace.ActionGenerator = aiprovider.Fake{}
 	if settings.AI.APIKey != "" {
-		aiProvider = aiprovider.NewOpenAI(settings.AI.APIKey, settings.AI.Model, settings.AI.Timeout, settings.AI.ActionMaxOutputTokens,
-			settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens, promptSet)
+		provider := aiprovider.NewOpenAI(settings.AI.APIKey, settings.AI.Model, settings.AI.ReasoningEffort, settings.AI.Timeout, settings.AI.ActionMaxOutputTokens,
+			settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
+		goalRefiner = provider
+		actionGenerator = provider
 	}
 	tokenCounter, err := aiprovider.NewTokenCounter(settings.AI.TokenizerEncoding)
 	if err != nil {
 		logger.Error("AI tokenizer unavailable", "error_class", "tokenizer_startup_failed")
-		os.Exit(1)
+		return 1
 	}
-	reservationUSD := (float64(settings.AI.MaxInputTokens)*settings.AI.Pricing.InputUSDPerMillionTokens +
-		float64(settings.AI.ActionMaxOutputTokens)*settings.AI.Pricing.OutputUSDPerMillionTokens) / 1_000_000 * float64(settings.AI.MaxProviderAttempts)
-	workspaceStore := postgres.NewWorkspaceStore(pool, postgres.WorkspaceStoreSettings{
-		CursorSigningKey: []byte(settings.Session.CursorSigningSecret), Provider: settings.AI.Provider, Model: settings.AI.Model,
-		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
-		RefinePromptVersion: settings.AI.RefinePromptVersion, RollingLimit: settings.AI.MaxGenerationsPerUser24h,
-		MonthlyBudgetUSD: settings.AI.MonthlyBudgetUSD, ReservationUSD: reservationUSD, LeaseDuration: settings.AI.LeaseDuration,
-		RateHashKey: []byte(settings.Session.RateLimitHMACSecret), AIPerUserMinute: settings.RateLimit.AIPerUserMinute,
-		AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute, AIPerIPMinute: settings.RateLimit.AIPerIPMinute,
-	})
-	workspaceService := workspace.NewService(workspaceStore, aiProvider, system.Clock{}, random, workspace.Settings{
-		MaxProgressingGoals: settings.Goals.MaxProgressingGoals, MaxProviderAttempts: settings.AI.MaxProviderAttempts,
-		MaxRetryBackoff: settings.AI.MaxRetryBackoff, FinalizationGrace: settings.AI.FinalizationGrace, Model: settings.AI.Model,
-		MaxInputTokens: settings.AI.MaxInputTokens, GoalRefineMaxOutputTokens: settings.AI.GoalRefineMaxOutputTokens,
-		ActionMaxOutputTokens: settings.AI.ActionMaxOutputTokens, MaxContextCycles: settings.AI.MaxContextCycles,
-		GoalRefineInstructions: promptSet.GoalRefine, ActionGenerateInstructions: promptSet.ActionGenerate,
-		ActionRefineInstructions: promptSet.ActionRefine, TokenCounter: tokenCounter,
-		GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
-		RefinePromptVersion: settings.AI.RefinePromptVersion, AIObserver: metrics,
-	})
+	actionReservationUSD := maximumAIReservationUSD(settings.AI.MaxInputTokens, settings.AI.ActionMaxOutputTokens, settings.AI.MaxProviderAttempts,
+		settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
+	goalRefineReservationUSD := maximumAIReservationUSD(settings.AI.MaxInputTokens, settings.AI.GoalRefineMaxOutputTokens, settings.AI.MaxProviderAttempts,
+		settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
+	workspaceStore := postgres.NewWorkspaceStore(pool)
+	workspaceService := workspace.NewService(workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore,
+		workspaceStore, goalRefiner, actionGenerator, system.Clock{}, random, workspace.Settings{
+			MaxProgressingGoals: settings.Goals.MaxProgressingGoals, Provider: settings.AI.Provider,
+			CursorSigningKey: []byte(settings.Session.CursorSigningSecret),
+			RollingLimit:     settings.AI.MaxGenerationsPerUser24h, MonthlyBudgetUSD: settings.AI.MonthlyBudgetUSD,
+			ReservationUSD: goalRefineReservationUSD, ActionReservationUSD: actionReservationUSD, LeaseDuration: settings.AI.LeaseDuration,
+			RateHashKey:               []byte(settings.Session.RateLimitHMACSecret),
+			GoalStartPerUserMinute:    settings.RateLimit.GoalStartPerUserMinute,
+			GoalStartPerSessionMinute: settings.RateLimit.GoalStartPerSessionMinute,
+			AIPerUserMinute:           settings.RateLimit.AIPerUserMinute, AIPerSessionMinute: settings.RateLimit.AIPerSessionMinute,
+			AIPerIPMinute:       settings.RateLimit.AIPerIPMinute,
+			MaxProviderAttempts: settings.AI.MaxProviderAttempts,
+			MaxRetryBackoff:     settings.AI.MaxRetryBackoff, FinalizationGrace: settings.AI.FinalizationGrace, Model: settings.AI.Model,
+			MaxInputTokens: settings.AI.MaxInputTokens, GoalRefineMaxOutputTokens: settings.AI.GoalRefineMaxOutputTokens,
+			ActionMaxOutputTokens: settings.AI.ActionMaxOutputTokens, MaxContextCycles: settings.AI.MaxContextCycles,
+			GoalRefineInstructions: promptSet.GoalRefine, ActionGenerateInstructions: promptSet.ActionGenerate,
+			ActionRefineInstructions: promptSet.ActionRefine, TokenCounter: tokenCounter,
+			GoalPromptVersion: settings.AI.GoalPromptVersion, GeneratePromptVersion: settings.AI.GeneratePromptVersion,
+			RefinePromptVersion: settings.AI.RefinePromptVersion, AIObserver: metrics, EventObserver: metrics,
+		})
 	var googleVerifier account.GoogleVerifier = googleidentity.NewVerifier(settings.Google.WebClientID)
 	if settings.App.Environment == "test" {
 		googleVerifier = googleidentity.FakeVerifier{}
@@ -115,39 +177,49 @@ func main() {
 		postgres.NewAccountRepository(pool), googleVerifier, system.Clock{}, random, random,
 		account.Settings{
 			SessionHashKey: []byte(settings.Session.TokenPepper), CSRFHashKey: []byte(settings.Session.CSRFTokenPepper),
-			IdleTTL: settings.Session.IdleTTL, AbsoluteTTL: settings.Session.AbsoluteTTL,
+			IdleTTL: settings.Session.IdleTTL, AbsoluteTTL: settings.Session.AbsoluteTTL, Observer: metrics,
 		},
 	)
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		Sessions: sessionService, Workspace: workspaceService, Account: accountService, RequestIDs: random,
 		PublicOrigin: settings.App.PublicOrigin.String(), Ready: pool.Ping, Logger: logger,
 		Production: settings.App.Environment == "production", TrustProxy: settings.App.Environment == "production",
-		StaticDir: settings.App.StaticDir, Metrics: metrics,
+		StaticDir: settings.App.StaticDir, Metrics: metrics, TracerProvider: telemetryRuntime.TracerProvider(),
 	})
 	server := &http.Server{
-		Addr: settings.App.HTTPAddress, Handler: router,
+		Addr: settings.App.HTTPAddress, Handler: router, ErrorLog: safelog.NewHTTPServerErrorLog(logger),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second,
 		WriteTimeout: settings.AI.LeaseDuration + settings.AI.FinalizationGrace, IdleTimeout: 120 * time.Second,
 	}
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.ListenAndServe() }()
-	logger.Info("server started", "address", settings.App.HTTPAddress, "environment", settings.App.Environment)
+	logger.Info("server started", "operation", "server_start")
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
 	select {
-	case received := <-signals:
-		logger.Info("shutdown requested", "signal", received.String())
+	case <-signals:
+		logger.Info("shutdown requested", "operation", "server_shutdown_requested")
 	case listenErr := <-serverErrors:
 		if !errors.Is(listenErr, http.ErrServerClosed) {
 			logger.Error("server stopped unexpectedly", "error_class", "http_server_failed")
-			os.Exit(1)
+			exitCode = 1
 		}
 	}
 	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelShutdown()
 	if err = server.Shutdown(shutdownContext); err != nil {
 		logger.Error("graceful shutdown failed", "error_class", "http_shutdown_failed")
-		os.Exit(1)
+		closePool = false
+		return 1
+	}
+	return exitCode
+}
+
+func cleanupServerResources(shutdownTelemetry func() error, closePool func(), closePoolAllowed bool) {
+	_ = shutdownTelemetry()
+	if closePoolAllowed {
+		closePool()
 	}
 }

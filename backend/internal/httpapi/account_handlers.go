@@ -18,7 +18,7 @@ type AccountService interface {
 }
 
 type googleTokenRequest struct {
-	IDToken string `json:"idToken" validate:"required"`
+	IDToken string `json:"idToken"`
 }
 
 type deleteAccountRequest struct {
@@ -49,6 +49,12 @@ func (server *api) upgradeGoogle(writer http.ResponseWriter, request *http.Reque
 }
 
 func (server *api) loginGoogle(writer http.ResponseWriter, request *http.Request) {
+	metricResult := "failure"
+	defer func() {
+		if server.dependencies.Metrics != nil {
+			server.dependencies.Metrics.GoogleLogin(request.Context(), metricResult)
+		}
+	}()
 	var input googleTokenRequest
 	if err := server.decodeAndValidateJSON(writer, request, &input, googleTokenBodyLimit); err != nil {
 		server.writeError(writer, request, err, nil)
@@ -61,6 +67,7 @@ func (server *api) loginGoogle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	setSessionCookie(writer, view.SessionToken)
+	metricResult = "success"
 	writeJSON(writer, http.StatusOK, sessionResponseFromAccount(view))
 }
 

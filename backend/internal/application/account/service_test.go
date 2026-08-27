@@ -65,6 +65,86 @@ func TestGoogleVerificationFailureDoesNotCreateSession(t *testing.T) {
 	}
 }
 
+type accountSettlementObservation struct {
+	path   string
+	result string
+	count  int64
+}
+
+type accountObserverRecorder struct {
+	unattributedCosts []float64
+	settlements       []accountSettlementObservation
+}
+
+func (observer *accountObserverRecorder) AIUnattributedCost(_ context.Context, costUSD float64) {
+	observer.unattributedCosts = append(observer.unattributedCosts, costUSD)
+}
+
+func (observer *accountObserverRecorder) AICostSettlement(_ context.Context, path, result string, count int64) {
+	observer.settlements = append(observer.settlements, accountSettlementObservation{path: path, result: result, count: count})
+}
+
+func TestDeleteObservesCommittedSettlementOperationsExactlyOnce(t *testing.T) {
+	t.Parallel()
+	userID := user.ID("00000000-0000-7000-8000-000000000001")
+	repositoryFailure := errors.New("delete failed")
+	tests := []struct {
+		name       string
+		result     DeleteResult
+		deleteErr  error
+		wantErr    error
+		wantCosts  []float64
+		wantSettle []accountSettlementObservation
+	}{
+		{
+			name:       "positive committed delta and multiple operations",
+			result:     DeleteResult{UnattributedCostUSD: 1.25, SettlementOperationCount: 2},
+			wantCosts:  []float64{1.25},
+			wantSettle: []accountSettlementObservation{{path: "account_delete", result: "success", count: 2}},
+		},
+		{
+			name:       "zero cost reservation settlement",
+			result:     DeleteResult{SettlementOperationCount: 1},
+			wantSettle: []accountSettlementObservation{{path: "account_delete", result: "success", count: 1}},
+		},
+		{name: "no settlement operations", result: DeleteResult{}},
+		{
+			name:      "known operations rolled back",
+			result:    DeleteResult{UnattributedCostUSD: 1.25, SettlementOperationCount: 3},
+			deleteErr: repositoryFailure, wantErr: ErrAccountDeleteFailed,
+			wantSettle: []accountSettlementObservation{{path: "account_delete", result: "failure", count: 3}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &fakeAccountRepository{deleteResult: test.result, deleteErr: test.deleteErr}
+			observer := &accountObserverRecorder{}
+			service := accountTestService(repository, fakeGoogleVerifier{})
+			service.settings.Observer = observer
+			err := service.Delete(context.Background(), userID, true)
+			if test.wantErr == nil && err != nil {
+				t.Fatal(err)
+			}
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("error = %v, want %v", err, test.wantErr)
+			}
+			if len(observer.unattributedCosts) != len(test.wantCosts) || len(observer.settlements) != len(test.wantSettle) {
+				t.Fatalf("observer calls = %#v / %#v", observer.unattributedCosts, observer.settlements)
+			}
+			for index := range test.wantCosts {
+				if observer.unattributedCosts[index] != test.wantCosts[index] {
+					t.Fatalf("unattributed costs = %#v, want %#v", observer.unattributedCosts, test.wantCosts)
+				}
+			}
+			for index := range test.wantSettle {
+				if observer.settlements[index] != test.wantSettle[index] {
+					t.Fatalf("settlements = %#v, want %#v", observer.settlements, test.wantSettle)
+				}
+			}
+		})
+	}
+}
+
 func accountTestService(repository Repository, verifier GoogleVerifier) *Service {
 	return NewService(repository, verifier, accountFakeClock{}, &accountFakeGenerator{}, &accountFakeGenerator{}, Settings{
 		SessionHashKey: []byte("session-key"), CSRFHashKey: []byte("csrf-key"),
@@ -98,13 +178,14 @@ func (verifier fakeGoogleVerifier) Verify(context.Context, string) (GoogleIdenti
 }
 
 type fakeAccountRepository struct {
-	result     AuthResult
-	upgrade    UpgradeRecord
-	login      LoginRecord
-	upgradeErr error
-	loginErr   error
-	deleteErr  error
-	deleted    bool
+	result       AuthResult
+	deleteResult DeleteResult
+	upgrade      UpgradeRecord
+	login        LoginRecord
+	upgradeErr   error
+	loginErr     error
+	deleteErr    error
+	deleted      bool
 }
 
 func (repository *fakeAccountRepository) UpgradeGoogle(_ context.Context, input UpgradeRecord) (AuthResult, error) {
@@ -117,7 +198,7 @@ func (repository *fakeAccountRepository) LoginGoogle(_ context.Context, input Lo
 	return repository.result, repository.loginErr
 }
 
-func (repository *fakeAccountRepository) DeleteAccount(context.Context, user.ID, time.Time) error {
+func (repository *fakeAccountRepository) DeleteAccount(context.Context, user.ID, time.Time) (DeleteResult, error) {
 	repository.deleted = true
-	return repository.deleteErr
+	return repository.deleteResult, repository.deleteErr
 }

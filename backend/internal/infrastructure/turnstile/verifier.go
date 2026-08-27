@@ -2,8 +2,6 @@ package turnstile
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 const (
@@ -36,12 +35,18 @@ type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+type Observer interface {
+	TurnstileVerification(context.Context, string)
+	RateLimitRejected(context.Context, string)
+}
+
 type Settings struct {
 	SecretKey      string
 	ExpectedAction string
 	ExpectedHost   string
 	RateHashKey    []byte
 	SiteverifyURL  string
+	Observer       Observer
 }
 
 type Verifier struct {
@@ -53,6 +58,7 @@ type Verifier struct {
 	expectedHost   string
 	rateHashKey    []byte
 	siteverifyURL  string
+	observer       Observer
 }
 
 type siteverifyResponse struct {
@@ -71,14 +77,21 @@ func NewVerifier(client HTTPClient, limiter RateLimiter, clock Clock, settings S
 		client: client, limiter: limiter, clock: clock,
 		secretKey: settings.SecretKey, expectedAction: settings.ExpectedAction,
 		expectedHost: settings.ExpectedHost, rateHashKey: append([]byte(nil), settings.RateHashKey...),
-		siteverifyURL: endpoint,
+		siteverifyURL: endpoint, observer: settings.Observer,
 	}
 }
 
 func (verifier *Verifier) VerifyAnonymousCreation(ctx context.Context, input ports.AnonymousAbuseInput) error {
 	ctx, span := otel.Tracer("fukamu-cycle/turnstile").Start(ctx, "turnstile.siteverify")
 	defer span.End()
+	metricResult := "unavailable"
+	defer func() {
+		if verifier.observer != nil {
+			verifier.observer.TurnstileVerification(context.WithoutCancel(ctx), metricResult)
+		}
+	}()
 	if strings.TrimSpace(input.TurnstileToken) == "" {
+		metricResult = "blocked"
 		return ports.ErrAnonymousCreationBlocked
 	}
 
@@ -113,9 +126,14 @@ func (verifier *Verifier) VerifyAnonymousCreation(ctx context.Context, input por
 	}
 	if !verification.Success || verification.Action != verifier.expectedAction ||
 		!strings.EqualFold(verification.Hostname, verifier.expectedHost) {
+		metricResult = "blocked"
 		return ports.ErrAnonymousCreationBlocked
 	}
-	if err := verifier.limiter.Check(ctx, hash(verifier.rateHashKey, normalizeIP(input.RemoteAddress)), verifier.clock.Now().UTC()); err != nil {
+	metricResult = "success"
+	if err := verifier.limiter.Check(ctx, securehash.HMACSHA256(verifier.rateHashKey, []byte(normalizeIP(input.RemoteAddress))), verifier.clock.Now().UTC()); err != nil {
+		if errors.Is(err, ports.ErrRateLimitExceeded) && verifier.observer != nil {
+			verifier.observer.RateLimitRejected(context.WithoutCancel(ctx), "anonymous")
+		}
 		return err
 	}
 	return nil
@@ -130,10 +148,4 @@ func normalizeIP(value string) string {
 		return parsed.String()
 	}
 	return value
-}
-
-func hash(key []byte, value string) []byte {
-	digest := hmac.New(sha256.New, key)
-	_, _ = digest.Write([]byte(value))
-	return digest.Sum(nil)
 }

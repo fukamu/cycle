@@ -3,14 +3,14 @@ package session
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/identifier"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 const (
@@ -66,6 +66,7 @@ type View struct {
 	GoogleEmail     *string
 	CSRFToken       string
 	SessionToken    string
+	Created         bool `json:"-"`
 }
 
 type CreateAnonymousInput struct {
@@ -103,7 +104,7 @@ func (service *Service) Authenticate(ctx context.Context, sessionToken string) (
 		return AuthenticatedSession{}, ErrSessionMissing
 	}
 	now := service.clock.Now().UTC()
-	record, err := service.repository.FindByTokenHash(ctx, keyedHash(service.settings.SessionHashKey, sessionToken), now)
+	record, err := service.repository.FindByTokenHash(ctx, securehash.HMACSHA256(service.settings.SessionHashKey, []byte(sessionToken)), now)
 	if err != nil {
 		return AuthenticatedSession{}, err
 	}
@@ -123,7 +124,7 @@ func (service *Service) Refresh(ctx context.Context, sessionToken string) (View,
 		return View{}, err
 	}
 	now := service.clock.Now().UTC()
-	if err := service.repository.RotateCSRF(ctx, record.ID, keyedHash(service.settings.CSRFHashKey, csrfToken), now); err != nil {
+	if err := service.repository.RotateCSRF(ctx, record.ID, securehash.HMACSHA256(service.settings.CSRFHashKey, []byte(csrfToken)), now); err != nil {
 		return View{}, err
 	}
 	return View{
@@ -136,7 +137,7 @@ func (service *Service) Refresh(ctx context.Context, sessionToken string) (View,
 }
 
 func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymousInput) (View, error) {
-	if !isCanonicalUUIDv7(input.BootstrapID) {
+	if !identifier.IsCanonicalUUIDv7(input.BootstrapID) {
 		return View{}, ErrBootstrapID
 	}
 	if err := service.abuse.VerifyAnonymousCreation(ctx, ports.AnonymousAbuseInput{
@@ -162,12 +163,12 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 	}
 	now := service.clock.Now().UTC()
 	record, err := service.repository.CreateOrResumeAnonymous(ctx, CreateAnonymousRecord{
-		BootstrapKeyHash:  keyedHash(service.settings.BootstrapHashKey, input.BootstrapID),
+		BootstrapKeyHash:  securehash.HMACSHA256(service.settings.BootstrapHashKey, []byte(input.BootstrapID)),
 		BootstrapExpires:  now.Add(service.settings.BootstrapTTL),
 		UserID:            user.ID(userID),
 		SessionID:         sessionID,
-		SessionTokenHash:  keyedHash(service.settings.SessionHashKey, sessionToken),
-		CSRFTokenHash:     keyedHash(service.settings.CSRFHashKey, csrfToken),
+		SessionTokenHash:  securehash.HMACSHA256(service.settings.SessionHashKey, []byte(sessionToken)),
+		CSRFTokenHash:     securehash.HMACSHA256(service.settings.CSRFHashKey, []byte(csrfToken)),
 		Now:               now,
 		IdleExpiresAt:     now.Add(service.settings.IdleTTL),
 		AbsoluteExpiresAt: now.Add(service.settings.AbsoluteTTL),
@@ -180,11 +181,12 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 		GoogleConnected: false,
 		CSRFToken:       csrfToken,
 		SessionToken:    sessionToken,
+		Created:         record.Created,
 	}, nil
 }
 
 func (service *Service) VerifyCSRF(record AuthenticatedSession, token string) error {
-	if token == "" || !hmac.Equal(record.CSRFTokenHash, keyedHash(service.settings.CSRFHashKey, token)) {
+	if token == "" || !hmac.Equal(record.CSRFTokenHash, securehash.HMACSHA256(service.settings.CSRFHashKey, []byte(token))) {
 		return ErrCSRFInvalid
 	}
 	return nil
@@ -200,28 +202,4 @@ func (service *Service) newEntityIDs() (string, string, error) {
 		return "", "", err
 	}
 	return userID, sessionID, nil
-}
-
-func keyedHash(key []byte, value string) []byte {
-	hash := hmac.New(sha256.New, key)
-	_, _ = hash.Write([]byte(value))
-	return hash.Sum(nil)
-}
-
-func isCanonicalUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return false
-	}
-	if value[14] != '7' || !strings.ContainsRune("89ab", rune(value[19])) {
-		return false
-	}
-	for index, character := range value {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			continue
-		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
-			return false
-		}
-	}
-	return true
 }

@@ -25,6 +25,8 @@ type MigrationResult struct {
 	Applied []AppliedMigration
 }
 
+var ErrMigrationDatabaseConfiguration = errors.New("invalid migration database configuration")
+
 func (r MigrationResult) NoChange() bool {
 	return len(r.Applied) == 0
 }
@@ -76,7 +78,11 @@ func Migrate(databaseURL string, directory string) (result MigrationResult, resu
 		return result, fmt.Errorf("resolve migrations: %w", err)
 	}
 	sourceURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(absoluteDirectory)}).String()
-	runner, err := migrate.New(sourceURL, databaseURL)
+	migrationDatabaseURL, err := normalizeMigrationDatabaseURL(databaseURL)
+	if err != nil {
+		return result, fmt.Errorf("configure migration database: %w", err)
+	}
+	runner, err := migrate.New(sourceURL, migrationDatabaseURL)
 	if err != nil {
 		return result, fmt.Errorf("create migration runner: %w", err)
 	}
@@ -91,4 +97,38 @@ func Migrate(databaseURL string, directory string) (result MigrationResult, resu
 		return result, fmt.Errorf("apply migrations: %w", err)
 	}
 	return result, nil
+}
+
+func normalizeMigrationDatabaseURL(databaseURL string) (string, error) {
+	trimmed := strings.TrimSpace(databaseURL)
+	parsed, err := url.Parse(trimmed)
+	if err != nil || trimmed == "" ||
+		(parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") ||
+		parsed.Hostname() == "" || parsed.Opaque != "" || parsed.Fragment != "" ||
+		strings.Contains(trimmed, "#") || strings.TrimPrefix(parsed.Path, "/") == "" {
+		return "", ErrMigrationDatabaseConfiguration
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return "", ErrMigrationDatabaseConfiguration
+	}
+	const fixedOptions = "-c search_path=public"
+	for key, values := range query {
+		switch {
+		case strings.EqualFold(key, "x-migrations-table"), strings.EqualFold(key, "x-migrations-table-quoted"):
+			return "", ErrMigrationDatabaseConfiguration
+		case strings.EqualFold(key, "search_path"):
+			if key != "search_path" || len(values) != 1 || values[0] != "public" {
+				return "", ErrMigrationDatabaseConfiguration
+			}
+		case strings.EqualFold(key, "options"):
+			if key != "options" || len(values) != 1 || values[0] != fixedOptions {
+				return "", ErrMigrationDatabaseConfiguration
+			}
+		}
+	}
+	query.Set("search_path", "public")
+	query.Set("options", fixedOptions)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
 }

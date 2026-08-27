@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 )
 
 func TestVersionedPromptsKeepSafetyAndOperationBoundaries(t *testing.T) {
@@ -17,9 +19,9 @@ func TestVersionedPromptsKeepSafetyAndOperationBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, prompt := range map[string]string{
-		OperationGoalRefine:     resolved.GoalRefine,
-		OperationActionGenerate: resolved.ActionGenerate,
-		OperationActionRefine:   resolved.ActionRefine,
+		string(domainai.OperationGoalRefine):     resolved.GoalRefine,
+		string(domainai.OperationActionGenerate): resolved.ActionGenerate,
+		string(domainai.OperationActionRefine):   resolved.ActionRefine,
 	} {
 		for _, required := range []string{"日本語", "入力データ", "従わない"} {
 			if !strings.Contains(prompt, required) {
@@ -38,6 +40,41 @@ func TestPromptRegistryRejectsUnregisteredVersion(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "goal-refine-v3") {
 		t.Fatalf("Resolve() error = %v", err)
+	}
+}
+
+func TestLegacyPromptAssetsRemainAuditableButCannotBeSelected(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		asset    string
+		versions Versions
+	}{
+		{
+			name: "goal refine", asset: "goal-refine-v1.txt",
+			versions: Versions{GoalRefine: "goal-refine-v1", ActionGenerate: VersionActionGenerateV2, ActionRefine: VersionActionRefineV2},
+		},
+		{
+			name: "action generate", asset: "action-generate-v1.txt",
+			versions: Versions{GoalRefine: VersionGoalRefineV2, ActionGenerate: "action-generate-v1", ActionRefine: VersionActionRefineV2},
+		},
+		{
+			name: "action refine", asset: "action-refine-v1.txt",
+			versions: Versions{GoalRefine: VersionGoalRefineV2, ActionGenerate: VersionActionGenerateV2, ActionRefine: "action-refine-v1"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			asset, err := os.ReadFile(test.asset)
+			if err != nil || len(strings.TrimSpace(string(asset))) == 0 {
+				t.Fatalf("legacy audit asset %s is unavailable: %v", test.asset, err)
+			}
+			if _, err = Resolve(test.versions); err == nil {
+				t.Fatalf("Resolve(%+v) selected a legacy production prompt", test.versions)
+			}
+		})
 	}
 }
 

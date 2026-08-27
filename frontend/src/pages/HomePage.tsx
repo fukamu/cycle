@@ -2,11 +2,16 @@ import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
-import { useSession } from "../features/auth/sessionContext";
+import {
+  useAuthenticatedRequestLease,
+  useSession,
+} from "../features/auth/sessionContext";
 import { AppReferralPromotion } from "../features/app-referral/AppReferralPromotion";
 import {
   cacheCreationDraft,
   cacheGoals,
+  userMutationKeys,
+  userQueryKeys,
 } from "../features/goal-collection/goalCache";
 import { createGoalDraft, getHome } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
@@ -14,20 +19,31 @@ import { statusLabel } from "../shared/copy/ja";
 
 export function HomePage() {
   const session = useSession();
+  const sessionLease = useAuthenticatedRequestLease();
+  const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const query = useQuery({ queryKey: ["home"], queryFn: getHome });
+  const query = useQuery({
+    queryKey: userQueryKeys.home(userId),
+    queryFn: ({ signal }) => getHome(sessionLease, signal),
+  });
   const create = useMutation({
-    mutationFn: () => createGoalDraft("", session.csrfToken),
+    mutationKey: userMutationKeys.createGoalDraft(userId),
+    mutationFn: () => createGoalDraft(sessionLease, "", session.csrfToken),
     onSuccess: ({ draft }) => {
-      cacheCreationDraft(cache, draft);
+      cacheCreationDraft(cache, userId, draft);
       navigate("/goals/new");
     },
   });
   useEffect(() => {
     if (query.data)
-      cacheGoals(cache, query.data.progressingGoals, query.dataUpdatedAt);
-  }, [cache, query.data, query.dataUpdatedAt]);
+      cacheGoals(
+        cache,
+        userId,
+        query.data.progressingGoals,
+        query.dataUpdatedAt,
+      );
+  }, [cache, query.data, query.dataUpdatedAt, userId]);
   if (query.isPending) return <PageLoading />;
   if (query.isError) return <PageError retry={() => void query.refetch()} />;
   const home = query.data;
@@ -54,10 +70,16 @@ export function HomePage() {
           </div>
         )}
         {home.progressingGoals.map((goal) => {
+          const activeWork =
+            goal.currentWork?.kind === "active_cycle"
+              ? goal.currentWork
+              : undefined;
           const target =
             goal.status === "goal_review"
               ? `/goals/${goal.id}/review`
-              : `/goals/${goal.id}/cycles/${goal.currentWork?.cycleId ?? ""}`;
+              : activeWork
+                ? `/goals/${goal.id}/cycles/${activeWork.cycleId}`
+                : `/goals/${goal.id}`;
           return (
             <Link className="goal-card" key={goal.id} to={target}>
               <span className="goal-card__kicker">あなたの目標</span>
@@ -66,7 +88,7 @@ export function HomePage() {
                 <span>{statusLabel[goal.status]}</span>
                 <span>
                   {goal.status === "active_cycle"
-                    ? `Cycle ${goal.currentWork?.cycleSequenceNumber ?? ""}`
+                    ? `Cycle ${activeWork?.cycleSequenceNumber ?? ""}`
                     : "前回Cycleを振り返って目標を確認してください"}
                 </span>
               </div>

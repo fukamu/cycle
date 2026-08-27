@@ -1,32 +1,50 @@
 import { z } from "zod";
 
-import { requestJSON } from "./client";
+import {
+  requestAuthenticatedJSON,
+  type AuthenticatedRequestLease,
+} from "./client";
 import { sessionSchema, type Session } from "./schemas";
 
 export function upgradeGoogle(
+  lease: AuthenticatedRequestLease,
   idToken: string,
   csrfToken: string,
 ): Promise<Session> {
-  return requestJSON("/api/v1/auth/google/upgrade", sessionSchema, {
-    method: "POST",
-    csrfToken,
-    body: { idToken },
-  });
+  return requestAuthenticatedJSON(
+    lease,
+    "/api/v1/auth/google/upgrade",
+    sessionSchema,
+    {
+      method: "POST",
+      csrfToken,
+      body: { idToken },
+    },
+  );
 }
 
 export function loginGoogle(
+  lease: AuthenticatedRequestLease,
   idToken: string,
   csrfToken: string,
 ): Promise<Session> {
-  return requestJSON("/api/v1/auth/google/login", sessionSchema, {
-    method: "POST",
-    csrfToken,
-    body: { idToken },
-  });
+  return requestAuthenticatedJSON(
+    lease,
+    "/api/v1/auth/google/login",
+    sessionSchema,
+    {
+      method: "POST",
+      csrfToken,
+      body: { idToken },
+    },
+  );
 }
 
-export function deleteAccount(csrfToken: string): Promise<void> {
-  return requestJSON("/api/v1/account", z.undefined(), {
+export function deleteAccount(
+  lease: AuthenticatedRequestLease,
+  csrfToken: string,
+): Promise<void> {
+  return requestAuthenticatedJSON(lease, "/api/v1/account", z.undefined(), {
     method: "DELETE",
     csrfToken,
     body: { confirmed: true },

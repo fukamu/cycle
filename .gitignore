@@ -47,6 +47,7 @@ gha-creds-*.json
 *.tfstate.*
 *.tfplan
 **/backend.hcl
-**/terraform.tfvars
+**/*.tfvars
+**/*.tfvars.json
 crash.log
 crash.*.log

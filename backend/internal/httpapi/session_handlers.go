@@ -16,7 +16,7 @@ type sessionResponse struct {
 }
 
 type createAnonymousRequest struct {
-	BootstrapID    string `json:"bootstrapId" validate:"required,uuid_v7"`
+	BootstrapID    string `json:"bootstrapId"`
 	TurnstileToken string `json:"turnstileToken"`
 }
 
@@ -62,7 +62,10 @@ func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	setSessionCookie(writer, view.SessionToken)
-	metricResult = "success"
+	metricResult = "idempotent"
+	if view.Created {
+		metricResult = "success"
+	}
 	writeJSON(writer, http.StatusCreated, mapSession(view))
 }
 

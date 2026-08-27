@@ -1,4 +1,4 @@
-import type { SimpleSaveState } from "../../shared/hooks/useDraftAutoSave";
+import type { AutoSaveState } from "../../shared/autosave/autoSaveCoordinator";
 import { isGoalSuggestionStale } from "./suggestionState";
 import type { GoalRefinementState } from "./useGoalRefinement";
 
@@ -15,7 +15,7 @@ export function GoalRefinementPanel({
   readonly id: string;
   readonly state: GoalRefinementState;
   readonly currentBody: string;
-  readonly saveState: SimpleSaveState;
+  readonly saveState: AutoSaveState;
   readonly pending: boolean;
   readonly failureMessage: string;
   readonly onDismiss: () => void;

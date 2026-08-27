@@ -1,0 +1,19 @@
+# Synthetic UUIDv7 from an HTTP idempotency contract test. This historical
+# fingerprint is scoped to the original commit, path, rule, and line; it is not
+# a credential and does not suppress the current tree or any future finding.
+3690977d68515b1dd494d04aa2c4ba71f510e693:backend/internal/httpapi/router_test.go:generic-api-key:67
+
+# E2E-only cursor signer input from the local Playwright server. This historical
+# fingerprint is scoped to the original commit, path, rule, and line. The current
+# synthetic value is deliberately low entropy, so no directory-scan exception is
+# needed and a future credential-like replacement will fail closed.
+065175fc0737f3c1aad504dac45ccc7c6f6c36b9:frontend/playwright.config.ts:generic-api-key:44
+
+# The UUIDv4 canary above is also introduced by this merge commit when the
+# complete merge diff is requested. It is the same reviewed synthetic line.
+b1e272ba46603dcd89800f0383cd6f70f70ea40e:backend/internal/httpapi/router_test.go:generic-api-key:67
+
+# The E2E cursor signer canary above is also introduced by these two merge
+# commits under full merge-history traversal. Both are the same reviewed line.
+8d0be23e39684cca97634b0f22ec094bb4389603:frontend/playwright.config.ts:generic-api-key:44
+1ff7a9aa3b896ace4b40c5d8f027c78ed7bc2837:frontend/playwright.config.ts:generic-api-key:44

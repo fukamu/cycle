@@ -19,6 +19,10 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.name == 'CI' &&
+       github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.status == 'completed' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
@@ -43,18 +47,67 @@ jobs:
           set -euo pipefail
           successful_runs="$(
             gh api \
+              --method GET \
               -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${COMMIT_SHA}&branch=main&status=success&per_page=1" \
-              --jq '.total_count'
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="${COMMIT_SHA}" \
+              -f branch=main \
+              -f event=push \
+              -f status=completed \
+              -f per_page=100 \
+              | jq -er \
+                --arg commit_sha "${COMMIT_SHA}" \
+                --arg repository "${GITHUB_REPOSITORY}" \
+                '
+                  . as $root
+                  | if (
+                      ($root | type) == "object" and
+                      ($root.total_count | type) == "number" and
+                      $root.total_count >= 0 and
+                      ($root.workflow_runs | type) == "array" and
+                      $root.total_count == ($root.workflow_runs | length) and
+                      $root.total_count <= 100 and
+                      all($root.workflow_runs[];
+                        (type == "object") and
+                        (.name | type) == "string" and
+                        (.path | type) == "string" and
+                        (.event | type) == "string" and
+                        (.status | type) == "string" and
+                        (.conclusion | type) == "string" and
+                        (.head_sha | type) == "string" and
+                        (.head_branch | type) == "string" and
+                        (.head_repository | type) == "object" and
+                        (.head_repository.full_name | type) == "string"
+                      )
+                    ) then
+                      [
+                        $root.workflow_runs[]
+                        | select(
+                            .name == "CI" and
+                            .path == ".github/workflows/ci.yml" and
+                            .event == "push" and
+                            .status == "completed" and
+                            .conclusion == "success" and
+                            .head_sha == $commit_sha and
+                            .head_branch == "main" and
+                            .head_repository.full_name == $repository
+                          )
+                      ]
+                      | length
+                    else
+                      error("invalid CI workflow-run response")
+                    end
+                '
           )"
-          if [[ "${successful_runs}" -lt 1 ]]; then
-            echo "::error::No successful CI run found for main commit ${COMMIT_SHA}."
+          if [[ ! "${successful_runs}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::No exact successful main push CI run found for commit ${COMMIT_SHA}."
             exit 1
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.COMMIT_SHA }}
+          persist-credentials: false
 
       - name: Validate Terraform deployment inputs
         shell: bash
@@ -81,9 +134,10 @@ jobs:
           fi
           exit "${missing}"
 
-      - uses: hashicorp/setup-terraform@v4
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: 1.15.8
+          terraform_wrapper: false
 
       - name: Prepare ephemeral R2 backend configuration
         shell: bash
@@ -101,7 +155,7 @@ jobs:
         working-directory: infra/terraform/staging
         run: |
           terraform fmt -check
-          terraform init -input=false -backend-config="${RUNNER_TEMP}/fukamu-cycle-staging-backend.hcl"
+          terraform init -lock=false -input=false -backend-config="${RUNNER_TEMP}/fukamu-cycle-staging-backend.hcl"
           terraform validate
 
       - name: Create saved Terraform plan
@@ -109,12 +163,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          terraform plan -input=false -no-color -out=staging.tfplan
+          terraform plan -lock=false -input=false -no-color -out=staging.tfplan
           sha256sum staging.tfplan > staging.tfplan.sha256
           printf '%s\n' "${COMMIT_SHA}" > staging.tfplan.commit-sha
 
       - name: Upload saved Terraform plan
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: terraform-plan-staging-${{ env.COMMIT_SHA }}
           path: |

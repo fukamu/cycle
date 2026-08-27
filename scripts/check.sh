@@ -49,9 +49,17 @@ fi
 run_frontend=false
 run_backend=false
 run_infrastructure=false
+run_repository_quality=false
 [[ "${scope}" == "all" || "${scope}" == "frontend" ]] && run_frontend=true
 [[ "${scope}" == "all" || "${scope}" == "backend" ]] && run_backend=true
 [[ "${scope}" == "all" || "${scope}" == "infrastructure" ]] && run_infrastructure=true
+[[ "${scope}" == "all" ]] && run_repository_quality=true
+
+if [[ "${run_repository_quality}" == "true" ]]; then
+  "${script_dir}/check-security.sh"
+  "${script_dir}/check-docs.sh"
+  "${script_dir}/check-config-parity.sh"
+fi
 
 if [[ "${run_frontend}" == "true" ]]; then
   require_command pnpm
@@ -59,11 +67,14 @@ if [[ "${run_frontend}" == "true" ]]; then
     || die "node_modules is missing. Run ./scripts/setup.sh first."
   (
     cd -- "${repo_root}"
-    pnpm --filter fukamu-cycle-frontend run format:check
-    pnpm --filter fukamu-cycle-frontend run lint
-    pnpm --filter fukamu-cycle-frontend run typecheck
-    pnpm --filter fukamu-cycle-frontend test
-    pnpm --filter fukamu-cycle-frontend run build
+    pnpm --filter fukamu-cycle-frontend --fail-if-no-match run format:check
+    pnpm --filter fukamu-cycle-frontend --fail-if-no-match run lint
+    pnpm --filter fukamu-cycle-frontend --fail-if-no-match run typecheck
+    pnpm --filter fukamu-cycle-frontend --fail-if-no-match test
+    if [[ "${run_e2e}" == "true" ]]; then
+      export VITE_GOOGLE_WEB_CLIENT_ID="fukamu-cycle-e2e-client"
+    fi
+    pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
   )
 fi
 
@@ -86,7 +97,7 @@ if [[ "${run_backend}" == "true" ]]; then
 
     cd -- "${repo_root}/backend"
     untracked_generated="$(
-      git ls-files --others --exclude-standard -- \
+      trusted_git ls-files --others --exclude-standard -- \
         internal/infrastructure/postgres/generated
     )"
     [[ -z "${untracked_generated}" ]] \
@@ -96,20 +107,23 @@ if [[ "${run_backend}" == "true" ]]; then
     [[ -z "${unformatted}" ]] \
       || die "gofmt is required for: ${unformatted//$'\n'/, }"
 
-    go vet ./...
-    go test -count=1 ./...
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go vet ./...
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go test -count=1 ./...
 
     mkdir -p -- "${repo_root}/.tmp/check"
-    go build -o "${repo_root}/.tmp/check/server" ./cmd/server
-    go build -o "${repo_root}/.tmp/check/migrate" ./cmd/migrate
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o "${repo_root}/.tmp/check/server" ./cmd/server
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o "${repo_root}/.tmp/check/migrate" ./cmd/migrate
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o "${repo_root}/.tmp/check/cleanup" ./cmd/cleanup
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o "${repo_root}/.tmp/check/configcheck" ./cmd/configcheck
   )
 fi
 
 if [[ "${run_infrastructure}" == "true" ]]; then
-  require_command terraform
+  require_terraform_version
   require_command pnpm
   require_command docker
   require_local_docker_context >/dev/null
+  "${script_dir}/check-docker-context.sh"
   "${script_dir}/check-shell.sh"
 
   docker compose --file "${repo_root}/compose.local.yaml" config --quiet
@@ -127,14 +141,14 @@ if [[ "${run_infrastructure}" == "true" ]]; then
   if [[ ! -f "${repo_root}/frontend/dist/index.html" ]]; then
     (
       cd -- "${repo_root}"
-      pnpm --filter fukamu-cycle-frontend run build
+      pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
     )
   fi
   (
     cd -- "${repo_root}"
     export XDG_CONFIG_HOME="${repo_root}/cloudflare/.wrangler/config"
-    pnpm --filter fukamu-cycle-cloudflare run check
-    pnpm --filter fukamu-cycle-cloudflare run deploy:dry-run
+    pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match run check
+    pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match run deploy:dry-run
   )
 fi
 
@@ -143,7 +157,7 @@ if [[ "${run_e2e}" == "true" ]]; then
   (
     cd -- "${repo_root}"
     unset FUKAMU_CYCLE_GO_BINARY FUKAMU_CYCLE_SERVER_BINARY
-    CI=true pnpm --filter fukamu-cycle-frontend run test:e2e
+    CI=true pnpm --filter fukamu-cycle-frontend --fail-if-no-match run test:e2e
   )
 fi
 

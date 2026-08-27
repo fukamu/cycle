@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 )
 
@@ -40,7 +41,7 @@ func contextTestService() *Service {
 func TestSelectAIContextIncludesNewestCyclesAsWholeUnitsWithinBudget(t *testing.T) {
 	service := contextTestService()
 	snapshot := AISnapshot{
-		Operation: "action_generate", GoalID: "goal-1", GoalBody: "current goal",
+		Operation: domainai.OperationActionGenerate, GoalID: "goal-1", GoalBody: "current goal",
 		CurrentCycle: &AIContextCycle{ID: "cycle-3", GoalID: "goal-1", SequenceNumber: 3, Status: cycle.StatusActive, Plan: "plan", Do: "do", Check: "check"},
 		PastCycles: []AIContextCycle{
 			{ID: "cycle-2", GoalID: "goal-1", SequenceNumber: 2, Status: cycle.StatusCompleted, GoalBody: "v1", Plan: strings.Repeat("a", 30)},
@@ -53,9 +54,7 @@ func TestSelectAIContextIncludesNewestCyclesAsWholeUnitsWithinBudget(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	service.settings.MaxInputTokens = limit
-
-	selected, err := service.selectAIContext(context.Background(), snapshot)
+	selected, err := service.selectAIContext(context.Background(), snapshot, limit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +65,7 @@ func TestSelectAIContextIncludesNewestCyclesAsWholeUnitsWithinBudget(t *testing.
 
 func TestSelectAIContextTruncatesOnlyProviderCopyWhenCurrentInputExceedsBudget(t *testing.T) {
 	service := contextTestService()
-	snapshot := AISnapshot{Operation: "goal_refine", SourceText: strings.Repeat("あ", 80), GoalBody: strings.Repeat("い", 80)}
+	snapshot := AISnapshot{Operation: domainai.OperationGoalRefine, SourceText: strings.Repeat("あ", 80), GoalBody: strings.Repeat("い", 80)}
 	empty := snapshot
 	empty.SourceText = ""
 	empty.GoalBody = ""
@@ -74,9 +73,9 @@ func TestSelectAIContextTruncatesOnlyProviderCopyWhenCurrentInputExceedsBudget(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	service.settings.MaxInputTokens = fixed + 20
+	limit := fixed + 20
 
-	selected, err := service.selectAIContext(context.Background(), snapshot)
+	selected, err := service.selectAIContext(context.Background(), snapshot, limit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,17 +86,46 @@ func TestSelectAIContextTruncatesOnlyProviderCopyWhenCurrentInputExceedsBudget(t
 		t.Fatal("saved snapshot source was mutated")
 	}
 	count, err := service.countProviderInput(context.Background(), selected)
-	if err != nil || count > service.settings.MaxInputTokens {
+	if err != nil || count > limit {
 		t.Fatalf("selected token count/error = %d/%v", count, err)
+	}
+}
+
+func TestSelectAIContextReservesWorstCaseInvalidRetryInstructionTokens(t *testing.T) {
+	service := contextTestService()
+	snapshot := AISnapshot{
+		Operation:  domainai.OperationGoalRefine,
+		SourceText: strings.Repeat("\u3042", 80), GoalBody: strings.Repeat("\u3044", 80),
+	}
+	service.settings.MaxProviderAttempts = 1
+	firstAttemptTokens, err := service.countProviderInput(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.settings.MaxProviderAttempts = 2
+	worstCaseTokens, err := service.countProviderInput(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worstCaseTokens <= firstAttemptTokens {
+		t.Fatalf("retry tokens = %d, first attempt = %d", worstCaseTokens, firstAttemptTokens)
+	}
+	selected, err := service.selectAIContext(context.Background(), snapshot, firstAttemptTokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedTokens, err := service.countProviderInput(context.Background(), selected)
+	if err != nil || selectedTokens > firstAttemptTokens || !selected.CurrentTruncated {
+		t.Fatalf("selected retry-safe input = tokens %d, truncated %t, error %v", selectedTokens, selected.CurrentTruncated, err)
 	}
 }
 
 func TestSelectAIContextRejectsAnotherGoalBeforeProviderCall(t *testing.T) {
 	service := contextTestService()
 	_, err := service.selectAIContext(context.Background(), AISnapshot{
-		Operation: "goal_refine", GoalID: "goal-1", SourceText: "draft",
+		Operation: domainai.OperationGoalRefine, GoalID: "goal-1", SourceText: "draft",
 		PastCycles: []AIContextCycle{{ID: "cycle-2", GoalID: "goal-2"}},
-	})
+	}, 10_000)
 	if !errors.Is(err, ErrAIContextIsolation) {
 		t.Fatalf("error = %v", err)
 	}

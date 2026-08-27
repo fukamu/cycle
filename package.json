@@ -5,5 +5,10 @@
   "packageManager": "pnpm@11.22.0",
   "engines": {
     "node": ">=24.0.0"
+  },
+  "devDependencies": {
+    "github-slugger": "2.0.0",
+    "markdown-it": "15.0.0",
+    "mermaid": "11.16.1"
   }
 }

@@ -5,12 +5,17 @@ import {
   cacheCreationDraft,
   cacheCycle,
   cacheCycleFrame,
+  cacheGoal,
+  cacheGoals,
   cacheReview,
   cacheReviewDraft,
-  cycleQueryKey,
-  goalQueryKey,
-  reviewQueryKey,
+  preferGoal,
+  userMutationKeys,
+  userQueryKeys,
 } from "./goalCache";
+
+const userId = "10000000-0000-7000-8000-000000000001";
+const otherUserId = "10000000-0000-7000-8000-000000000002";
 
 const goal: Goal = {
   id: "20000000-0000-7000-8000-000000000001",
@@ -70,42 +75,90 @@ const reviewDraft: GoalDraft = {
 };
 
 describe("goal cache", () => {
+  it("defines every server-state key under the owning user root", () => {
+    expect(userQueryKeys.root(userId)).toEqual(["user", userId]);
+    expect(userQueryKeys.home(userId)).toEqual(["user", userId, "home"]);
+    expect(userQueryKeys.goals(userId, "all")).toEqual([
+      "user",
+      userId,
+      "goals",
+      "all",
+    ]);
+    expect(userQueryKeys.goal(userId, goal.id)).toEqual([
+      "user",
+      userId,
+      "goal",
+      goal.id,
+    ]);
+    expect(userQueryKeys.review(userId, goal.id)).toEqual([
+      "user",
+      userId,
+      "goal-review",
+      goal.id,
+    ]);
+    expect(userQueryKeys.goalCycles(userId, goal.id)).toEqual([
+      "user",
+      userId,
+      "goal-cycles",
+      goal.id,
+    ]);
+    expect(userQueryKeys.cycle(userId, goal.id, cycle.id)).toEqual([
+      "user",
+      userId,
+      "cycle",
+      goal.id,
+      cycle.id,
+    ]);
+    expect(userMutationKeys.createGoalDraft(userId)).toEqual([
+      "user",
+      userId,
+      "create-goal-draft",
+    ]);
+  });
+
   it("primes goal and cycle details from a transition response", () => {
     const cache = new QueryClient();
 
-    cacheCycle(cache, goal, cycle);
+    cacheCycle(cache, userId, goal, cycle);
 
-    expect(cache.getQueryData(goalQueryKey(goal.id))).toEqual({ goal });
-    expect(cache.getQueryData(cycleQueryKey(goal.id, cycle.id))).toEqual({
-      cycle,
+    expect(cache.getQueryData(userQueryKeys.goal(userId, goal.id))).toEqual({
+      goal,
     });
+    expect(
+      cache.getQueryData(userQueryKeys.cycle(userId, goal.id, cycle.id)),
+    ).toEqual({ cycle });
   });
 
-  it("adds a created draft to an existing home response", () => {
+  it("adds a created draft only to the captured user's home response", () => {
     const cache = new QueryClient();
     const home: Home = {
       progressingGoals: [],
       creationDraft: null,
       canCreateGoalDraft: true,
-      progressingGoalLimit: 3,
+      progressingGoalLimit: 2,
       canStartProgressingGoal: true,
     };
-    cache.setQueryData(["home"], home);
+    const otherHome = { ...home, progressingGoals: [goal] };
+    cache.setQueryData(userQueryKeys.home(userId), home);
+    cache.setQueryData(userQueryKeys.home(otherUserId), otherHome);
 
-    cacheCreationDraft(cache, draft);
+    cacheCreationDraft(cache, userId, draft);
 
-    expect(cache.getQueryData<Home>(["home"])).toEqual({
+    expect(cache.getQueryData<Home>(userQueryKeys.home(userId))).toEqual({
       ...home,
       creationDraft: draft,
       canCreateGoalDraft: false,
     });
+    expect(cache.getQueryData<Home>(userQueryKeys.home(otherUserId))).toEqual(
+      otherHome,
+    );
   });
 
   it("keeps a saved frame in the canonical cycle detail", () => {
     const cache = new QueryClient();
-    cacheCycle(cache, goal, cycle);
+    cacheCycle(cache, userId, goal, cycle);
 
-    cacheCycleFrame(cache, goal.id, {
+    cacheCycleFrame(cache, userId, goal.id, {
       cycleId: cycle.id,
       frame: "plan",
       content: "保存後のP",
@@ -114,8 +167,9 @@ describe("goal cache", () => {
     });
 
     expect(
-      cache.getQueryData<{ cycle: Cycle }>(cycleQueryKey(goal.id, cycle.id))
-        ?.cycle,
+      cache.getQueryData<{ cycle: Cycle }>(
+        userQueryKeys.cycle(userId, goal.id, cycle.id),
+      )?.cycle,
     ).toEqual({
       ...cycle,
       plan: "保存後のP",
@@ -126,14 +180,14 @@ describe("goal cache", () => {
 
   it("does not let an older frame response regress canonical state", () => {
     const cache = new QueryClient();
-    cacheCycle(cache, goal, {
+    cacheCycle(cache, userId, goal, {
       ...cycle,
       plan: "newer",
       contentRevision: 3,
       frameRevisions: { ...cycle.frameRevisions, plan: 2 },
     });
 
-    cacheCycleFrame(cache, goal.id, {
+    cacheCycleFrame(cache, userId, goal.id, {
       cycleId: cycle.id,
       frame: "plan",
       content: "older",
@@ -142,8 +196,9 @@ describe("goal cache", () => {
     });
 
     expect(
-      cache.getQueryData<{ cycle: Cycle }>(cycleQueryKey(goal.id, cycle.id))
-        ?.cycle,
+      cache.getQueryData<{ cycle: Cycle }>(
+        userQueryKeys.cycle(userId, goal.id, cycle.id),
+      )?.cycle,
     ).toMatchObject({
       plan: "newer",
       contentRevision: 3,
@@ -151,17 +206,80 @@ describe("goal cache", () => {
     });
   });
 
+  it("does not let a late goal collection snapshot regress a newer detail", () => {
+    const cache = new QueryClient();
+    const newer = {
+      ...goal,
+      revision: 2,
+      currentVersion: { ...goal.currentVersion, body: "新しい目標" },
+    };
+    const older = {
+      ...goal,
+      revision: 1,
+      currentVersion: { ...goal.currentVersion, body: "古い目標" },
+    };
+    cache.setQueryData(userQueryKeys.goal(userId, goal.id), { goal: newer });
+
+    cacheGoals(cache, userId, [older]);
+
+    expect(cache.getQueryData(userQueryKeys.goal(userId, goal.id))).toEqual({
+      goal: newer,
+    });
+  });
+
+  it("returns the canonical goal selected by the shared revision policy", () => {
+    const cache = new QueryClient();
+    const newer = {
+      ...goal,
+      revision: 2,
+      currentVersion: { ...goal.currentVersion, body: "新しい目標" },
+    };
+    const older = {
+      ...goal,
+      revision: 1,
+      currentVersion: { ...goal.currentVersion, body: "古い目標" },
+    };
+
+    expect(preferGoal(older, newer)).toBe(newer);
+    expect(preferGoal(newer, older)).toBe(newer);
+    expect(cacheGoal(cache, userId, newer)).toBe(newer);
+    expect(cacheGoal(cache, userId, older)).toBe(newer);
+    expect(cache.getQueryData(userQueryKeys.goal(userId, goal.id))).toEqual({
+      goal: newer,
+    });
+  });
+
   it("keeps a saved review draft in the canonical review detail", () => {
     const cache = new QueryClient();
-    cacheReview(cache, { goal, reviewDraft, triggerCycle: cycle });
+    cacheReview(cache, userId, { goal, reviewDraft, triggerCycle: cycle });
     const saved = { ...reviewDraft, body: "保存後の目標", revision: 1 };
 
-    cacheReviewDraft(cache, goal.id, saved);
+    cacheReviewDraft(cache, userId, goal.id, saved);
 
-    expect(cache.getQueryData(reviewQueryKey(goal.id))).toEqual({
+    expect(cache.getQueryData(userQueryKeys.review(userId, goal.id))).toEqual({
       goal,
       reviewDraft: saved,
       triggerCycle: cycle,
     });
+  });
+
+  it("invalidates only queries under the captured user root", async () => {
+    const cache = new QueryClient();
+    cache.setQueryData(userQueryKeys.home(userId), { owner: userId });
+    cache.setQueryData(userQueryKeys.home(otherUserId), {
+      owner: otherUserId,
+    });
+
+    await cache.invalidateQueries({
+      queryKey: userQueryKeys.root(userId),
+      refetchType: "none",
+    });
+
+    expect(cache.getQueryState(userQueryKeys.home(userId))?.isInvalidated).toBe(
+      true,
+    );
+    expect(
+      cache.getQueryState(userQueryKeys.home(otherUserId))?.isInvalidated,
+    ).toBe(false);
   });
 });

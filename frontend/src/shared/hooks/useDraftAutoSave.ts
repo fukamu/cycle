@@ -1,23 +1,47 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
+import { APIError } from "../api/client";
+import {
+  AutoSaveCoordinator,
+  type AutoSaveState,
+} from "../autosave/autoSaveCoordinator";
+import {
+  type AutoSaveBrowserOperationQueue,
+  useAutoSaveScopeRegistry,
+} from "../autosave/AutoSaveScopeProvider";
 import {
   type BrowserDraft,
   deleteBrowserDraft,
+  deleteBrowserDraftIfUnchanged,
   getBrowserDraft,
   putBrowserDraft,
 } from "../drafts/browserDraftCache";
-import {
-  autoSaveDebounceMs,
-  autoSaveRetryDelay,
-  browserDraftDebounceMs,
-  isRetryableAutoSaveError,
-  maxAutoSaveRetries,
-} from "./autoSavePolicy";
+import { normalizeLineEndings } from "../text/semantics";
 
-export type SimpleSaveState = "dirty" | "saving" | "saved" | "failed";
+export type DraftSaveState = AutoSaveState;
 
-type Input = {
+export type SimpleDraftRevisionConflictCode =
+  | "GOAL_DRAFT_REVISION_CONFLICT"
+  | "GOAL_REVIEW_DRAFT_REVISION_CONFLICT";
+
+type DraftSnapshot = {
+  readonly body: string;
+  readonly revision: number;
+};
+
+export type DraftLatestResolution<TSnapshot extends DraftSnapshot> =
+  | { readonly kind: "accepted"; readonly snapshot: TSnapshot }
+  | { readonly kind: "scope-moved"; readonly href: string };
+
+type Input<TSnapshot extends DraftSnapshot> = {
   readonly userId: string;
   readonly goalId: string | null;
   readonly subjectKey: string;
@@ -26,416 +50,513 @@ type Input = {
   readonly save: (
     body: string,
     revision: number,
+    signal: AbortSignal,
   ) => Promise<{ readonly body: string; readonly revision: number }>;
+  readonly revisionConflictCode: SimpleDraftRevisionConflictCode;
+  readonly loadLatest: (signal: AbortSignal) => Promise<TSnapshot>;
+  readonly acceptLatest?: (
+    latest: TSnapshot,
+  ) => DraftLatestResolution<TSnapshot>;
+  readonly scopeMovedOnError?: (error: unknown) => string | null;
 };
 
-export function useDraftAutoSave(input: Input) {
-  const { goalId, initialBody, initialRevision, save, subjectKey, userId } =
-    input;
-  const { control, reset, setValue } = useForm<{ body: string }>({
-    defaultValues: { body: initialBody },
-  });
-  const body = useWatch({ control, name: "body" });
-  const [revision, setRevision] = useState(initialRevision);
-  const [state, setState] = useState<SimpleSaveState>("saved");
+type ConflictSnapshot = {
+  readonly body: string;
+  readonly baseRevision: number;
+};
+
+const bodyKey = "body";
+
+export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
+  input: Input<TSnapshot>,
+) {
+  const registry = useAutoSaveScopeRegistry();
+  const scopeKey = input.userId + ":" + input.subjectKey;
+  const runtimeRef = useRef<{
+    readonly scopeKey: string;
+    readonly userId: string;
+    readonly goalId: string | null;
+    readonly subjectKey: string;
+    readonly initialBody: string;
+    readonly initialRevision: number;
+    readonly revisionConflictCode: SimpleDraftRevisionConflictCode;
+    save: Input<TSnapshot>["save"];
+    loadLatest: Input<TSnapshot>["loadLatest"];
+    acceptLatest: Input<TSnapshot>["acceptLatest"];
+    scopeMovedOnError: Input<TSnapshot>["scopeMovedOnError"];
+  } | null>(null);
+  if (!runtimeRef.current || runtimeRef.current.scopeKey !== scopeKey) {
+    runtimeRef.current = {
+      scopeKey,
+      userId: input.userId,
+      goalId: input.goalId,
+      subjectKey: input.subjectKey,
+      initialBody: input.initialBody,
+      initialRevision: input.initialRevision,
+      revisionConflictCode: input.revisionConflictCode,
+      save: input.save,
+      loadLatest: input.loadLatest,
+      acceptLatest: input.acceptLatest,
+      scopeMovedOnError: input.scopeMovedOnError,
+    };
+  } else {
+    runtimeRef.current.save = input.save;
+    runtimeRef.current.loadLatest = input.loadLatest;
+    runtimeRef.current.acceptLatest = input.acceptLatest;
+    runtimeRef.current.scopeMovedOnError = input.scopeMovedOnError;
+  }
+  const runtime = runtimeRef.current;
+
+  const lease = useMemo(() => registry.prepare(scopeKey), [registry, scopeKey]);
+  const [body, setBodyValue] = useState(runtime.initialBody);
+  const [revision, setRevision] = useState(runtime.initialRevision);
   const [recoveryConflict, setRecoveryConflict] = useState<BrowserDraft | null>(
     null,
   );
+  const [revisionConflictActive, setRevisionConflictActive] = useState(false);
+  const [resolvingConflict, setResolvingConflict] = useState(false);
   const [browserCacheFailed, setBrowserCacheFailed] = useState(false);
+  const [scopeMovedHref, setScopeMovedHref] = useState<string | null>(null);
 
-  const bodyRef = useRef(initialBody);
-  const revisionRef = useRef(initialRevision);
-  const savedBodyRef = useRef(initialBody);
-  const saveRef = useRef(save);
-  saveRef.current = save;
-  const inFlightRef = useRef(false);
-  const pausedRef = useRef(false);
-  const disposedRef = useRef(false);
-  const discardedRef = useRef(false);
-  const mountedRef = useRef(true);
-  const conflictRef = useRef(false);
+  const revisionRef = useRef(runtime.initialRevision);
+  const conflictSnapshotRef = useRef<ConflictSnapshot | undefined>(undefined);
+  const attemptBaseRevisionRef = useRef(runtime.initialRevision);
+  const lastCachedDraftRef = useRef<BrowserDraft | undefined>(undefined);
   const hasEditedRef = useRef(false);
-  const editVersionRef = useRef(0);
-  const retryCountRef = useRef(0);
-  const lastInputAtRef = useRef(0);
-  const saveTimerRef = useRef<number | undefined>(undefined);
-  const browserTimerRef = useRef<number | undefined>(undefined);
-  const runSaveRef = useRef<() => Promise<void>>(async () => undefined);
-  const browserQueueRef = useRef(Promise.resolve());
-
-  const updateState = useCallback((next: SimpleSaveState) => {
-    if (mountedRef.current) setState(next);
-  }, []);
-
-  const queueBrowserOperation = useCallback(
-    (operation: () => Promise<void>): Promise<void> => {
-      const settled = browserQueueRef.current.then(operation).then(
-        () => {
-          if (mountedRef.current) setBrowserCacheFailed(false);
-        },
-        () => {
-          if (mountedRef.current) setBrowserCacheFailed(true);
-        },
-      );
-      browserQueueRef.current = settled;
-      return settled;
-    },
-    [],
+  const mountedRef = useRef(false);
+  const quiesceQueueRef = useRef<AutoSaveBrowserOperationQueue | undefined>(
+    undefined,
+  );
+  const resolveRevisionConflictRef = useRef<
+    (signal: AbortSignal) => Promise<void>
+  >(async () => undefined);
+  const markScopeMovedRef = useRef<(href: string) => void>(() => undefined);
+  const queueBrowserOperation = useCallback<AutoSaveBrowserOperationQueue>(
+    (operation) =>
+      (quiesceQueueRef.current ?? lease.queueBrowserOperation)(operation),
+    [lease],
   );
 
-  const deleteCachedDraft = useCallback(
-    () => queueBrowserOperation(() => deleteBrowserDraft(userId, subjectKey)),
-    [queueBrowserOperation, subjectKey, userId],
-  );
-
-  const cacheDraft = useCallback(
-    (draftBody: string, baseRevision: number) => {
-      if (discardedRef.current) return Promise.resolve();
-      return queueBrowserOperation(() =>
-        putBrowserDraft({
-          userId,
-          goalId,
-          subjectKey,
-          body: draftBody,
-          baseRevision,
-          updatedAt: new Date().toISOString(),
-        }),
-      );
-    },
-    [goalId, queueBrowserOperation, subjectKey, userId],
-  );
-
-  const persistCurrentDraft = useCallback(() => {
-    if (conflictRef.current || discardedRef.current) return Promise.resolve();
-    return bodyRef.current === savedBodyRef.current
-      ? deleteCachedDraft()
-      : cacheDraft(bodyRef.current, revisionRef.current);
-  }, [cacheDraft, deleteCachedDraft]);
-
-  const clearSaveTimer = useCallback(() => {
-    if (saveTimerRef.current !== undefined) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = undefined;
-    }
-  }, []);
-
-  const clearBrowserTimer = useCallback(() => {
-    if (browserTimerRef.current !== undefined) {
-      window.clearTimeout(browserTimerRef.current);
-      browserTimerRef.current = undefined;
-    }
-  }, []);
-
-  const scheduleSave = useCallback(
-    (delay: number) => {
-      clearSaveTimer();
-      if (
-        pausedRef.current ||
-        disposedRef.current ||
-        conflictRef.current ||
-        bodyRef.current === savedBodyRef.current
-      )
-        return;
-      saveTimerRef.current = window.setTimeout(() => {
-        saveTimerRef.current = undefined;
-        void runSaveRef.current();
-      }, delay);
-    },
-    [clearSaveTimer],
-  );
-
-  const scheduleBrowserDraft = useCallback(() => {
-    clearBrowserTimer();
-    if (conflictRef.current) return;
-    browserTimerRef.current = window.setTimeout(() => {
-      browserTimerRef.current = undefined;
-      void persistCurrentDraft();
-    }, browserDraftDebounceMs);
-  }, [clearBrowserTimer, persistCurrentDraft]);
-
-  const saveDetached = useCallback(
-    (snapshot: string, baseRevision: number) => {
-      void saveRef
-        .current(snapshot, baseRevision)
-        .then((result) => {
-          revisionRef.current = result.revision;
-          savedBodyRef.current = result.body;
-          if (bodyRef.current === snapshot) {
-            bodyRef.current = result.body;
-            return deleteCachedDraft();
-          }
-          return cacheDraft(bodyRef.current, result.revision);
-        })
-        .catch(() => undefined);
-    },
-    [cacheDraft, deleteCachedDraft],
-  );
-
-  const runSave = useCallback(async () => {
-    if (
-      pausedRef.current ||
-      disposedRef.current ||
-      conflictRef.current ||
-      inFlightRef.current
-    )
-      return;
-    if (bodyRef.current === savedBodyRef.current) {
-      updateState("saved");
-      clearBrowserTimer();
-      void deleteCachedDraft();
-      return;
-    }
-
-    const snapshot = bodyRef.current;
-    const snapshotEditVersion = editVersionRef.current;
-    const baseRevision = revisionRef.current;
-    inFlightRef.current = true;
-    updateState("saving");
-    let result:
-      | { readonly body: string; readonly revision: number }
-      | undefined;
-    let failure: unknown;
+  const clearBrowserDraft = useCallback(async () => {
     try {
-      result = await saveRef.current(snapshot, baseRevision);
-      revisionRef.current = result.revision;
-      savedBodyRef.current = result.body;
-      retryCountRef.current = 0;
-      if (editVersionRef.current === snapshotEditVersion) {
-        bodyRef.current = result.body;
-        if (mountedRef.current) {
-          reset({ body: result.body });
-          setRevision(result.revision);
+      const cleared = await lease.queueBrowserOperation(async () => {
+        await deleteBrowserDraft(runtime.userId, runtime.subjectKey);
+        return true;
+      });
+      if (cleared !== true) throw new Error("browser draft scope is inactive");
+      lastCachedDraftRef.current = undefined;
+      if (mountedRef.current && lease.isCurrent()) {
+        setBrowserCacheFailed(false);
+      }
+      return true;
+    } catch {
+      if (mountedRef.current && lease.isCurrent()) {
+        setBrowserCacheFailed(true);
+      }
+      return false;
+    }
+  }, [lease, runtime]);
+
+  const coordinator = useMemo(() => {
+    const own = {
+      current: undefined as
+        | AutoSaveCoordinator<
+            typeof bodyKey,
+            string,
+            { readonly body: string; readonly revision: number }
+          >
+        | undefined,
+    };
+    const created = new AutoSaveCoordinator<
+      typeof bodyKey,
+      string,
+      { readonly body: string; readonly revision: number }
+    >({
+      initialValues: new Map([[bodyKey, runtime.initialBody]]),
+      initiallyHydrating: true,
+      signal: lease.signal,
+      isCurrent: lease.isCurrent,
+      save: (entry, signal) => {
+        const baseRevision = revisionRef.current;
+        attemptBaseRevisionRef.current = baseRevision;
+        return runtime.save(entry.value, baseRevision, signal);
+      },
+      savedValue: (result) => result.body,
+      onSaved: (_entry, result) => {
+        if (!lease.isCurrent()) return;
+        revisionRef.current = result.revision;
+        if (mountedRef.current) setRevision(result.revision);
+        const current = own.current?.getCurrentValue(bodyKey);
+        if (current === result.body && mountedRef.current)
+          setBodyValue(result.body);
+      },
+      onError: async (error, entry, signal) => {
+        const movedHref = runtime.scopeMovedOnError?.(error);
+        if (movedHref) {
+          markScopeMovedRef.current(movedHref);
+          return "handled";
         }
-      } else if (mountedRef.current) {
-        setRevision(result.revision);
-      }
+        if (
+          !(error instanceof APIError) ||
+          error.status !== 409 ||
+          error.code !== runtime.revisionConflictCode
+        )
+          return "unhandled";
 
-      clearBrowserTimer();
-      if (bodyRef.current === result.body) {
-        void deleteCachedDraft();
-        updateState("saved");
-      } else {
-        void cacheDraft(bodyRef.current, result.revision);
-        updateState("dirty");
-      }
-    } catch (cause) {
-      failure = cause;
-    } finally {
-      inFlightRef.current = false;
-    }
+        const conflict = {
+          body: entry.value,
+          baseRevision: attemptBaseRevisionRef.current,
+        };
+        conflictSnapshotRef.current = conflict;
+        const current = own.current?.getCurrentValue(bodyKey) ?? entry.value;
+        own.current?.block(bodyKey, current, runtime.revisionConflictCode);
+        if (mountedRef.current && lease.isCurrent()) {
+          setRevisionConflictActive(true);
+          setRecoveryConflict(null);
+        }
+        await resolveRevisionConflictRef.current(signal);
+        return "handled";
+      },
+      persist: async (_key, value) => {
+        const draft: BrowserDraft = {
+          userId: runtime.userId,
+          goalId: runtime.goalId,
+          subjectKey: runtime.subjectKey,
+          body: value,
+          baseRevision:
+            conflictSnapshotRef.current?.baseRevision ?? revisionRef.current,
+          updatedAt: new Date().toISOString(),
+        };
+        const stored = await queueBrowserOperation(async () => {
+          await putBrowserDraft(draft);
+          return true;
+        });
+        if (stored !== true) throw new Error("browser draft scope is inactive");
+        lastCachedDraftRef.current = draft;
+      },
+      clearPersisted: async () => {
+        const expected = lastCachedDraftRef.current;
+        if (!expected) return;
+        await queueBrowserOperation(() =>
+          deleteBrowserDraftIfUnchanged(
+            expected.userId,
+            expected.subjectKey,
+            expected.body,
+            expected.baseRevision,
+          ),
+        );
+        if (lastCachedDraftRef.current === expected)
+          lastCachedDraftRef.current = undefined;
+      },
+      onPersistenceStatus: (available) => {
+        if (mountedRef.current && lease.isCurrent())
+          setBrowserCacheFailed(!available);
+      },
+    });
+    own.current = created;
+    return created;
+  }, [lease, queueBrowserOperation, runtime]);
 
-    if (result) {
-      if (bodyRef.current !== savedBodyRef.current) {
-        if (disposedRef.current)
-          saveDetached(bodyRef.current, revisionRef.current);
-        else if (!pausedRef.current && !conflictRef.current) scheduleSave(0);
+  const state = useSyncExternalStore(
+    coordinator.subscribe,
+    coordinator.getState,
+    coordinator.getState,
+  );
+  const hydrationRunRef = useRef<{
+    readonly coordinator: typeof coordinator;
+    readonly token: symbol;
+  } | null>(null);
+
+  const markScopeMoved = useCallback(
+    (href: string) => {
+      if (!lease.isCurrent()) return;
+      conflictSnapshotRef.current = undefined;
+      const current = coordinator.getCurrentValue(bodyKey);
+      coordinator.pause(true);
+      if (current !== undefined)
+        coordinator.block(bodyKey, current, "AUTOSAVE_SCOPE_MOVED");
+      if (mountedRef.current) {
+        setScopeMovedHref(href);
+        setRevisionConflictActive(false);
+        setRecoveryConflict(null);
+        setResolvingConflict(false);
       }
+    },
+    [coordinator, lease],
+  );
+  markScopeMovedRef.current = markScopeMoved;
+
+  const resolveRevisionConflict = useCallback(
+    async (signal: AbortSignal) => {
+      const conflict = conflictSnapshotRef.current;
+      if (!conflict || resolvingConflict) return;
+      if (mountedRef.current && lease.isCurrent()) setResolvingConflict(true);
+      try {
+        const loaded = await runtime.loadLatest(signal);
+        if (
+          signal.aborted ||
+          !lease.isCurrent() ||
+          conflictSnapshotRef.current !== conflict
+        )
+          return;
+        const resolution: DraftLatestResolution<TSnapshot> =
+          runtime.acceptLatest?.(loaded) ?? {
+            kind: "accepted",
+            snapshot: loaded,
+          };
+        if (conflictSnapshotRef.current !== conflict) return;
+        if (resolution.kind === "scope-moved") {
+          markScopeMoved(resolution.href);
+          return;
+        }
+        const latest = resolution.snapshot;
+
+        revisionRef.current = latest.revision;
+        if (mountedRef.current) setRevision(latest.revision);
+        coordinator.rebase(bodyKey, latest.body);
+        const current = coordinator.getCurrentValue(bodyKey) ?? conflict.body;
+
+        if (conflict.body === latest.body) {
+          conflictSnapshotRef.current = undefined;
+          setRevisionConflictActive(false);
+          setRecoveryConflict(null);
+          coordinator.unblock(bodyKey);
+          if (current === latest.body && mountedRef.current)
+            setBodyValue(latest.body);
+          return;
+        }
+
+        const localDraft: BrowserDraft = {
+          userId: runtime.userId,
+          goalId: runtime.goalId,
+          subjectKey: runtime.subjectKey,
+          body: current,
+          baseRevision: conflict.baseRevision,
+          updatedAt: new Date().toISOString(),
+        };
+        lastCachedDraftRef.current = localDraft;
+        coordinator.block(bodyKey, current, runtime.revisionConflictCode);
+        if (mountedRef.current) setRecoveryConflict(localDraft);
+      } catch (error) {
+        const movedHref = runtime.scopeMovedOnError?.(error);
+        if (
+          movedHref &&
+          !signal.aborted &&
+          lease.isCurrent() &&
+          conflictSnapshotRef.current === conflict
+        ) {
+          markScopeMoved(movedHref);
+          return;
+        }
+        // The local value remains blocked and recoverable. Manual retry only
+        // repeats this latest-state fetch, never the stale PATCH.
+      } finally {
+        if (
+          mountedRef.current &&
+          lease.isCurrent() &&
+          conflictSnapshotRef.current === conflict
+        )
+          setResolvingConflict(false);
+      }
+    },
+    [coordinator, lease, markScopeMoved, resolvingConflict, runtime],
+  );
+  resolveRevisionConflictRef.current = resolveRevisionConflict;
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    lease.activate();
+    if (!lease.isCurrent()) {
+      mountedRef.current = false;
       return;
     }
-
-    if (disposedRef.current || pausedRef.current || conflictRef.current) return;
-    void persistCurrentDraft();
-    if (editVersionRef.current !== snapshotEditVersion) {
-      retryCountRef.current = 0;
-      updateState("dirty");
-      const elapsed = Date.now() - lastInputAtRef.current;
-      scheduleSave(Math.max(0, autoSaveDebounceMs - elapsed));
-      return;
-    }
-    if (
-      isRetryableAutoSaveError(failure) &&
-      retryCountRef.current < maxAutoSaveRetries
-    ) {
-      retryCountRef.current += 1;
-      updateState("dirty");
-      scheduleSave(autoSaveRetryDelay(retryCountRef.current));
-      return;
-    }
-    updateState("failed");
-  }, [
-    cacheDraft,
-    clearBrowserTimer,
-    deleteCachedDraft,
-    persistCurrentDraft,
-    reset,
-    saveDetached,
-    scheduleSave,
-    updateState,
-  ]);
-  runSaveRef.current = runSave;
+    coordinator.attach();
+    const unregister = lease.onQuiesce(async (lifecycle) => {
+      quiesceQueueRef.current = lifecycle.queueBrowserOperation;
+      try {
+        await coordinator.quiesce(lifecycle.preserveDrafts);
+      } finally {
+        if (quiesceQueueRef.current === lifecycle.queueBrowserOperation)
+          quiesceQueueRef.current = undefined;
+      }
+    });
+    return () => {
+      mountedRef.current = false;
+      unregister();
+      coordinator.detach();
+    };
+  }, [coordinator, lease]);
 
   useEffect(() => {
     let canceled = false;
-    void getBrowserDraft(userId, subjectKey)
-      .then((draft) => {
-        if (canceled || hasEditedRef.current || !draft) return;
-        if (draft.baseRevision !== revisionRef.current) {
-          conflictRef.current = true;
-          bodyRef.current = draft.body;
-          setValue("body", draft.body);
-          setRecoveryConflict(draft);
-          setState("failed");
+    const run = { coordinator, token: Symbol("draft-hydration") };
+    hydrationRunRef.current = run;
+    void (async () => {
+      try {
+        const draft = await lease.queueBrowserOperation(() =>
+          getBrowserDraft(runtime.userId, runtime.subjectKey),
+        );
+        if (canceled || !draft || hasEditedRef.current || !lease.isCurrent())
+          return;
+
+        const canonicalBody = normalizeLineEndings(draft.body);
+        const canonicalDraft =
+          canonicalBody === draft.body
+            ? draft
+            : { ...draft, body: canonicalBody };
+        lastCachedDraftRef.current = draft;
+        if (canonicalDraft !== draft) {
+          const stored = await lease.queueBrowserOperation(async () => {
+            await putBrowserDraft(canonicalDraft);
+            return true;
+          });
+          if (stored !== true)
+            throw new Error("browser draft scope is inactive");
+          lastCachedDraftRef.current = canonicalDraft;
+        }
+        if (canceled || hasEditedRef.current || !lease.isCurrent()) return;
+
+        if (canonicalDraft.baseRevision !== revisionRef.current) {
+          conflictSnapshotRef.current = {
+            body: canonicalBody,
+            baseRevision: canonicalDraft.baseRevision,
+          };
+          coordinator.block(
+            bodyKey,
+            canonicalBody,
+            runtime.revisionConflictCode,
+          );
+          setBodyValue(canonicalBody);
+          setRecoveryConflict(canonicalDraft);
+          setRevisionConflictActive(true);
           return;
         }
-        if (draft.body === savedBodyRef.current) {
-          void deleteCachedDraft();
+        if (canonicalBody === coordinator.getSavedValue(bodyKey)) {
+          coordinator.flush(bodyKey);
           return;
         }
-        bodyRef.current = draft.body;
-        editVersionRef.current += 1;
-        setValue("body", draft.body);
-        setState("dirty");
-        scheduleSave(autoSaveDebounceMs);
-      })
-      .catch(() => {
-        if (!canceled) setBrowserCacheFailed(true);
-      });
+        coordinator.edit(bodyKey, canonicalBody);
+        setBodyValue(canonicalBody);
+      } catch {
+        if (!canceled && lease.isCurrent()) setBrowserCacheFailed(true);
+      } finally {
+        const active = hydrationRunRef.current;
+        if (active?.coordinator !== coordinator || active.token === run.token)
+          coordinator.finishHydration();
+      }
+    })();
     return () => {
       canceled = true;
     };
-  }, [deleteCachedDraft, scheduleSave, setValue, subjectKey, userId]);
+  }, [coordinator, lease, runtime]);
 
   useEffect(() => {
     const handleOnline = () => {
-      if (
-        pausedRef.current ||
-        conflictRef.current ||
-        bodyRef.current === savedBodyRef.current
-      )
+      if (scopeMovedHref) return;
+      if (revisionConflictActive && !recoveryConflict) {
+        void resolveRevisionConflictRef.current(lease.signal);
         return;
-      retryCountRef.current = 0;
-      updateState("dirty");
-      scheduleSave(0);
+      }
+      coordinator.online();
     };
     window.addEventListener("online", handleOnline);
     return () => window.removeEventListener("online", handleOnline);
-  }, [scheduleSave, updateState]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    disposedRef.current = false;
-    return () => {
-      mountedRef.current = false;
-      disposedRef.current = true;
-      clearSaveTimer();
-      clearBrowserTimer();
-      if (conflictRef.current || discardedRef.current) return;
-      if (bodyRef.current !== savedBodyRef.current) {
-        void cacheDraft(bodyRef.current, revisionRef.current);
-        if (!pausedRef.current && !inFlightRef.current)
-          saveDetached(bodyRef.current, revisionRef.current);
-      }
-    };
-  }, [cacheDraft, clearBrowserTimer, clearSaveTimer, saveDetached]);
+  }, [
+    coordinator,
+    lease.signal,
+    recoveryConflict,
+    revisionConflictActive,
+    scopeMovedHref,
+  ]);
 
   const setBody = useCallback(
     (value: string) => {
-      if (conflictRef.current) return;
+      if (revisionConflictActive || scopeMovedHref) return;
       hasEditedRef.current = true;
-      editVersionRef.current += 1;
-      retryCountRef.current = 0;
-      lastInputAtRef.current = Date.now();
-      bodyRef.current = value;
-      setValue("body", value);
-      if (!inFlightRef.current)
-        updateState(value === savedBodyRef.current ? "saved" : "dirty");
-      scheduleBrowserDraft();
-      scheduleSave(autoSaveDebounceMs);
+      coordinator.edit(bodyKey, value);
+      setBodyValue(value);
     },
-    [scheduleBrowserDraft, scheduleSave, setValue, updateState],
+    [coordinator, revisionConflictActive, scopeMovedHref],
   );
 
-  const flush = useCallback(() => {
-    if (conflictRef.current || pausedRef.current) return;
-    clearBrowserTimer();
-    void persistCurrentDraft();
-    clearSaveTimer();
-    void runSaveRef.current();
-  }, [clearBrowserTimer, clearSaveTimer, persistCurrentDraft]);
+  const flush = useCallback(() => coordinator.flush(bodyKey), [coordinator]);
 
   const synchronize = useCallback(
     (nextBody: string, nextRevision: number) => {
-      clearSaveTimer();
-      clearBrowserTimer();
-      conflictRef.current = false;
-      discardedRef.current = false;
+      conflictSnapshotRef.current = undefined;
+      setRevisionConflictActive(false);
       setRecoveryConflict(null);
-      bodyRef.current = nextBody;
+      setResolvingConflict(false);
+      setScopeMovedHref(null);
       revisionRef.current = nextRevision;
-      savedBodyRef.current = nextBody;
-      retryCountRef.current = 0;
-      editVersionRef.current += 1;
-      reset({ body: nextBody });
+      coordinator.synchronize(bodyKey, nextBody);
+      setBodyValue(nextBody);
       setRevision(nextRevision);
-      setState("saved");
-      void deleteCachedDraft();
+      void clearBrowserDraft();
     },
-    [clearBrowserTimer, clearSaveTimer, deleteCachedDraft, reset],
+    [clearBrowserDraft, coordinator],
   );
 
-  const pause = useCallback(() => {
-    pausedRef.current = true;
-    clearSaveTimer();
-  }, [clearSaveTimer]);
+  const pause = useCallback(() => coordinator.pause(), [coordinator]);
 
-  const resume = useCallback(() => {
-    pausedRef.current = false;
-    discardedRef.current = false;
-    retryCountRef.current = 0;
-    if (!conflictRef.current && bodyRef.current !== savedBodyRef.current) {
-      updateState("dirty");
-      scheduleSave(0);
-    }
-  }, [scheduleSave, updateState]);
+  const resume = useCallback(() => coordinator.resume(), [coordinator]);
 
   const discard = useCallback(async () => {
-    pausedRef.current = true;
-    discardedRef.current = true;
-    clearSaveTimer();
-    clearBrowserTimer();
-    conflictRef.current = false;
+    conflictSnapshotRef.current = undefined;
+    setRevisionConflictActive(false);
     setRecoveryConflict(null);
-    await deleteCachedDraft();
-  }, [clearBrowserTimer, clearSaveTimer, deleteCachedDraft]);
+    setResolvingConflict(false);
+    setScopeMovedHref(null);
+    await coordinator.discard();
+    return clearBrowserDraft();
+  }, [clearBrowserDraft, coordinator]);
 
   const retry = useCallback(() => {
-    if (conflictRef.current || pausedRef.current) return;
-    retryCountRef.current = 0;
-    updateState("dirty");
-    scheduleSave(0);
-  }, [scheduleSave, updateState]);
+    if (scopeMovedHref) return;
+    if (revisionConflictActive) {
+      if (!recoveryConflict)
+        void resolveRevisionConflictRef.current(lease.signal);
+      return;
+    }
+    coordinator.retry();
+  }, [
+    coordinator,
+    lease.signal,
+    recoveryConflict,
+    revisionConflictActive,
+    scopeMovedHref,
+  ]);
 
   const restoreRecovery = useCallback(() => {
     const draft = recoveryConflict;
     if (!draft) return;
-    conflictRef.current = false;
+    conflictSnapshotRef.current = undefined;
+    setRevisionConflictActive(false);
     setRecoveryConflict(null);
+    setResolvingConflict(false);
     hasEditedRef.current = true;
-    editVersionRef.current += 1;
-    retryCountRef.current = 0;
-    bodyRef.current = draft.body;
-    setValue("body", draft.body);
-    setState("dirty");
-    void cacheDraft(draft.body, revisionRef.current);
-    scheduleSave(0);
-  }, [cacheDraft, recoveryConflict, scheduleSave, setValue]);
+    setBodyValue(draft.body);
+    coordinator.unblock(bodyKey);
+  }, [coordinator, recoveryConflict]);
 
   const discardRecovery = useCallback(() => {
     if (!recoveryConflict) return;
-    conflictRef.current = false;
+    const saved = coordinator.getSavedValue(bodyKey) ?? runtime.initialBody;
+    conflictSnapshotRef.current = undefined;
+    setRevisionConflictActive(false);
     setRecoveryConflict(null);
-    bodyRef.current = savedBodyRef.current;
-    editVersionRef.current += 1;
-    reset({ body: savedBodyRef.current });
-    setState("saved");
-    void deleteCachedDraft();
-  }, [deleteCachedDraft, recoveryConflict, reset]);
+    setResolvingConflict(false);
+    coordinator.synchronize(bodyKey, saved);
+    setBodyValue(saved);
+    void clearBrowserDraft();
+  }, [clearBrowserDraft, coordinator, recoveryConflict, runtime]);
 
   return {
     body,
     setBody,
     revision,
     state,
+    hydrating: coordinator.isHydrating(),
     retry,
     flush,
     synchronize,
@@ -443,8 +564,12 @@ export function useDraftAutoSave(input: Input) {
     resume,
     discard,
     recoveryConflict,
+    revisionConflictActive,
+    resolvingConflict,
+    scopeMovedHref,
     restoreRecovery,
     discardRecovery,
     browserCacheFailed,
+    isActiveScope: lease.isCurrent,
   };
 }

@@ -8,8 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-playground/validator/v10"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
@@ -31,11 +30,11 @@ type WorkspaceService interface {
 	GetDraft(context.Context, string, string) (workspace.DraftView, error)
 	SaveDraft(context.Context, string, string, string, int64) (workspace.DraftView, error)
 	AbandonDraft(context.Context, string, string) error
-	StartGoal(context.Context, string, string, string, int64) (workspace.StartGoalResult, error)
+	StartGoal(context.Context, string, string, string, string, int64) (workspace.StartGoalResult, error)
 	ListGoals(context.Context, string, string, string, int) (workspace.GoalPage, error)
 	GetGoal(context.Context, string, string) (workspace.GoalView, error)
 	GetReview(context.Context, string, string) (workspace.ReviewView, error)
-	SaveReview(context.Context, string, string, string, int64) (workspace.DraftView, error)
+	SaveReview(context.Context, string, string, string, string, int64) (workspace.DraftView, error)
 	ContinueReview(context.Context, string, string, string, int64, int64) (workspace.ContinueReviewResult, error)
 	Terminate(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error)
 	DeleteGoal(context.Context, string, string, bool, int64, string) error
@@ -45,48 +44,51 @@ type WorkspaceService interface {
 	CompleteCycle(context.Context, workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error)
 	RefineGoal(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
 	AdoptGoalSuggestion(context.Context, string, string, string, string, int64, *int64) (workspace.DraftView, error)
-	RunActionAI(context.Context, workspace.ActionAIInput) (workspace.AIResponse, error)
+	GenerateAction(context.Context, workspace.ActionGenerateInput) (workspace.AIResponse, error)
+	RefineAction(context.Context, workspace.ActionRefineInput) (workspace.AIResponse, error)
 }
 
 type Metrics interface {
 	ObserveHTTP(context.Context, string, int, time.Duration)
-	ObserveAutosave(context.Context, string, time.Duration)
-	CycleCompleted(context.Context)
+	ObserveAutosave(context.Context, string, string, time.Duration)
 	AccountUpgrade(context.Context, string)
+	GoogleLogin(context.Context, string)
 	AccountDelete(context.Context, string)
 	AnonymousCreate(context.Context, string)
 	RateLimitRejected(context.Context, string)
+	TurnstileVerification(context.Context, string)
 	AIContextIsolationViolation(context.Context)
 	ErrorCode(context.Context, string)
 }
 
 type Dependencies struct {
-	Sessions     SessionService
-	Workspace    WorkspaceService
-	Account      AccountService
-	RequestIDs   ports.IDGenerator
-	PublicOrigin string
-	Ready        func(context.Context) error
-	Logger       *slog.Logger
-	Production   bool
-	TrustProxy   bool
-	StaticDir    string
-	Metrics      Metrics
+	Sessions       SessionService
+	Workspace      WorkspaceService
+	Account        AccountService
+	RequestIDs     ports.IDGenerator
+	PublicOrigin   string
+	Ready          func(context.Context) error
+	Logger         *slog.Logger
+	Production     bool
+	TrustProxy     bool
+	StaticDir      string
+	Metrics        Metrics
+	TracerProvider trace.TracerProvider
 }
 
 type api struct {
 	dependencies Dependencies
-	validate     *validator.Validate
 }
 
 func NewRouter(dependencies Dependencies) http.Handler {
-	server := &api{dependencies: dependencies, validate: newRequestValidator()}
+	server := &api{dependencies: dependencies}
 	router := chi.NewRouter()
-	router.Use(server.requestIDMiddleware, server.requestLogMiddleware, server.securityHeaders)
+	router.Use(server.traceMiddleware, server.requestIDMiddleware, server.requestLogMiddleware, server.panicRecoveryMiddleware, server.securityHeaders)
 	router.Get("/healthz", healthHandler)
 	router.Get("/readyz", server.readyHandler)
 	if dependencies.Sessions != nil && dependencies.Workspace != nil {
 		router.Route("/api/v1", func(v1 chi.Router) {
+			v1.Use(server.noStoreMiddleware)
 			v1.Post("/session/anonymous", server.createAnonymous)
 			v1.Group(func(protected chi.Router) {
 				protected.Use(server.authenticateMiddleware)
@@ -128,15 +130,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	if dependencies.StaticDir != "" {
 		router.Handle("/*", newSPAHandler(dependencies.StaticDir))
 	}
-	return otelhttp.NewHandler(router, "http.request")
-}
-
-func newRequestValidator() *validator.Validate {
-	validate := validator.New(validator.WithRequiredStructEnabled())
-	_ = validate.RegisterValidation("uuid_v7", func(field validator.FieldLevel) bool {
-		return isCanonicalUUIDv7(field.Field().String())
-	})
-	return validate
+	return router
 }
 
 type healthResponse struct {

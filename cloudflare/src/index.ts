@@ -19,6 +19,14 @@ export class Backend extends Container {
     APP_ENV: "production",
     HTTP_ADDRESS: ":8080",
     PUBLIC_ORIGIN: required("PUBLIC_ORIGIN", env.PUBLIC_ORIGIN),
+    OTEL_EXPORTER_OTLP_ENDPOINT: required(
+      "OTEL_EXPORTER_OTLP_ENDPOINT",
+      env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    ),
+    OTEL_EXPORTER_OTLP_HEADERS: required(
+      "OTEL_EXPORTER_OTLP_HEADERS",
+      env.OTEL_EXPORTER_OTLP_HEADERS,
+    ),
     DATABASE_URL: required("DATABASE_URL", env.DATABASE_URL),
     DB_MAX_OPEN_CONNS: required("DB_MAX_OPEN_CONNS", env.DB_MAX_OPEN_CONNS),
     DB_MAX_IDLE_CONNS: required("DB_MAX_IDLE_CONNS", env.DB_MAX_IDLE_CONNS),
@@ -63,6 +71,10 @@ export class Backend extends Container {
     OPENAI_API_KEY: required("OPENAI_API_KEY", env.OPENAI_API_KEY),
     AI_PROVIDER: "openai",
     AI_MODEL: required("AI_MODEL", env.AI_MODEL),
+    AI_REASONING_EFFORT: required(
+      "AI_REASONING_EFFORT",
+      env.AI_REASONING_EFFORT,
+    ),
     AI_MAX_INPUT_TOKENS: required(
       "AI_MAX_INPUT_TOKENS",
       env.AI_MAX_INPUT_TOKENS,
@@ -147,6 +159,14 @@ export class Backend extends Container {
     RATE_ANONYMOUS_CREATE_PER_IP_24H: required(
       "RATE_ANONYMOUS_CREATE_PER_IP_24H",
       env.RATE_ANONYMOUS_CREATE_PER_IP_24H,
+    ),
+    RATE_GOAL_START_PER_USER_MINUTE: required(
+      "RATE_GOAL_START_PER_USER_MINUTE",
+      env.RATE_GOAL_START_PER_USER_MINUTE,
+    ),
+    RATE_GOAL_START_PER_SESSION_MINUTE: required(
+      "RATE_GOAL_START_PER_SESSION_MINUTE",
+      env.RATE_GOAL_START_PER_SESSION_MINUTE,
     ),
     RATE_AI_PER_USER_MINUTE: required(
       "RATE_AI_PER_USER_MINUTE",

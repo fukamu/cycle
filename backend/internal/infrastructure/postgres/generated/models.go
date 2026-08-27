@@ -25,16 +25,17 @@ type AiBudgetMonthly struct {
 }
 
 type AiGeneration struct {
-	ID                    pgtype.UUID
-	UserID                pgtype.UUID
-	OperationType         string
-	Status                string
-	SourceGoalDraftID     pgtype.UUID
-	GoalID                pgtype.UUID
-	GoalVersionID         pgtype.UUID
-	CycleID               pgtype.UUID
-	TargetRevision        int64
-	IdempotencyKey        pgtype.UUID
+	ID                pgtype.UUID
+	UserID            pgtype.UUID
+	OperationType     string
+	Status            string
+	SourceGoalDraftID pgtype.UUID
+	GoalID            pgtype.UUID
+	GoalVersionID     pgtype.UUID
+	CycleID           pgtype.UUID
+	TargetRevision    int64
+	IdempotencyKey    pgtype.UUID
+	// Temporary rollback alias of idempotency_request_hash; remove in a later contract migration.
 	InputHash             string
 	SourceText            *string
 	Output                *string
@@ -57,24 +58,30 @@ type AiGeneration struct {
 	AppliedAt             pgtype.Timestamptz
 	StartedAt             pgtype.Timestamptz
 	FinishedAt            pgtype.Timestamptz
+	// Immutable request replay identity.
+	IdempotencyRequestHash string
+	// Immutable canonical provider input identity; NULL only for pre-split records and rollback-window legacy-writer inserts.
+	CanonicalProviderInputHash *string
 }
 
 type AiUsageEvent struct {
-	OperationID              pgtype.UUID
-	UserID                   pgtype.UUID
-	GoalID                   pgtype.UUID
-	OperationType            string
-	Status                   string
-	Provider                 string
-	Model                    string
-	PromptVersion            string
-	AcceptedAt               pgtype.Timestamptz
-	InputTokens              *int64
-	OutputTokens             *int64
-	EstimatedCostUsd         pgtype.Numeric
-	ProviderUsageFinalizedAt pgtype.Timestamptz
-	QuotaRetainUntil         pgtype.Timestamptz
-	ContentDeleted           bool
+	OperationID                  pgtype.UUID
+	UserID                       pgtype.UUID
+	GoalID                       pgtype.UUID
+	OperationType                string
+	Status                       string
+	Provider                     string
+	Model                        string
+	PromptVersion                string
+	AcceptedAt                   pgtype.Timestamptz
+	InputTokens                  *int64
+	OutputTokens                 *int64
+	EstimatedCostUsd             pgtype.Numeric
+	ProviderUsageFinalizedAt     pgtype.Timestamptz
+	QuotaRetainUntil             pgtype.Timestamptz
+	ContentDeleted               bool
+	SettlementBudgetMonthUtc     pgtype.Date
+	SettlementReservationCostUsd pgtype.Numeric
 }
 
 type AnonymousBootstrap struct {

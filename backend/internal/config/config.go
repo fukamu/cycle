@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ type LookupEnv func(string) (string, bool)
 
 type Config struct {
 	App       AppConfig
+	Telemetry TelemetryConfig
 	Database  DatabaseConfig
 	Session   SessionConfig
 	Goals     GoalConfig
@@ -29,6 +31,11 @@ type AppConfig struct {
 	PublicOrigin *url.URL
 	HTTPAddress  string
 	StaticDir    string
+}
+
+type TelemetryConfig struct {
+	OTLPEndpoint string
+	OTLPHeaders  string
 }
 
 type DatabaseConfig struct {
@@ -58,6 +65,7 @@ type AIConfig struct {
 	APIKey                    string
 	Provider                  string
 	Model                     string
+	ReasoningEffort           string
 	MaxInputTokens            int
 	GoalRefineMaxOutputTokens int
 	ActionMaxOutputTokens     int
@@ -84,11 +92,13 @@ type AIPricingConfig struct {
 }
 
 type RateLimitConfig struct {
-	AnonymousCreatePerIPHour int
-	AnonymousCreatePerIP24h  int
-	AIPerUserMinute          int
-	AIPerSessionMinute       int
-	AIPerIPMinute            int
+	AnonymousCreatePerIPHour  int
+	AnonymousCreatePerIP24h   int
+	GoalStartPerUserMinute    int
+	GoalStartPerSessionMinute int
+	AIPerUserMinute           int
+	AIPerSessionMinute        int
+	AIPerIPMinute             int
 }
 
 type TurnstileConfig struct {
@@ -115,10 +125,14 @@ func Load(lookup LookupEnv) (Config, error) {
 			HTTPAddress:  reader.stringValue("HTTP_ADDRESS", ":8080"),
 			StaticDir:    reader.stringValue("STATIC_DIR", ""),
 		},
+		Telemetry: TelemetryConfig{
+			OTLPEndpoint: reader.stringValue("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+			OTLPHeaders:  reader.stringValue("OTEL_EXPORTER_OTLP_HEADERS", ""),
+		},
 		Database: DatabaseConfig{
 			URL:             reader.stringValue("DATABASE_URL", ""),
-			MaxOpenConns:    int32(reader.intValue("DB_MAX_OPEN_CONNS", 10)),
-			MaxIdleConns:    int32(reader.intValue("DB_MAX_IDLE_CONNS", 5)),
+			MaxOpenConns:    reader.int32Value("DB_MAX_OPEN_CONNS", 10),
+			MaxIdleConns:    reader.int32Value("DB_MAX_IDLE_CONNS", 5),
 			ConnMaxLifetime: reader.durationMinutes("DB_CONN_MAX_LIFETIME_MINUTES", 30),
 		},
 		Session: SessionConfig{
@@ -137,6 +151,7 @@ func Load(lookup LookupEnv) (Config, error) {
 			APIKey:                    reader.stringValue("OPENAI_API_KEY", ""),
 			Provider:                  reader.stringValue("AI_PROVIDER", "openai"),
 			Model:                     reader.stringValue("AI_MODEL", "gpt-5.6-luna"),
+			ReasoningEffort:           reader.stringValue("AI_REASONING_EFFORT", "medium"),
 			MaxInputTokens:            reader.intValue("AI_MAX_INPUT_TOKENS", 12000),
 			GoalRefineMaxOutputTokens: reader.intValue("AI_GOAL_REFINE_MAX_OUTPUT_TOKENS", 400),
 			ActionMaxOutputTokens:     reader.intValue("AI_ACTION_MAX_OUTPUT_TOKENS", 800),
@@ -160,11 +175,13 @@ func Load(lookup LookupEnv) (Config, error) {
 			},
 		},
 		RateLimit: RateLimitConfig{
-			AnonymousCreatePerIPHour: reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_HOUR", 5),
-			AnonymousCreatePerIP24h:  reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_24H", 20),
-			AIPerUserMinute:          reader.intValue("RATE_AI_PER_USER_MINUTE", 3),
-			AIPerSessionMinute:       reader.intValue("RATE_AI_PER_SESSION_MINUTE", 3),
-			AIPerIPMinute:            reader.intValue("RATE_AI_PER_IP_MINUTE", 10),
+			AnonymousCreatePerIPHour:  reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_HOUR", 5),
+			AnonymousCreatePerIP24h:   reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_24H", 20),
+			GoalStartPerUserMinute:    reader.intValue("RATE_GOAL_START_PER_USER_MINUTE", 5),
+			GoalStartPerSessionMinute: reader.intValue("RATE_GOAL_START_PER_SESSION_MINUTE", 5),
+			AIPerUserMinute:           reader.intValue("RATE_AI_PER_USER_MINUTE", 3),
+			AIPerSessionMinute:        reader.intValue("RATE_AI_PER_SESSION_MINUTE", 3),
+			AIPerIPMinute:             reader.intValue("RATE_AI_PER_IP_MINUTE", 10),
 		},
 		Turnstile: TurnstileConfig{
 			Enabled:        reader.boolValue("TURNSTILE_ENABLED", true),
@@ -195,8 +212,8 @@ func (config Config) Validate() error {
 	if strings.TrimSpace(config.App.HTTPAddress) == "" {
 		problems = append(problems, "HTTP_ADDRESS is required")
 	}
-	if strings.TrimSpace(config.Database.URL) == "" {
-		problems = append(problems, "DATABASE_URL is required")
+	if err := validateDatabaseURL(config.Database.URL); err != nil {
+		problems = append(problems, err.Error())
 	}
 	if config.Database.MaxOpenConns <= 0 || config.Database.MaxIdleConns < 0 || config.Database.MaxIdleConns > config.Database.MaxOpenConns {
 		problems = append(problems, "database connection limits are invalid")
@@ -224,6 +241,9 @@ func (config Config) Validate() error {
 	if config.AI.Provider != "openai" {
 		problems = append(problems, "AI_PROVIDER must be openai")
 	}
+	if !isGPT56ReasoningEffort(config.AI.ReasoningEffort) {
+		problems = append(problems, "AI_REASONING_EFFORT must be none, low, medium, high, xhigh, or max")
+	}
 	if config.AI.Model == "" || config.AI.MaxInputTokens <= 0 || config.AI.GoalRefineMaxOutputTokens <= 0 || config.AI.ActionMaxOutputTokens <= 0 || config.AI.MaxContextCycles < 1 || config.AI.MaxContextCycles > 10 || config.AI.Timeout <= 0 {
 		problems = append(problems, "AI model, token budgets, context cycle limit (1..10), and timeout are invalid")
 	}
@@ -237,33 +257,42 @@ func (config Config) Validate() error {
 	if config.AI.GoalPromptVersion == "" || config.AI.GeneratePromptVersion == "" || config.AI.RefinePromptVersion == "" {
 		problems = append(problems, "AI prompt versions are required")
 	}
-	if config.AI.MaxGenerationsPerUser24h <= 0 || config.AI.MonthlyBudgetUSD <= 0 {
+	if config.AI.MaxGenerationsPerUser24h <= 0 || !isFinite(config.AI.MonthlyBudgetUSD) || config.AI.MonthlyBudgetUSD <= 0 {
 		problems = append(problems, "AI limits and monthly budget must be positive")
 	}
 	if config.AI.Model != config.AI.Pricing.Model {
 		problems = append(problems, "AI_MODEL and AI_PRICING_MODEL must match")
 	}
-	if config.AI.Pricing.InputUSDPerMillionTokens < 0 || config.AI.Pricing.OutputUSDPerMillionTokens < 0 {
-		problems = append(problems, "AI prices cannot be negative")
+	if !isFinite(config.AI.Pricing.InputUSDPerMillionTokens) ||
+		!isFinite(config.AI.Pricing.OutputUSDPerMillionTokens) ||
+		config.AI.Pricing.InputUSDPerMillionTokens < 0 ||
+		config.AI.Pricing.OutputUSDPerMillionTokens < 0 {
+		problems = append(problems, "AI prices must be finite and cannot be negative")
 	}
 	if config.App.Environment == "production" && (config.AI.Pricing.InputUSDPerMillionTokens <= 0 || config.AI.Pricing.OutputUSDPerMillionTokens <= 0) {
 		problems = append(problems, "production AI prices must be positive")
 	}
 	previous := float64(0)
 	for _, threshold := range config.AI.WarningThresholds {
-		if threshold <= 0 || threshold >= 1 || threshold <= previous {
+		if !isFinite(threshold) || threshold <= 0 || threshold >= 1 || threshold <= previous {
 			problems = append(problems, "AI warning thresholds must be increasing values between 0 and 1")
 			break
 		}
 		previous = threshold
 	}
-	if config.RateLimit.AnonymousCreatePerIPHour <= 0 || config.RateLimit.AnonymousCreatePerIP24h <= 0 || config.RateLimit.AIPerUserMinute <= 0 || config.RateLimit.AIPerSessionMinute <= 0 || config.RateLimit.AIPerIPMinute <= 0 {
+	if config.RateLimit.AnonymousCreatePerIPHour <= 0 || config.RateLimit.AnonymousCreatePerIP24h <= 0 || config.RateLimit.GoalStartPerUserMinute <= 0 || config.RateLimit.GoalStartPerSessionMinute <= 0 || config.RateLimit.AIPerUserMinute <= 0 || config.RateLimit.AIPerSessionMinute <= 0 || config.RateLimit.AIPerIPMinute <= 0 {
 		problems = append(problems, "rate limits must be positive")
 	}
 	if config.Turnstile.ExpectedAction == "" {
 		problems = append(problems, "TURNSTILE_EXPECTED_ACTION is required")
 	}
 	if config.App.Environment == "production" {
+		if strings.TrimSpace(config.Telemetry.OTLPEndpoint) == "" {
+			problems = append(problems, "OTEL_EXPORTER_OTLP_ENDPOINT is required in production")
+		}
+		if strings.TrimSpace(config.Telemetry.OTLPHeaders) == "" {
+			problems = append(problems, "OTEL_EXPORTER_OTLP_HEADERS is required in production")
+		}
 		if config.AI.APIKey == "" {
 			problems = append(problems, "OPENAI_API_KEY is required in production")
 		}
@@ -305,14 +334,27 @@ func (reader *envReader) intValue(key string, fallback int) int {
 	return value
 }
 
+func (reader *envReader) int32Value(key string, fallback int32) int32 {
+	raw, ok := reader.lookup(key)
+	if !ok {
+		return fallback
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32)
+	if err != nil {
+		reader.addError(key, errors.New("must be a signed 32-bit integer"))
+		return 0
+	}
+	return int32(value)
+}
+
 func (reader *envReader) floatValue(key string, fallback float64) float64 {
 	raw, ok := reader.lookup(key)
 	if !ok {
 		return fallback
 	}
 	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	if err != nil {
-		reader.addError(key, err)
+	if err != nil || !isFinite(value) {
+		reader.addError(key, errors.New("must be a finite number"))
 		return 0
 	}
 	return value
@@ -340,8 +382,8 @@ func (reader *envReader) floatList(key string, fallback []float64) []float64 {
 	values := make([]float64, 0, len(parts))
 	for _, part := range parts {
 		value, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
-		if err != nil {
-			reader.addError(key, err)
+		if err != nil || !isFinite(value) {
+			reader.addError(key, errors.New("must contain only finite numbers"))
 			return nil
 		}
 		values = append(values, value)
@@ -350,15 +392,37 @@ func (reader *envReader) floatList(key string, fallback []float64) []float64 {
 }
 
 func (reader *envReader) durationSeconds(key string, fallback int) time.Duration {
-	return time.Duration(reader.intValue(key, fallback)) * time.Second
+	return reader.durationValue(key, fallback, time.Second)
 }
 
 func (reader *envReader) durationMinutes(key string, fallback int) time.Duration {
-	return time.Duration(reader.intValue(key, fallback)) * time.Minute
+	return reader.durationValue(key, fallback, time.Minute)
 }
 
 func (reader *envReader) durationDays(key string, fallback int) time.Duration {
-	return time.Duration(reader.intValue(key, fallback)) * 24 * time.Hour
+	return reader.durationValue(key, fallback, 24*time.Hour)
+}
+
+func (reader *envReader) durationValue(key string, fallback int, unit time.Duration) time.Duration {
+	value := int64(fallback)
+	if raw, ok := reader.lookup(key); ok {
+		parsed, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil {
+			reader.addError(key, errors.New("must be an integer within the supported duration range"))
+			return 0
+		}
+		value = parsed
+	}
+
+	const (
+		maxDuration = time.Duration(1<<63 - 1)
+		minDuration = time.Duration(-1 << 63)
+	)
+	if value > int64(maxDuration/unit) || value < int64(minDuration/unit) {
+		reader.addError(key, errors.New("must be within the supported duration range"))
+		return 0
+	}
+	return time.Duration(value) * unit
 }
 
 func (reader *envReader) addError(key string, err error) {
@@ -370,13 +434,52 @@ func (reader *envReader) addError(key string, err error) {
 	reader.err = errors.Join(reader.err, wrapped)
 }
 
+func isFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func isGPT56ReasoningEffort(value string) bool {
+	switch value {
+	case "none", "low", "medium", "high", "xhigh", "max":
+		return true
+	default:
+		return false
+	}
+}
+
 func parseURL(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(raw)
-	if err != nil {
-		return nil, err
-	}
-	if parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, errors.New("must be an absolute origin without credentials, query, or fragment")
+	if err != nil ||
+		parsed.Scheme == "" ||
+		parsed.Hostname() == "" ||
+		parsed.User != nil ||
+		parsed.Opaque != "" ||
+		parsed.Path != "" ||
+		parsed.RawPath != "" ||
+		parsed.RawQuery != "" ||
+		parsed.ForceQuery ||
+		parsed.Fragment != "" ||
+		strings.Contains(raw, "#") {
+		return nil, errors.New("must be a canonical absolute origin without credentials, path, query, or fragment")
 	}
 	return parsed, nil
+}
+
+func validateDatabaseURL(raw string) error {
+	const message = "DATABASE_URL must be a postgres or postgresql URL with a host and database name"
+
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil ||
+		(parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") ||
+		parsed.Hostname() == "" ||
+		parsed.Opaque != "" ||
+		parsed.Fragment != "" ||
+		strings.Contains(raw, "#") {
+		return errors.New(message)
+	}
+	databaseName := strings.TrimPrefix(parsed.Path, "/")
+	if strings.TrimSpace(databaseName) == "" {
+		return errors.New(message)
+	}
+	return nil
 }

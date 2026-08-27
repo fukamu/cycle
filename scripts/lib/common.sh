@@ -23,6 +23,34 @@ require_command() {
     || die "Required command '${command_name}' was not found. See docs/development.md."
 }
 
+trusted_git() {
+  local git_path
+  git_path="$(type -P git)" || return 127
+
+  # Candidate-controlled repository config must not launch fsmonitor/hooks or
+  # redirect Git to an ambient index/object graph. Start with an empty process
+  # environment, then opt in only to deterministic, non-interactive read/write
+  # behavior needed by repository checks.
+  env -i \
+    PATH="${PATH}" \
+    LC_ALL=C \
+    GIT_ATTR_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_NO_LAZY_FETCH=1 \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_OPTIONAL_LOCKS=0 \
+    GIT_PAGER=cat \
+    GIT_TERMINAL_PROMPT=0 \
+    PAGER=cat \
+    "${git_path}" \
+    --no-pager \
+    -c core.fsmonitor=false \
+    -c core.untrackedCache=false \
+    -c core.hooksPath=/dev/null \
+    "$@"
+}
+
 require_standard_tool_versions() {
   require_command node
   require_command pnpm
@@ -44,10 +72,26 @@ require_standard_tool_versions() {
   [[ "${pnpm_version}" == "11.22.0" ]] \
     || die "pnpm 11.22.0 is required for reproducible local/CI builds; found ${pnpm_version}."
 
-  go_version="$(go env GOVERSION)"
+  go_version="$(GOENV=off GOTOOLCHAIN=local go env GOVERSION)"
   go_version="${go_version#go}"
   [[ "${go_version}" == "1.26.6" ]] \
     || die "Go 1.26.6 is required for reproducible local/CI builds; found ${go_version}."
+}
+
+require_terraform_version() {
+  require_command terraform
+
+  local version_json
+  local terraform_version
+  if ! version_json="$(terraform version -json 2>/dev/null)"; then
+    die "Could not determine the Terraform version."
+  fi
+  terraform_version="$(
+    sed -n 's/.*"terraform_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      <<<"${version_json}"
+  )"
+  [[ "${terraform_version}" == "1.15.8" ]] \
+    || die "Terraform 1.15.8 is required for reproducible local/CI checks; found ${terraform_version:-unknown}."
 }
 
 require_disposable_test_database_url() {

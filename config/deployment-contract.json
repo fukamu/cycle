@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "backend": {
+    "fixed": [
+      "APP_ENV",
+      "HTTP_ADDRESS",
+      "AI_PROVIDER",
+      "TURNSTILE_ENABLED",
+      "TURNSTILE_EXPECTED_ACTION"
+    ],
+    "omitted": ["STATIC_DIR"],
+    "githubVariables": [
+      "PUBLIC_ORIGIN",
+      "OTEL_EXPORTER_OTLP_ENDPOINT",
+      "DB_MAX_OPEN_CONNS",
+      "DB_MAX_IDLE_CONNS",
+      "DB_CONN_MAX_LIFETIME_MINUTES",
+      "SESSION_IDLE_DAYS",
+      "SESSION_ABSOLUTE_DAYS",
+      "SESSION_ACTIVITY_TOUCH_MINUTES",
+      "ANONYMOUS_BOOTSTRAP_TTL_MINUTES",
+      "MAX_PROGRESSING_GOALS",
+      "AI_MODEL",
+      "AI_REASONING_EFFORT",
+      "AI_MAX_INPUT_TOKENS",
+      "AI_GOAL_REFINE_MAX_OUTPUT_TOKENS",
+      "AI_ACTION_MAX_OUTPUT_TOKENS",
+      "AI_MAX_CONTEXT_CYCLES",
+      "AI_TIMEOUT_SECONDS",
+      "AI_MAX_PROVIDER_ATTEMPTS",
+      "AI_MAX_RETRY_BACKOFF_SECONDS",
+      "AI_FINALIZATION_GRACE_SECONDS",
+      "AI_LEASE_SECONDS",
+      "AI_MAX_GENERATIONS_PER_USER_24H",
+      "AI_GOAL_REFINE_PROMPT_VERSION",
+      "AI_GENERATE_PROMPT_VERSION",
+      "AI_REFINE_PROMPT_VERSION",
+      "AI_TOKENIZER_ENCODING",
+      "AI_MONTHLY_BUDGET_USD",
+      "AI_WARNING_THRESHOLDS",
+      "AI_PRICE_INPUT_USD_PER_MILLION",
+      "AI_PRICE_OUTPUT_USD_PER_MILLION",
+      "GOOGLE_WEB_CLIENT_ID",
+      "RATE_ANONYMOUS_CREATE_PER_IP_HOUR",
+      "RATE_ANONYMOUS_CREATE_PER_IP_24H",
+      "RATE_GOAL_START_PER_USER_MINUTE",
+      "RATE_GOAL_START_PER_SESSION_MINUTE",
+      "RATE_AI_PER_USER_MINUTE",
+      "RATE_AI_PER_SESSION_MINUTE",
+      "RATE_AI_PER_IP_MINUTE"
+    ],
+    "derived": {
+      "AI_PRICING_MODEL": "AI_MODEL"
+    },
+    "secrets": [
+      "DATABASE_URL",
+      "OTEL_EXPORTER_OTLP_HEADERS",
+      "SESSION_TOKEN_PEPPER",
+      "CSRF_TOKEN_PEPPER",
+      "BOOTSTRAP_ID_PEPPER",
+      "RATE_LIMIT_HMAC_SECRET",
+      "CURSOR_SIGNING_SECRET",
+      "OPENAI_API_KEY",
+      "TURNSTILE_SECRET_KEY"
+    ]
+  },
+  "closedBeta": {
+    "mode": {
+      "name": "BETA_ADMISSION_MODE",
+      "allowed": ["off", "closed"]
+    },
+    "conditionalVariables": ["BETA_ADMISSION_COOKIE_TTL_DAYS", "BETA_INVITES"],
+    "conditionalSecrets": ["BETA_ADMISSION_COOKIE_KEY"]
+  },
+  "frontend": {
+    "fixed": {
+      "VITE_DEPLOYMENT_ENV": "staging"
+    },
+    "required": {
+      "VITE_GOOGLE_WEB_CLIENT_ID": "GOOGLE_WEB_CLIENT_ID",
+      "VITE_TURNSTILE_SITE_KEY": "TURNSTILE_SITE_KEY"
+    },
+    "optional": {
+      "VITE_APP_REFERRAL_URL": "APP_REFERRAL_URL"
+    }
+  },
+  "deploy": {
+    "requiredOnly": [
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_API_TOKEN",
+      "MIGRATION_DATABASE_URL"
+    ],
+    "aliases": {
+      "DATABASE_URL": "NEON_DATABASE_URL",
+      "MIGRATION_DATABASE_URL": "NEON_MIGRATION_DATABASE_URL"
+    }
+  }
+}

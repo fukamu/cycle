@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
@@ -21,11 +22,13 @@ var (
 	ErrGoalRevisionConflict          = errors.New("goal revision conflict")
 	ErrGoalVersionConflict           = errors.New("goal version conflict")
 	ErrGoalActiveLimit               = errors.New("progressing goal limit exceeded")
+	ErrProgressingGoalLimitInvariant = errors.New("progressing goal limit invariant violated")
 	ErrGoalReviewNotActive           = errors.New("goal review is not active")
 	ErrGoalReviewInvariant           = errors.New("goal review invariant broken")
 	ErrGoalStateConflict             = errors.New("goal state conflict")
 	ErrGoalAlreadyTerminal           = errors.New("goal already terminal")
 	ErrInvalidGoalOutcome            = errors.New("invalid goal outcome")
+	ErrInvalidTerminationRequest     = errors.New("invalid goal termination request")
 	ErrDeleteConfirmation            = errors.New("goal delete confirmation required")
 	ErrDeleteConflict                = errors.New("goal delete conflict")
 	ErrDiscardConfirmation           = errors.New("review discard confirmation required")
@@ -41,6 +44,7 @@ var (
 	ErrAIUserLimit                   = errors.New("AI user rolling limit exceeded")
 	ErrAIRateLimit                   = errors.New("AI rate limit exceeded")
 	ErrAIBudget                      = errors.New("AI service budget exceeded")
+	ErrAIProviderRejected            = errors.New("AI provider rejected request")
 	ErrAIProviderUnavailable         = errors.New("AI provider unavailable")
 	ErrAIProviderTimeout             = errors.New("AI provider timeout")
 	ErrAIInvalidResponse             = errors.New("AI invalid response")
@@ -170,6 +174,7 @@ type CyclePage struct {
 
 type StartGoalInput struct {
 	UserID                string
+	SessionID             string
 	DraftID               string
 	OperationID           string
 	ExpectedDraftRevision int64
@@ -209,12 +214,9 @@ type CompleteCycleInput struct {
 	UserID                  string
 	GoalID                  string
 	CycleID                 string
-	ReviewDraftID           string
 	OperationID             string
 	ExpectedGoalRevision    int64
 	ExpectedContentRevision int64
-	RequestHash             string
-	Now                     time.Time
 }
 
 type CompleteCycleResult struct {
@@ -245,6 +247,11 @@ type TerminateResult struct {
 	Replayed      bool       `json:"replayed,omitempty"`
 }
 
+type GoalDeleteResult struct {
+	SourceState goal.Status
+	Replayed    bool
+}
+
 type CommandReplayResourceIDs struct {
 	GoalID  string `json:"goalId"`
 	CycleID string `json:"cycleId,omitempty"`
@@ -265,7 +272,6 @@ type SaveFrameInput struct {
 	Frame                 cycle.Frame
 	Content               string
 	ExpectedFrameRevision int64
-	Now                   time.Time
 }
 
 type SaveFrameResult struct {
@@ -290,20 +296,6 @@ type GoalRefineInput struct {
 	Now                   time.Time
 }
 
-type ActionAIInput struct {
-	UserID                  string
-	GoalID                  string
-	CycleID                 string
-	Operation               string
-	ExpectedContentRevision int64
-	ConfirmReplace          bool
-	IdempotencyKey          string
-	GenerationID            string
-	RemoteAddress           string
-	SessionID               string
-	Now                     time.Time
-}
-
 type AIContextCycle struct {
 	ID             string
 	GoalID         string
@@ -317,51 +309,27 @@ type AIContextCycle struct {
 }
 
 type AISnapshot struct {
-	GenerationID            string
-	Operation               string
-	TargetRevision          int64
-	SourceGoalRevision      int64
-	GoalID                  string
-	GoalBody                string
-	SourceText              string
-	CurrentCycle            *AIContextCycle
-	PastCycles              []AIContextCycle
-	CurrentTruncated        bool
-	ReplayedOutput          *string
-	ReplayedContentRevision int64
-	ReplayedActionRevision  int64
-}
-
-type AIProviderCycle struct {
-	SequenceNumber int32        `json:"sequenceNumber"`
-	Status         cycle.Status `json:"status"`
-	GoalBody       string       `json:"goalBody"`
-	Plan           string       `json:"plan"`
-	Do             string       `json:"do"`
-	Check          string       `json:"check"`
-	Action         string       `json:"action"`
-}
-
-type AIProviderRequest struct {
-	Operation       string            `json:"operation"`
-	GoalBody        string            `json:"goalBody"`
-	SourceText      string            `json:"sourceText"`
-	CurrentCycle    *AIProviderCycle  `json:"currentCycle,omitempty"`
-	PastCycles      []AIProviderCycle `json:"pastCycles"`
-	MaxOutputTokens int64             `json:"-"`
-}
-
-type AIProviderResult struct {
-	Output            string
-	InputTokens       int64
-	OutputTokens      int64
-	ProviderRequestID string
-	CostUSD           float64
-	Attempts          int16
+	GenerationID               string
+	Operation                  domainai.OperationType
+	TargetRevision             int64
+	SourceGoalRevision         int64
+	CanonicalProviderInputHash string
+	MaxOutputTokens            int64
+	GoalID                     string
+	GoalBody                   string
+	SourceText                 string
+	CurrentCycle               *AIContextCycle
+	PastCycles                 []AIContextCycle
+	CurrentTruncated           bool
+	ReplayedOutput             *string
+	ReplayedContextChanged     bool
+	ReplayedContentRevision    int64
+	ReplayedActionRevision     int64
 }
 
 type AIObservation struct {
-	Operation         string
+	GenerationID      string
+	Operation         domainai.OperationType
 	Result            string
 	Model             string
 	PromptVersion     string
@@ -370,6 +338,8 @@ type AIObservation struct {
 	EstimatedCostUSD  float64
 	ContextCycleCount int
 	CurrentTruncated  bool
+	ContextChanged    bool
+	ProviderDuration  time.Duration
 	Duration          time.Duration
 }
 
@@ -383,10 +353,8 @@ type AIResponse struct {
 	ActionRevision      int64  `json:"actionRevision,omitempty"`
 	ContextChanged      bool   `json:"contextChanged"`
 	Replayed            bool   `json:"replayed,omitempty"`
-}
-
-type AIProvider interface {
-	Execute(context.Context, AIProviderRequest) (AIProviderResult, error)
+	SettlementPath      string `json:"-"`
+	SettlementResult    string `json:"-"`
 }
 
 type TokenCounter interface {
@@ -398,29 +366,50 @@ type AIObserver interface {
 	ObserveAI(context.Context, AIObservation)
 }
 
+type WorkspaceMetricEvent uint8
+
+const (
+	WorkspaceMetricGoalCreationDraftCreated WorkspaceMetricEvent = iota + 1
+	WorkspaceMetricGoalStarted
+	WorkspaceMetricGoalReviewOpened
+	WorkspaceMetricGoalReviewContinued
+	WorkspaceMetricGoalTerminal
+	WorkspaceMetricGoalDeleted
+	WorkspaceMetricGoalVersionCreated
+	WorkspaceMetricProgressingGoalLimitRejected
+	WorkspaceMetricProgressingGoalLimitInvariantViolation
+	WorkspaceMetricCycleStarted
+	WorkspaceMetricCycleCompleted
+	WorkspaceMetricCycleCanceled
+	WorkspaceMetricAIProviderAttempt
+	WorkspaceMetricAICostSettlement
+	WorkspaceMetricAISuggestionAdopted
+	WorkspaceMetricAIQuotaRejected
+	WorkspaceMetricAIBudgetRejected
+	WorkspaceMetricRateLimitRejected
+)
+
+type WorkspaceObservation struct {
+	Event              WorkspaceMetricEvent
+	VersionChanged     bool
+	Outcome            goal.Status
+	SourceState        goal.Status
+	Result             string
+	Scope              string
+	CancellationReason cycle.CancellationReason
+	Operation          domainai.OperationType
+	SettlementPath     string
+	SuggestionSource   string
+}
+
+type WorkspaceObserver interface {
+	ObserveWorkspace(context.Context, WorkspaceObservation)
+}
+
 type AIContextSelector func(context.Context, AISnapshot) (AISnapshot, error)
 
 type Store interface {
 	Home(context.Context, string, int) (HomeView, error)
-	CreateDraft(context.Context, string, string, string, time.Time) (DraftView, error)
 	GetDraft(context.Context, string, string) (DraftView, error)
-	SaveDraft(context.Context, string, string, string, int64, time.Time) (DraftView, error)
-	AbandonDraft(context.Context, string, string, time.Time) error
-	StartGoal(context.Context, StartGoalInput, int) (StartGoalResult, error)
-	ListGoals(context.Context, string, string, string, int) (GoalPage, error)
-	GetGoal(context.Context, string, string) (GoalView, error)
 	GetReview(context.Context, string, string) (ReviewView, error)
-	SaveReview(context.Context, string, string, string, int64, time.Time) (DraftView, error)
-	ContinueReview(context.Context, ContinueReviewInput) (ContinueReviewResult, error)
-	Terminate(context.Context, TerminateInput) (TerminateResult, error)
-	DeleteGoal(context.Context, string, string, bool, int64, string, string, time.Time) error
-	ListCycles(context.Context, string, string, string, int) (CyclePage, error)
-	GetCycle(context.Context, string, string, string) (CycleView, error)
-	SaveFrame(context.Context, SaveFrameInput) (SaveFrameResult, error)
-	CompleteCycle(context.Context, CompleteCycleInput) (CompleteCycleResult, error)
-	BeginGoalRefine(context.Context, GoalRefineInput, AIContextSelector) (AISnapshot, error)
-	FinishGoalRefine(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
-	AdoptGoalSuggestion(context.Context, string, string, string, string, int64, *int64, time.Time) (DraftView, error)
-	BeginActionAI(context.Context, ActionAIInput, AIContextSelector) (AISnapshot, error)
-	FinishActionAI(context.Context, AISnapshot, AIProviderResult, error, time.Time) (AIResponse, error)
 }
