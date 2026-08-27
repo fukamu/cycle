@@ -990,6 +990,82 @@ tag_guard_failure_status=0
 [[ "${tag_guard_failure_status}" -ne 0 ]] || fail "temporary-image tag query error was treated as confirmed absence"
 pass "temporary-image guards propagate daemon, query, and removal errors"
 
+image_availability_fixture="${test_root}/pinned-image-availability"
+mkdir -p -- "${image_availability_fixture}/bin"
+image_availability_calls="${image_availability_fixture}/docker-calls"
+image_availability_mode="${image_availability_fixture}/mode"
+image_availability_stdout="${image_availability_fixture}/stdout"
+image_availability_stderr="${image_availability_fixture}/stderr"
+# shellcheck disable=SC2016 # The generated fake expands these variables when it runs.
+fake_image_docker_lines=(
+  '#!/usr/bin/env bash'
+  'set -u'
+  'printf "%s\n" "$*" >>"${FUKAMU_IMAGE_AVAILABILITY_CALLS}"'
+  'mode="$(cat -- "${FUKAMU_IMAGE_AVAILABILITY_MODE}")"'
+  'if [[ "${1:-}" == "image" && "${2:-}" == "inspect" ]]; then'
+  '  [[ "${mode}" == "cached" ]]'
+  '  exit'
+  'fi'
+  'if [[ "${1:-}" == "pull" && "${2:-}" == "--quiet" ]]; then'
+  '  printf "%s\n" "simulated pull output"'
+  '  printf "%s\n" "simulated pull progress" >&2'
+  '  [[ "${mode}" == "cold" ]]'
+  '  exit'
+  'fi'
+  'exit 97'
+)
+printf '%s\n' "${fake_image_docker_lines[@]}" >"${image_availability_fixture}/bin/docker"
+chmod 700 "${image_availability_fixture}/bin/docker"
+
+printf '%s\n' cached >"${image_availability_mode}"
+printf 'image inspect %s\n' "${SECURITY_PNPM_IMAGE}" >"${image_availability_fixture}/cached-expected"
+(
+  hash -r
+  PATH="${image_availability_fixture}/bin:${PATH}" \
+    FUKAMU_IMAGE_AVAILABILITY_CALLS="${image_availability_calls}" \
+    FUKAMU_IMAGE_AVAILABILITY_MODE="${image_availability_mode}" \
+    security_ensure_pinned_image_available "${SECURITY_PNPM_IMAGE}"
+) >"${image_availability_stdout}" 2>"${image_availability_stderr}" \
+  || fail "cached pinned image was rejected"
+cmp --silent -- "${image_availability_fixture}/cached-expected" "${image_availability_calls}" \
+  || fail "cached pinned image triggered an unexpected Docker operation"
+[[ ! -s "${image_availability_stdout}" && ! -s "${image_availability_stderr}" ]] \
+  || fail "cached pinned-image check exposed Docker output"
+
+printf '%s\n' cold >"${image_availability_mode}"
+: >"${image_availability_calls}"
+printf 'image inspect %s\npull --quiet %s\n' \
+  "${SECURITY_PNPM_IMAGE}" "${SECURITY_PNPM_IMAGE}" >"${image_availability_fixture}/cold-expected"
+(
+  hash -r
+  PATH="${image_availability_fixture}/bin:${PATH}" \
+    FUKAMU_IMAGE_AVAILABILITY_CALLS="${image_availability_calls}" \
+    FUKAMU_IMAGE_AVAILABILITY_MODE="${image_availability_mode}" \
+    security_ensure_pinned_image_available "${SECURITY_PNPM_IMAGE}"
+) >"${image_availability_stdout}" 2>"${image_availability_stderr}" \
+  || fail "cold pinned image was not pulled"
+cmp --silent -- "${image_availability_fixture}/cold-expected" "${image_availability_calls}" \
+  || fail "cold pinned image did not use the exact quiet-pull sequence"
+[[ ! -s "${image_availability_stdout}" && ! -s "${image_availability_stderr}" ]] \
+  || fail "pinned-image pull exposed Docker transport output"
+
+printf '%s\n' pull-fails >"${image_availability_mode}"
+: >"${image_availability_calls}"
+image_pull_failure_status=0
+(
+  hash -r
+  PATH="${image_availability_fixture}/bin:${PATH}" \
+    FUKAMU_IMAGE_AVAILABILITY_CALLS="${image_availability_calls}" \
+    FUKAMU_IMAGE_AVAILABILITY_MODE="${image_availability_mode}" \
+    security_ensure_pinned_image_available "${SECURITY_PNPM_IMAGE}"
+) >"${image_availability_stdout}" 2>"${image_availability_stderr}" || image_pull_failure_status=$?
+[[ "${image_pull_failure_status}" -ne 0 ]] || fail "pinned-image pull failure was ignored"
+cmp --silent -- "${image_availability_fixture}/cold-expected" "${image_availability_calls}" \
+  || fail "failed pinned-image pull did not use the exact quiet-pull sequence"
+[[ ! -s "${image_availability_stdout}" && ! -s "${image_availability_stderr}" ]] \
+  || fail "failed pinned-image pull exposed Docker transport output"
+pass "pinned-image availability handles cached, cold, and failed pulls without contaminating scanner logs"
+
 classifier_fixture="${test_root}/classifier"
 mkdir -p -- "${classifier_fixture}"
 printf '%s\n' '{"advisories":{},"metadata":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":0,"critical":0}}}' >"${classifier_fixture}/node-clean.json"

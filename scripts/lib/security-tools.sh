@@ -585,6 +585,18 @@ security_prepare_go_cache() {
   mkdir -p -- "${cache_root}/mod"
 }
 
+security_ensure_pinned_image_available() {
+  local image_reference="$1"
+
+  if docker image inspect "${image_reference}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Docker writes pull progress to stderr. Keep that transport output separate
+  # from scanner stderr, which callers validate as part of the report policy.
+  docker pull --quiet "${image_reference}" >/dev/null 2>&1
+}
+
 security_remove_temporary_image() {
   local image_tag="$1"
   docker image rm "${image_tag}" >/dev/null 2>&1
@@ -988,6 +1000,10 @@ security_validate_node_audit_policy() {
     return 1
   fi
   if ! "${validate_command[@]}" >/dev/null 2>/dev/null; then
+    return 1
+  fi
+
+  if ! security_ensure_pinned_image_available "${SECURITY_PNPM_IMAGE}"; then
     return 1
   fi
 
