@@ -7,22 +7,30 @@
 - Bash 5.0以上とGNU userland（Ubuntu 20.04/24.04、WSL2）
 - Node.js 24以上、pnpm 11.22.0（lock fileはrootの `pnpm-lock.yaml`）
 - Go 1.26.6
-- PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24`）
+- PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2`）
 - sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.26.6によるfallbackも利用可能）
 - Docker EngineとDocker Buildx（PostgreSQLの簡易起動、Cloudflare Container imageのbuild、InfrastructureのDocker build context監査に必要）
 - Chromium（E2Eを実行する場合）
 - Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
 - Python 3と`curl`、`jq`、`openssl`、`realpath`、`sha256sum`、`base64`、`tar`、`zip`、`script`、`sed`、`awk`、`find`、`sort`、`mktemp`
 
-CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.26.6、PostgreSQL 18.6を前提にし、Docker PostgreSQLは`postgres:18.6-alpine3.24`へ固定しています。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
+CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.26.6、PostgreSQL 18.6を前提にし、Docker PostgreSQLは`postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2`へ固定しています。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
 
-sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1.31.1がHostにあればそれを使い、なければ`sqlc/sqlc:1.31.1`を`docker run --rm`で起動します。Docker serverも利用できない場合は、Goでpin済みの一時toolを`.tmp/tools`へbuildしてfallbackします。これによりsqlcをHostへ常設する必要はありません。Docker/Goはいずれも初回だけimageまたはmoduleのdownloadが必要で、一時toolは通常のsafe clean対象です。
+sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1.31.1がHostにあればそれを使い、なければ`sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537`を`docker run --rm`で起動します。Docker serverも利用できない場合は、Goでpin済みの一時toolを`.tmp/tools`へbuildしてfallbackします。これによりsqlcをHostへ常設する必要はありません。Docker/Goはいずれも初回だけimageまたはmoduleのdownloadが必要で、一時toolは通常のsafe clean対象です。
 
 ```bash
 ./scripts/invoke-sqlc.sh compile generate
 ```
 
 特定の実行方法を検証する場合は`--runner host`、`--runner docker`、`--runner go`を指定できます。Docker実行では`backend/`だけを書き込み可能でmountし、containerは実行後に削除します。Host user IDを渡し、生成物がroot所有になることを防ぎます。
+
+## Supply-chain固定値の更新
+
+GitHub Actionsの外部Actionは完全な40文字commit SHAと同じ行のsemantic version comment、外部Container imageは可読なtagと`sha256` digestの組で固定します。`./scripts/check-supply-chain.sh`はworkflow、Dockerfile、Compose、運用tool registry、文書の全参照と同一tagのdigest一致を検証し、`./scripts/check-security.sh`もsecret scan完了後のcandidate snapshotへ同じpolicyを適用します。
+
+`.github/dependabot.yml`はGitHub Actionsを月曜、Dockerfileを火曜、Docker Composeを水曜の05:00（Asia/Tokyo）に週次確認し、ecosystemごとに全version updateを1つのPRへまとめます。PRではupstream release/tagと変更履歴を確認し、ActionのSHAとversion comment、またはimageのtagとdigestを同じ変更で更新して全gateを通します。障害時も固定自体を外さず、直前に確認済みのSHAまたはtag/digest組へreviewed commitで戻します。
+
+`docker://`形式のActionはDependabotの更新対象外です。Actionlintのrelease確認、workflow参照、`scripts/lib/tool-images.sh`の対応値は手動で同じPRへ更新し、policy fixtureとsecurity gateでdriftを拒否します。
 
 ## Dockerによるローカル実機確認
 
@@ -72,10 +80,10 @@ source ./scripts/import-env.sh
 ローカルにPostgreSQL 18.6がなければ、Dockerで開発DBを起動できます。
 
 ```bash
-docker run --name fukamu-cycle-postgres -e POSTGRES_USER=fukamu_cycle -e POSTGRES_PASSWORD=fukamu_cycle -e POSTGRES_DB=fukamu_cycle -p 5432:5432 -d postgres:18.6-alpine3.24
+docker run --name fukamu-cycle-postgres -e POSTGRES_USER=fukamu_cycle -e POSTGRES_PASSWORD=fukamu_cycle -e POSTGRES_DB=fukamu_cycle -p 5432:5432 -d postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
 ```
 
-同名containerを以前作成して停止している場合は、`docker inspect --format '{{.Config.Image}}' fukamu-cycle-postgres`でimageが正確に`postgres:18.6-alpine3.24`であることを確認してから`docker start fukamu-cycle-postgres`を使います。異なるimageのcontainerは再利用せず、保持dataの要否を確認してから別途処分してください。`docker rm`やvolume削除は通常の開発手順には含めません。
+同名containerを以前作成して停止している場合は、`docker inspect --format '{{.Config.Image}}' fukamu-cycle-postgres`でimageが正確に`postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2`であることを確認してから`docker start fukamu-cycle-postgres`を使います。異なるimageのcontainerは再利用せず、保持dataの要否を確認してから別途処分してください。`docker rm`やvolume削除は通常の開発手順には含めません。
 
 PostgreSQL 18以降の公式Docker imageは`PGDATA=/var/lib/postgresql/18/docker`を使い、volume mount先が`/var/lib/postgresql`へ変わりました。`compose.local.yaml`の破棄可能DBも親directoryへtmpfsをmountします。17以前の`/var/lib/postgresql/data`を新規設定へ流用しません。
 

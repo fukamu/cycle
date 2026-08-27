@@ -14,11 +14,11 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/check-security.sh
 
-Run the pinned M25 security profile: Node and Go dependency vulnerability
+Run the pinned M25/M28 security profile: Node and Go dependency vulnerability
 checks, Go static analysis, full-history/staged/current-tree secret detection,
-Terraform and production Dockerfile checks, then build and scan the production
-container image. Scanner, registry, advisory, and vulnerability DB errors fail
-the gate closed.
+immutable supply-chain policy, Terraform and production Dockerfile checks, then
+build and scan the production container image. Scanner, registry, advisory,
+and vulnerability DB errors fail the gate closed.
 EOF
 }
 
@@ -163,6 +163,11 @@ fi
 printf '%s\n' "[security] MIME/path-normalized history secrets (Gitleaks 8.30.0, redacted)"
 if ! security_run_gitleaks_normalized_text "${repo_root}" history "${gitleaks_config}" "${output_root}/gitleaks-normalized-history.log"; then
   die "Normalized history secret scan failed or found a secret; raw scanner metadata is suppressed."
+fi
+
+printf '%s\n' "[security] Immutable workflow and container supply chain"
+if ! security_run_supply_chain_policy "${snapshot_root}"; then
+  die "Supply-chain policy rejected a mutable, inconsistent, or unreviewed Action/image/update configuration."
 fi
 
 printf '%s\n' "[security] Go module policy (no workspace, vendor, replace, ignore, or toolchain override)"

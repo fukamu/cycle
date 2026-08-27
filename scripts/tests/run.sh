@@ -5,6 +5,8 @@ IFS=$'\n\t'
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(realpath -e -- "${script_dir}/../..")"
+# shellcheck source=scripts/lib/tool-images.sh
+source "${repo_root}/scripts/lib/tool-images.sh"
 test_root="$(mktemp -d)"
 trap 'rm -rf -- "${test_root}"' EXIT
 
@@ -460,7 +462,7 @@ EOF
     bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
   assert_file_contains "${log}" "pnpm install --frozen-lockfile --ignore-scripts"
   assert_file_contains "${log}" "resolve-ci-reuse test"
-  grep -Fq -- 'rhysd/actionlint:1.7.12 -color' "${log}" \
+  grep -Fq -- "${SUPPLY_CHAIN_ACTIONLINT_IMAGE} -color" "${log}" \
     || fail "before-commit check did not run pinned actionlint"
   assert_file_contains "${log}" "check CI=true --e2e"
   assert_lines_in_order "${log}" \
@@ -471,7 +473,7 @@ EOF
     "go env GOVERSION GOENV=off GOTOOLCHAIN=local" \
     "pnpm install --frozen-lockfile --ignore-scripts" \
     "resolve-ci-reuse test" \
-    "docker run --rm --volume ${fixture}:/repo:ro --workdir /repo rhysd/actionlint:1.7.12 -color" \
+    "docker run --rm --volume ${fixture}:/repo:ro --workdir /repo ${SUPPLY_CHAIN_ACTIONLINT_IMAGE} -color" \
     "check CI=true --e2e"
   [[ "$(grep -Fxc -- 'git diff --no-ext-diff --no-textconv --check' "${log}")" == "2" ]] \
     || fail "before-commit check did not validate unstaged whitespace before and after checks"
@@ -678,7 +680,7 @@ if [[ "${1:-}" == "context" && "${2:-}" == "inspect" ]]; then
 elif [[ "${1:-}" == "inspect" ]]; then
   case "${3:-}" in
     '{{.State.Status}}') printf '%s\n' 'running' ;;
-    '{{.Config.Image}}') printf '%s\n' "${FAKE_POSTGRES_IMAGE:-postgres:18.6-alpine3.24}" ;;
+    '{{.Config.Image}}') printf '%s\n' "${FAKE_POSTGRES_IMAGE:-postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2}" ;;
     '{{range .Config.Env}}{{println .}}{{end}}')
       printf '%s\n' 'POSTGRES_USER=dev user' 'POSTGRES_PASSWORD=p@ss:word'
       ;;
@@ -725,6 +727,7 @@ EOF
     --database-name fukamu_cycle_test --confirm-database-name fukamu_cycle_test --dry-run
 
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    FAKE_POSTGRES_IMAGE="${SUPPLY_CHAIN_POSTGRES_IMAGE}" \
     bash "${fixture}/scripts/reset-local-db.sh" \
     --database-name fukamu_cycle_test --confirm-database-name fukamu_cycle_test --yes >/dev/null
   grep -Fq -- 'dropdb --username dev user --if-exists --force fukamu_cycle_test' "${log}" \
@@ -780,6 +783,7 @@ test_admission_helpers
 bash "${script_dir}/check-terraform-state-recovery.sh"
 node --test "${script_dir}/staging-critical.test.mjs"
 bash "${script_dir}/check-staging-critical.sh"
+bash "${script_dir}/check-supply-chain.sh"
 bash "${script_dir}/check-ci-security-model.sh"
 bash "${script_dir}/check-security.sh"
 bash "${script_dir}/check-docs-config.sh"

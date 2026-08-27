@@ -321,9 +321,9 @@ test("deployment contract is the exact repository handoff classification", () =>
     matches(deployJob, /^      - ([^\n]+)$/gm),
     [
       "name: Verify commit has successful CI",
-      "uses: actions/checkout@v7",
-      "uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c",
-      "uses: actions/setup-go@v7",
+      "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+      "uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0",
+      "uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
       "name: Validate required deployment inputs",
       "name: Install JavaScript dependencies",
       "name: Verify dependency install preserved candidate tree",
@@ -577,12 +577,15 @@ test("deployment contract is the exact repository handoff classification", () =>
     "deployment CI-success verification step",
   );
 
-  const checkoutStep = extractUsesStep(workflow, "actions/checkout@v7");
+  const checkoutStep = extractUsesStep(
+    workflow,
+    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+  );
   assertStepExecutionControls(checkoutStep, "deployment checkout", null);
   assert.equal(
     checkoutStep.trimEnd(),
     [
-      "      - uses: actions/checkout@v7",
+      "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
       "        with:",
       "          ref: ${{ env.COMMIT_SHA }}",
       "          persist-credentials: false",
@@ -591,13 +594,13 @@ test("deployment contract is the exact repository handoff classification", () =>
   );
   const pnpmSetupStep = extractUsesStep(
     workflow,
-    "pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c",
+    "pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0",
   );
   assertStepExecutionControls(pnpmSetupStep, "deployment pnpm setup", null);
   assert.equal(
     pnpmSetupStep.trimEnd(),
     [
-      "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c",
+      "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0",
       "        with:",
       "          runtime: node@24",
       "          cache: true",
@@ -605,12 +608,15 @@ test("deployment contract is the exact repository handoff classification", () =>
     ].join("\n"),
     "deployment pnpm setup step",
   );
-  const goSetupStep = extractUsesStep(workflow, "actions/setup-go@v7");
+  const goSetupStep = extractUsesStep(
+    workflow,
+    "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
+  );
   assertStepExecutionControls(goSetupStep, "deployment Go setup", null);
   assert.equal(
     goSetupStep.trimEnd(),
     [
-      "      - uses: actions/setup-go@v7",
+      "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
       "        with:",
       "          go-version: 1.26.6",
       "          cache-dependency-path: backend/go.sum",
@@ -1244,15 +1250,27 @@ test("deployment contract is the exact repository handoff classification", () =>
     "deployment job secret exposure must be exact and step-scoped",
   );
   for (const [label, step] of [
-    ["checkout", extractUsesStep(workflow, "actions/checkout@v7")],
+    [
+      "checkout",
+      extractUsesStep(
+        workflow,
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+      ),
+    ],
     [
       "pnpm setup",
       extractUsesStep(
         workflow,
-        "pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c",
+        "pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0",
       ),
     ],
-    ["Go setup", extractUsesStep(workflow, "actions/setup-go@v7")],
+    [
+      "Go setup",
+      extractUsesStep(
+        workflow,
+        "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
+      ),
+    ],
     [
       "dependency installation",
       extractStep(workflow, "Install JavaScript dependencies"),

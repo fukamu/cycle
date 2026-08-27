@@ -6,10 +6,12 @@ IFS=$'\n\t'
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=scripts/lib/common.sh
 source "${script_dir}/lib/common.sh"
+# shellcheck source=scripts/lib/tool-images.sh
+source "${script_dir}/lib/tool-images.sh"
 repo_root="$(resolve_repo_root "${BASH_SOURCE[0]}")"
 backend_path="${repo_root}/backend"
 required_version="1.31.1"
-docker_image="sqlc/sqlc:${required_version}"
+docker_image="${SUPPLY_CHAIN_SQLC_IMAGE}"
 go_package="github.com/sqlc-dev/sqlc/cmd/sqlc@v${required_version}"
 managed_tool_dir="${repo_root}/.tmp/tools/sqlc-${required_version}"
 managed_sqlc="${managed_tool_dir}/sqlc"

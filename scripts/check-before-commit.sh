@@ -6,6 +6,8 @@ IFS=$'\n\t'
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=scripts/lib/common.sh
 source "${script_dir}/lib/common.sh"
+# shellcheck source=scripts/lib/tool-images.sh
+source "${script_dir}/lib/tool-images.sh"
 repo_root="$(resolve_repo_root "${BASH_SOURCE[0]}")"
 
 usage() {
@@ -71,7 +73,7 @@ bash .github/scripts/resolve-ci-reuse.test.sh
 docker run --rm \
   --volume "${repo_root}:/repo:ro" \
   --workdir /repo \
-  rhysd/actionlint:1.7.12 \
+  "${SUPPLY_CHAIN_ACTIONLINT_IMAGE}" \
   -color
 CI=true "${script_dir}/check.sh" --e2e
 

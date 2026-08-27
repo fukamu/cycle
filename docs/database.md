@@ -4,7 +4,7 @@
 
 ## 構成
 
-- Database: PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24`）
+- Database: PostgreSQL 18.6（Dockerは`postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2`）
 - Migration runner: `backend/cmd/migrate`（`golang-migrate`）
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
@@ -117,7 +117,7 @@ seed scriptと固定seedデータはありません。Migration後、匿名sessi
 - `clean.sh` とは別commandで、明示的な実行以外から呼ばれない。
 - `fukamu_cycle`、`fukamu_cycle_dev`、`fukamu_cycle_test` 以外のDB名を拒否する。
 - DB名を`--confirm-database-name`へ大文字小文字も含めて再入力させる。
-- remote Docker context、停止container、`postgres:18.6-alpine3.24`以外のimage、host portなしを拒否する。
+- remote Docker context、停止container、`postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2`以外のimage、host portなしを拒否する。
 - URLを引数に取らず、local Docker containerからだけ接続情報を構築する。
 - `APP_ENV=production` を拒否する。
 - Docker/Go/migration実行条件を削除前に検査し、実削除には`--yes`を要求する。

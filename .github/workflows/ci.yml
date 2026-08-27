@@ -23,7 +23,7 @@ jobs:
       source_run_id: ${{ steps.resolve.outputs.source_run_id }}
       tested_tree: ${{ steps.resolve.outputs.tested_tree }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Resolve reusable PR CI attestation
@@ -61,13 +61,13 @@ jobs:
       needs.quality.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Test CI reuse resolver
         run: bash .github/scripts/resolve-ci-reuse.test.sh
       - name: Validate GitHub Actions workflows
-        uses: docker://rhysd/actionlint:1.7.12
+        uses: docker://rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12
         with:
           args: -color
   quality:
@@ -80,13 +80,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Run security gates
         run: bash ./scripts/check-security.sh
-      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0
         with:
           runtime: node@24
           cache: true
@@ -115,10 +115,10 @@ jobs:
       needs.quality.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0
         with:
           runtime: node@24
           cache: true
@@ -147,7 +147,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:18.6-alpine3.24
+        image: postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
         env:
           POSTGRES_USER: fukamu_cycle
           POSTGRES_PASSWORD: fukamu_cycle
@@ -165,10 +165,10 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.6"
           cache-dependency-path: backend/go.sum
@@ -194,10 +194,10 @@ jobs:
       needs.quality.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0
         with:
           runtime: node@24
           cache: true
@@ -213,7 +213,7 @@ jobs:
       - run: docker compose --file compose.local.yaml config --quiet
       - name: Audit Docker build contexts
         run: bash ./scripts/check-docker-context.sh
-      - uses: hashicorp/setup-terraform@v4
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: 1.15.8
       - run: terraform fmt -check -recursive .
@@ -240,7 +240,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:18.6-alpine3.24
+        image: postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
         env:
           POSTGRES_USER: fukamu_cycle
           POSTGRES_PASSWORD: fukamu_cycle
@@ -253,15 +253,15 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c
+      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0
         with:
           runtime: node@24
           cache: true
           install: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.6"
           cache-dependency-path: backend/go.sum
@@ -297,7 +297,7 @@ jobs:
       needs.e2e.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -321,7 +321,7 @@ jobs:
           } > "${RUNNER_TEMP}/fukamu-cycle-pr-ci-attestation/attestation.txt"
           echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
       - name: Upload tested tree attestation
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.metadata.outputs.artifact_name }}
           path: ${{ runner.temp }}/fukamu-cycle-pr-ci-attestation/attestation.txt

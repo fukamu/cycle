@@ -95,11 +95,11 @@ extract_checkout_step() {
   local job_file="$1"
   awk '
     /uses:[[:space:]]*actions\/checkout@/ { all_uses++ }
-    /^      - uses: actions\/checkout@[^[:space:]]+$/ {
+    /^      - uses: actions\/checkout@[^[:space:]]+[[:space:]]+#[[:space:]]+v[^[:space:]]+$/ {
       parsed_uses++
       active = 1
     }
-    active && $0 !~ /^      - uses: actions\/checkout@[^[:space:]]+$/ && /^      - / {
+    active && $0 !~ /^      - uses: actions\/checkout@[^[:space:]]+[[:space:]]+#[[:space:]]+v[^[:space:]]+$/ && /^      - / {
       active = 0
     }
     active { print }
@@ -328,13 +328,13 @@ validate_secret_workflow_exact_digest() {
 
   case "${contract}" in
     deploy)
-      expected_digest="094ebf026e6493f7d13398668771e19e19e99c336a1f254bb20acceb9ed28a44"
+      expected_digest="486553aa19961c972a2e5bd463324135b35f82bf39c766af41e956c7ae5a1cd4"
       ;;
     terraform-plan)
-      expected_digest="c06fb1aaeebabb2b5311c26cdd711144f15c511241fbfc165204c7f06196b949"
+      expected_digest="3401da86fcb13bec1335fae58fa523c83cffcc1be7ddabedfcc976e900ec2bd7"
       ;;
     terraform-apply)
-      expected_digest="b3aad3beb9f05f9662c183994657b42e6102efcfdac24d45d819b8af9a361af9"
+      expected_digest="5ab3289be3c80cd7506c84a3a505100af05763bade1ec5f0faeb29a5cc2fae78"
       ;;
     *) return 0 ;;
   esac
@@ -363,7 +363,7 @@ validate_checkout_credential_file() {
       in_with = 0
     }
     /uses:[[:space:]]*actions\/checkout@/ { all_uses++ }
-    /^      - uses: actions\/checkout@[^[:space:]]+$/ {
+    /^      - uses: actions\/checkout@[^[:space:]]+[[:space:]]+#[[:space:]]+v[^[:space:]]+$/ {
       finish_checkout()
       parsed_uses++
       active = 1
@@ -633,7 +633,7 @@ validate_job_structure() {
     }
     require_nonblank_lines "${services_file}" \
       "      postgres:" \
-      "        image: postgres:18.6-alpine3.24" \
+      "        image: postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2" \
       "        env:" \
       "          POSTGRES_USER: fukamu_cycle" \
       "          POSTGRES_PASSWORD: fukamu_cycle" \
@@ -691,23 +691,23 @@ validate_exact_functional_steps() {
     case "${job}" in
       workflow)
         require_nonblank_lines "${steps_file}" \
-          "      - uses: actions/checkout@v7" \
+          "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
           "        with:" \
           "          persist-credentials: false" \
           "      - name: Test CI reuse resolver" \
           "        run: bash .github/scripts/resolve-ci-reuse.test.sh" \
           "      - name: Validate GitHub Actions workflows" \
-          "        uses: docker://rhysd/actionlint:1.7.12" \
+          "        uses: docker://rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12" \
           "        with:" \
           "          args: -color" || return 1
         ;;
       frontend)
         # shellcheck disable=SC2016 # Expected workflow/fixture command is a literal.
         require_nonblank_lines "${steps_file}" \
-          "      - uses: actions/checkout@v7" \
+          "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
           "        with:" \
           "          persist-credentials: false" \
-          "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c" \
+          "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0" \
           "        with:" \
           "          runtime: node@24" \
           "          cache: true" \
@@ -729,10 +729,10 @@ validate_exact_functional_steps() {
       backend)
         # shellcheck disable=SC2016 # Expected workflow command is a literal.
         require_nonblank_lines "${steps_file}" \
-          "      - uses: actions/checkout@v7" \
+          "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
           "        with:" \
           "          persist-credentials: false" \
-          "      - uses: actions/setup-go@v7" \
+          "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0" \
           "        with:" \
           '          go-version: "1.26.6"' \
           "          cache-dependency-path: backend/go.sum" \
@@ -752,10 +752,10 @@ validate_exact_functional_steps() {
       infrastructure)
         # shellcheck disable=SC2016 # Expected workflow/fixture command is a literal.
         require_nonblank_lines "${steps_file}" \
-          "      - uses: actions/checkout@v7" \
+          "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
           "        with:" \
           "          persist-credentials: false" \
-          "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c" \
+          "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0" \
           "        with:" \
           "          runtime: node@24" \
           "          cache: true" \
@@ -771,7 +771,7 @@ validate_exact_functional_steps() {
           "      - run: docker compose --file compose.local.yaml config --quiet" \
           "      - name: Audit Docker build contexts" \
           "        run: bash ./scripts/check-docker-context.sh" \
-          "      - uses: hashicorp/setup-terraform@v4" \
+          "      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1" \
           "        with:" \
           "          terraform_version: 1.15.8" \
           "      - run: terraform fmt -check -recursive ." \
@@ -787,15 +787,15 @@ validate_exact_functional_steps() {
       e2e)
         # shellcheck disable=SC2016 # Expected workflow/fixture command is a literal.
         require_nonblank_lines "${steps_file}" \
-          "      - uses: actions/checkout@v7" \
+          "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
           "        with:" \
           "          persist-credentials: false" \
-          "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c" \
+          "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0" \
           "        with:" \
           "          runtime: node@24" \
           "          cache: true" \
           "          install: false" \
-          "      - uses: actions/setup-go@v7" \
+          "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0" \
           "        with:" \
           '          go-version: "1.26.6"' \
           "          cache-dependency-path: backend/go.sum" \
@@ -838,7 +838,7 @@ validate_exact_control_steps() {
   }
   expected_reuse_steps="$(
     cat <<'EOF'
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Resolve reusable PR CI attestation
@@ -880,7 +880,7 @@ EOF
   }
   expected_attest_steps="$(
     cat <<'EOF'
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -904,7 +904,7 @@ EOF
           } > "${RUNNER_TEMP}/fukamu-cycle-pr-ci-attestation/attestation.txt"
           echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
       - name: Upload tested tree attestation
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.metadata.outputs.artifact_name }}
           path: ${{ runner.temp }}/fukamu-cycle-pr-ci-attestation/attestation.txt
@@ -1067,7 +1067,7 @@ validate_workflow() {
   }
   require_nonblank_lines "${actionlint_step}" \
     "      - name: Validate GitHub Actions workflows" \
-    "        uses: docker://rhysd/actionlint:1.7.12" \
+    "        uses: docker://rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12" \
     "        with:" \
     "          args: -color" || return 1
   [[ "$(awk '/uses:[[:space:]]*docker:\/\/rhysd\/actionlint:/ { count++ } END { print count + 0 }' "${file}")" == "1" ]] || {
@@ -1097,13 +1097,13 @@ validate_workflow() {
   }
   # shellcheck disable=SC2016 # Expected workflow/fixture command is a literal.
   require_nonblank_lines "${quality_steps}" \
-    "      - uses: actions/checkout@v7" \
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
     "        with:" \
     "          fetch-depth: 0" \
     "          persist-credentials: false" \
     "      - name: Run security gates" \
     "        run: bash ./scripts/check-security.sh" \
-    "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c" \
+    "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0" \
     "        with:" \
     "          runtime: node@24" \
     "          cache: true" \
@@ -1434,8 +1434,8 @@ assert_invalid_workflow_set "Terraform Apply process-substitution artifact parse
 
 workflow_set="$(new_workflow_set_fixture terraform-plan-anonymous-step)"
 replace_line_once "${workflow_set}/terraform-plan.yml" \
-  "      - uses: actions/checkout@v7" \
-  $'      - run: true\n      - uses: actions/checkout@v7'
+  "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
+  $'      - run: true\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
 assert_invalid_workflow_set "Terraform Plan anonymous step" "${workflow_set}"
 
 workflow_set="$(new_workflow_set_fixture terraform-apply-extra-named-step)"
@@ -1495,7 +1495,7 @@ assert_invalid_workflow_set \
 
 workflow_set="$(new_workflow_set_fixture terraform-plan-action-change)"
 replace_line_once "${workflow_set}/terraform-plan.yml" \
-  "        uses: actions/upload-artifact@v7" \
+  "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1" \
   "        uses: actions/upload-artifact@main"
 assert_invalid_workflow_set "Terraform Plan action change" "${workflow_set}"
 
@@ -1689,7 +1689,7 @@ assert_invalid "attestation checkout ref change" "${fixture}"
 
 fixture="$(new_fixture attest-upload-action-change)"
 replace_job_line "${fixture}" attest_pr_ci \
-  "        uses: actions/upload-artifact@v7" \
+  "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1" \
   "        uses: actions/upload-artifact@main"
 assert_invalid "attestation upload action change" "${fixture}"
 
@@ -1706,8 +1706,8 @@ assert_invalid "persisted checkout credentials" "${fixture}"
 
 fixture="$(new_fixture duplicate-quality-checkout)"
 replace_job_line "${fixture}" quality \
-  "      - uses: actions/checkout@v7" \
-  $'      - uses: actions/checkout@v7\n        with:\n          persist-credentials: false\n      - uses: actions/checkout@v7'
+  "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
+  $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
 assert_invalid "duplicate quality checkout" "${fixture}"
 
 fixture="$(new_fixture misplaced-full-history-fetch)"
@@ -1856,7 +1856,7 @@ QUALITY_FORBIDDEN_JOB_FIELDS
 
 fixture="$(new_fixture replaced-actionlint-consumer)"
 replace_job_line "${fixture}" workflow \
-  "        uses: docker://rhysd/actionlint:1.7.12" \
+  "        uses: docker://rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12" \
   "        uses: docker://rhysd/actionlint:latest"
 assert_invalid "replaced actionlint consumer" "${fixture}"
 

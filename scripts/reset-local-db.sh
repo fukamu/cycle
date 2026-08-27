@@ -6,6 +6,8 @@ IFS=$'\n\t'
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=scripts/lib/common.sh
 source "${script_dir}/lib/common.sh"
+# shellcheck source=scripts/lib/tool-images.sh
+source "${script_dir}/lib/tool-images.sh"
 repo_root="$(resolve_repo_root "${BASH_SOURCE[0]}")"
 container_name="fukamu-cycle-postgres"
 database_name="fukamu_cycle"
@@ -93,8 +95,8 @@ container_environment="$(docker inspect --format '{{range .Config.Env}}{{println
 
 [[ "${container_state}" == "running" ]] \
   || die "Container '${container_name}' is not running. No database was changed."
-[[ "${container_image}" == "postgres:18.6-alpine3.24" ]] \
-  || die "Container '${container_name}' does not use the expected postgres:18.6-alpine3.24 image. No database was changed."
+[[ "${container_image}" == "${SUPPLY_CHAIN_POSTGRES_IMAGE}" ]] \
+  || die "Container '${container_name}' does not use the expected immutable PostgreSQL image. No database was changed."
 
 postgres_user=""
 postgres_password=""

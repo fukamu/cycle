@@ -276,24 +276,28 @@ assert_networkless_read_only_parser security_validate_node_audit_policy 4
 assert_networkless_read_only_parser security_run_trivy_config 1
 assert_networkless_read_only_parser security_validate_terraform_module_policy 1
 assert_networkless_read_only_parser security_classify_json_report 1
+assert_networkless_read_only_parser security_run_supply_chain_policy 1
 node_policy_body="$(declare -f security_validate_node_audit_policy)" || fail "could not inspect Node audit policy helper"
 trivy_config_body="$(declare -f security_run_trivy_config)" || fail "could not inspect Trivy config helper"
 terraform_module_policy_body="$(declare -f security_validate_terraform_module_policy)" || fail "could not inspect Terraform module policy helper"
 report_classifier_body="$(declare -f security_classify_json_report)" || fail "could not inspect report classifier"
+supply_chain_policy_body="$(declare -f security_run_supply_chain_policy)" || fail "could not inspect supply-chain policy helper"
 node_policy_source_ro_count="$(awk 'index($0, "${source_root}:/workspace:ro") { count += 1 } END { print count + 0 }' <<<"${node_policy_body}")"
 trivy_source_ro_count="$(awk 'index($0, "${source_root}:/workspace:ro") { count += 1 } END { print count + 0 }' <<<"${trivy_config_body}")"
 trivy_config_ro_count="$(awk 'index($0, "${config_path}:/trivy/config.yaml:ro") { count += 1 } END { print count + 0 }' <<<"${trivy_config_body}")"
 terraform_module_source_ro_count="$(awk 'index($0, "${source_root}:/workspace:ro") { count += 1 } END { print count + 0 }' <<<"${terraform_module_policy_body}")"
 classifier_input_ro_count="$(awk 'index($0, ":/input:ro") { count += 1 } END { print count + 0 }' <<<"${report_classifier_body}")"
+supply_chain_source_ro_count="$(awk 'index($0, "${source_root}:/workspace:ro") { count += 1 } END { print count + 0 }' <<<"${supply_chain_policy_body}")"
 text_inventory_body="$(declare -f security_validate_text_inventory)" || fail "could not inspect approved-text inventory helper"
 git_repository_body="$(declare -f security_validate_git_repository_inputs)" || fail "could not inspect Git repository guard"
 text_inventory_ro_count="$(awk 'index($0, "${source_root}:/source:ro") { count += 1 } END { print count + 0 }' <<<"${text_inventory_body}")"
 git_repository_ro_count="$(awk 'index($0, "${source_root}:/source:ro") { count += 1 } END { print count + 0 }' <<<"${git_repository_body}")"
 [[ "${node_policy_source_ro_count}" -eq 4 && "${trivy_source_ro_count}" -eq 1 &&
   "${trivy_config_ro_count}" -eq 1 && "${terraform_module_source_ro_count}" -eq 1 && "${classifier_input_ro_count}" -eq 1 &&
+  "${supply_chain_source_ro_count}" -eq 1 &&
   "${text_inventory_ro_count}" -eq 1 && "${git_repository_ro_count}" -eq 1 ]] \
   || fail "a network-independent parser has a writable candidate or report input"
-unset node_policy_body trivy_config_body terraform_module_policy_body report_classifier_body node_policy_source_ro_count trivy_source_ro_count trivy_config_ro_count terraform_module_source_ro_count classifier_input_ro_count text_inventory_body git_repository_body text_inventory_ro_count git_repository_ro_count
+unset node_policy_body trivy_config_body terraform_module_policy_body report_classifier_body supply_chain_policy_body node_policy_source_ro_count trivy_source_ro_count trivy_config_ro_count terraform_module_source_ro_count classifier_input_ro_count supply_chain_source_ro_count text_inventory_body git_repository_body text_inventory_ro_count git_repository_ro_count
 pass "all network-independent candidate and report parsers are networkless and read-only"
 
 text_policy_fixture="${test_root}/approved-text-policy"
@@ -747,6 +751,7 @@ assert_snapshot_scanner_wiring security_run_gosec "security_run_gosec \"\${snaps
 assert_snapshot_scanner_wiring security_validate_go_module_policy "security_validate_go_module_policy \"\${snapshot_root}/backend\"" 1
 assert_snapshot_scanner_wiring security_run_trivy_config "security_run_trivy_config \"\${snapshot_root}\"" 2
 assert_snapshot_scanner_wiring security_run_gitleaks_directory "security_run_gitleaks_directory \"\${snapshot_root}\"" 1
+assert_snapshot_scanner_wiring security_run_supply_chain_policy "security_run_supply_chain_policy \"\${snapshot_root}\"" 1
 normalized_gitleaks_call_count="$(awk 'index($0, "security_run_gitleaks_normalized_text") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-security.sh")"
 normalized_candidate_call_count="$(awk 'index($0, "security_run_gitleaks_normalized_text") && index($0, "${snapshot_root}") && index($0, "candidate") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-security.sh")"
 normalized_staged_call_count="$(awk 'index($0, "security_run_gitleaks_normalized_text") && index($0, "${repo_root}") && index($0, "staged") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-security.sh")"
@@ -777,14 +782,17 @@ snapshot_creation_line="$(awk 'index($0, "security_create_candidate_snapshot") {
 first_structured_scan_line="$(awk 'index($0, "security_run_node_audit") { print NR; exit }' "${repo_root}/scripts/check-security.sh")"
 [[ "${snapshot_creation_line}" =~ ^[1-9][0-9]*$ && "${first_structured_scan_line}" =~ ^[1-9][0-9]*$ && "${snapshot_creation_line}" -lt "${first_structured_scan_line}" ]] || fail "candidate snapshot is not created before structured scanners run"
 last_secret_scan_line="$(awk 'index($0, "security_run_gitleaks_") { line = NR } END { print line + 0 }' "${repo_root}/scripts/check-security.sh")"
+supply_chain_policy_line="$(awk 'index($0, "security_run_supply_chain_policy") { print NR; exit }' "${repo_root}/scripts/check-security.sh")"
 go_policy_line="$(awk 'index($0, "security_validate_go_module_policy") { print NR; exit }' "${repo_root}/scripts/check-security.sh")"
 first_network_scan_line="$(awk 'index($0, "security_run_node_audit") || index($0, "security_run_govulncheck") || index($0, "security_run_gosec") || index($0, "security_run_trivy_") || index($0, "docker build") { print NR; exit }' "${repo_root}/scripts/check-security.sh")"
-[[ "${last_secret_scan_line}" -gt 0 && "${go_policy_line}" =~ ^[1-9][0-9]*$ &&
+[[ "${last_secret_scan_line}" -gt 0 && "${supply_chain_policy_line}" =~ ^[1-9][0-9]*$ &&
+  "${go_policy_line}" =~ ^[1-9][0-9]*$ &&
   "${first_network_scan_line}" =~ ^[1-9][0-9]*$ &&
-  "${last_secret_scan_line}" -lt "${go_policy_line}" &&
+  "${last_secret_scan_line}" -lt "${supply_chain_policy_line}" &&
+  "${supply_chain_policy_line}" -lt "${go_policy_line}" &&
   "${go_policy_line}" -lt "${first_network_scan_line}" ]] \
-  || fail "secret scans and Go module policy do not precede networked scanners and image build"
-pass "structured scanners, six secret views, Git graph guard, and production build are wired to their exact candidate/index/history inputs"
+  || fail "secret scans, supply-chain policy, and Go module policy do not precede networked scanners and image build"
+pass "structured scanners, six secret views, supply-chain policy, Git graph guard, and production build are wired to their exact candidate/index/history inputs"
 
 snapshot_fixture="${test_root}/candidate-snapshot"
 snapshot_repo="${snapshot_fixture}/repo"

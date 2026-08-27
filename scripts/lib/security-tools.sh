@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# M25 pins every scanner/tool introduced by the security gate. Pinning the
-# repository's existing workflow Actions and production Dockerfile base images
-# is deliberately left to the separate M28 supply-chain milestone.
+# Security tooling and the M28 supply-chain policy both run from immutable
+# images. Workflow Actions, production bases, and operational tools are checked
+# by scripts/check-supply-chain.mjs against the candidate snapshot.
 readonly SECURITY_PNPM_IMAGE='ghcr.io/pnpm/pnpm:11.22.0@sha256:eba76954b37ec1ba6187f0adb39caee1e31733194857eedd01319da0af3fa00d'
 readonly SECURITY_NODE_IMAGE='node:24.19.0@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584'
 readonly SECURITY_GO_IMAGE='golang:1.26.6@sha256:0d1d3a794be25f809dd2cb3160d8c73276c4056a9f8242a138e908ddeee7b6b6'
@@ -1723,6 +1723,22 @@ security_run_gitleaks_directory() {
   "${command[@]}" >"${log_path}" 2>&1 || scan_status=$?
   ((scan_status == 0)) || return "${scan_status}"
   security_validate_gitleaks_log "${log_path}"
+}
+
+security_run_supply_chain_policy() {
+  local source_root="$1"
+  local -a command=(
+    docker run --rm
+    --network none
+    --read-only
+    --tmpfs "/tmp:rw,nosuid,nodev,noexec"
+    --user "$(id -u):$(id -g)"
+    --volume "${source_root}:/workspace:ro"
+    --workdir /workspace
+    "${SECURITY_NODE_IMAGE}"
+    node scripts/check-supply-chain.mjs /workspace
+  )
+  "${command[@]}"
 }
 
 security_validate_terraform_module_policy() {

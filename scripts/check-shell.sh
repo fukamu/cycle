@@ -6,6 +6,8 @@ IFS=$'\n\t'
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=scripts/lib/common.sh
 source "${script_dir}/lib/common.sh"
+# shellcheck source=scripts/lib/tool-images.sh
+source "${script_dir}/lib/tool-images.sh"
 repo_root="$(resolve_repo_root "${BASH_SOURCE[0]}")"
 
 if (($# > 0)); then
@@ -45,11 +47,11 @@ bash -n "${shell_files[@]}"
 docker run --rm \
   --volume "${repo_root}:/src:ro" \
   --workdir /src \
-  koalaman/shellcheck:v0.11.0 \
+  "${SUPPLY_CHAIN_SHELLCHECK_IMAGE}" \
   --external-sources "${relative_files[@]}"
 docker run --rm \
   --volume "${repo_root}:/src:ro" \
   --workdir /src \
-  mvdan/shfmt:v3.13.1 \
+  "${SUPPLY_CHAIN_SHFMT_IMAGE}" \
   -d -i 2 -ci -bn "${relative_files[@]}"
 bash "${script_dir}/tests/run.sh"
