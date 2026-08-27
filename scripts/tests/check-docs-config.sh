@@ -516,7 +516,13 @@ replace_exact_line() {
   local line="$2"
   local replacement="$3"
   local next="${file}.fixture-next"
-  if ! awk -v line="${line}" -v replacement="${replacement}" '
+  if ! FUKAMU_FIXTURE_LINE="${line}" \
+    FUKAMU_FIXTURE_REPLACEMENT="${replacement}" \
+    awk '
+    BEGIN {
+      line = ENVIRON["FUKAMU_FIXTURE_LINE"]
+      replacement = ENVIRON["FUKAMU_FIXTURE_REPLACEMENT"]
+    }
     $0 == line {
       matches++
       $0 = replacement
@@ -536,7 +542,15 @@ replace_exact_line_after_marker() {
   local line="$3"
   local replacement="$4"
   local next="${file}.fixture-next"
-  if ! awk -v marker="${marker}" -v line="${line}" -v replacement="${replacement}" '
+  if ! FUKAMU_FIXTURE_MARKER="${marker}" \
+    FUKAMU_FIXTURE_LINE="${line}" \
+    FUKAMU_FIXTURE_REPLACEMENT="${replacement}" \
+    awk '
+    BEGIN {
+      marker = ENVIRON["FUKAMU_FIXTURE_MARKER"]
+      line = ENVIRON["FUKAMU_FIXTURE_LINE"]
+      replacement = ENVIRON["FUKAMU_FIXTURE_REPLACEMENT"]
+    }
     $0 == marker {
       markers++
       active = 1
@@ -560,7 +574,13 @@ insert_before_exact_line() {
   local line="$2"
   local insertion="$3"
   local next="${file}.fixture-next"
-  if ! awk -v line="${line}" -v insertion="${insertion}" '
+  if ! FUKAMU_FIXTURE_LINE="${line}" \
+    FUKAMU_FIXTURE_INSERTION="${insertion}" \
+    awk '
+    BEGIN {
+      line = ENVIRON["FUKAMU_FIXTURE_LINE"]
+      insertion = ENVIRON["FUKAMU_FIXTURE_INSERTION"]
+    }
     $0 == line {
       matches++
       print insertion
