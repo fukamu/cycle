@@ -150,6 +150,22 @@ new_docs_fixture() {
   printf '%s\n' "${fixture}"
 }
 
+write_valid_design_trace() {
+  local fixture="$1"
+  local section
+  printf '%s\n' \
+    '# Design fixture' \
+    '' \
+    '## 54.3 Legacy §0–54 trace' \
+    '' \
+    '| 旧§ | Disposition | Verification |' \
+    '|---:|---|---|' >"${fixture}/docs/design.md"
+  for ((section = 0; section <= 54; section += 1)); do
+    printf '| %d | owner | test |\n' "${section}" \
+      >>"${fixture}/docs/design.md"
+  done
+}
+
 test_docs_gate() {
   local fixture
   local output
@@ -356,6 +372,28 @@ test_docs_gate() {
     grep -Fq -- "${expected}" "${output}" \
       || fail "installed documentation tool mismatch did not report ${expected}"
   done
+
+  fixture="$(new_docs_fixture valid-design-trace)"
+  write_valid_design_trace "${fixture}"
+  bash "${fixture}/scripts/check-docs.sh" >/dev/null \
+    || fail "documentation gate rejected a complete legacy design trace"
+
+  fixture="$(new_docs_fixture missing-design-trace)"
+  printf '%s\n' '# Design fixture without a trace' \
+    >"${fixture}/docs/design.md"
+  assert_failure_contains "missing design legacy trace" \
+    "DESIGN_LEGACY_TRACE_MISSING" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture duplicate-design-trace-row)"
+  write_valid_design_trace "${fixture}"
+  replace_exact_line \
+    "${fixture}/docs/design.md" \
+    '| 27 | owner | test |' \
+    '| 28 | owner | test |'
+  assert_failure_contains "duplicate design legacy trace row" \
+    "DESIGN_LEGACY_TRACE_SEQUENCE" \
+    bash "${fixture}/scripts/check-docs.sh"
 
   pass "documentation gate has parser-semantic and deterministic negative fixtures"
 }

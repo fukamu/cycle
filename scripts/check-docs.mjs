@@ -71,6 +71,8 @@ if (documents.size === 0 && problems.length === 0) {
   fail("No Markdown documents were found.");
 }
 
+validateDesignLegacyTrace();
+
 const mermaid = installedTools.has("mermaid") ? await loadMermaid() : null;
 if (mermaid !== null) await validateMermaidBlocks(mermaid);
 
@@ -249,7 +251,41 @@ function parseDocument(path, source) {
     }
   }
 
-  return { anchors, links, mermaidBlocks, path };
+  return { anchors, links, mermaidBlocks, path, source };
+}
+
+function validateDesignLegacyTrace() {
+  const designPath = resolve(canonicalRoot, "docs/design.md");
+  const document = documents.get(designPath);
+  if (document === undefined) return;
+
+  const heading = /^## 54\.3 Legacy §0–54 trace[ \t]*$/mu.exec(
+    document.source,
+  );
+  if (heading === null) {
+    addProblem(
+      designPath,
+      1,
+      "DESIGN_LEGACY_TRACE_MISSING",
+      "docs/design.md must contain the M31 legacy §0–54 trace",
+    );
+    return;
+  }
+
+  const traceSource = document.source.slice(heading.index + heading[0].length);
+  const rows = [...traceSource.matchAll(/^\| ([0-9]+) \|/gmu)];
+  const values = rows.map((match) => Number.parseInt(match[1], 10));
+  const complete =
+    values.length === 55 && values.every((value, index) => value === index);
+  if (complete) return;
+
+  const line = document.source.slice(0, heading.index).split("\n").length;
+  addProblem(
+    designPath,
+    line,
+    "DESIGN_LEGACY_TRACE_SEQUENCE",
+    `legacy trace rows must contain each section from 0 through 54 exactly once in order; found [${values.join(", ")}]`,
+  );
 }
 
 function validateFenceClosure(path, token, line) {
