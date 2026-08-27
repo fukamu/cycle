@@ -21,45 +21,45 @@ type createDraftRequest struct {
 }
 type saveDraftRequest struct {
 	Body             string `json:"body"`
-	ExpectedRevision int64  `json:"expectedRevision" validate:"gte=0"`
+	ExpectedRevision int64  `json:"expectedRevision"`
 }
 type saveReviewRequest struct {
 	Body                  string `json:"body"`
-	ExpectedReviewDraftID string `json:"expectedReviewDraftId" validate:"required,uuid_v7"`
-	ExpectedRevision      int64  `json:"expectedRevision" validate:"gte=0"`
+	ExpectedReviewDraftID string `json:"expectedReviewDraftId"`
+	ExpectedRevision      int64  `json:"expectedRevision"`
 }
 type startGoalRequest struct {
-	OperationID           string `json:"operationId" validate:"required,uuid_v7"`
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
+	OperationID           string `json:"operationId"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
 }
 type refineGoalRequest struct {
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
-	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty" validate:"omitempty,gte=0"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
+	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty"`
 }
 type adoptSuggestionRequest struct {
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
-	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty" validate:"omitempty,gte=0"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
+	ExpectedGoalRevision  *int64 `json:"expectedGoalRevision,omitempty"`
 }
 type continueReviewRequest struct {
-	OperationID           string `json:"operationId" validate:"required,uuid_v7"`
-	ExpectedGoalRevision  int64  `json:"expectedGoalRevision" validate:"gte=0"`
-	ExpectedDraftRevision int64  `json:"expectedDraftRevision" validate:"gte=0"`
+	OperationID           string `json:"operationId"`
+	ExpectedGoalRevision  int64  `json:"expectedGoalRevision"`
+	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
 }
 type saveFrameRequest struct {
 	Content               string `json:"content"`
-	ExpectedFrameRevision int64  `json:"expectedFrameRevision" validate:"gte=0"`
+	ExpectedFrameRevision int64  `json:"expectedFrameRevision"`
 }
 type actionGenerateRequest struct {
-	ExpectedContentRevision int64 `json:"expectedContentRevision" validate:"gte=0"`
+	ExpectedContentRevision int64 `json:"expectedContentRevision"`
 	ConfirmReplace          bool  `json:"confirmReplace"`
 }
 type actionRefineRequest struct {
-	ExpectedContentRevision int64 `json:"expectedContentRevision" validate:"gte=0"`
+	ExpectedContentRevision int64 `json:"expectedContentRevision"`
 }
 type completeCycleRequest struct {
-	OperationID             string `json:"operationId" validate:"required,uuid_v7"`
-	ExpectedGoalRevision    int64  `json:"expectedGoalRevision" validate:"gte=0"`
-	ExpectedContentRevision int64  `json:"expectedContentRevision" validate:"gte=0"`
+	OperationID             string `json:"operationId"`
+	ExpectedGoalRevision    int64  `json:"expectedGoalRevision"`
+	ExpectedContentRevision int64  `json:"expectedContentRevision"`
 }
 type optionalJSONField[T any] struct {
 	Value   T
@@ -77,10 +77,10 @@ func (field *optionalJSONField[T]) UnmarshalJSON(data []byte) error {
 }
 
 type terminateGoalRequest struct {
-	OperationID                  string                    `json:"operationId" validate:"required,uuid_v7"`
-	Outcome                      goal.Status               `json:"outcome" validate:"required"`
-	ExpectedGoalRevision         *int64                    `json:"expectedGoalRevision" validate:"required,gte=0"`
-	ExpectedState                goal.Status               `json:"expectedState" validate:"required"`
+	OperationID                  string                    `json:"operationId"`
+	Outcome                      goal.Status               `json:"outcome"`
+	ExpectedGoalRevision         *int64                    `json:"expectedGoalRevision"`
+	ExpectedState                goal.Status               `json:"expectedState"`
 	ActiveCycleID                optionalJSONField[string] `json:"activeCycleId"`
 	ExpectedCycleContentRevision optionalJSONField[int64]  `json:"expectedCycleContentRevision"`
 	ConfirmDiscardReviewDraft    optionalJSONField[bool]   `json:"confirmDiscardReviewDraft"`
@@ -111,7 +111,7 @@ func (input terminateGoalRequest) variant() (string, *int64, bool, error) {
 
 type deleteGoalRequest struct {
 	Confirmed            bool  `json:"confirmed"`
-	ExpectedGoalRevision int64 `json:"expectedGoalRevision" validate:"gte=0"`
+	ExpectedGoalRevision int64 `json:"expectedGoalRevision"`
 }
 
 func (server *api) getHome(writer http.ResponseWriter, request *http.Request) {

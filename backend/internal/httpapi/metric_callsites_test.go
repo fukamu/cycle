@@ -191,7 +191,7 @@ func TestAutosaveMetricsRunOnceAtAllProductionHandlers(t *testing.T) {
 				test.configure(spaces)
 			}
 			metrics := &metricCallRecorder{}
-			server := &api{dependencies: Dependencies{Workspace: spaces, Metrics: metrics}, validate: newRequestValidator()}
+			server := &api{dependencies: Dependencies{Workspace: spaces, Metrics: metrics}}
 			response := httptest.NewRecorder()
 			test.invoke(server, response, metricHandlerRequest(http.MethodPatch, "/", test.body, test.params))
 			if len(metrics.autosaves) != 1 || metrics.autosaves[0].resourceType != test.resourceType ||
@@ -260,7 +260,7 @@ func TestAccountHandlerMetricsRecordOneDurableResult(t *testing.T) {
 				test.configure(accounts)
 			}
 			metrics := &metricCallRecorder{}
-			server := &api{dependencies: Dependencies{Account: accounts, Metrics: metrics}, validate: newRequestValidator()}
+			server := &api{dependencies: Dependencies{Account: accounts, Metrics: metrics}}
 			response := httptest.NewRecorder()
 			test.invoke(server, response, metricHandlerRequest(http.MethodPost, "/", test.body, nil))
 			calls := test.metric(metrics)

@@ -86,7 +86,6 @@ func TestAnonymousCreateMetricDistinguishesFreshCookieReuseAndDatabaseReplay(t *
 			}
 			server := &api{
 				dependencies: Dependencies{Sessions: sessions, PublicOrigin: origin, Metrics: metrics},
-				validate:     newRequestValidator(),
 			}
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/session/anonymous",
 				strings.NewReader(`{"bootstrapId":"`+bootstrapID+`","turnstileToken":"token"}`))

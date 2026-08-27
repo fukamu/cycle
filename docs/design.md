@@ -4161,7 +4161,7 @@ Actions:
 - PostgreSQL driver: `github.com/jackc/pgx/v5`
 - Typed SQL: `sqlc`
 - Migration: `golang-migrate/migrate`
-- DTO validation: `go-playground/validator/v10` + Domain validation
+- DTO validation: explicit typed HTTP boundary validation + Domain validation
 - Google verification: `google.golang.org/api/idtoken`
 - OpenAI: `github.com/openai/openai-go/v3`
 - Logging: standard `log/slog` JSON

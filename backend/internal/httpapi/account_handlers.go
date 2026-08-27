@@ -18,7 +18,7 @@ type AccountService interface {
 }
 
 type googleTokenRequest struct {
-	IDToken string `json:"idToken" validate:"required"`
+	IDToken string `json:"idToken"`
 }
 
 type deleteAccountRequest struct {

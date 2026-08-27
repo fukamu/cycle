@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-playground/validator/v10"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
@@ -79,11 +78,10 @@ type Dependencies struct {
 
 type api struct {
 	dependencies Dependencies
-	validate     *validator.Validate
 }
 
 func NewRouter(dependencies Dependencies) http.Handler {
-	server := &api{dependencies: dependencies, validate: newRequestValidator()}
+	server := &api{dependencies: dependencies}
 	router := chi.NewRouter()
 	router.Use(server.traceMiddleware, server.requestIDMiddleware, server.requestLogMiddleware, server.panicRecoveryMiddleware, server.securityHeaders)
 	router.Get("/healthz", healthHandler)
@@ -133,14 +131,6 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		router.Handle("/*", newSPAHandler(dependencies.StaticDir))
 	}
 	return router
-}
-
-func newRequestValidator() *validator.Validate {
-	validate := validator.New(validator.WithRequiredStructEnabled())
-	_ = validate.RegisterValidation("uuid_v7", func(field validator.FieldLevel) bool {
-		return isCanonicalUUIDv7(field.Field().String())
-	})
-	return validate
 }
 
 type healthResponse struct {
