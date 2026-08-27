@@ -141,7 +141,7 @@ Goal Review Draft
 - Frontend: TypeScript / React 19.2 / Vite SPA
 - Routing: React Router
 - Server State: TanStack Query v5
-- Form: React Hook Form + Zod 4
+- Form: Controlled React state + Zod 4
 - Backend: Go 1.26 / `net/http` + `chi`
 - Database: PostgreSQL / Neon
 - DB Access: `pgx/v5` + `sqlc`
@@ -4002,13 +4002,13 @@ Reviewからachieve/endする際、Frontendはqueued saveをcancelする。既�
 - Vite
 - React Router
 - TanStack Query v5
-- React Hook Form v7
+- Controlled React state
 - Zod 4
 - Vitest
 - React Testing Library
 - Playwright
 
-Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTanStack Query、FormはReact Hook Form、AI/editor stateはfeature-scoped Context / reducerで扱う。
+Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTanStack Query、Formはcontrolled React state、AI/editor stateはfeature-scoped Context / reducerで扱う。
 
 ## 29.2 Logical module boundaries
 
@@ -5998,7 +5998,7 @@ Processを起動しない条件:
 | Build | Vite 8系 | SPAに十分、開発/buildが単純 | Next.js, Rsbuild | SSRを持たない |
 | Routing | React Router | 画面規模に対して成熟・十分 | TanStack Router | Search param型安全は弱め |
 | Server State | TanStack Query v5 | cache、mutation、infinite queryを標準化 | SWR, custom | Library concept追加 |
-| Form | React Hook Form | Textarea stateとvalidationを分離しやすい | Controlled React only | 単純formには依存追加 |
+| Form | Controlled React state | 単一Textareaをautosave coordinatorの明示stateと直接同期し、専用form abstractionを追加しない | React Hook Form | 複雑な複数field formへ拡張する場合は再評価が必要 |
 | Frontend validation | Zod 4 | `unknown`からtyped DTOへ境界検証 | Valibot | Bundle最小ではない |
 | Backend | Go 1.26系 | 確定要件、静的型、single binary | — | Frontendと型を直接共有しない |
 | HTTP | `net/http` + chi | 薄く標準互換、MVPに十分 | standard mux, Gin | batteries-includedではない |

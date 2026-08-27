@@ -7,7 +7,6 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { useForm, useWatch } from "react-hook-form";
 
 import { APIError } from "../api/client";
 import {
@@ -109,10 +108,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
   const runtime = runtimeRef.current;
 
   const lease = useMemo(() => registry.prepare(scopeKey), [registry, scopeKey]);
-  const { control, reset, setValue } = useForm<{ body: string }>({
-    defaultValues: { body: runtime.initialBody },
-  });
-  const body = useWatch({ control, name: "body" });
+  const [body, setBodyValue] = useState(runtime.initialBody);
   const [revision, setRevision] = useState(runtime.initialRevision);
   const [recoveryConflict, setRecoveryConflict] = useState<BrowserDraft | null>(
     null,
@@ -192,7 +188,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
         if (mountedRef.current) setRevision(result.revision);
         const current = own.current?.getCurrentValue(bodyKey);
         if (current === result.body && mountedRef.current)
-          reset({ body: result.body });
+          setBodyValue(result.body);
       },
       onError: async (error, entry, signal) => {
         const movedHref = runtime.scopeMovedOnError?.(error);
@@ -259,7 +255,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     });
     own.current = created;
     return created;
-  }, [lease, queueBrowserOperation, reset, runtime]);
+  }, [lease, queueBrowserOperation, runtime]);
 
   const state = useSyncExternalStore(
     coordinator.subscribe,
@@ -326,7 +322,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
           setRecoveryConflict(null);
           coordinator.unblock(bodyKey);
           if (current === latest.body && mountedRef.current)
-            reset({ body: latest.body });
+            setBodyValue(latest.body);
           return;
         }
 
@@ -363,7 +359,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
           setResolvingConflict(false);
       }
     },
-    [coordinator, lease, markScopeMoved, reset, resolvingConflict, runtime],
+    [coordinator, lease, markScopeMoved, resolvingConflict, runtime],
   );
   resolveRevisionConflictRef.current = resolveRevisionConflict;
 
@@ -430,7 +426,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
             canonicalBody,
             runtime.revisionConflictCode,
           );
-          setValue("body", canonicalBody);
+          setBodyValue(canonicalBody);
           setRecoveryConflict(canonicalDraft);
           setRevisionConflictActive(true);
           return;
@@ -440,7 +436,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
           return;
         }
         coordinator.edit(bodyKey, canonicalBody);
-        setValue("body", canonicalBody);
+        setBodyValue(canonicalBody);
       } catch {
         if (!canceled && lease.isCurrent()) setBrowserCacheFailed(true);
       } finally {
@@ -452,7 +448,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     return () => {
       canceled = true;
     };
-  }, [coordinator, lease, runtime, setValue]);
+  }, [coordinator, lease, runtime]);
 
   useEffect(() => {
     const handleOnline = () => {
@@ -478,9 +474,9 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
       if (revisionConflictActive || scopeMovedHref) return;
       hasEditedRef.current = true;
       coordinator.edit(bodyKey, value);
-      setValue("body", value);
+      setBodyValue(value);
     },
-    [coordinator, revisionConflictActive, scopeMovedHref, setValue],
+    [coordinator, revisionConflictActive, scopeMovedHref],
   );
 
   const flush = useCallback(() => coordinator.flush(bodyKey), [coordinator]);
@@ -494,11 +490,11 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
       setScopeMovedHref(null);
       revisionRef.current = nextRevision;
       coordinator.synchronize(bodyKey, nextBody);
-      reset({ body: nextBody });
+      setBodyValue(nextBody);
       setRevision(nextRevision);
       void clearBrowserDraft();
     },
-    [clearBrowserDraft, coordinator, reset],
+    [clearBrowserDraft, coordinator],
   );
 
   const pause = useCallback(() => coordinator.pause(), [coordinator]);
@@ -539,9 +535,9 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     setRecoveryConflict(null);
     setResolvingConflict(false);
     hasEditedRef.current = true;
-    setValue("body", draft.body);
+    setBodyValue(draft.body);
     coordinator.unblock(bodyKey);
-  }, [coordinator, recoveryConflict, setValue]);
+  }, [coordinator, recoveryConflict]);
 
   const discardRecovery = useCallback(() => {
     if (!recoveryConflict) return;
@@ -551,9 +547,9 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     setRecoveryConflict(null);
     setResolvingConflict(false);
     coordinator.synchronize(bodyKey, saved);
-    reset({ body: saved });
+    setBodyValue(saved);
     void clearBrowserDraft();
-  }, [clearBrowserDraft, coordinator, recoveryConflict, reset, runtime]);
+  }, [clearBrowserDraft, coordinator, recoveryConflict, runtime]);
 
   return {
     body,
