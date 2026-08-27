@@ -126,6 +126,16 @@ Frontend、Backend、Infrastructureだけを確認できます。
 ./scripts/check.sh --scope infrastructure
 ```
 
+改革や大規模整理の前後を同じ定義で比較する場合は、比較対象commitをそれぞれclean worktreeへcheckoutし、両方で`./scripts/setup.sh`とFrontend production buildを完了してから次を実行します。
+
+```bash
+node ./scripts/report-reform-metrics.mjs \
+  --before-root /absolute/path/to/before-worktree \
+  --after-root /absolute/path/to/after-worktree
+```
+
+このreportはtracked file、Frontend/Backend/SQL/Cloudflare/script/workflow/Terraform/documentのfile数とLF行数、dependency数、`go list -m all`のmodule graph、generated codeを除くproduction PostgreSQL call site、Frontend production assetのraw/gzip byteを同じ規則で比較します。入力worktreeにtracked/untracked差分がある場合、build assetがない場合、migration pairが不完全な場合はfail-closedです。`frontend/dist`、dependency directory、environment fileは計測結果へ含めず、出力にはcommit IDと集計値だけを含めます。
+
 Docker build context監査だけを単独で実行する場合は、次を使います。
 
 ```bash

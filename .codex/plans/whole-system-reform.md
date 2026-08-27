@@ -3,7 +3,7 @@
 - 保存先: `.codex/plans/whole-system-reform.md`
 - 基準commit: `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`
 - 初版作成日: 2026-08-22
-- 状態: IN_PROGRESS / M32 operational documentation consolidation
+- 状態: COMPLETE / M0–M33 validated
 
 この文書は自己完結したliving ExecPlanであり、次の担当者が再開位置、確定判断、未決gate、変更順序、検証、復旧方法をこの文書だけから判断できるよう維持する。実際のrepository変更前にはrepository governanceとして`AGENTS.md`を読み、Normative contractを変更するmilestoneでは`docs/design.md`の該当箇所と照合する。進捗、判断、検証結果、残存riskは作業ごとにこの文書へ追記する。
 
@@ -333,6 +333,33 @@ Frontendはroute pageがAPI orchestration、state machine、autosave、IndexedDB
 - GitHub full CI: 約4分16秒
 - Duplication、cyclomatic complexity、coverage総率は、再現可能な固定toolがなかったため断定しない。
 
+### 18.1 After metrics
+
+基準commit `fe2c82a5705d192ceddbcb61aa217c6f9f45c29c` と最終candidate treeを、`git clone --no-local`で作った2つのclean・自己完結checkoutでsetup/buildした後、`scripts/report-reform-metrics.mjs`の同一定義で比較した。表のLOCはtracked sourceのLF行数、bundle gzipはNode zlibによるexact byteであり、旧Vite表示の概算値とは区別する。
+
+| Metric | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Tracked files | 230 | 503 | +273 |
+| Frontend production TS/TSX | 42 files / 5,036 LOC | 92 files / 11,454 LOC | +50 files / +6,418 LOC |
+| Frontend tests / E2E | 2,295 / 595 LOC | 17,182 / 2,395 LOC | +14,887 / +1,800 LOC |
+| Frontend runtime / dev dependencies | 6 / 20 | 5 / 21 | -1 / +1 |
+| Frontend JS raw / gzip | 414,402 / 133,353 bytes | 465,524 / 144,948 bytes | +51,122 / +11,595 bytes |
+| Frontend CSS raw / gzip | 18,219 / 4,453 bytes | 18,219 / 4,463 bytes | 0 / +10 bytes |
+| Backend production / test Go | 8,163 / 2,444 LOC | 22,452 / 33,656 LOC | +14,289 / +31,212 LOC |
+| Backend packages | 20 | 26 | +6 |
+| Go direct / indirect / graph dependencies | 13 / 34 / 251 | 16 / 33 / 253 | +3 / -1 / +2 |
+| Handwritten PostgreSQL calls | 122 | 0 | -122 |
+| Backend SQL / migration pairs | 6 files / 526 LOC / 1 pair | 26 files / 2,419 LOC / 5 pairs | +20 files / +1,893 LOC / +4 pairs |
+| Cloudflare source | 3 files / 812 LOC | 6 files / 5,071 LOC | +3 files / +4,259 LOC |
+| Scripts | 15 files / 1,771 LOC | 42 files / 16,710 LOC | +27 files / +14,939 LOC |
+| Workflows | 4 files / 957 LOC | 4 files / 1,334 LOC | 0 files / +377 LOC |
+| Terraform | 5 files / 74 LOC | 5 files / 74 LOC | 0 |
+| Documents / `docs/design.md` | 12 files / 8,110 LOC / 6,720 LOC | 9 files / 8,309 LOC / 6,163 LOC | -3 files / +199 LOC / -557 LOC |
+
+同じ固定Linux toolchainで連続計測したFrontendは、26 files / 70 tests / 17.644秒から51 files / 438 tests / 41.320秒へ、clean TypeScript production buildは181 modules / 6.936秒から228 modules / 12.121秒へ変化した。主要browser flowは8/8から19/19へ増え、M33 Eでは19/19を2.0分で完走した。旧GitHub full CI約4分16秒とlocal A/Eはrunner・network・追加security負例が異なるため、同一尺度の性能比較には使わない。
+
+総LOCとbundleは増えたが、増加の中心はblack-box、cross-user、concurrency、response-loss、security、deploy、retentionの回帰test/fixtureと、全queryを生成層へ移したSQL/sqlc surfaceである。一方でFrontend runtime dependencyは1減、handwritten PostgreSQL callは122から0、Normative designは557 LOC減、文書数は3減、Terraform topologyは不変となった。最大Frontend production fileはworkspace 1,065 LOCからcycle feature 1,562 LOC、autosave 450からcoordinator 740 LOC、review 349からreview feature 612 LOCへ増えており、routeをcomposition-onlyにした境界testと全acceptanceは通るものの、今後変更頻度が高まる場合の分割候補として残す。これはM33を妨げる未解決correctness/security問題ではない。
+
 ## 19. Milestones
 
 1. **M0 Contract convergence**: 確定した3仕様と外部consumer前提をSoTへ反映。
@@ -548,6 +575,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 24. Decision log
 
+- 2026-08-27: M33のbefore基準はExecPlan既定の`fe2c82a5705d192ceddbcb61aa217c6f9f45c29c`、afterは最終candidate treeとする。比較scriptは2つのclean・fully materialized Git checkoutだけを受理し、tracked sourceのfile/LF LOC、dependency、`go list -m all`、generatedを除くproduction PostgreSQL call site、build済みFrontend asset raw/gzip byteを同じ規則で測る。Dirty checkout、build欠落、incomplete migration pairはfail-closedとし、pathやsource本文をreportへ出さない。Linked worktreeはsecurity gateがshared object storeを拒否するため使用せず、全履歴/object DBを`git clone --no-local`で自己完結させる。After candidateはindexから一時commit objectを作り、一時ref経由でstandalone cloneへ取得後ただちにrefを削除する。隔離cloneでsetup/A/E/Q/I/D/S/smokeを実行後にcloneを削除する。Production/Staging deploy/apply、secret変更、live data操作は行わない。
 - 2026-08-27: M32はinventoryどおり`docs/deployment.md`を`docs/operations.md`へ、`docs/troubleshooting.md`をdevelopment/database/operationsへ、`docs/ai-evaluation.md`をdevelopmentへ統合し、重複していたTerraform staging READMEもoperationsへ統合して4文書を削除する。Temporary `docs/closed-beta-admission.md`は承認済み撤去条件成立まで独立runbookとして維持する。READMEは概要、1-command quick start、design + 4 operational owner + temporary runbook + AGENTSの索引だけを所有する。Docs gateはこのnavigationを必須化し、削除済み4 pathの復活をfail-closedに拒否する。PostgreSQL image / local DB起動はdatabaseだけが所有し、developmentはowner linkへ縮約し、supply-chain negative fixtureもdatabase ownerを破壊して検証する。
 - 2026-08-27: M31は旧top-level番号と外部anchorを維持し、`[追跡]`を独立Ruleを持たない明示labelとして追加する。Product/Domain/API/AI/運用のcanonical ownerを§54.2へ集約し、summary、scope表、invariant/use-case一覧、screen transition、concurrency重複、technology表、trade-off、case manifest、acceptance checklist、guardrailをowner参照へ縮約する。Request identity hashはTransaction正本の§18.9へ移し、API method/path/authは各Endpoint詳細、HTTP status/error意味は§26、Prompt versionは§19.4、Domain値は§14、AI運営値は§§32/37–39だけが所有する。DDL/JSON Schema/API detail/Prompt/Testにsyntax上必要なliteralだけをenforcement mirrorとして許可し、exact Environment key/default/sourceは§45が指定する`docs/environment.md`とmachine-readable deployment contractへ分離する。旧§0〜54は§54.3で各一回owner/testへtraceし、docs gateが連番・欠落・重複をfail-closedに検査する。
 - 2026-08-27: M30の削除前監査で、当初unusedと見込んだFrontend `getGoalDraft`はGoal Creationのrevision conflict recoveryで最新Draftを取得するproduction経路と判明したため削除しない。公開不要な`CommandRequestOptions` type exportだけを外す。M11のversion比較、M18のgeneric AI / output wrapper、M21のunused sqlc query/generated surfaceは既存architecture guardとproduction-caller guardで既にzeroを維持している。Hash分離migrationの`input_hash` rollback aliasはM21で定めたproduction rollout / rollback window終了条件を満たした証跡がなく、Database table/columnをM30の推測削除対象にしない。
@@ -620,6 +648,10 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 
 ## 25. Progress log
 
+- 2026-08-28: M33 final clean-environment verificationを完了した。Baselineとstaged candidateを`git clone --no-local`した自己完結checkoutでsetup/buildし、metrics fixtureはclean inputを受理してdirty inputをfail-closedに拒否した。最終candidateのAはSecurity profile、9 Markdown / 11 Mermaid、config parity 5/5、Frontend 51 files / 438 testsと228-module build、Backend全package、sqlc、全fixture、Terraform、Cloudflare 57 tests、Wrangler dry-run/backend image buildまで成功した。別のfresh empty PostgreSQL 18.6によるEも同じ全gate、実PostgreSQL integration、Playwright 19/19を完走し、migration version 5・dirty=falseを確認した。Qはsqlc generated差分zero、IはCompose/Terraform/Cloudflare dry-run、Dは9 Markdown / 11 Mermaidとconfig parity 5/5、Sは全固定scanner、local-app smokeは`/healthz`と`/readyz`がともにHTTP 200だった。検証後のcheckoutはcleanで、E DBとlocal-appのcontainers/network/volumeは削除済み。
+- 2026-08-28: M33の最初のclean環境候補だったlinked worktreeは、shared Git object storeをsecurity guardがtest開始前にfail-closed拒否したため結果に採用せず、`git clone --no-local`へ置換して全gateを最初から実行した。Iの最初の直接呼び出しも既定Compose filenameがないためcode検証前に停止し、SoTどおり`docker compose --file compose.local.yaml config --quiet`へ直してI全体を再実行した。いずれもassertion、guard、production codeは緩和していない。Production/Staging deploy/apply、R2、secret変更、live data操作は行っていない。
+- 2026-08-28: Final DoD 17項目をM0–M33のDecision/Progress、machine gate、clean checkout、fresh DB、before/after reportに対して監査した。主要flow/authn/authz/CSRF/ownership/revision/idempotency、Global lock order、AI quota/budget、identity/cache isolation、generated一致、README navigation、Normative/config ownership、security/reliability/observabilityをtestと正負fixtureが保護する。Terraform、main CI reuse、Temporary Closed Beta、production cleanup cadence/R2 retentionなど意図して残す複雑性はDecision log・owner runbook・撤去/承認条件を持ち、未決値のままProductionへdeployしない。最大Frontend feature fileの増大だけを非blockingな保守性follow-up候補として明記した。最終Cはこの完了記録を含むexact staged treeを別のfresh DBで再検証し、成功したtreeだけをcommitする。
+- 2026-08-27: M32 operational documentation consolidationのplan-inclusive final Cはcandidate tree `b21513cfe654aa72c5561625ee81cd64c559b39b`で成功し、index/working treeを変えずcommit `8df0e803afe529c558298cc9cbf1df2cb4f746e5`（`docs: consolidate operational runbooks`）として独立commitした。Security profile 2回、frozen pnpm、9 Markdown / 11 Mermaid、config parity 5/5、Frontend 51 files / 438 testsと228-module build、Backend全packageと実PostgreSQL integration、sqlc drift zero、全fixture、Terraform、Cloudflare 57 tests、Wrangler dry-run/backend image build、Playwright 19/19、migration version 5・dirty=false、開始・終了tree一致を確認した。Final C用DB containerとtmpfsは削除済みで、commit treeは検証treeと一致しworking treeはclean。M32 acceptanceを完了し、M33 final clean-environment verificationへ移る。Production/Staging deploy/apply、secret変更、live data操作は行っていない。
 - 2026-08-27: M32のplan-inclusive Aとstandalone Iは固定Linux toolchainで成功した。AはSecurity profile、9 Markdown / 11 Mermaid、config parity 5/5、Frontend format/lint/typecheckと51 files / 438 tests・228-module production build、Backend全package、sqlc compile/generate drift zero、shell/security/docs/config全fixture、Terraform init/validate、Cloudflare 57 tests、Wrangler dry-runとproduction backend image buildを完走した。Iも共通fail-closed fixtureを含めて独立再実行し、Terraform init/validate、Cloudflare 57 tests、Wrangler dry-run/backend image buildまで成功した。両run後のtracked差分はcandidate 16 filesだけで`git diff --check`も成功した。READMEを人手でreviewし、design / development / environment / database / operations / Temporary Closed Beta / AGENTSの7正本へ直接到達でき、概要・1-command quick start・索引だけを所有することを確認した。次に全candidateをstageし、fresh disposable PostgreSQL 18.6によるplan-inclusive final Cを実行する。
 - 2026-08-27: M32 candidateを実装した。`docs/deployment.md` 380行、`docs/troubleshooting.md` 81行、`docs/ai-evaluation.md` 25行、Terraform staging README 13行の固有手順をoperations/development/databaseへ移管して削除し、Temporary Closed Beta runbookは維持した。READMEは109行から41行の索引へ縮約し、README + docsは7,682行から7,431行へ251行、designを除く同範囲は1,519行から1,268行へ251行（16.5%）縮約した。削除文書へのMarkdown linkはzeroで、docs gateへcanonical navigationのpositive fixture、owner link欠落とobsolete path復活のnegative fixtureを追加した。PostgreSQL image / local起動をdatabase ownerへ収束しsupply-chain fixtureを同期、Terraform recovery fixtureはoperations ownerを直接検証する。Dは9 Markdown / 11 Mermaid、config parity 5/5、docs/config全正負fixture、supply-chain policy /負例、Terraform state recovery fixture、`git diff --check`が成功した。次にplan-inclusive AとI、README navigation最終review、final Cを実行する。
 - 2026-08-27: M31 normative documentation convergenceのplan-inclusive final Cはcandidate tree `c1430ee889e2d26360b271556f83ea2f61ac9d87`で成功し、index/working treeを変えずcommit `955eeeee388da552cb9d4d544d21903770f71212`（`docs: converge normative contract ownership`）として独立commitした。Security profile 2回、frozen pnpm、13 Markdown / 11 Mermaid、config parity 5/5、Frontend 51 files / 438 testsと228-module build、Backend全packageと実PostgreSQL integration、sqlc drift zero、全fixture、Terraform、Cloudflare 57 tests、Wrangler dry-run/backend image build、Playwright 19/19、migration version 5・dirty=false、開始・終了tree一致を確認した。Final C用DB containerとtmpfsは削除済みで、commit treeは検証treeと一致しworking treeはclean。`docs/design.md`内のNormative owner一意性と旧§0〜54 traceを満たし、M31 acceptanceを完了した。Production/Staging deploy/apply、secret変更、live data操作は行っていない。M32 operational documentation consolidationへ移る。
@@ -747,9 +779,11 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
-- 現在の再開位置: M32 candidate、D、plan-inclusive A、standalone I、README navigation reviewは成功済み。全candidateをstageし、fresh disposable `*_test` PostgreSQLのplan-inclusive final Cを実行して、開始・終了treeとcommit treeを一致させた独立commitにする。Production/Staging deploy/apply、secret変更、live data操作は禁止したまま維持する。
+- 現在の再開位置: Whole-system reformのM0–M33は完了し、追加実装の再開位置はない。将来の変更は本ExecPlanを既存契約と検証証跡として扱い、新しい目的・scope・rollbackを持つ別計画で開始する。Production/Staging deploy/apply、R2、secret変更、live data操作は本計画では実行していない。
 
 ## 26. Final definition of done
+
+2026-08-28のM33監査で、以下17項目をすべて満たした。根拠は直前のM33 Progress、各milestoneの完了記録、Decision log、再現可能なvalidation profileに記録する。
 
 - 主要user flowがacceptance/component/API/E2E testで保護される。
 - 認証、認可、CSRF、ownership、入力境界、revision、idempotency、主要異常系が検証される。

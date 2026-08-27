@@ -787,5 +787,6 @@ bash "${script_dir}/check-supply-chain.sh"
 bash "${script_dir}/check-ci-security-model.sh"
 bash "${script_dir}/check-security.sh"
 bash "${script_dir}/check-docs-config.sh"
+node --test "${script_dir}/repository-metrics.test.mjs"
 
 printf '%s\n' "Bash script tests passed."
