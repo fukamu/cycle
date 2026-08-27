@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-func TestWorkspaceTransitionSharedLockHelpersRemainOwnerScoped(t *testing.T) {
+func TestWorkspaceLockHelpersRemainOwnerScoped(t *testing.T) {
 	t.Parallel()
 
 	fileSet := token.NewFileSet()
-	transitionFile, err := parser.ParseFile(fileSet, "workspace_transitions.go", nil, 0)
+	actionAIFile, err := parser.ParseFile(fileSet, "workspace_action_ai_uow.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestWorkspaceTransitionSharedLockHelpersRemainOwnerScoped(t *testing.T) {
 			t.Fatalf("LockUser query source = %q, want fragment %q", normalizedUserQuery, fragment)
 		}
 	}
-	assertWorkspaceCallsMethods(t, transitionFile, "loadCycleForUpdate", "New", "LockCycleForTransition")
+	assertWorkspaceCallsMethods(t, actionAIFile, "LockActionCycle", "LockCycleForTransition")
 }
 
 func assertWorkspaceCallsMethods(t *testing.T, file *ast.File, functionName string, methods ...string) {

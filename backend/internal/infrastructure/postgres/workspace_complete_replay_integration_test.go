@@ -114,14 +114,13 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 		t.Fatal(err)
 	}
 
+	const reviewDraftID = "61000000-0000-7000-8000-000000000001"
 	completeInput := workspace.CompleteCycleInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		ReviewDraftID:        "61000000-0000-7000-8000-000000000001",
 		OperationID:          "62000000-0000-7000-8000-000000000001",
 		ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
-		RequestHash: "complete-replay-continue-hash", Now: now.Add(time.Minute),
 	}
-	completed, err := executeCycleCompleteUseCase(seedStore, context.Background(), completeInput)
+	completed, err := executeCycleCompleteUseCase(seedStore, context.Background(), completeInput, now.Add(time.Minute), reviewDraftID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +149,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	replayCalls := make(chan completeCycleCall, 1)
 	replayCtx := context.WithValue(ctx, completeReplayContinueCommandContextKey{}, completeReplayCommand)
 	go func() {
-		result, callErr := executeCycleCompleteUseCase(store, replayCtx, completeInput)
+		result, callErr := executeCycleCompleteUseCase(store, replayCtx, completeInput, now.Add(time.Minute), reviewDraftID)
 		replayCalls <- completeCycleCall{result: result, err: callErr}
 	}()
 
@@ -208,7 +207,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	}
 	if replayCall.result.Goal.Status != goal.StatusGoalReview ||
 		replayCall.result.CompletedCycle.Status != cycle.StatusCompleted ||
-		replayCall.result.ReviewDraft.ID != completeInput.ReviewDraftID {
+		replayCall.result.ReviewDraft.ID != reviewDraftID {
 		t.Fatalf("Complete replay payload = %#v", replayCall.result)
 	}
 

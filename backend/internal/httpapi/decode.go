@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/fukamu/cycle/backend/internal/identifier"
 )
 
 const defaultBodyLimit = 64 << 10
@@ -31,7 +33,7 @@ func decodeJSON(writer http.ResponseWriter, request *http.Request, destination a
 func isValidRequestBody(destination any) bool {
 	switch input := destination.(type) {
 	case *createAnonymousRequest:
-		return input != nil && isCanonicalUUIDv7(input.BootstrapID)
+		return input != nil && identifier.IsCanonicalUUIDv7(input.BootstrapID)
 	case *googleTokenRequest:
 		return input != nil && input.IDToken != ""
 	case *deleteAccountRequest:
@@ -41,9 +43,9 @@ func isValidRequestBody(destination any) bool {
 	case *saveDraftRequest:
 		return input != nil && input.ExpectedRevision >= 0
 	case *saveReviewRequest:
-		return input != nil && isCanonicalUUIDv7(input.ExpectedReviewDraftID) && input.ExpectedRevision >= 0
+		return input != nil && identifier.IsCanonicalUUIDv7(input.ExpectedReviewDraftID) && input.ExpectedRevision >= 0
 	case *startGoalRequest:
-		return input != nil && isCanonicalUUIDv7(input.OperationID) && input.ExpectedDraftRevision >= 0
+		return input != nil && identifier.IsCanonicalUUIDv7(input.OperationID) && input.ExpectedDraftRevision >= 0
 	case *refineGoalRequest:
 		return input != nil && input.ExpectedDraftRevision >= 0 &&
 			(input.ExpectedGoalRevision == nil || *input.ExpectedGoalRevision >= 0)
@@ -51,7 +53,7 @@ func isValidRequestBody(destination any) bool {
 		return input != nil && input.ExpectedDraftRevision >= 0 &&
 			(input.ExpectedGoalRevision == nil || *input.ExpectedGoalRevision >= 0)
 	case *continueReviewRequest:
-		return input != nil && isCanonicalUUIDv7(input.OperationID) &&
+		return input != nil && identifier.IsCanonicalUUIDv7(input.OperationID) &&
 			input.ExpectedGoalRevision >= 0 && input.ExpectedDraftRevision >= 0
 	case *saveFrameRequest:
 		return input != nil && input.ExpectedFrameRevision >= 0
@@ -60,10 +62,10 @@ func isValidRequestBody(destination any) bool {
 	case *actionRefineRequest:
 		return input != nil && input.ExpectedContentRevision >= 0
 	case *completeCycleRequest:
-		return input != nil && isCanonicalUUIDv7(input.OperationID) &&
+		return input != nil && identifier.IsCanonicalUUIDv7(input.OperationID) &&
 			input.ExpectedGoalRevision >= 0 && input.ExpectedContentRevision >= 0
 	case *terminateGoalRequest:
-		return input != nil && isCanonicalUUIDv7(input.OperationID) && input.Outcome != "" &&
+		return input != nil && identifier.IsCanonicalUUIDv7(input.OperationID) && input.Outcome != "" &&
 			input.ExpectedGoalRevision != nil && *input.ExpectedGoalRevision >= 0 && input.ExpectedState != ""
 	case *deleteGoalRequest:
 		return input != nil && input.ExpectedGoalRevision >= 0

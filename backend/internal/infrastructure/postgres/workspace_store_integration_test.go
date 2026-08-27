@@ -492,11 +492,10 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 		t.Fatal(err)
 	}
 	completeInput := workspace.CompleteCycleInput{
-		UserID: userID, GoalID: goalID, CycleID: cycleID, ReviewDraftID: reviewDraftID,
+		UserID: userID, GoalID: goalID, CycleID: cycleID,
 		OperationID: completeOperation, ExpectedGoalRevision: 0, ExpectedContentRevision: 4,
-		RequestHash: "complete-hash", Now: now.Add(time.Minute),
 	}
-	if _, err = executeCycleCompleteUseCase(store, context.Background(), completeInput); err != nil {
+	if _, err = executeCycleCompleteUseCase(store, context.Background(), completeInput, now.Add(time.Minute), reviewDraftID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.GetDraft(context.Background(), userID, reviewDraftID); !errors.Is(err, workspace.ErrDraftTypeMismatch) {
@@ -509,7 +508,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1 WHERE id=$1`, 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	completeReplay, err := executeCycleCompleteUseCase(store, context.Background(), completeInput)
+	completeReplay, err := executeCycleCompleteUseCase(store, context.Background(), completeInput, now.Add(time.Minute), reviewDraftID)
 	if err != nil || completeReplay.Replay == nil || !completeReplay.Replay.Replayed {
 		t.Fatalf("complete replay = %#v, error = %v", completeReplay, err)
 	}
@@ -606,10 +605,9 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 		t.Fatal(err)
 	}
 	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
-		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: reviewDraftID,
+		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		OperationID: completeOperation, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
-		RequestHash: "complete-review-ai", Now: now.Add(time.Minute),
-	})
+	}, now.Add(time.Minute), reviewDraftID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,8 @@ import (
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/identifier"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 var ErrCyclePersistenceInvariant = errors.New("Cycle persistence invariant violated")
@@ -238,7 +240,7 @@ func (useCases *CycleUseCases) CompleteCycle(ctx context.Context, input Complete
 		if idErr != nil {
 			return idErr
 		}
-		if !isCycleUUIDv7(reviewDraftID) {
+		if !identifier.IsCanonicalUUIDv7(reviewDraftID) {
 			return cycleInvariantError("ID generator returned a non-canonical UUIDv7")
 		}
 		reviewingGoal, transitionErr := goal.EnterReview(lockedGoal, now)
@@ -428,9 +430,8 @@ func (useCases *CycleUseCases) encodeCycleCursor(goalID string, keyset CycleList
 	if err != nil {
 		return "", err
 	}
-	mac := hmac.New(sha256.New, useCases.settings.CursorSigningKey)
-	_, _ = mac.Write(body)
-	return base64.RawURLEncoding.EncodeToString(append(body, mac.Sum(nil)...)), nil
+	signature := securehash.HMACSHA256(useCases.settings.CursorSigningKey, body)
+	return base64.RawURLEncoding.EncodeToString(append(body, signature...)), nil
 }
 
 func (useCases *CycleUseCases) decodeCycleCursor(encoded, goalID string) (*CycleListKeyset, error) {
@@ -442,14 +443,12 @@ func (useCases *CycleUseCases) decodeCycleCursor(encoded, goalID string) (*Cycle
 		return nil, ErrInvalidCursor
 	}
 	body, signature := raw[:len(raw)-sha256.Size], raw[len(raw)-sha256.Size:]
-	mac := hmac.New(sha256.New, useCases.settings.CursorSigningKey)
-	_, _ = mac.Write(body)
-	if !hmac.Equal(signature, mac.Sum(nil)) {
+	if !hmac.Equal(signature, securehash.HMACSHA256(useCases.settings.CursorSigningKey, body)) {
 		return nil, ErrInvalidCursor
 	}
 	var payload cycleCursorPayload
 	if json.Unmarshal(body, &payload) != nil || payload.Scope != "cycles:"+goalID || payload.Category != nil ||
-		payload.Time != nil || payload.Sequence == nil || *payload.Sequence <= 0 || !isCycleUUIDv7(payload.ID) {
+		payload.Time != nil || payload.Sequence == nil || *payload.Sequence <= 0 || !identifier.IsCanonicalUUIDv7(payload.ID) {
 		return nil, ErrInvalidCursor
 	}
 	return &CycleListKeyset{SequenceNumber: *payload.Sequence, CycleID: payload.ID}, nil
@@ -457,7 +456,7 @@ func (useCases *CycleUseCases) decodeCycleCursor(encoded, goalID string) (*Cycle
 
 func validateCycleSummaries(rows []CycleSummary) error {
 	for index, row := range rows {
-		if !isCycleUUIDv7(row.ID) || row.SequenceNumber <= 0 || row.StartedAt.IsZero() {
+		if !identifier.IsCanonicalUUIDv7(row.ID) || row.SequenceNumber <= 0 || row.StartedAt.IsZero() {
 			return cycleInvariantError("Cycle query row metadata is incomplete")
 		}
 		if err := validateCycleSummaryStatusTimes(row.Status, row.CompletedAt, row.CanceledAt); err != nil {
@@ -541,26 +540,10 @@ func validateCycleStatusTimes(
 }
 
 func validateCycleGoalVersion(version GoalVersionView) error {
-	if !isCycleUUIDv7(version.ID) || version.VersionNumber <= 0 || version.CreatedAt.IsZero() {
+	if !identifier.IsCanonicalUUIDv7(version.ID) || version.VersionNumber <= 0 || version.CreatedAt.IsZero() {
 		return cycleInvariantError("Cycle Goal Version is incomplete")
 	}
 	return nil
-}
-
-func isCycleUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' ||
-		value[14] != '7' || !strings.ContainsRune("89ab", rune(value[19])) {
-		return false
-	}
-	for index, character := range value {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			continue
-		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
-			return false
-		}
-	}
-	return true
 }
 
 func requireCycleRows(operation string, actual, expected int64) error {

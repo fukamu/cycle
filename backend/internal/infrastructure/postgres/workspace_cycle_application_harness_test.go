@@ -69,14 +69,17 @@ func executeCycleSaveUseCase(
 	store *WorkspaceStore,
 	ctx context.Context,
 	input workspace.SaveFrameInput,
+	now time.Time,
 ) (workspace.SaveFrameResult, error) {
-	return newCycleApplicationTestUseCases(store, input.Now).SaveFrame(ctx, input)
+	return newCycleApplicationTestUseCases(store, now).SaveFrame(ctx, input)
 }
 
 func executeCycleCompleteUseCase(
 	store *WorkspaceStore,
 	ctx context.Context,
 	input workspace.CompleteCycleInput,
+	now time.Time,
+	reviewDraftID string,
 ) (workspace.CompleteCycleResult, error) {
-	return newCycleApplicationTestUseCases(store, input.Now, input.ReviewDraftID).CompleteCycle(ctx, input)
+	return newCycleApplicationTestUseCases(store, now, reviewDraftID).CompleteCycle(ctx, input)
 }

@@ -2,13 +2,12 @@ package account
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"errors"
 	"time"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 const tokenBytes = 32
@@ -200,8 +199,8 @@ func (service *Service) createSession(ctx context.Context, operation func(sessio
 	now := service.clock.Now().UTC()
 	material := sessionMaterial{
 		id: sessionID, token: token, csrf: csrf,
-		tokenHash: keyedHash(service.settings.SessionHashKey, token),
-		csrfHash:  keyedHash(service.settings.CSRFHashKey, csrf),
+		tokenHash: securehash.HMACSHA256(service.settings.SessionHashKey, []byte(token)),
+		csrfHash:  securehash.HMACSHA256(service.settings.CSRFHashKey, []byte(csrf)),
 		now:       now, idleExpiresAt: now.Add(service.settings.IdleTTL), absoluteExpiresAt: now.Add(service.settings.AbsoluteTTL),
 	}
 	result, err := operation(material)
@@ -213,10 +212,4 @@ func (service *Service) createSession(ctx context.Context, operation func(sessio
 		GoogleEmail:  result.GoogleEmail,
 		SessionToken: token, CSRFToken: csrf,
 	}, nil
-}
-
-func keyedHash(key []byte, value string) []byte {
-	hash := hmac.New(sha256.New, key)
-	_, _ = hash.Write([]byte(value))
-	return hash.Sum(nil)
 }

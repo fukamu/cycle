@@ -43,18 +43,16 @@ func TestReviewTransitionContinueReplaysCurrentReviewAfterCreatedCycleCompleted(
 		if _, err = executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 			UserID: userID, GoalID: fixture.goalID, CycleID: continued.Cycle.ID,
 			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0,
-			Now: now.Add(4 * time.Minute),
-		}); err != nil {
+		}, now.Add(4*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	const completionOperationID = "73000000-0000-7000-8000-000000000451"
 	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: continued.Cycle.ID,
-		ReviewDraftID: "61000000-0000-7000-8000-000000000452",
-		OperationID:   completionOperationID, ExpectedGoalRevision: continued.Goal.Revision,
-		ExpectedContentRevision: 4, Now: now.Add(5 * time.Minute),
-	})
+		OperationID: completionOperationID, ExpectedGoalRevision: continued.Goal.Revision,
+		ExpectedContentRevision: 4,
+	}, now.Add(5*time.Minute), "61000000-0000-7000-8000-000000000452")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -949,13 +949,10 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	}
 	completed, err := executeCycleCompleteUseCase(seedStore, context.Background(), workspace.CompleteCycleInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		ReviewDraftID:           "61000000-0000-7000-8000-000000000001",
 		OperationID:             "62000000-0000-7000-8000-000000000001",
 		ExpectedGoalRevision:    started.Goal.Revision,
 		ExpectedContentRevision: 4,
-		RequestHash:             "complete-for-review-ai-lock-order",
-		Now:                     now.Add(time.Minute),
-	})
+	}, now.Add(time.Minute), "61000000-0000-7000-8000-000000000001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1060,13 +1057,10 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	}
 	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		ReviewDraftID:           "61000000-0000-7000-8000-000000000001",
 		OperationID:             "62000000-0000-7000-8000-000000000001",
 		ExpectedGoalRevision:    started.Goal.Revision,
 		ExpectedContentRevision: 4,
-		RequestHash:             "complete-for-stale-review-refine",
-		Now:                     now.Add(time.Minute),
-	})
+	}, now.Add(time.Minute), "61000000-0000-7000-8000-000000000001")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -49,7 +49,18 @@ func (transaction *workspaceActionAITx) LockActionCycle(
 	goalID string,
 	cycleID string,
 ) (cycle.PDCACycle, error) {
-	return loadCycleForUpdate(ctx, transaction.tx, userID, goalID, cycleID)
+	row, err := transaction.queries.LockCycleForTransition(ctx, db.LockCycleForTransitionParams{
+		CycleID: mustUUID(cycleID),
+		GoalID:  mustUUID(goalID),
+		UserID:  mustUUID(userID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return cycle.PDCACycle{}, workspace.ErrNotFound
+	}
+	if err != nil {
+		return cycle.PDCACycle{}, err
+	}
+	return cycleFromSQLC(row)
 }
 
 func (transaction *workspaceActionAITx) FindActionAIReplay(

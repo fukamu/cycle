@@ -8,6 +8,7 @@ import (
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 func TestCreateAnonymousHashesCredentialsAndReturnsPlainTokens(t *testing.T) {
@@ -69,7 +70,7 @@ func TestRefreshRotatesCSRFAndVerifyCSRF(t *testing.T) {
 		ID:              "00000000-0000-7000-8000-000000000009",
 		UserID:          user.ID("00000000-0000-7000-8000-000000000001"),
 		LastSeenAt:      testTime.Add(-time.Hour),
-		CSRFTokenHash:   keyedHash([]byte("csrf-key"), "token-2"),
+		CSRFTokenHash:   securehash.HMACSHA256([]byte("csrf-key"), []byte("token-2")),
 		GoogleConnected: true,
 		GoogleEmail:     &email,
 	}}

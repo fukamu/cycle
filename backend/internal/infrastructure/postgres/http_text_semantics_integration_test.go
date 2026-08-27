@@ -126,8 +126,8 @@ func TestWorkspaceHTTPTextSemanticsUseCodePointsAndNormalizeNewlines(t *testing.
 	for _, frame := range []cycle.Frame{cycle.FrameDo, cycle.FrameCheck, cycle.FrameAction} {
 		if _, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 			UserID: client.userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0, Now: now.Add(2 * time.Minute),
-		}); err != nil {
+			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0,
+		}, now.Add(2*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -136,11 +136,10 @@ func TestWorkspaceHTTPTextSemanticsUseCodePointsAndNormalizeNewlines(t *testing.
 		completeID    = "71000000-0000-7000-8000-000000000071"
 	)
 	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
-		UserID: client.userID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: reviewDraftID,
+		UserID: client.userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		OperationID: completeID, ExpectedGoalRevision: started.Goal.Revision,
 		ExpectedContentRevision: normalizedFrameResult.ContentRevision + 3,
-		RequestHash:             "m7-http-text-semantics-complete", Now: now.Add(3 * time.Minute),
-	})
+	}, now.Add(3*time.Minute), reviewDraftID)
 	if err != nil {
 		t.Fatal(err)
 	}

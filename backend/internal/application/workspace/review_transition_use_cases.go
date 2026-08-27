@@ -10,6 +10,7 @@ import (
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/identifier"
 )
 
 var ErrReviewTransitionPersistenceInvariant = errors.New("Review transition persistence invariant violated")
@@ -123,7 +124,7 @@ func (useCases *ReviewTransitionUseCases) ContinueReview(ctx context.Context, in
 			if transitionErr != nil {
 				return transitionErr
 			}
-			if !isCycleUUIDv7(versionID) {
+			if !identifier.IsCanonicalUUIDv7(versionID) {
 				return reviewTransitionInvariant("ID generator returned a non-canonical Goal Version UUIDv7")
 			}
 		}
@@ -131,7 +132,7 @@ func (useCases *ReviewTransitionUseCases) ContinueReview(ctx context.Context, in
 		if transitionErr != nil {
 			return transitionErr
 		}
-		if !isCycleUUIDv7(cycleID) {
+		if !identifier.IsCanonicalUUIDv7(cycleID) {
 			return reviewTransitionInvariant("ID generator returned a non-canonical Cycle UUIDv7")
 		}
 		now := useCases.clock.Now().UTC().Truncate(time.Microsecond)

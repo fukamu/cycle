@@ -15,6 +15,8 @@ import (
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/identifier"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 const goalDeleteReceiptTTL = 24 * time.Hour
@@ -123,9 +125,8 @@ func (useCases *GoalUseCases) encodeGoalCursor(scope GoalListScope, keyset GoalL
 	if err != nil {
 		return "", err
 	}
-	mac := hmac.New(sha256.New, useCases.settings.CursorSigningKey)
-	_, _ = mac.Write(body)
-	return base64.RawURLEncoding.EncodeToString(append(body, mac.Sum(nil)...)), nil
+	signature := securehash.HMACSHA256(useCases.settings.CursorSigningKey, body)
+	return base64.RawURLEncoding.EncodeToString(append(body, signature...)), nil
 }
 
 func (useCases *GoalUseCases) decodeGoalCursor(encoded string, scope GoalListScope) (*GoalListKeyset, error) {
@@ -137,14 +138,12 @@ func (useCases *GoalUseCases) decodeGoalCursor(encoded string, scope GoalListSco
 		return nil, ErrInvalidCursor
 	}
 	body, signature := raw[:len(raw)-sha256.Size], raw[len(raw)-sha256.Size:]
-	mac := hmac.New(sha256.New, useCases.settings.CursorSigningKey)
-	_, _ = mac.Write(body)
-	if !hmac.Equal(signature, mac.Sum(nil)) {
+	if !hmac.Equal(signature, securehash.HMACSHA256(useCases.settings.CursorSigningKey, body)) {
 		return nil, ErrInvalidCursor
 	}
 	var payload goalCursorPayload
 	if json.Unmarshal(body, &payload) != nil || payload.Scope != string(scope) || payload.Category == nil ||
-		payload.Time == nil || payload.Time.IsZero() || payload.Sequence != nil || !isGoalCursorUUID(payload.ID) ||
+		payload.Time == nil || payload.Time.IsZero() || payload.Sequence != nil || !identifier.IsCanonicalUUIDv7(payload.ID) ||
 		!goalCursorCategoryMatchesScope(*payload.Category, scope) {
 		return nil, ErrInvalidCursor
 	}
@@ -162,22 +161,6 @@ func goalCursorCategoryMatchesScope(category int16, scope GoalListScope) bool {
 	default:
 		return false
 	}
-}
-
-func isGoalCursorUUID(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' ||
-		value[14] != '7' || !strings.ContainsRune("89ab", rune(value[19])) {
-		return false
-	}
-	for index, character := range value {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			continue
-		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
-			return false
-		}
-	}
-	return true
 }
 
 func validateGoalQueryRows(rows []GoalQueryRow, scope GoalListScope) error {

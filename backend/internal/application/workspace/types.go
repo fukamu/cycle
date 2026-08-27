@@ -214,12 +214,9 @@ type CompleteCycleInput struct {
 	UserID                  string
 	GoalID                  string
 	CycleID                 string
-	ReviewDraftID           string
 	OperationID             string
 	ExpectedGoalRevision    int64
 	ExpectedContentRevision int64
-	RequestHash             string
-	Now                     time.Time
 }
 
 type CompleteCycleResult struct {
@@ -275,7 +272,6 @@ type SaveFrameInput struct {
 	Frame                 cycle.Frame
 	Content               string
 	ExpectedFrameRevision int64
-	Now                   time.Time
 }
 
 type SaveFrameResult struct {

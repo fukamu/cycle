@@ -47,15 +47,15 @@ func TestWorkspaceSaveFrameTreatsSamePersistedContentWithStaleRevisionAsNoOp(t *
 	savedAt := now.Add(time.Minute)
 	saved, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		Frame: cycle.FramePlan, Content: "保存済みPlan", ExpectedFrameRevision: 0, Now: savedAt,
-	})
+		Frame: cycle.FramePlan, Content: "保存済みPlan", ExpectedFrameRevision: 0,
+	}, savedAt)
 	if err != nil || saved.FrameRevision != 1 || saved.ContentRevision != 1 {
 		t.Fatalf("save = %#v, error = %v", saved, err)
 	}
 	replayed, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		Frame: cycle.FramePlan, Content: saved.Content, ExpectedFrameRevision: 0, Now: now.Add(2 * time.Minute),
-	})
+		Frame: cycle.FramePlan, Content: saved.Content, ExpectedFrameRevision: 0,
+	}, now.Add(2*time.Minute))
 	if err != nil || replayed.Content != saved.Content || replayed.FrameRevision != saved.FrameRevision ||
 		replayed.ContentRevision != saved.ContentRevision || !replayed.SavedAt.Equal(savedAt) {
 		t.Fatalf("stale same-content save = %#v, error = %v", replayed, err)
@@ -74,8 +74,8 @@ func TestWorkspaceSaveFrameTreatsSamePersistedContentWithStaleRevisionAsNoOp(t *
 	}
 	if _, err = executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		Frame: cycle.FramePlan, Content: "異なるPlan", ExpectedFrameRevision: 0, Now: now.Add(2 * time.Minute),
-	}); err != cycle.ErrRevisionConflict {
+		Frame: cycle.FramePlan, Content: "異なるPlan", ExpectedFrameRevision: 0,
+	}, now.Add(2*time.Minute)); err != cycle.ErrRevisionConflict {
 		t.Fatalf("stale different-content error = %v, want %v", err, cycle.ErrRevisionConflict)
 	}
 }
@@ -87,8 +87,8 @@ func TestWorkspaceSaveReviewTreatsSamePersistedBodyWithStaleRevisionAsNoOp(t *te
 	for _, frame := range []cycle.Frame{cycle.FramePlan, cycle.FrameDo, cycle.FrameCheck, cycle.FrameAction} {
 		if _, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 			UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0, Now: now.Add(time.Minute),
-		}); err != nil {
+			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0,
+		}, now.Add(time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -97,10 +97,9 @@ func TestWorkspaceSaveReviewTreatsSamePersistedBodyWithStaleRevisionAsNoOp(t *te
 		completeID    = "71000000-0000-7000-8000-000000000010"
 	)
 	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
-		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: reviewDraftID,
+		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		OperationID: completeID, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
-		RequestHash: "m6-autosave-complete", Now: now.Add(2 * time.Minute),
-	})
+	}, now.Add(2*time.Minute), reviewDraftID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,10 +140,9 @@ func TestWorkspaceSaveReviewRejectsSupersededDraftGeneration(t *testing.T) {
 	)
 
 	firstReview, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
-		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: firstReviewDraftID,
+		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		OperationID: firstCompleteID, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
-		RequestHash: "m6-first-complete", Now: now.Add(2 * time.Minute),
-	})
+	}, now.Add(2*time.Minute), firstReviewDraftID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,10 +156,9 @@ func TestWorkspaceSaveReviewRejectsSupersededDraftGeneration(t *testing.T) {
 	}
 	saveAllAutosaveFrames(t, store, fixture.goalID, secondCycleID, now.Add(4*time.Minute))
 	secondReview, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
-		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: secondCycleID, ReviewDraftID: secondReviewDraftID,
+		UserID: autosaveTestUserID, GoalID: fixture.goalID, CycleID: secondCycleID,
 		OperationID: secondCompleteID, ExpectedGoalRevision: continued.Goal.Revision, ExpectedContentRevision: 4,
-		RequestHash: "m6-second-complete", Now: now.Add(5 * time.Minute),
-	})
+	}, now.Add(5*time.Minute), secondReviewDraftID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,8 +217,8 @@ func saveAllAutosaveFrames(t *testing.T, store *WorkspaceStore, goalID, cycleID 
 	for _, frame := range []cycle.Frame{cycle.FramePlan, cycle.FrameDo, cycle.FrameCheck, cycle.FrameAction} {
 		if _, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 			UserID: autosaveTestUserID, GoalID: goalID, CycleID: cycleID,
-			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0, Now: now,
-		}); err != nil {
+			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0,
+		}, now); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
+	"github.com/fukamu/cycle/backend/internal/identifier"
 )
 
 const (
@@ -54,7 +55,7 @@ func (server *api) traceMiddleware(next http.Handler) http.Handler {
 func (server *api) requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestID := strings.ToLower(strings.TrimSpace(request.Header.Get("X-Request-ID")))
-		if !isCanonicalUUIDv7(requestID) {
+		if !identifier.IsCanonicalUUIDv7(requestID) {
 			requestID = "00000000-0000-7000-8000-000000000000"
 			if server.dependencies.RequestIDs != nil {
 				if generated, err := server.dependencies.RequestIDs.NewID(); err == nil {
@@ -216,7 +217,7 @@ func expectedAuthenticatedUserID(request *http.Request) (string, bool, error) {
 	if !present {
 		return "", false, nil
 	}
-	if len(values) != 1 || !isCanonicalUUIDv7(values[0]) {
+	if len(values) != 1 || !identifier.IsCanonicalUUIDv7(values[0]) {
 		return "", true, errRequestValidation
 	}
 	return values[0], true, nil
@@ -226,7 +227,7 @@ func (server *api) validatedPath(next http.HandlerFunc, names ...string) http.Ha
 	return func(writer http.ResponseWriter, request *http.Request) {
 		for _, name := range names {
 			value := chi.URLParam(request, name)
-			if !isCanonicalUUIDv7(value) {
+			if !identifier.IsCanonicalUUIDv7(value) {
 				server.writeError(writer, request, errRequestValidation, nil)
 				return
 			}
@@ -270,22 +271,4 @@ func (server *api) remoteIP(request *http.Request) string {
 		}
 	}
 	return request.RemoteAddr
-}
-
-func isCanonicalUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return false
-	}
-	if value[14] != '7' || !strings.ContainsRune("89ab", rune(value[19])) {
-		return false
-	}
-	for index, character := range value {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			continue
-		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
-			return false
-		}
-	}
-	return true
 }

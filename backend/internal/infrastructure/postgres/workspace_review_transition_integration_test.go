@@ -311,16 +311,15 @@ func prepareReviewTransitionReview(
 	for _, frame := range []cycle.Frame{cycle.FramePlan, cycle.FrameDo, cycle.FrameCheck, cycle.FrameAction} {
 		if _, err := executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 			UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0, Now: now.Add(time.Minute),
-		}); err != nil {
+			Frame: frame, Content: string(frame), ExpectedFrameRevision: 0,
+		}, now.Add(time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	completed, err := executeCycleCompleteUseCase(store, context.Background(), workspace.CompleteCycleInput{
-		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID, ReviewDraftID: reviewDraftID,
+		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
 		OperationID: completeOperationID, ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
-		Now: now.Add(2 * time.Minute),
-	})
+	}, now.Add(2*time.Minute), reviewDraftID)
 	if err != nil {
 		t.Fatal(err)
 	}

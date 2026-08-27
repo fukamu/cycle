@@ -2,8 +2,6 @@ package workspace
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/big"
@@ -17,6 +15,7 @@ import (
 	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 const (
@@ -1120,11 +1119,7 @@ func goalRefineFailureCode(err error) string {
 }
 
 func goalDraftRateHash(key []byte, scope, value string) []byte {
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte(scope))
-	_, _ = mac.Write([]byte{0})
-	_, _ = mac.Write([]byte(value))
-	return mac.Sum(nil)
+	return securehash.HMACSHA256(key, []byte(scope+"\x00"+value))
 }
 
 func exceedsBudget(budget AIBudgetState, reservation, limit string) (bool, error) {

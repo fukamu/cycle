@@ -67,7 +67,7 @@ const terminateEnvelope = z.object({
   replayed: z.boolean().optional(),
 });
 
-export type CommandRequestOptions = {
+type CommandRequestOptions = {
   readonly operationId: string;
   readonly csrfToken: string;
 };

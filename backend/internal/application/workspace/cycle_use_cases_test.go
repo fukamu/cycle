@@ -346,8 +346,6 @@ func cycleCommandFixture() (*cycleTestTx, *cycleUseCaseTestClock, *cycleUseCaseT
 	input := CompleteCycleInput{
 		UserID: cycleTestUserID, GoalID: cycleTestGoalID, CycleID: cycleTestCycleID1,
 		OperationID: cycleTestOperation, ExpectedGoalRevision: 5, ExpectedContentRevision: 4,
-		ReviewDraftID: "caller-must-not-control-this", RequestHash: "caller-must-not-control-this",
-		Now: time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC),
 	}
 	return tx, clock, ids, input
 }
@@ -367,7 +365,6 @@ func TestSaveFrameOwnsGoalCycleOrderAndStaleSameContentNoOp(t *testing.T) {
 	result, err := useCases.SaveFrame(context.Background(), SaveFrameInput{
 		UserID: cycleTestUserID, GoalID: cycleTestGoalID, CycleID: cycleTestCycleID1,
 		Frame: cycle.FramePlan, Content: "same body", ExpectedFrameRevision: 2,
-		Now: time.Date(1999, time.January, 1, 0, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatal(err)

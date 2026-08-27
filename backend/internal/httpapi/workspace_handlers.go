@@ -14,6 +14,7 @@ import (
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/identifier"
 )
 
 type createDraftRequest struct {
@@ -90,7 +91,7 @@ func (input terminateGoalRequest) variant() (string, *int64, bool, error) {
 	switch input.ExpectedState {
 	case goal.StatusActiveCycle:
 		if !input.ActiveCycleID.Present || input.ActiveCycleID.Null ||
-			!isCanonicalUUIDv7(input.ActiveCycleID.Value) ||
+			!identifier.IsCanonicalUUIDv7(input.ActiveCycleID.Value) ||
 			!input.ExpectedCycleContentRevision.Present || input.ExpectedCycleContentRevision.Null ||
 			input.ExpectedCycleContentRevision.Value < 0 ||
 			input.ConfirmDiscardReviewDraft.Present {
@@ -522,7 +523,7 @@ func pageLimit(request *http.Request) (int, error) {
 
 func idempotencyKey(request *http.Request) string {
 	value := strings.ToLower(strings.TrimSpace(request.Header.Get("Idempotency-Key")))
-	if !isCanonicalUUIDv7(value) {
+	if !identifier.IsCanonicalUUIDv7(value) {
 		return ""
 	}
 	return value

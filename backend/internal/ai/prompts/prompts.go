@@ -8,22 +8,10 @@ import (
 )
 
 const (
-	VersionGoalRefineV1     = "goal-refine-v1"
-	VersionActionGenerateV1 = "action-generate-v1"
-	VersionActionRefineV1   = "action-refine-v1"
 	VersionGoalRefineV2     = "goal-refine-v2"
 	VersionActionGenerateV2 = "action-generate-v2"
 	VersionActionRefineV2   = "action-refine-v2"
 )
-
-//go:embed goal-refine-v1.txt
-var goalRefineV1 string
-
-//go:embed action-generate-v1.txt
-var actionGenerateV1 string
-
-//go:embed action-refine-v1.txt
-var actionRefineV1 string
 
 //go:embed goal-refine-v2.txt
 var goalRefineV2 string
@@ -52,9 +40,6 @@ type registryKey struct {
 }
 
 var registry = map[registryKey]string{
-	{domainai.OperationGoalRefine, VersionGoalRefineV1}:         goalRefineV1,
-	{domainai.OperationActionGenerate, VersionActionGenerateV1}: actionGenerateV1,
-	{domainai.OperationActionRefine, VersionActionRefineV1}:     actionRefineV1,
 	{domainai.OperationGoalRefine, VersionGoalRefineV2}:         goalRefineV2,
 	{domainai.OperationActionGenerate, VersionActionGenerateV2}: actionGenerateV2,
 	{domainai.OperationActionRefine, VersionActionRefineV2}:     actionRefineV2,

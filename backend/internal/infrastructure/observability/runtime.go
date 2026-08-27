@@ -29,6 +29,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/fukamu/cycle/backend/internal/identifier"
 )
 
 const (
@@ -1331,11 +1333,11 @@ func sanitizeCorrelationAttribute(class spanClass, keyValue attribute.KeyValue) 
 		if class != spanClassHTTP && class != spanClassPostgres && class != spanClassOpenAI {
 			return attribute.KeyValue{}, false
 		}
-		if isCanonicalCorrelationUUIDv7(value) {
+		if identifier.IsCanonicalUUIDv7(value) {
 			return attribute.String(key, value), true
 		}
 	case "fukamu.ai_generation_id":
-		if (class == spanClassPostgres || class == spanClassOpenAI) && isCanonicalCorrelationUUIDv7(value) {
+		if (class == spanClassPostgres || class == spanClassOpenAI) && identifier.IsCanonicalUUIDv7(value) {
 			return attribute.String(key, value), true
 		}
 	case "fukamu.ai_operation_type":
@@ -1347,22 +1349,6 @@ func sanitizeCorrelationAttribute(class spanClass, keyValue attribute.KeyValue) 
 		}
 	}
 	return attribute.KeyValue{}, false
-}
-
-func isCanonicalCorrelationUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' ||
-		value[14] != '7' || !strings.ContainsRune("89ab", rune(value[19])) {
-		return false
-	}
-	for index, character := range value {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			continue
-		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
-			return false
-		}
-	}
-	return true
 }
 
 func isAllowedHTTPMethod(method string) bool {

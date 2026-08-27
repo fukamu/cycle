@@ -2,8 +2,6 @@ package turnstile
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 const (
@@ -131,7 +130,7 @@ func (verifier *Verifier) VerifyAnonymousCreation(ctx context.Context, input por
 		return ports.ErrAnonymousCreationBlocked
 	}
 	metricResult = "success"
-	if err := verifier.limiter.Check(ctx, hash(verifier.rateHashKey, normalizeIP(input.RemoteAddress)), verifier.clock.Now().UTC()); err != nil {
+	if err := verifier.limiter.Check(ctx, securehash.HMACSHA256(verifier.rateHashKey, []byte(normalizeIP(input.RemoteAddress))), verifier.clock.Now().UTC()); err != nil {
 		if errors.Is(err, ports.ErrRateLimitExceeded) && verifier.observer != nil {
 			verifier.observer.RateLimitRejected(context.WithoutCancel(ctx), "anonymous")
 		}
@@ -149,10 +148,4 @@ func normalizeIP(value string) string {
 		return parsed.String()
 	}
 	return value
-}
-
-func hash(key []byte, value string) []byte {
-	digest := hmac.New(sha256.New, key)
-	_, _ = digest.Write([]byte(value))
-	return digest.Sum(nil)
 }

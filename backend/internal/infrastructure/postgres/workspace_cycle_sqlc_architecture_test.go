@@ -29,8 +29,8 @@ func TestCycleStableSQLMethodsUseGeneratedQueries(t *testing.T) {
 			"CompleteCycleCAS":          {"CompleteCycleCAS"},
 			"LoadCycleView":             {},
 		},
-		"workspace_transitions.go": {
-			"loadCycleForUpdate": {"LockCycleForTransition"},
+		"workspace_action_ai_uow.go": {
+			"LockActionCycle": {"LockCycleForTransition"},
 		},
 		"workspace_review_transition_uow.go": {
 			"FindContinueReviewReceipt": {"FindContinueReviewReceipt"},

@@ -2164,6 +2164,7 @@ Concurrent operation:
 
 - Serviceが扱うEntity ID、operation ID、idempotency key、bootstrap ID、request IDを含む全UUIDはUUID v7へ統一し、Application側で生成する。
 - APIはUUID v7以外のUUIDをvalidation errorとして拒否し、DBもPrimary/standalone UUID列とUUID配列をversion/variantの`CHECK`で強制する。FK列はUUID v7制約済みの参照先へ限定する。
+- Backendのcanonical UUID v7判定はHTTP、Application、Observabilityで同じshared predicateを使用し、境界ごとのcopyを持たない。HMAC-SHA256 primitiveもSession、Account、rate limit、Cursorで一つのshared implementationを使用し、scope framingだけを各callerが所有する。
 - `sequenceNumber` / `versionNumber`はUI連番でありEntity IDではない。
 - JSONではcanonical lower-case UUID string。
 - Path parameterはparse→validate→typed ID。
@@ -2190,7 +2191,7 @@ Concurrent operation:
 - DB: snake_case plural table。
 - JSON: camelCase。
 - Error code: `UPPER_SNAKE_CASE`。
-- Prompt version: `goal-refine-v2`, `action-generate-v2`, `action-refine-v2`。v1 assetは過去の監査可能性のためimmutableのまま保持する。
+- Productionで選択可能なPrompt versionは`goal-refine-v2`, `action-generate-v2`, `action-refine-v2`。v1 assetは過去の監査可能性のためimmutableのままRepositoryへ保持するが、production registryへ登録・binaryへembedせず、configから選択できない。
 - Product UIでは日本語を使い、内部Domain用語は本書の英語名へ統一する。
 
 
@@ -4611,7 +4612,7 @@ Product文書の概念順とProvider message優先度を混同しない。System
 
 ## 33.4 Versioning
 
-Prompt本文はRepository内のversion-controlled prompt assetとして管理する。物理Directory名とfile名は固定しないが、logical operationとimmutable version（例: `goal-refine-v1`）を一意に解決できなければならない。
+Prompt本文はRepository内のversion-controlled prompt assetとして管理する。物理Directory名とfile名は固定しないが、logical operationとimmutable version（例: `goal-refine-v2`）を一意に解決できなければならない。
 
 - Prompt loader、Test、AIGeneration記録は同じPrompt registryを参照する。
 - Prompt本文を変更した場合は`goal-refine-v2`等へversionを上げ、既存AIGenerationの`promptVersion`を変更しない。
@@ -4665,7 +4666,7 @@ A: ...
 
 Canceled Cycleは未入力Frameを含み得る。Context builderは欠落を空欄として明示し、成功・完了したCycleであるように表現しない。
 
-Prompt version例: `action-generate-v1`。
+現行Prompt version: `action-generate-v2`。
 
 ---
 
@@ -4707,7 +4708,7 @@ A: <current action>
 ...
 ```
 
-Prompt version例: `action-refine-v1`。
+現行Prompt version: `action-refine-v2`。
 
 ---
 

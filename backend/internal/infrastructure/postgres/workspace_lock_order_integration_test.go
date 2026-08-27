@@ -239,9 +239,10 @@ func completeCycleCanonicalHashForTest(t *testing.T, input workspace.CompleteCyc
 }
 
 type concurrentCompleteCycleCall struct {
-	input  workspace.CompleteCycleInput
-	result workspace.CompleteCycleResult
-	err    error
+	input         workspace.CompleteCycleInput
+	reviewDraftID string
+	result        workspace.CompleteCycleResult
+	err           error
 }
 
 func TestWorkspaceStoreCompleteCycleAndTerminateUseGoalBeforeCycleLockOrder(t *testing.T) {
@@ -279,12 +280,11 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	}()
 
 	store := NewWorkspaceStore(tracedPool)
+	const completeReviewDraftID = "61000000-0000-7000-8000-000000000001"
 	completeInput := workspace.CompleteCycleInput{
 		UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-		ReviewDraftID:        "61000000-0000-7000-8000-000000000001",
 		OperationID:          "62000000-0000-7000-8000-000000000001",
 		ExpectedGoalRevision: started.Goal.Revision, ExpectedContentRevision: 4,
-		RequestHash: "complete-lock-order-hash", Now: now.Add(time.Minute),
 	}
 	cycleRevision := int64(4)
 	terminateInput := workspace.TerminateInput{
@@ -299,7 +299,7 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 	completeCalls := make(chan completeCycleCall, 1)
 	completeCtx := context.WithValue(ctx, lockOrderCommandContextKey{}, lockOrderComplete)
 	go func() {
-		result, callErr := executeCycleCompleteUseCase(store, completeCtx, completeInput)
+		result, callErr := executeCycleCompleteUseCase(store, completeCtx, completeInput, now.Add(time.Minute), completeReviewDraftID)
 		completeCalls <- completeCycleCall{result: result, err: callErr}
 	}()
 
@@ -351,7 +351,6 @@ func TestWorkspaceStoreConcurrentCompleteCyclePreservesUserScopedReplayContract(
 	tests := []struct {
 		name           string
 		fixtureIndexes [2]int
-		callerHashes   [2]string
 		contentOffsets [2]int64
 		wantSuccesses  int
 		wantFresh      int
@@ -361,20 +360,17 @@ func TestWorkspaceStoreConcurrentCompleteCyclePreservesUserScopedReplayContract(
 		{
 			name:           "same request on the same Goal",
 			fixtureIndexes: [2]int{0, 0},
-			callerHashes:   [2]string{"same-complete-hash", "same-complete-hash"},
 			wantSuccesses:  2, wantFresh: 1, wantReplayed: 1,
 		},
 		{
 			name:           "different canonical request on the same Goal",
 			fixtureIndexes: [2]int{0, 0},
-			callerHashes:   [2]string{"ignored-first-hash", "ignored-second-hash"},
 			contentOffsets: [2]int64{0, 1},
 			wantSuccesses:  1, wantFresh: 1, wantKeyReuse: 1,
 		},
 		{
 			name:           "same operation on different Goals",
 			fixtureIndexes: [2]int{0, 1},
-			callerHashes:   [2]string{"first-goal-complete-hash", "second-goal-complete-hash"},
 			wantSuccesses:  1, wantFresh: 1, wantKeyReuse: 1,
 		},
 	}
@@ -443,12 +439,9 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 				started := startedByFixture[fixtureIndex]
 				inputs[attempt] = workspace.CompleteCycleInput{
 					UserID: userID, GoalID: fixture.goalID, CycleID: fixture.cycleID,
-					ReviewDraftID:           reviewDraftIDs[attempt],
 					OperationID:             operationID,
 					ExpectedGoalRevision:    started.Goal.Revision,
 					ExpectedContentRevision: 4 + test.contentOffsets[attempt],
-					RequestHash:             test.callerHashes[attempt],
-					Now:                     now.Add(time.Duration(attempt+10) * time.Minute),
 				}
 			}
 
@@ -457,12 +450,14 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 			attemptStates := make([]*completeReplayAttemptTraceState, len(inputs))
 			for attempt := range inputs {
 				input := inputs[attempt]
+				operationNow := now.Add(time.Duration(attempt+10) * time.Minute)
+				reviewDraftID := reviewDraftIDs[attempt]
 				state := newCompleteReplayAttemptTraceState(attempt == 0)
 				attemptStates[attempt] = state
 				attemptCtx := context.WithValue(ctx, completeReplayAttemptContextKey{}, state)
 				go func() {
-					result, callErr := executeCycleCompleteUseCase(store, attemptCtx, input)
-					calls <- concurrentCompleteCycleCall{input: input, result: result, err: callErr}
+					result, callErr := executeCycleCompleteUseCase(store, attemptCtx, input, operationNow, reviewDraftID)
+					calls <- concurrentCompleteCycleCall{input: input, reviewDraftID: reviewDraftID, result: result, err: callErr}
 				}()
 			}
 
@@ -557,10 +552,10 @@ content_revision=4,plan_revision=1,do_revision=1,check_revision=1,action_revisio
 
 			if freshCall.result.Goal.ID != freshCall.input.GoalID ||
 				freshCall.result.CompletedCycle.ID != freshCall.input.CycleID ||
-				freshCall.result.ReviewDraft.ID != freshCall.input.ReviewDraftID {
+				freshCall.result.ReviewDraft.ID != freshCall.reviewDraftID {
 				t.Fatalf("fresh completion payload = goal %s, cycle %s, draft %s; input = %s/%s/%s",
 					freshCall.result.Goal.ID, freshCall.result.CompletedCycle.ID, freshCall.result.ReviewDraft.ID,
-					freshCall.input.GoalID, freshCall.input.CycleID, freshCall.input.ReviewDraftID)
+					freshCall.input.GoalID, freshCall.input.CycleID, freshCall.reviewDraftID)
 			}
 			if test.wantReplayed == 1 {
 				replayPayload := replayCall.result
