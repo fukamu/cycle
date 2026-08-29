@@ -120,8 +120,9 @@ Applyは最終main HEAD確認の直後に [`backup-and-drill-terraform-state.sh`
    - `fukamu-cycle/staging/state-backups/<commit-sha>/<utc-timestamp>.tfstate`
 3. 両objectを読み戻し、local snapshot、保存checksum、read-back bytesの一致を確認する。
 4. 検証済みstateを`fukamu-cycle/staging/state-restore-drills/<commit-sha>/<run-id>-<attempt>/terraform.tfstate`へcopyし、別backend keyで初期化する。
-5. Isolated stateのchecksumを再比較し、`terraform plan -refresh=false -lock=false`を実行する。Live stateへ`state push`しない。
-6. Isolated stateとそのlockだけを削除する。Upload response loss時もcleanupを試行し、cleanup失敗時もApplyを停止する。
+5. Isolated backendから`terraform state pull`でき、sourceとstate envelope identity（version / serial / lineage）が一致することを確認する。`state pull`はcurrent Terraform形式へ再serializationするため、そのstdoutをraw objectのbyte checksumには使わない。
+6. Backend経由のpull後にisolated R2 objectを再取得してsource checksumと一致することを確認し、`terraform plan -refresh=false -lock=false`を実行する。Live stateへ`state push`しない。
+7. Isolated stateとそのlockだけを削除する。Upload response loss時もcleanupを試行し、cleanup失敗時もApplyを停止する。
 
 Snapshot、checksum upload / read-back、drill、cleanupのいずれかが失敗した場合、`terraform apply`へ進みません。保持期間は未決のため、現在の契約は **automatic snapshot deletion is disabled** です。`state-backups`配下のstate / checksumをworkflowから削除しません。成功時はbackup keyだけをsummaryへ記録し、本文やcredentialを出力しません。
 
@@ -327,7 +328,7 @@ Migration / destructive change / backup / restoreの判断は [`database.md`](da
 1. Plan / Applyとmanual remote state操作を停止し、writerがないことを確認する。
 2. Apply summaryまたはprivate R2 inventoryから同じprefixの`.tfstate` / `.sha256` pairを選ぶ。本文やcredentialをissue / chatへ転記しない。
 3. Access-controlled workspaceで取得し、SHA-256とstate envelopeを確認する。Source backupは変更・削除しない。
-4. Live keyではない新しい`fukamu-cycle/staging/state-restore-drills/` keyへcopyし、そのkeyだけで`state pull` checksumと`plan -refresh=false -lock=false`を確認する。
+4. Live keyではない新しい`fukamu-cycle/staging/state-restore-drills/` keyへcopyし、そのkeyだけで`state pull`のenvelope identity、pull後のraw object checksum、`plan -refresh=false -lock=false`を確認する。
 5. Drillではlive `fukamu-cycle/staging/terraform.tfstate`へpush / overwriteしない。Live復旧が必要ならbackup、current resources、expected diffを添えた別owner-reviewed maintenanceで決定する。
 6. Drillのisolated state / lockだけを削除し、source backup / checksumは保持する。
 

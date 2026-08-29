@@ -87,6 +87,7 @@ checksum_file="${recovery_root}/live.tfstate.sha256"
 backup_readback="${recovery_root}/backup-readback.tfstate"
 checksum_readback="${recovery_root}/backup-readback.tfstate.sha256"
 drill_readback="${recovery_root}/drill-readback.tfstate"
+drill_post_pull_readback="${recovery_root}/drill-post-pull-readback.tfstate"
 aws_stdout="${recovery_root}/aws.stdout"
 aws_stderr="${recovery_root}/aws.stderr"
 terraform_log="${recovery_root}/terraform.log"
@@ -303,9 +304,43 @@ if ! (
 ); then
   die "Isolated Terraform restore-drill state pull failed."
 fi
-isolated_digest="$(sha256sum "${isolated_state}" | awk '{print $1}')"
-[[ "${isolated_digest}" == "${state_digest}" ]] \
-  || die "Isolated Terraform restore-drill state checksum does not match."
+[[ -f "${isolated_state}" && ! -L "${isolated_state}" && -s "${isolated_state}" ]] \
+  || die "Isolated Terraform restore-drill state pull did not produce a regular non-empty state file."
+isolated_state_size="$(stat -c '%s' -- "${isolated_state}")"
+if [[ ! "${isolated_state_size}" =~ ^[0-9]+$ ]] \
+  || ((isolated_state_size > maximum_state_bytes)); then
+  die "Isolated Terraform restore-drill state exceeded the approved size bound."
+fi
+if ! jq -e \
+  'type == "object" and
+   (.version | type) == "number" and
+   (.version | floor) == .version and
+   .version >= 1 and
+   (.serial | type) == "number" and
+   (.serial | floor) == .serial and
+   .serial >= 0 and
+   (.lineage | type) == "string" and
+   (.lineage | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))' \
+  "${isolated_state}" >/dev/null 2>&1; then
+  die "Isolated Terraform restore-drill state has an invalid state envelope."
+fi
+source_state_identity="$(jq -c '[.version, .serial, .lineage]' "${state_file}")"
+isolated_state_identity="$(jq -c '[.version, .serial, .lineage]' "${isolated_state}")"
+[[ "${isolated_state_identity}" == "${source_state_identity}" ]] \
+  || die "Isolated Terraform restore-drill state identity does not match."
+
+# `terraform state pull` parses and reserializes state in the current Terraform
+# format, so its stdout is not a byte-preserving copy of the backend object.
+# Re-read the raw object after the backend-mediated pull for the checksum proof.
+aws_call drill-state-post-pull-readback \
+  s3api get-object \
+  --bucket "${R2_STATE_BUCKET}" \
+  --key "${drill_key}" \
+  "${drill_post_pull_readback}" \
+  || die "Isolated Terraform restore-drill post-pull read-back failed."
+drill_post_pull_digest="$(sha256sum "${drill_post_pull_readback}" | awk '{print $1}')"
+[[ "${drill_post_pull_digest}" == "${state_digest}" ]] \
+  || die "Isolated Terraform restore-drill object checksum does not match after state pull."
 if ! (
   cd -- "${drill_workspace}"
   terraform plan \

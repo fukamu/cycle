@@ -54,6 +54,7 @@ assert_lines_in_order() {
 bin="${test_root}/bin"
 runner_temp="${test_root}/runner"
 object_root="${test_root}/objects"
+run_state="${test_root}/run-state"
 command_log="${test_root}/commands.log"
 output="${test_root}/output.log"
 fixture_state="${test_root}/live.tfstate"
@@ -90,7 +91,15 @@ case "${command_name}" in
     ;;
   state)
     [[ "$#" == "2" && "$2" == "pull" ]]
-    cat -- "${FAKE_TERRAFORM_STATE}"
+    if [[ "${PWD}" == */workspace &&
+      "${FAKE_TERRAFORM_ISOLATED_STATE_IDENTITY_MISMATCH:-}" == "true" ]]; then
+      jq '.serial += 1' "${FAKE_TERRAFORM_STATE}"
+    elif [[ "${PWD}" == */workspace &&
+      "${FAKE_TERRAFORM_NORMALIZE_ISOLATED_STATE:-}" == "true" ]]; then
+      jq '.' "${FAKE_TERRAFORM_STATE}"
+    else
+      cat -- "${FAKE_TERRAFORM_STATE}"
+    fi
     ;;
   init)
     backend_config=""
@@ -182,6 +191,20 @@ case "${operation}" in
       printf '%064d\n' 0 >"${output_path}"
     elif [[ "${FAKE_AWS_CORRUPT_CHECKSUM:-}" == "multiline" && "${key}" == *.sha256 ]]; then
       printf '%032d\n%032d\n' 0 0 >"${output_path}"
+    elif [[ "${FAKE_AWS_CORRUPT_SECOND_DRILL_READBACK:-}" == "true" &&
+      "${key}" == fukamu-cycle/staging/state-restore-drills/*/terraform.tfstate ]]; then
+      drill_read_count_file="${FAKE_RUN_STATE}/drill-read-count"
+      drill_read_count=0
+      if [[ -f "${drill_read_count_file}" ]]; then
+        IFS= read -r drill_read_count <"${drill_read_count_file}"
+      fi
+      drill_read_count=$((drill_read_count + 1))
+      printf '%s\n' "${drill_read_count}" >"${drill_read_count_file}"
+      if ((drill_read_count == 2)); then
+        printf '%s\n' '{"corrupt":true}' >"${output_path}"
+      else
+        cp -- "${target}" "${output_path}"
+      fi
     else
       cp -- "${target}" "${output_path}"
     fi
@@ -211,8 +234,8 @@ checksum_key="${backup_key}.sha256"
 drill_key="fukamu-cycle/staging/state-restore-drills/${commit_sha}/123456789-2/terraform.tfstate"
 
 prepare_run() {
-  rm -rf -- "${runner_temp}" "${object_root}"
-  mkdir -p -- "${runner_temp}" "${object_root}"
+  rm -rf -- "${runner_temp}" "${object_root}" "${run_state}"
+  mkdir -p -- "${runner_temp}" "${object_root}" "${run_state}"
   : >"${command_log}"
   : >"${output}"
   : >"${github_output}"
@@ -235,6 +258,7 @@ run_recovery() {
     FAKE_EXPECTED_SECRET_ACCESS_KEY="${secret_access_key}" \
     FAKE_COMMAND_LOG="${command_log}" \
     FAKE_R2_ROOT="${object_root}" \
+    FAKE_RUN_STATE="${run_state}" \
     FAKE_TERRAFORM_STATE="${fixture_state}" \
     "$@" \
     bash "${recovery_script}" >"${output}" 2>&1
@@ -287,13 +311,27 @@ assert_failure "isolated Terraform plan failure" run_recovery FAKE_TERRAFORM_FAI
   -f "${object_root}/${bucket}/${checksum_key}" ]] \
   || fail "failed drill removed the retained backup"
 
+assert_failure "isolated state identity mismatch" run_recovery \
+  FAKE_TERRAFORM_ISOLATED_STATE_IDENTITY_MISMATCH=true
+if grep -Fq -- 'plan -refresh=false' "${command_log}"; then
+  fail "isolated state identity mismatch reached Terraform plan"
+fi
+
+assert_failure "post-pull drill object checksum mismatch" run_recovery \
+  FAKE_AWS_CORRUPT_SECOND_DRILL_READBACK=true
+if grep -Fq -- 'plan -refresh=false' "${command_log}"; then
+  fail "post-pull object checksum mismatch reached Terraform plan"
+fi
+
 assert_failure "isolated state cleanup failure" run_recovery \
   FAKE_AWS_FAIL_OPERATION=delete-object \
   FAKE_AWS_FAIL_KEY_SUFFIX=terraform.tfstate
 [[ -f "${object_root}/${bucket}/${drill_key}" ]] \
   || fail "cleanup failure fixture did not retain the isolated object"
 
-run_recovery COMMIT_SHA="${commit_sha}"
+run_recovery \
+  COMMIT_SHA="${commit_sha}" \
+  FAKE_TERRAFORM_NORMALIZE_ISOLATED_STATE=true
 cmp --silent -- "${fixture_state}" "${object_root}/${bucket}/${backup_key}" \
   || fail "backup state bytes changed"
 expected_digest="$(sha256sum "${fixture_state}" | awk '{print $1}')"
@@ -308,6 +346,8 @@ grep -Fq -- "state_backup_checksum_key=${checksum_key}" "${github_output}" \
   || fail "checksum key output is missing"
 grep -Fq -- 'plan -refresh=false -lock=false -input=false -no-color -out=' "${command_log}" \
   || fail "isolated drill did not run the exact no-refresh plan"
+[[ "$(grep -Fxc -- "aws|get-object|${bucket}|${drill_key}" "${command_log}" || true)" == "2" ]] \
+  || fail "isolated drill did not verify raw state bytes after Terraform state pull"
 if grep -Fq -- 'state push' "${command_log}" \
   || grep -Fq -- "aws|put-object|${bucket}|fukamu-cycle/staging/terraform.tfstate" "${command_log}" \
   || grep -Fq -- "aws|delete-object|${bucket}|fukamu-cycle/staging/terraform.tfstate" "${command_log}"; then
