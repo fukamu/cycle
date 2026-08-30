@@ -5634,7 +5634,7 @@ External OpenAI / Google / Turnstileの実callを通常PR必須testにしない�
 2. staging migrationをdirect DB URLで適用
 3. Worker/Container/assetsをdeploy
 4. /healthz /readyz smoke test
-5. critical E2E
+5. Operations ownerによるmanual critical journey / cleanup
 6. production approval
 7. production migration
 8. production deploy

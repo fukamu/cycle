@@ -328,7 +328,7 @@ validate_secret_workflow_exact_digest() {
 
   case "${contract}" in
     deploy)
-      expected_digest="486553aa19961c972a2e5bd463324135b35f82bf39c766af41e956c7ae5a1cd4"
+      expected_digest="74a017bb625d9732d24ada2406a5d9f53ec731a16d34f1eb71450b5028df269d"
       ;;
     terraform-plan)
       expected_digest="3401da86fcb13bec1335fae58fa523c83cffcc1be7ddabedfcc976e900ec2bd7"

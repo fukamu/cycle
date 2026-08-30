@@ -184,9 +184,9 @@ Playwright自身の既定portは55432です。このリポジトリのDocker例�
 
 ### Staging post-deploy critical journey
 
-`./scripts/check-staging-critical.sh`は通常のlocal checkではなく、`Deploy Staging`が実際のStaging traffic切替とsmoke testの後にだけ実行します。`STAGING_BASE_URL`と`STAGING_E2E_INVITE_TOKEN`はGitHub `staging` Environmentからstep scopeで渡し、引数にはしません。HarnessはPlaywright test reporterを使わず、trace、screenshot、video、artifactを作らず、debug modeを無効化します。成功・失敗にかかわらず公開account-delete APIで検証accountを削除します。
+`Deploy Staging`はtraffic切替後の`/healthz` / `/readyz` smoke testまでで終了します。GitHub ActionsではChromiumをinstallせず、実Browser、live Turnstile、`./scripts/check-staging-critical.sh`を実行しないため、手動確認待ちのrunnerも保持しません。
 
-Localから日常的に実行せず、Production originやProduction dataへ向けません。障害調査でOperations ownerが直接実行する場合も、承認済みsecret managerから環境へ注入し、shell history、process argument、terminal recordingへRaw Invite Tokenを残さず、[`operations.md`](operations.md#staging-critical-journey-cleanup)のcleanup確認まで完了させます。
+Production promotion前のcritical journeyは[`operations.md`](operations.md#post-deploy-verification)に従ってOperations ownerが通常のBrowserで手動確認します。Repositoryに残す`./scripts/check-staging-critical.sh`は明示的な障害調査専用であり、release gateや日常checkには使いません。使用する場合もProduction origin / dataへ向けず、値を承認済みsecret managerからprocess environmentへ注入し、[cleanup確認](operations.md#staging-critical-journey-cleanup)まで完了させます。
 
 ### Commit前の必須gate
 

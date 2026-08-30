@@ -39,8 +39,8 @@ CloudflareのDDoS protectionは自動有効ですが、Application rate limit、
 |---|---|
 | Terraform workflows | Staging専用Turnstile widget、saved plan review、承認付きApply、pre-Apply state backup / restore drill |
 | Wrangler / deploy workflow | Worker、Container image/config、static assets、custom domain、runtime secrets、application deployment |
-| GitHub Actions | main / exact SHA gate、migration-first順序、smoke test、self-cleaning post-deploy critical journey |
-| Manual bootstrap | Cloudflare account/zone/plan/token、R2 bucket、Neon、Google client、OpenAI limit、GitHub Environment protectionと入力 |
+| GitHub Actions | main / exact SHA gate、migration-first順序、traffic切替、`/healthz` / `/readyz` smoke test |
+| Manual operations | Cloudflare account/zone/plan/token、R2 bucket、Neon、Google client、OpenAI limit、GitHub Environment protectionと入力、post-deploy critical journey / cleanup / production promotion |
 
 Worker / ContainerをTerraformとWranglerの両方で管理しません。Application releaseとDB migrationはTerraform stateへ入れません。
 
@@ -168,18 +168,15 @@ saved plan integrity / exact main SHA check
 -> owner approval
 -> pre-Apply state backup / isolated restore drill
 -> terraform apply
--> staging Chromium install
 -> frontend build
 -> Neon direct URLでmigration
 -> ephemeral secrets file作成
 -> Wrangler deploy Worker + Container + assets
 -> secrets file削除 (always)
 -> /healthz, /readyz smoke test
--> Goal / Cycle / Review / History critical journey
--> 公開account-delete APIでaccount cleanup
 ```
 
-Migration失敗時はWrangler deployへ進みません。Input不足でDeployだけ停止した場合は承認値を修正し、同じrunのfailed jobをrerunできます。`workflow_dispatch`はcurrent main HEADのApplication復旧用であり、Terraform変更を迂回する経路ではありません。
+`Deploy Staging`はsmoke test成功で完了し、手動確認待ちのrunnerを保持しません。Actions成功後、production approval前に[Post-deploy verification](#post-deploy-verification)をOperations ownerが通常のBrowserで実施します。Migration失敗時はWrangler deployへ進みません。Input不足でDeployだけ停止した場合は承認値を修正し、同じrunのfailed jobをrerunできます。`workflow_dispatch`はcurrent main HEADのApplication復旧用であり、Terraform変更を迂回する経路ではありません。
 
 Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し、CloudflareがDNS recordとcertificateを管理します。同名recordがある場合は所有用途を確認し、不要と確認できたrecordだけをDashboardから除去します。`workers.dev`とpreview URLは無効のまま維持します。
 
@@ -193,16 +190,18 @@ Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し�
 
 ## Post-deploy verification
 
-1. Commit SHA、Plan / Apply runとapprover、Cloudflare deployment / version、Container rollout、migration runをrelease記録へ残す。
+`Deploy Staging`はsmoke test成功で終了し、このchecklistの完了をActions statusでは待ちません。Operations ownerはproduction approval前に同じdeploy run / commitを対象として手動で完了し、release記録へ結果を残します。
+
+1. Commit SHA、Deploy / Plan / Apply runとapprover、Cloudflare deployment / version、Container rollout、migration runが同一candidateを指すことをrelease記録へ残す。
 2. [Health check](#health-check)が継続して成功し、5xx、latency、cold start、Neon connectionがbaseline内であることを確認する。
-3. Self-cleaning critical journeyがGoal Draft autosave、Goal開始、P/D/C/A、Cycle完了、Goal Review、次Cycle、HistoryのGoal V1 / Cycle 1 / Cycle 2まで成功する。
-4. 同journeyの公開account-delete cleanupが成功し、session再確認が401へ収束する。
+3. Playwrightを使わないfreshな通常Chrome / Firefox profileでcanonical Staging originを開く。VPN / proxyと不要なextensionを無効にし、Closed Beta時は非個人Invite Tokenをpassword managerからUIへ入力してURL、console、記録へ残さない。匿名bootstrapからHomeへ到達できればApplicationとの接続確認は完了とし、Cloudflare Turnstile service自体をGitHub Actionsから別途live testしない。
+4. 機密でない検証dataだけを使い、Goal Draft autosave、Goal開始、P/D/C/A、Cycle完了、Goal Review、次Cycle、HistoryのGoal V1 / Cycle 1 / Cycle 2、Google upgrade、Goal Refine、Action Generate / Refineを必要最小回数確認する。Google loginはsource Anonymous Userを自動削除・mergeしないため、このmanual journeyでは実行しない。
 5. 配信HTMLがStagingの`noindex, nofollow`を持ち、certificate / mixed-content / CSP errorがない。
-6. Turnstile hostname / action、Google login / upgrade、Goal Refine、Action Generate / Refine、account deletionを検証dataで最小回数確認する。
-7. Workers Logs / TracesとOTLP payloadにsecret、PDCA本文、email、raw user ID / IP、raw Turnstile tokenがない。
-8. Backend span / metricが承認済みcollectorへ到達し、collector障害中も`/readyz`と代表Application requestが影響を受けない。
-9. Neon、Container、OpenAI usage / cost、rate-limit拒否が承認済みlimit内である。
-10. Canonical Staging hostname以外と`workers.dev`から利用できない。
+6. Workers Logs / TracesとOTLP payloadにsecret、PDCA本文、email、raw user ID / IP、raw Turnstile tokenがない。
+7. Backend span / metricが承認済みcollectorへ到達し、collector障害中も`/readyz`と代表Application requestが影響を受けない。
+8. Neon、Container、OpenAI usage / cost、rate-limit拒否が承認済みlimit内である。
+9. Canonical Staging hostname以外と`workers.dev`から利用できない。
+10. Journeyの成功・失敗にかかわらず、[Staging critical journey cleanup](#staging-critical-journey-cleanup)で公開account-deleteを実行し、204、response identity、session再確認401を確認する。
 
 Stagingはpublic internetから到達可能です。URLの秘匿をaccess controlとして扱わず、機密情報、Production data、失えないdataを入力しません。
 
@@ -242,13 +241,80 @@ OTLP failureでは固定error classと集約`failure_count`だけを確認し、
 
 ## Staging critical journey cleanup
 
-`Deploy Staging`はrepository / run ID / commitから同一runで安定するUUIDv7 bootstrap IDを作り、Raw IDを表示しません。Browserを閉じてsessionを更新し、CSRF、expected-user binding、`{"confirmed":true}`を使う公開`DELETE /api/v1/account`だけでcleanupします。204とresponse identityを確認するまで1、2、4、8、16秒backoffで再試行し、最後に`GET /api/v1/session`が401であることを確認します。
+`Deploy Staging`は検証accountを作成せず、cleanupも実行しません。手動journeyには他の同一origin tabを閉じたfreshな使い捨てBrowser profileを使い、機密情報や失えないdataを入力しません。Cleanup確認が完了するまでtabとprofileを閉じず、Browser update、OS restart、profile削除を開始しません。
 
-Cleanupが収束しない場合、workflowは失敗し、`sha256:<64 lowercase hex>`のaccount correlationだけをannotationへ記録します。Raw account ID、session / CSRF、Invite Token、本文、response body、screenshot、trace、videoを記録しません。
+Anonymous bootstrapが始まったら、journeyの成功・失敗にかかわらず、canonical Staging originを表示しているtabのDevTools Consoleで次を実行します。Session / CSRF / raw user IDはmemory内だけで扱い、Consoleへ出すのはstatusだけです。
 
-1. `ANONYMOUS_BOOTSTRAP_TTL_MINUTES`内に同じfailed jobをrerunする。同じrun / commitで未削除accountをresumeし、既に削除済みなら新しい検証accountを作成して同じ公開delete経路へ収束させる。
-2. Workers Logsではroute template、status、固定error class / code、request / trace IDだけを確認し、hashed correlationからRaw IDを復元しない。
-3. TTL内でも失敗する場合は新規deployを止め、schema互換なら直前Wrangler deploymentへのrollback、非互換ならforward fixを選ぶ。Migrationをdownせず、SQL手動DELETE / UPDATE、Raw DB correction、別の管理削除経路を作らない。
+```js
+(async () => {
+  const expectedOrigin = "https://cycle.staging.fukamu.matoruru.com";
+  if (window.location.origin !== expectedOrigin) {
+    throw new Error("Unexpected origin; cleanup was not attempted.");
+  }
+
+  const discoverSession = () =>
+    fetch("/api/v1/session", {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+
+  const sessionResponse = await discoverSession();
+  if (sessionResponse.status === 401) {
+    throw new Error(
+      "Session was unavailable before account deletion could be verified.",
+    );
+  }
+  if (sessionResponse.status !== 200) {
+    throw new Error(`Session discovery failed with ${sessionResponse.status}.`);
+  }
+
+  const session = await sessionResponse.json();
+  const userID = session?.user?.id;
+  const csrfToken = session?.csrfToken;
+  if (
+    typeof userID !== "string" ||
+    userID.length === 0 ||
+    typeof csrfToken !== "string" ||
+    csrfToken.length === 0
+  ) {
+    throw new Error("Session response was invalid.");
+  }
+
+  const deleteResponse = await fetch("/api/v1/account", {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json; charset=utf-8",
+      "X-CSRF-Token": csrfToken,
+      "X-Fukamu-Expected-User-ID": userID,
+    },
+    body: JSON.stringify({ confirmed: true }),
+  });
+  const responseIdentity = deleteResponse.headers.get(
+    "X-Fukamu-Authenticated-User-ID",
+  );
+  if (deleteResponse.status !== 204 || responseIdentity !== userID) {
+    throw new Error(`Account deletion failed with ${deleteResponse.status}.`);
+  }
+
+  const deletedSessionResponse = await discoverSession();
+  if (deletedSessionResponse.status !== 401) {
+    throw new Error(`Deleted session remained ${deletedSessionResponse.status}.`);
+  }
+  const result = { deleteStatus: 204, sessionStatus: 401 };
+  console.info("Staging cleanup verified", result);
+  return result;
+})();
+```
+
+Expected resultは`{ deleteStatus: 204, sessionStatus: 401 }`です。確認後に使い捨てprofileを閉じます。Deleteの204とresponse identityを同じattemptで確認する前の401はcleanup成功の証拠にしません。Raw account ID、session / CSRF、Invite Token、本文、response body、screenshot、HAR、trace、videoをrelease記録へ残しません。
+
+1. 失敗時はsessionが同じ使い捨てprofileで利用可能な場合だけsnippetを再実行する。204とresponse identityを観測できないまま401になった場合は削除済みと推定しない。
+2. Workers Logsではroute template、status、固定error class / code、request / trace IDだけを確認し、raw / hashed IDから個人を追跡しない。
+3. Cleanup前にsession / profileを失った場合、または再実行しても収束しない場合はprivacy incidentとしてproduction promotionと追加journeyを止める。Schema互換なら直前Wrangler deploymentへのrollback、非互換ならforward fixを選び、Migration down、SQL手動DELETE / UPDATE、Raw DB correction、別の管理削除経路を作らない。
 
 ## Cloud troubleshooting
 
