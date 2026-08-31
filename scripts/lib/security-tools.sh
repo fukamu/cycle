@@ -47,11 +47,110 @@ security_validate_gitleaks_ignore() {
   done <"${ignore_path}"
 }
 
+security_append_git_repository_mount() {
+  local source_root="$1"
+  local command_array_name="$2"
+  local canonical_source_root
+  local git_entry
+  local git_directory
+  local git_common_directory
+  local git_relative_directory
+  local container_git_directory
+  local gitdir_reference
+  local commondir_reference
+  local gitdir_reference_path
+  local commondir_reference_path
+  local gitdir_backlink
+  local gitdir_backlink_path
+  local -a git_entry_lines=()
+  local -a commondir_lines=()
+  local -a gitdir_backlink_lines=()
+  local LC_ALL=C
+
+  [[ "${command_array_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  local -n command_array="${command_array_name}"
+
+  canonical_source_root="$(realpath -e -- "${source_root}" 2>/dev/null)" || return 1
+  [[ "${source_root}" == "${canonical_source_root}" && -d "${source_root}" && ! -L "${source_root}" ]] || return 1
+  git_entry="${source_root}/.git"
+  [[ ! -L "${git_entry}" ]] || return 1
+
+  if [[ -d "${git_entry}" ]]; then
+    git_directory="$(realpath -e -- "${git_entry}" 2>/dev/null)" || return 1
+    [[ "${git_directory}" == "${git_entry}" ]] || return 1
+    [[ ! -e "${git_directory}/commondir" && ! -L "${git_directory}/commondir" ]] || return 1
+    git_common_directory="${git_directory}"
+    container_git_directory='/git-common'
+  elif [[ -f "${git_entry}" ]]; then
+    mapfile -t git_entry_lines <"${git_entry}" || return 1
+    [[ "${#git_entry_lines[@]}" -eq 1 && "${git_entry_lines[0]}" == 'gitdir: '* ]] || return 1
+    gitdir_reference="${git_entry_lines[0]#gitdir: }"
+    [[ -n "${gitdir_reference}" && ! "${gitdir_reference}" =~ [[:cntrl:]] ]] || return 1
+    cmp --silent -- "${git_entry}" <(printf 'gitdir: %s\n' "${gitdir_reference}") || return 1
+    if [[ "${gitdir_reference}" == /* ]]; then
+      gitdir_reference_path="${gitdir_reference}"
+    else
+      gitdir_reference_path="${source_root}/${gitdir_reference}"
+    fi
+    [[ ! -L "${gitdir_reference_path}" ]] || return 1
+    git_directory="$(realpath -e -- "${gitdir_reference_path}" 2>/dev/null)" || return 1
+    [[ -d "${git_directory}" ]] || return 1
+
+    [[ -f "${git_directory}/commondir" && ! -L "${git_directory}/commondir" ]] || return 1
+    mapfile -t commondir_lines <"${git_directory}/commondir" || return 1
+    [[ "${#commondir_lines[@]}" -eq 1 && "${commondir_lines[0]}" == '../..' ]] || return 1
+    commondir_reference="${commondir_lines[0]}"
+    cmp --silent -- "${git_directory}/commondir" <(printf '%s\n' '../..') || return 1
+    commondir_reference_path="${git_directory}/${commondir_reference}"
+    git_common_directory="$(realpath -e -- "${commondir_reference_path}" 2>/dev/null)" || return 1
+    [[ -d "${git_common_directory}" && ! -L "${git_common_directory}" ]] || return 1
+    [[ -d "${git_common_directory}/worktrees" && ! -L "${git_common_directory}/worktrees" ]] || return 1
+
+    git_relative_directory="${git_directory#"${git_common_directory}/"}"
+    [[ "${git_relative_directory}" != "${git_directory}" && "${git_relative_directory}" == worktrees/* ]] || return 1
+    [[ -n "${git_relative_directory#worktrees/}" && "${git_relative_directory#worktrees/}" != */* ]] || return 1
+    [[ "${git_relative_directory#worktrees/}" != '.' && "${git_relative_directory#worktrees/}" != '..' ]] || return 1
+    [[ ! "${git_relative_directory#worktrees/}" =~ [[:cntrl:]] ]] || return 1
+
+    [[ -f "${git_directory}/gitdir" && ! -L "${git_directory}/gitdir" ]] || return 1
+    mapfile -t gitdir_backlink_lines <"${git_directory}/gitdir" || return 1
+    [[ "${#gitdir_backlink_lines[@]}" -eq 1 ]] || return 1
+    gitdir_backlink="${gitdir_backlink_lines[0]}"
+    [[ -n "${gitdir_backlink}" && ! "${gitdir_backlink}" =~ [[:cntrl:]] ]] || return 1
+    cmp --silent -- "${git_directory}/gitdir" <(printf '%s\n' "${gitdir_backlink}") || return 1
+    if [[ "${gitdir_backlink}" == /* ]]; then
+      gitdir_backlink_path="${gitdir_backlink}"
+    else
+      gitdir_backlink_path="${git_directory}/${gitdir_backlink}"
+    fi
+    [[ ! -L "${gitdir_backlink_path}" ]] || return 1
+    [[ "$(realpath -e -- "${gitdir_backlink_path}" 2>/dev/null)" == "${git_entry}" ]] || return 1
+    container_git_directory="/git-common/${git_relative_directory}"
+  else
+    return 1
+  fi
+
+  [[ -f "${git_common_directory}/HEAD" && ! -L "${git_common_directory}/HEAD" ]] || return 1
+  [[ -f "${git_common_directory}/config" && ! -L "${git_common_directory}/config" ]] || return 1
+  [[ -d "${git_common_directory}/objects" && ! -L "${git_common_directory}/objects" ]] || return 1
+  [[ -d "${git_common_directory}/refs" && ! -L "${git_common_directory}/refs" ]] || return 1
+
+  # Git worktree files can point outside the checked-out tree. Expose only the
+  # structurally verified common Git directory at a fixed, read-only container
+  # path, then select the current worktree metadata explicitly.
+  command_array+=(
+    --env "GIT_DIR=${container_git_directory}"
+    --env GIT_COMMON_DIR=/git-common
+    --env GIT_WORK_TREE=/source
+    --volume "${git_common_directory}:/git-common:ro"
+  )
+}
+
 security_validate_git_repository_inputs() {
   local source_root="$1"
   # GIT_NO_REPLACE_OBJECTS disables replace refs, but legacy graft files remain
   # active. Reject both, plus alternate object stores, so every history reader
-  # sees the self-contained object graph mounted read-only at /source.
+  # sees the self-contained object graph mounted read-only at /git-common.
   # shellcheck disable=SC2016 # The single-quoted program expands only inside the pinned container.
   local -a command=(
     docker run --rm
@@ -67,6 +166,10 @@ security_validate_git_repository_inputs() {
     --env GIT_NO_LAZY_FETCH=1
     --env GIT_NO_REPLACE_OBJECTS=1
     --volume "${source_root}:/source:ro"
+  )
+  security_append_git_repository_mount "${source_root}" command || return 1
+  # shellcheck disable=SC2016 # The single-quoted program expands only inside the pinned container.
+  command+=(
     --workdir /source
     --entrypoint sh
     "${SECURITY_GITLEAKS_IMAGE}"
@@ -227,6 +330,12 @@ security_validate_text_inventory() {
     --env "LEGACY_BINARY_BLOB_OID=${SECURITY_LEGACY_BINARY_BLOB_OID}"
     --env "LEGACY_BINARY_BLOB_SIZE=${SECURITY_LEGACY_BINARY_BLOB_SIZE}"
     --volume "${source_root}:/source:ro"
+  )
+  if [[ "${inventory_mode}" != 'candidate' ]]; then
+    security_append_git_repository_mount "${source_root}" command || return 1
+  fi
+  # shellcheck disable=SC2016 # The single-quoted program expands only inside the pinned container.
+  command+=(
     --workdir /source
     "${SECURITY_NODE_IMAGE}"
     node -e
@@ -1384,6 +1493,12 @@ security_run_gitleaks_normalized_text() {
     --env "REVIEWED_BLOB_OIDS=${SECURITY_NORMALIZED_TEXT_REVIEWED_BLOB_OIDS}"
     --volume "${source_root}:/source:ro"
     --volume "${config_path}:/gitleaks/config.toml:ro"
+  )
+  if [[ "${inventory_mode}" != 'candidate' ]]; then
+    security_append_git_repository_mount "${source_root}" command || return 1
+  fi
+  # shellcheck disable=SC2016 # The single-quoted program expands only inside the pinned container.
+  command+=(
     --workdir /source
     --entrypoint sh
     "${SECURITY_GITLEAKS_IMAGE}"
@@ -1646,6 +1761,9 @@ security_run_gitleaks_history() {
     --env GIT_NO_REPLACE_OBJECTS=1
     --volume "${source_root}:/source:ro"
     --volume "${config_path}:/gitleaks/config.toml:ro"
+  )
+  security_append_git_repository_mount "${source_root}" command || return 1
+  command+=(
     --workdir /source
     "${SECURITY_GITLEAKS_IMAGE}"
     --config=/gitleaks/config.toml
@@ -1685,6 +1803,9 @@ security_run_gitleaks_staged() {
     --env GIT_NO_REPLACE_OBJECTS=1
     --volume "${source_root}:/source:ro"
     --volume "${config_path}:/gitleaks/config.toml:ro"
+  )
+  security_append_git_repository_mount "${source_root}" command || return 1
+  command+=(
     --workdir /source
     "${SECURITY_GITLEAKS_IMAGE}"
     --config=/gitleaks/config.toml

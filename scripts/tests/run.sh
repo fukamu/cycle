@@ -335,19 +335,26 @@ EOF
 }
 
 test_backend_command_build_targets() {
+  local backend_build_count
+  local backend_build_without_vcs_count
+
   assert_file_contains "${repo_root}/scripts/check.sh" \
     "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go vet ./..."
   assert_file_contains "${repo_root}/scripts/check.sh" \
     "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go test -count=1 ./..."
   assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o \"\${repo_root}/.tmp/check/server\" ./cmd/server"
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/server\" ./cmd/server"
   assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o \"\${repo_root}/.tmp/check/migrate\" ./cmd/migrate"
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/migrate\" ./cmd/migrate"
   assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o \"\${repo_root}/.tmp/check/cleanup\" ./cmd/cleanup"
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/cleanup\" ./cmd/cleanup"
   assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o \"\${repo_root}/.tmp/check/configcheck\" ./cmd/configcheck"
-  pass "check builds the retention cleanup maintenance command"
+    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/configcheck\" ./cmd/configcheck"
+  backend_build_count="$(awk 'index($0, "go build ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check.sh")"
+  backend_build_without_vcs_count="$(awk 'index($0, "go build -buildvcs=false ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check.sh")"
+  [[ "${backend_build_count}" -eq 4 && "${backend_build_without_vcs_count}" -eq 4 ]] \
+    || fail "check compile targets can invoke unisolated VCS stamping"
+  pass "check builds every backend command without VCS stamping"
 }
 
 test_before_commit_check() {

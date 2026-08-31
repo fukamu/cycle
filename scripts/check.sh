@@ -111,10 +111,10 @@ if [[ "${run_backend}" == "true" ]]; then
     GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go test -count=1 ./...
 
     mkdir -p -- "${repo_root}/.tmp/check"
-    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o "${repo_root}/.tmp/check/server" ./cmd/server
-    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o "${repo_root}/.tmp/check/migrate" ./cmd/migrate
-    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o "${repo_root}/.tmp/check/cleanup" ./cmd/cleanup
-    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -o "${repo_root}/.tmp/check/configcheck" ./cmd/configcheck
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o "${repo_root}/.tmp/check/server" ./cmd/server
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o "${repo_root}/.tmp/check/migrate" ./cmd/migrate
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o "${repo_root}/.tmp/check/cleanup" ./cmd/cleanup
+    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o "${repo_root}/.tmp/check/configcheck" ./cmd/configcheck
   )
 fi
 

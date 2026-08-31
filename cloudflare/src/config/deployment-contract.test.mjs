@@ -322,7 +322,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     [
       "name: Verify commit has successful CI",
       "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
-      "uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0",
+      "uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2",
       "uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
       "name: Validate required deployment inputs",
       "name: Install JavaScript dependencies",
@@ -594,13 +594,13 @@ test("deployment contract is the exact repository handoff classification", () =>
   );
   const pnpmSetupStep = extractUsesStep(
     workflow,
-    "pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0",
+    "pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2",
   );
   assertStepExecutionControls(pnpmSetupStep, "deployment pnpm setup", null);
   assert.equal(
     pnpmSetupStep.trimEnd(),
     [
-      "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0",
+      "      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2",
       "        with:",
       "          runtime: node@24",
       "          cache: true",
@@ -1261,7 +1261,7 @@ test("deployment contract is the exact repository handoff classification", () =>
       "pnpm setup",
       extractUsesStep(
         workflow,
-        "pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0",
+        "pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2",
       ),
     ],
     [
