@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM ghcr.io/pnpm/pnpm:11.22.0@sha256:eba76954b37ec1ba6187f0adb39caee1e31733194857eedd01319da0af3fa00d AS pnpm-runtime
+FROM ghcr.io/pnpm/pnpm:12.2.1@sha256:593354f9c014e360dd4cd44528f4c61ba1074d39f2490f2910b2518c0b6fd7f2 AS pnpm-runtime
 
-FROM node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS frontend-build
+FROM node:26-alpine@sha256:2d984a15c9b54fd0aeb608b8e0d0d83529eb34d2966db27a1fb4f1edc3d298a3 AS frontend-build
 WORKDIR /src
 COPY --from=pnpm-runtime /opt/pnpm/dist /opt/pnpm/dist
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
@@ -12,7 +12,7 @@ RUN node /opt/pnpm/dist/pnpm.mjs install --frozen-lockfile --filter fukamu-cycle
 COPY frontend/ frontend/
 RUN node /opt/pnpm/dist/pnpm.mjs --filter fukamu-cycle-frontend run build
 
-FROM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS backend-build
+FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS backend-build
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
