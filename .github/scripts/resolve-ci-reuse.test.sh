@@ -171,6 +171,93 @@ case "$endpoint" in
         "$FIXTURE_HEAD_SHA"
     fi
     ;;
+  */commits/"${FIXTURE_HEAD_SHA}"/pulls?*)
+    printf '%s\n' requested >>"${FAKE_HEAD_PULLS_MARKER}"
+    fail_if_requested head_pulls
+    case "${FAKE_HEAD_PULLS_MODE:-valid}" in
+      zero)
+        printf '%s\n' '[]'
+        ;;
+      wrong)
+        printf '[{"number":19,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"%s","ref":"feature"}}]\n' \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+      multiple)
+        printf '[{"number":18,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"%s","ref":"feature"}},{"number":19,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"%s","ref":"feature"}}]\n' \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA" \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+      page_full)
+        separator=""
+        printf '['
+        for ((number = 1; number <= 100; number++)); do
+          printf '%s{"number":%s,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"%s","ref":"feature"}}' \
+            "$separator" \
+            "$number" \
+            "$FIXTURE_MAIN_SHA" \
+            "$FIXTURE_HEAD_SHA"
+          separator=,
+        done
+        printf ']\n'
+        ;;
+      malformed)
+        printf '%s\n' '{"not":"an array"}'
+        ;;
+      malformed_pull)
+        printf '%s\n' '[{"number":"18"}]'
+        ;;
+      boolean_number)
+        printf '[{"number":true,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"%s","ref":"feature"}}]\n' \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+      open)
+        printf '[{"number":18,"state":"open","merged_at":null,"merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"%s","ref":"feature"}}]\n' \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+      null_merged_at)
+        printf '[{"number":18,"state":"closed","merged_at":null,"merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"%s","ref":"feature"}}]\n' \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+      null_base)
+        printf '[{"number":18,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":null,"head":{"sha":"%s","ref":"feature"}}]\n' \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+      missing_head)
+        printf '[{"number":18,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"main"}}]\n' \
+          "$FIXTURE_MAIN_SHA"
+        ;;
+      wrong_head)
+        printf '[{"number":18,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","ref":"feature"}}]\n' \
+          "$FIXTURE_MAIN_SHA"
+        ;;
+      wrong_head_ref)
+        printf '[{"number":18,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"%s","ref":"other"}}]\n' \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+      wrong_base)
+        printf '[{"number":18,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"develop"},"head":{"sha":"%s","ref":"feature"}}]\n' \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+      wrong_merge)
+        printf '[{"number":18,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","base":{"ref":"main"},"head":{"sha":"%s","ref":"feature"}}]\n' \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+      *)
+        printf '[{"number":18,"state":"closed","merged_at":"2026-08-20T00:00:00Z","merge_commit_sha":"%s","base":{"ref":"main"},"head":{"sha":"%s","ref":"feature"}}]\n' \
+          "$FIXTURE_MAIN_SHA" \
+          "$FIXTURE_HEAD_SHA"
+        ;;
+    esac
+    ;;
   */pulls/18/files?*)
     fail_if_requested files
     case "${FAKE_SCHEMA_MODE:-none}:${FAKE_FILES_MODE:-code}" in
@@ -234,27 +321,39 @@ case "$endpoint" in
       printf '%s\n' '{"total_count":2,"workflow_runs":[]}'
     else
       case "${FAKE_RUNS_MODE:-valid}" in
+        empty_pulls)
+          pull_requests='[]'
+          run_path=".github/workflows/ci.yml"
+          ;;
+        empty_pulls_wrong_path)
+          pull_requests='[]'
+          run_path=".github/workflows/other.yml"
+          ;;
         boolean_pull)
-          pull_number=true
+          pull_requests='[{"number":true}]'
           run_path=".github/workflows/ci.yml"
           ;;
         wrong_pull)
-          pull_number=19
+          pull_requests='[{"number":19}]'
+          run_path=".github/workflows/ci.yml"
+          ;;
+        multiple_pulls)
+          pull_requests='[{"number":18},{"number":19}]'
           run_path=".github/workflows/ci.yml"
           ;;
         wrong_path)
-          pull_number=18
+          pull_requests='[{"number":18}]'
           run_path=".github/workflows/other.yml"
           ;;
         *)
-          pull_number=18
+          pull_requests='[{"number":18}]'
           run_path=".github/workflows/ci.yml"
           ;;
       esac
-      printf '{"total_count":1,"workflow_runs":[{"id":42,"name":"CI","event":"pull_request","status":"completed","conclusion":"success","head_sha":"%s","head_branch":"feature","path":"%s","pull_requests":[{"number":%s}]}]}\n' \
+      printf '{"total_count":1,"workflow_runs":[{"id":42,"name":"CI","event":"pull_request","status":"completed","conclusion":"success","head_sha":"%s","head_branch":"feature","path":"%s","pull_requests":%s}]}\n' \
         "$FIXTURE_HEAD_SHA" \
         "$run_path" \
-        "$pull_number"
+        "$pull_requests"
     fi
     ;;
   */actions/runs/42/jobs?*)
@@ -343,6 +442,7 @@ chmod +x "${test_dir}/gh"
 
 last_output=""
 last_log=""
+last_head_pulls_marker=""
 
 run_case() {
   local case_name="$1"
@@ -355,12 +455,15 @@ run_case() {
   local event_name="${8:-push}"
   local runs_mode="${9:-valid}"
   local control_path="${10:-}"
+  local head_pulls_mode="${11:-valid}"
 
   local archive_path="${test_dir}/${case_name}.zip"
   last_output="${test_dir}/${case_name}.output"
   last_log="${test_dir}/${case_name}.log"
+  last_head_pulls_marker="${test_dir}/${case_name}.head-pulls"
   make_archive "$archive_path" "$archive_mode"
   : >"$last_output"
+  rm -f -- "$last_head_pulls_marker"
 
   if ! GITHUB_EVENT_NAME="$event_name" \
     FIXTURE_MAIN_SHA="$main_sha" \
@@ -375,6 +478,8 @@ run_case() {
     FAKE_API_FAILURE="$api_failure" \
     FAKE_RUNS_MODE="$runs_mode" \
     FAKE_CONTROL_PATH="$control_path" \
+    FAKE_HEAD_PULLS_MODE="$head_pulls_mode" \
+    FAKE_HEAD_PULLS_MARKER="$last_head_pulls_marker" \
     PYTHONPATH="${test_dir}" \
     RESOLVER_PYTHON_HOOK_MARKER="${python_hook_marker}" \
     PATH="${test_dir}:${PATH}" \
@@ -419,8 +524,57 @@ assert_fallback() {
   grep -qx 'tested_tree=' "$last_output"
 }
 
+assert_head_pulls_called_once() {
+  if [[ ! -f "$last_head_pulls_marker" ]] || [[ "$(wc -l <"$last_head_pulls_marker")" -ne 1 ]]; then
+    echo "Expected exactly one head-commit pull request lookup" >&2
+    exit 1
+  fi
+}
+
+assert_head_pulls_not_called() {
+  if [[ -e "$last_head_pulls_marker" ]]; then
+    echo "Unexpected head-commit pull request lookup" >&2
+    exit 1
+  fi
+}
+
 # A normal application-code PR with one exact artifact and attestation is reusable.
 assert_reuse valid
+assert_head_pulls_not_called
+
+# A deleted head branch may erase the run association. The head commit must then
+# resolve to exactly the same merged PR before the normal evidence checks continue.
+assert_reuse deleted_head_branch valid code valid valid none none push empty_pulls
+assert_head_pulls_called_once
+for head_pulls_mode in \
+  zero \
+  wrong \
+  multiple \
+  page_full \
+  malformed \
+  malformed_pull \
+  boolean_number \
+  open \
+  null_merged_at \
+  null_base \
+  missing_head \
+  wrong_head \
+  wrong_head_ref \
+  wrong_base \
+  wrong_merge; do
+  assert_fallback \
+    "head_pulls_${head_pulls_mode}" \
+    valid code valid valid none none push empty_pulls "" "$head_pulls_mode"
+  assert_head_pulls_called_once
+done
+assert_fallback head_pulls_api_failure valid code valid valid none head_pulls push empty_pulls
+assert_head_pulls_called_once
+assert_fallback deleted_head_wrong_jobs valid code attest_failed valid none none push empty_pulls
+assert_head_pulls_called_once
+assert_fallback deleted_head_wrong_attestation wrong_tree code valid valid none none push empty_pulls
+assert_head_pulls_called_once
+assert_fallback deleted_head_wrong_workflow valid code valid valid none none push empty_pulls_wrong_path
+assert_head_pulls_not_called
 
 # Artifact discovery and download are fail-closed.
 assert_fallback artifact_with_unrelated valid code valid with_unrelated
@@ -464,8 +618,13 @@ assert_fallback jobs_missing_attest valid code missing_attest
 assert_fallback jobs_attest_failed valid code attest_failed
 assert_fallback jobs_reuse_not_skipped valid code reuse_succeeded
 assert_fallback run_wrong_pull valid code valid valid none none push wrong_pull
+assert_head_pulls_not_called
 assert_fallback run_boolean_pull_number valid code valid valid none none push boolean_pull
+assert_head_pulls_not_called
+assert_fallback run_multiple_pulls valid code valid valid none none push multiple_pulls
+assert_head_pulls_not_called
 assert_fallback run_wrong_workflow valid code valid valid none none push wrong_path
+assert_head_pulls_not_called
 
 # API transport failures and malformed/paginated response shapes all fall back.
 for failure in main pulls pull_detail files runs jobs artifacts download; do
@@ -484,6 +643,8 @@ assert_fallback changed_files_unexpected_previous valid unexpected_previous
 assert_fallback changed_files_renamed_without_previous valid renamed_without_previous
 
 # A PR that changes its own verifier, dependencies, or test/build policy is never reused.
+assert_fallback deleted_head_control_plane valid control valid valid none none push empty_pulls
+assert_head_pulls_not_called
 for control_path in \
   .github/workflows/ci.yml \
   cloudflare/src/config/deployment-contract.test.mjs \
