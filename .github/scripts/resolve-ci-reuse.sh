@@ -460,7 +460,7 @@ for run in runs:
         ):
             raise SystemExit(2)
         pull_numbers.append(pull["number"])
-    if (
+    metadata_matches = (
         run["name"] == "CI"
         and run["event"] == "pull_request"
         and run["status"] == "completed"
@@ -468,20 +468,83 @@ for run in runs:
         and run["head_sha"] == head_sha
         and run["head_branch"] == head_branch
         and run["path"] == ".github/workflows/ci.yml"
-        and pull_numbers == [pr_number]
-    ):
-        candidates.append(run_id)
+    )
+    if metadata_matches and pull_numbers == [pr_number]:
+        candidates.append(("direct", run_id))
+    elif metadata_matches and not pull_numbers:
+        candidates.append(("commit", run_id))
 
 if not candidates:
     raise SystemExit(3)
 
-print("\n".join(str(run_id) for run_id in candidates))
+print("\n".join(f"{association}:{run_id}" for association, run_id in candidates))
 PY
 )" || fallback "No unambiguous successful PR workflow run matched the merged PR"
 
-mapfile -t run_ids <<<"$run_ids_text"
-if [[ "${#run_ids[@]}" -eq 0 ]]; then
+mapfile -t run_candidates <<<"$run_ids_text"
+if [[ "${#run_candidates[@]}" -eq 0 ]]; then
   fallback "No successful PR workflow run matched the merged PR"
+fi
+
+run_ids=()
+requires_commit_pull_lookup=false
+for candidate in "${run_candidates[@]}"; do
+  if [[ ! "$candidate" =~ ^(direct|commit):([1-9][0-9]*)$ ]]; then
+    fallback "The PR workflow run association was ambiguous"
+  fi
+  run_ids+=("${BASH_REMATCH[2]}")
+  if [[ "${BASH_REMATCH[1]}" == "commit" ]]; then
+    requires_commit_pull_lookup=true
+  fi
+done
+
+if [[ "$requires_commit_pull_lookup" == true ]]; then
+  head_pulls_json="${validation_root}/head-pulls.json"
+  if ! gh api \
+    -H "Accept: application/vnd.github+json" \
+    "/repos/${repository}/commits/${head_sha}/pulls?per_page=100" >"$head_pulls_json"; then
+    fallback "Could not query pull requests associated with the PR head commit"
+  fi
+
+  python3 -I - \
+    "$head_pulls_json" \
+    "$main_sha" \
+    "$pr_number" \
+    "$head_sha" \
+    "$head_branch" <<'PY' || fallback "The PR head commit did not resolve to the exact merged PR"
+import json
+import sys
+
+path, main_sha, pr_number_text, head_sha, head_branch = sys.argv[1:]
+try:
+    pr_number = int(pr_number_text)
+    with open(path, encoding="utf-8") as source:
+        pulls = json.load(source)
+except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(2)
+
+if not isinstance(pulls, list) or len(pulls) != 1:
+    raise SystemExit(2)
+
+pull = pulls[0]
+base = pull.get("base") if isinstance(pull, dict) else None
+head = pull.get("head") if isinstance(pull, dict) else None
+if (
+    not isinstance(pull, dict)
+    or not isinstance(pull.get("number"), int)
+    or isinstance(pull.get("number"), bool)
+    or pull["number"] != pr_number
+    or pull.get("state") != "closed"
+    or not isinstance(pull.get("merged_at"), str)
+    or pull.get("merge_commit_sha") != main_sha
+    or not isinstance(base, dict)
+    or base.get("ref") != "main"
+    or not isinstance(head, dict)
+    or head.get("sha") != head_sha
+    or head.get("ref") != head_branch
+):
+    raise SystemExit(2)
+PY
 fi
 
 validate_jobs() {
