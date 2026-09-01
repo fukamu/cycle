@@ -96,7 +96,10 @@ new_docs_fixture() {
   local name="$1"
   local fixture="${test_root}/docs-${name}"
   copy_gate_scripts "${fixture}"
-  mkdir -p -- "${fixture}/docs"
+  mkdir -p -- "${fixture}/.github" "${fixture}/docs"
+  cp -- \
+    "${repo_root}/.github/pull_request_template.md" \
+    "${fixture}/.github/pull_request_template.md"
   cp -- "${repo_root}/package.json" "${fixture}/package.json"
   ln -s -- "${repo_root}/node_modules" "${fixture}/node_modules"
   printf '%s\n' '/node_modules' >>"${fixture}/.gitignore"
@@ -146,6 +149,11 @@ new_docs_fixture() {
     '' \
     '\[escaped link](docs/missing-escaped.md)' \
     '[undefined reference is literal][not-defined]' >>"${fixture}/README.md"
+  printf '%s\n' \
+    '# Repository instructions' \
+    '' \
+    '## 仕様変更と停止条件' >"${fixture}/AGENTS.md"
+  write_valid_design_trace "${fixture}"
   initialize_candidate_fixture "${fixture}"
   printf '%s\n' "${fixture}"
 }
@@ -153,8 +161,29 @@ new_docs_fixture() {
 write_valid_design_trace() {
   local fixture="$1"
   local section
+  # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
   printf '%s\n' \
     '# Design fixture' \
+    '' \
+    '## 0.1 文書の権威' \
+    '' \
+    '## 52.3 Changes that require updating this document' \
+    '' \
+    '## 52.4 Changes that normally do not require updating this document' \
+    '' \
+    '## 52.5 Specification update procedure' \
+    '' \
+    '変更は着手前に次のいずれか一つへ分類する。' \
+    '' \
+    '| Classification | 判定 | 実行条件 |' \
+    '|---|---|---|' \
+    '| `既存仕様内の具体化` | Canonical ownerの意味を変えないDeliveryまたはmaintenance（§52.4を含む）として、既存Contractを実装・修正・検証する | 根拠となるcanonical sectionと影響または非影響の理由を記録する |' \
+    '| `仕様変更` | Product Rule、Architecture Constraint、Implementation Contract、required verificationの意味を変える | 理由・影響・実行可能な選択肢を示し、Product Ownerの明示承認を得る |' \
+    '| `Discoveryのみ` | 仮説、調査、比較、計測だけを行い、canonical ownerまたはProduct behaviorを変更しない | 参照したcanonical sectionと、採用時は別のDelivery変更として再分類することを記録する |' \
+    '' \
+    '`仕様変更`は、Product Ownerが理由・影響・選択肢を明示して承認した後だけ、canonical ownerまたは実装の変更に着手できる。承認前は該当変更を停止し、承認証跡をIssueまたはPull Requestへ記録する。' \
+    '' \
+    '## 54.2 Canonical ownership index' \
     '' \
     '## 54.3 Legacy §0–54 trace' \
     '' \
@@ -172,7 +201,10 @@ enable_operational_documentation_topology() {
   local target
   mkdir -p -- "${fixture}/config"
   printf '%s\n' '{}' >"${fixture}/config/deployment-contract.json"
-  printf '%s\n' '# Repository instructions' >"${fixture}/AGENTS.md"
+  printf '%s\n' \
+    '# Repository instructions' \
+    '' \
+    '## 仕様変更と停止条件' >"${fixture}/AGENTS.md"
   write_valid_design_trace "${fixture}"
   for target in \
     'docs/closed-beta-admission.md' \
@@ -208,6 +240,195 @@ test_docs_gate() {
   enable_operational_documentation_topology "${fixture}"
   bash "${fixture}/scripts/check-docs.sh" >/dev/null \
     || fail "documentation gate rejected the canonical operational navigation"
+
+  fixture="$(new_docs_fixture missing-design-change-control)"
+  enable_operational_documentation_topology "${fixture}"
+  # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
+  remove_exact_line \
+    "${fixture}/docs/design.md" \
+    '`仕様変更`は、Product Ownerが理由・影響・選択肢を明示して承認した後だけ、canonical ownerまたは実装の変更に着手できる。承認前は該当変更を停止し、承認証跡をIssueまたはPull Requestへ記録する。'
+  assert_failure_contains \
+    "design missing the canonical change-control approval rule" \
+    "DESIGN_CHANGE_CONTROL_CONTRACT" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture hidden-design-change-classification)"
+  enable_operational_documentation_topology "${fixture}"
+  # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
+  insert_before_exact_line \
+    "${fixture}/docs/design.md" \
+    '| `仕様変更` | Product Rule、Architecture Constraint、Implementation Contract、required verificationの意味を変える | 理由・影響・実行可能な選択肢を示し、Product Ownerの明示承認を得る |' \
+    '```text'
+  # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
+  insert_after_exact_line \
+    "${fixture}/docs/design.md" \
+    '| `仕様変更` | Product Rule、Architecture Constraint、Implementation Contract、required verificationの意味を変える | 理由・影響・実行可能な選択肢を示し、Product Ownerの明示承認を得る |' \
+    '```'
+  assert_failure_contains \
+    "design hides a change classification outside the visible table" \
+    "DESIGN_CHANGE_CONTROL_CONTRACT" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-template)"
+  rm -- "${fixture}/.github/pull_request_template.md"
+  assert_failure_contains \
+    "missing pull request Source of Truth template without deployment contract" \
+    "PULL_REQUEST_TEMPLATE_MISSING" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-canonical-reference)"
+  enable_operational_documentation_topology "${fixture}"
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- [文書の権威](https://github.com/fukamu/cycle/blob/main/docs/design.md#01-文書の権威)'
+  assert_failure_contains \
+    "pull request template missing a canonical reference" \
+    "PULL_REQUEST_TEMPLATE_CANONICAL_REFERENCE" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture raw-html-pull-request-canonical-link)"
+  enable_operational_documentation_topology "${fixture}"
+  replace_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- [文書の権威](https://github.com/fukamu/cycle/blob/main/docs/design.md#01-文書の権威)' \
+    '<a href="https://github.com/fukamu/cycle/blob/main/docs/design.md#01-文書の権威">文書の権威</a>'
+  assert_failure_contains \
+    "pull request template replaces a visible Markdown owner link with raw HTML" \
+    "PULL_REQUEST_TEMPLATE_CANONICAL_REFERENCE" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture broken-pull-request-canonical-anchor)"
+  enable_operational_documentation_topology "${fixture}"
+  replace_exact_line \
+    "${fixture}/docs/design.md" \
+    '## 52.5 Specification update procedure' \
+    '## 52.5 Renamed specification procedure'
+  assert_failure_contains \
+    "pull request template canonical URL has a missing local anchor" \
+    "PULL_REQUEST_TEMPLATE_CANONICAL_REFERENCE" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture detached-pull-request-source-sections)"
+  enable_operational_documentation_topology "${fixture}"
+  insert_before_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '### Specification Impact classification' \
+    '## Detached review section'
+  assert_failure_contains \
+    "pull request template moves review prompts outside the Source of Truth section" \
+    "PULL_REQUEST_TEMPLATE_STRUCTURE" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-classification)"
+  enable_operational_documentation_topology "${fixture}"
+  # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- [ ] `Discoveryのみ`'
+  assert_failure_contains \
+    "pull request template missing one Specification Impact classification" \
+    "PULL_REQUEST_TEMPLATE_CLASSIFICATION" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-impact-area)"
+  enable_operational_documentation_topology "${fixture}"
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '| AI | <!-- 必須 --> |'
+  assert_failure_contains \
+    "pull request template missing an impact or N/A review area" \
+    "PULL_REQUEST_TEMPLATE_IMPACT_REVIEW" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture weakened-pull-request-na-reason)"
+  enable_operational_documentation_topology "${fixture}"
+  # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
+  replace_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '各行を必ず埋め、影響がない場合は `N/A — 理由` と記載してください。空欄または理由のない `N/A` は認めません。' \
+    '影響がない場合は `N/A` と記載してください。'
+  assert_failure_contains \
+    "pull request template permits N/A without a reason" \
+    "PULL_REQUEST_TEMPLATE_IMPACT_REVIEW" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-owner-evidence)"
+  enable_operational_documentation_topology "${fixture}"
+  # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- Product Owner approval: <!-- 仕様変更では、理由・影響・選択肢を含む承認証跡を記載。その他は `N/A — 理由`。 -->'
+  assert_failure_contains \
+    "pull request template missing Product Owner approval evidence" \
+    "PULL_REQUEST_TEMPLATE_OWNER_FIRST" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-owner-first-gate)"
+  enable_operational_documentation_topology "${fixture}"
+  # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- [ ] `仕様変更`はProduct Owner承認後に着手し、canonical ownerをcodeより前またはこのPull Requestで更新した。その他の分類はその根拠を上に記載した。'
+  assert_failure_contains \
+    "pull request template missing the owner-first gate" \
+    "PULL_REQUEST_TEMPLATE_OWNER_FIRST" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-stop-condition)"
+  enable_operational_documentation_topology "${fixture}"
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- [ ] Product質問、仕様矛盾、security/data retention/auth/permission/production上の重要な判断不能、または影響範囲不明は未解決でない。発見した場合は該当変更を停止し、Product Ownerの判断を記録した。'
+  assert_failure_contains \
+    "pull request template missing the stop condition" \
+    "PULL_REQUEST_TEMPLATE_STOP_CONDITION" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture hidden-pull-request-stop-condition)"
+  enable_operational_documentation_topology "${fixture}"
+  insert_before_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- [ ] Product質問、仕様矛盾、security/data retention/auth/permission/production上の重要な判断不能、または影響範囲不明は未解決でない。発見した場合は該当変更を停止し、Product Ownerの判断を記録した。' \
+    '```text'
+  insert_after_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- [ ] Product質問、仕様矛盾、security/data retention/auth/permission/production上の重要な判断不能、または影響範囲不明は未解決でない。発見した場合は該当変更を停止し、Product Ownerの判断を記録した。' \
+    '```'
+  assert_failure_contains \
+    "pull request template hides the stop condition in a code fence" \
+    "PULL_REQUEST_TEMPLATE_STOP_CONDITION" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-main-consistency)"
+  enable_operational_documentation_topology "${fixture}"
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- [ ] 仕様だけまたは実装だけが先行する一時的不整合をmainへmergeせず、Product / UX、Domain / state、DB / migration、API、Frontend、AI、Security / Privacy、Operations、Testが同じ現在形になっている。'
+  assert_failure_contains \
+    "pull request template missing main consistency" \
+    "PULL_REQUEST_TEMPLATE_MAIN_CONSISTENCY" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-verification-evidence)"
+  enable_operational_documentation_topology "${fixture}"
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '## Verification evidence'
+  assert_failure_contains \
+    "pull request template missing verification evidence" \
+    "PULL_REQUEST_TEMPLATE_VERIFICATION_EVIDENCE" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-semantic-scope)"
+  enable_operational_documentation_topology "${fixture}"
+  replace_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    'このtemplateは意味的整合性を自動証明しません。実装者とreviewerがcanonical ownerとconsumerを読み、同じ現在形に整合していることを確認してください。' \
+    '実装者とreviewerが整合性を確認してください。'
+  assert_failure_contains \
+    "pull request template claims no bounded semantic scope" \
+    "PULL_REQUEST_TEMPLATE_SEMANTIC_SCOPE" \
+    bash "${fixture}/scripts/check-docs.sh"
 
   fixture="$(new_docs_fixture missing-operational-owner-link)"
   enable_operational_documentation_topology "${fixture}" 'docs/operations.md'
@@ -505,10 +726,21 @@ new_config_fixture() {
 remove_exact_line() {
   local file="$1"
   local line="$2"
-  local before
-  before="$(grep -Fxc -- "${line}" "${file}")"
-  [[ "${before}" == "1" ]] || fail "fixture mutation expected one exact line in ${file}"
-  sed -i "\|^${line}$|d" "${file}"
+  local next="${file}.fixture-next"
+  if ! FUKAMU_FIXTURE_LINE="${line}" \
+    awk '
+    BEGIN { line = ENVIRON["FUKAMU_FIXTURE_LINE"] }
+    $0 == line {
+      matches++
+      next
+    }
+    { print }
+    END { if (matches != 1) exit 1 }
+  ' "${file}" >"${next}"; then
+    rm -f -- "${next}"
+    fail "fixture mutation expected one exact line in ${file}"
+  fi
+  mv -- "${next}" "${file}"
 }
 
 replace_exact_line() {

@@ -29,7 +29,8 @@
 ## 仕様変更と停止条件
 
 - 仕様へ影響する変更では、実装前に `docs/design.md` の関連sectionと全体整合性を確認し、恒久的な仕様変更なら更新要否を判断する。
-- `docs/design.md` を変更できるのは、既存仕様の意味を変えず、他sectionと矛盾せず、影響範囲を確認できる場合だけ。
+- 既存仕様の意味を変える恒久的な仕様変更は、Product Ownerが理由・影響・選択肢を明示して承認した場合に限り、`docs/design.md`のcanonical ownerをcodeより前または同一Pull Requestで更新できる。承認前は該当変更を停止する。
+- 既存仕様の意味を変えない整合修正は、他sectionと矛盾せず、影響範囲を確認できる場合だけ`docs/design.md`を更新できる。
 - 実装に合わせるため、矛盾を隠すため、または不明確な仕様を推測で確定するために `docs/design.md` を変更しない。
 - 既存仕様同士の矛盾、既存仕様への違反、security/data retention/auth/permission/production上の重要な判断不能、影響範囲不明を発見したら、該当する実装・script・config・文書変更を停止する。
 - 停止時は `docs/design.md` も変更せず、関連仕様、問題、影響、停止した変更、user判断が必要な選択肢を具体的に報告する。

@@ -72,6 +72,8 @@ if (documents.size === 0 && problems.length === 0) {
 }
 
 validateDesignLegacyTrace();
+validateSpecificationChangeControl();
+validatePullRequestReviewTemplate();
 await validateOperationalDocumentationTopology();
 
 const mermaid = installedTools.has("mermaid") ? await loadMermaid() : null;
@@ -187,10 +189,13 @@ function parseDocument(path, source) {
   const environment = { references: Object.create(null) };
   const tokens = markdown.parse(source, environment);
   const anchors = new Set();
+  const headings = [];
   const links = [];
   const mermaidBlocks = [];
   const referenceLabels = new Set();
   const slugger = new GithubSlugger();
+  const visibleMarkdownLinks = [];
+  const visibleTextBlocks = [];
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -209,6 +214,11 @@ function parseDocument(path, source) {
         const heading = inlineText(inline.children ?? []);
         const anchor = slugger.slug(heading);
         if (anchor !== "") anchors.add(anchor);
+        headings.push({
+          level: Number.parseInt(token.tag.slice(1), 10),
+          line,
+          text: heading,
+        });
       }
     }
 
@@ -245,14 +255,32 @@ function parseDocument(path, source) {
     }
 
     if (token.type === "inline") {
+      const visibleText = inlineText(token.children ?? []).trim();
+      if (visibleText !== "") {
+        visibleTextBlocks.push({ line, text: visibleText });
+      }
       collectInlineLinks(token.children ?? [], line, links);
+      collectVisibleMarkdownLinks(
+        token.children ?? [],
+        line,
+        visibleMarkdownLinks,
+      );
       collectInlineHTMLMetadata(token.children ?? [], line, anchors, links);
     } else if (token.type === "html_block") {
       collectHTMLMetadata(token.content, line, anchors, links);
     }
   }
 
-  return { anchors, links, mermaidBlocks, path, source };
+  return {
+    anchors,
+    headings,
+    links,
+    mermaidBlocks,
+    path,
+    source,
+    visibleMarkdownLinks,
+    visibleTextBlocks,
+  };
 }
 
 function validateDesignLegacyTrace() {
@@ -286,6 +314,84 @@ function validateDesignLegacyTrace() {
     line,
     "DESIGN_LEGACY_TRACE_SEQUENCE",
     `legacy trace rows must contain each section from 0 through 54 exactly once in order; found [${values.join(", ")}]`,
+  );
+}
+
+function validateSpecificationChangeControl() {
+  const designPath = resolve(canonicalRoot, "docs/design.md");
+  const document = documents.get(designPath);
+  if (document === undefined) return;
+
+  const tokens = markdown.parse(document.source, {
+    references: Object.create(null),
+  });
+  let sectionStart = -1;
+  let sectionEnd = tokens.length;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type !== "heading_open" || token.tag !== "h2") continue;
+    const heading = tokens[index + 1];
+    const text =
+      heading?.type === "inline" ? inlineText(heading.children ?? []) : "";
+    if (sectionStart === -1 && text === "52.5 Specification update procedure") {
+      sectionStart = index;
+    } else if (sectionStart !== -1) {
+      sectionEnd = index;
+      break;
+    }
+  }
+
+  const sectionTokens =
+    sectionStart === -1 ? [] : tokens.slice(sectionStart, sectionEnd);
+  const tableRows = [];
+  let currentRow = null;
+  for (const token of sectionTokens) {
+    if (token.type === "tr_open") {
+      currentRow = [];
+    } else if (token.type === "inline" && currentRow !== null) {
+      currentRow.push(inlineText(token.children ?? []).trim());
+    } else if (token.type === "tr_close" && currentRow !== null) {
+      tableRows.push(currentRow);
+      currentRow = null;
+    }
+  }
+  const expectedRows = [
+    ["Classification", "判定", "実行条件"],
+    [
+      "既存仕様内の具体化",
+      "Canonical ownerの意味を変えないDeliveryまたはmaintenance（§52.4を含む）として、既存Contractを実装・修正・検証する",
+      "根拠となるcanonical sectionと影響または非影響の理由を記録する",
+    ],
+    [
+      "仕様変更",
+      "Product Rule、Architecture Constraint、Implementation Contract、required verificationの意味を変える",
+      "理由・影響・実行可能な選択肢を示し、Product Ownerの明示承認を得る",
+    ],
+    [
+      "Discoveryのみ",
+      "仮説、調査、比較、計測だけを行い、canonical ownerまたはProduct behaviorを変更しない",
+      "参照したcanonical sectionと、採用時は別のDelivery変更として再分類することを記録する",
+    ],
+  ];
+  const approvalRule =
+    "仕様変更は、Product Ownerが理由・影響・選択肢を明示して承認した後だけ、canonical ownerまたは実装の変更に着手できる。承認前は該当変更を停止し、承認証跡をIssueまたはPull Requestへ記録する。";
+  const contractPresent =
+    JSON.stringify(tableRows) === JSON.stringify(expectedRows) &&
+    sectionTokens.filter(
+      (token) =>
+        token.type === "inline" &&
+        inlineText(token.children ?? []).trim() === approvalRule,
+    ).length === 1;
+  if (contractPresent) return;
+
+  const sectionHeading = document.headings.find(
+    (heading) => heading.text === "52.5 Specification update procedure",
+  );
+  addProblem(
+    designPath,
+    sectionHeading?.line ?? 1,
+    "DESIGN_CHANGE_CONTROL_CONTRACT",
+    "docs/design.md §52.5 must retain one visible classification table and Product Owner approval rule in its canonical section",
   );
 }
 
@@ -345,6 +451,419 @@ async function validateOperationalDocumentationTopology() {
       1,
       "README_NAVIGATION_MISSING",
       `README.md must link to ${requiredTarget}`,
+    );
+  }
+}
+
+function validatePullRequestReviewTemplate() {
+  const templatePath = resolve(
+    canonicalRoot,
+    ".github/pull_request_template.md",
+  );
+  const template = documents.get(templatePath);
+  if (template === undefined) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_MISSING",
+      ".github/pull_request_template.md must provide the Source of Truth review gate",
+    );
+    return;
+  }
+
+  // This is intentionally a structural prompt guard, not a claim that text
+  // matching can prove semantic consistency between the specification and its
+  // consumers. Authors and reviewers remain responsible for that assessment.
+  const lines = template.source.split("\n");
+  const exactLineIndex = (expected) => {
+    const indexes = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index] === expected) indexes.push(index);
+    }
+    return indexes.length === 1 ? indexes[0] : -1;
+  };
+  const hasVisiblePrompt = (sourceLine, visibleText) => {
+    const index = exactLineIndex(sourceLine);
+    return (
+      index !== -1 &&
+      template.visibleTextBlocks.some(
+        (block) => block.line === index + 1 && block.text === visibleText,
+      )
+    );
+  };
+  const headingIndex = (sourceLine, level, text) => {
+    const index = exactLineIndex(sourceLine);
+    if (index === -1) return -1;
+    return template.headings.some(
+      (heading) =>
+        heading.line === index + 1 &&
+        heading.level === level &&
+        heading.text === text,
+    )
+      ? index
+      : -1;
+  };
+  const isBetween = (index, start, end = lines.length) =>
+    index > start && index < end;
+
+  const structure = [
+    headingIndex("# Summary", 1, "Summary"),
+    headingIndex("## Source of Truth impact", 2, "Source of Truth impact"),
+    headingIndex(
+      "### Specification Impact classification",
+      3,
+      "Specification Impact classification",
+    ),
+    headingIndex("### Cross-reference review", 3, "Cross-reference review"),
+    headingIndex("### Change-control gate", 3, "Change-control gate"),
+    headingIndex("## Verification evidence", 2, "Verification evidence"),
+  ];
+  const expectedSourceSectionHeadings = [
+    {
+      level: 3,
+      line: structure[2] + 1,
+      text: "Specification Impact classification",
+    },
+    { level: 3, line: structure[3] + 1, text: "Cross-reference review" },
+    { level: 3, line: structure[4] + 1, text: "Change-control gate" },
+  ];
+  const sourceSectionHeadings = template.headings.filter(
+    (heading) =>
+      heading.line > structure[1] + 1 &&
+      heading.line < structure[5] + 1 &&
+      heading.level <= 3,
+  );
+  const sourceHierarchyPresent =
+    sourceSectionHeadings.length === expectedSourceSectionHeadings.length &&
+    sourceSectionHeadings.every((heading, index) => {
+      const expected = expectedSourceSectionHeadings[index];
+      return (
+        expected !== undefined &&
+        heading.level === expected.level &&
+        heading.line === expected.line &&
+        heading.text === expected.text
+      );
+    });
+  const structurePresent =
+    structure.every((index) => index !== -1) &&
+    structure.every((index, position) => {
+      const previous = structure[position - 1];
+      return previous === undefined || previous < index;
+    }) &&
+    sourceHierarchyPresent;
+  if (!structurePresent) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_STRUCTURE",
+      "Pull request template must retain the visible Summary, Source of Truth, classification, cross-reference, change-control, and verification sections in order",
+    );
+  }
+
+  const [, sourceStart, classificationStart, crossReferenceStart, gateStart] =
+    structure;
+  const verificationStart = structure[5];
+
+  const requiredCanonicalLinks = [
+    {
+      destination:
+        "https://github.com/fukamu/cycle/blob/main/docs/design.md#01-文書の権威",
+      fragment: "01-文書の権威",
+      label: "文書の権威",
+      path: "docs/design.md",
+    },
+    {
+      destination:
+        "https://github.com/fukamu/cycle/blob/main/docs/design.md#523-changes-that-require-updating-this-document",
+      fragment: "523-changes-that-require-updating-this-document",
+      label: "更新が必要な変更",
+      path: "docs/design.md",
+    },
+    {
+      destination:
+        "https://github.com/fukamu/cycle/blob/main/docs/design.md#524-changes-that-normally-do-not-require-updating-this-document",
+      fragment: "524-changes-that-normally-do-not-require-updating-this-document",
+      label: "通常は更新不要な変更",
+      path: "docs/design.md",
+    },
+    {
+      destination:
+        "https://github.com/fukamu/cycle/blob/main/docs/design.md#525-specification-update-procedure",
+      fragment: "525-specification-update-procedure",
+      label: "仕様更新手順",
+      path: "docs/design.md",
+    },
+    {
+      destination:
+        "https://github.com/fukamu/cycle/blob/main/docs/design.md#542-canonical-ownership-index",
+      fragment: "542-canonical-ownership-index",
+      label: "Canonical ownership index",
+      path: "docs/design.md",
+    },
+    {
+      destination:
+        "https://github.com/fukamu/cycle/blob/main/AGENTS.md#仕様変更と停止条件",
+      fragment: "仕様変更と停止条件",
+      label: "仕様変更と停止条件",
+      path: "AGENTS.md",
+    },
+  ];
+  const decodedTemplateLinks = template.visibleMarkdownLinks.map((link) => {
+    try {
+      return { ...link, destination: decodeURIComponent(link.destination) };
+    } catch {
+      return link;
+    }
+  });
+  const canonicalSectionLine =
+    "- Canonical design section(s): <!-- 必須。`docs/design.md` §§...を記載。Discoveryのみの場合も、変更しない根拠と確認したsectionを記載。 -->";
+  const classificationRationaleLine =
+    "- Classification rationale: <!-- 既存仕様で完全に規定済みか、§52.4の非意味変更か、Product Owner承認済みの仕様変更か、Discoveryだけかを説明。 -->";
+  const canonicalOwnerStart = exactLineIndex("Canonical owner:");
+  const enforcementMirrorStart = exactLineIndex(
+    "Repository enforcement mirror:",
+  );
+  const canonicalReferencesPresent =
+    hasVisiblePrompt("Canonical owner:", "Canonical owner:") &&
+    isBetween(canonicalOwnerStart, sourceStart, classificationStart) &&
+    hasVisiblePrompt(
+      "Repository enforcement mirror:",
+      "Repository enforcement mirror:",
+    ) &&
+    isBetween(
+      enforcementMirrorStart,
+      sourceStart,
+      classificationStart,
+    ) &&
+    hasVisiblePrompt(canonicalSectionLine, "Canonical design section(s):") &&
+    isBetween(
+      exactLineIndex(canonicalSectionLine),
+      classificationStart,
+      crossReferenceStart,
+    ) &&
+    hasVisiblePrompt(classificationRationaleLine, "Classification rationale:") &&
+    isBetween(
+      exactLineIndex(classificationRationaleLine),
+      classificationStart,
+      crossReferenceStart,
+    ) &&
+    requiredCanonicalLinks.every((requiredLink) => {
+      const target = documents.get(resolve(canonicalRoot, requiredLink.path));
+      const linkStart =
+        requiredLink.path === "AGENTS.md"
+          ? enforcementMirrorStart
+          : canonicalOwnerStart;
+      const linkEnd =
+        requiredLink.path === "AGENTS.md"
+          ? classificationStart
+          : enforcementMirrorStart;
+      return (
+        target?.anchors.has(requiredLink.fragment) === true &&
+        decodedTemplateLinks.some(
+          (link) =>
+            link.destination === requiredLink.destination &&
+            link.label === requiredLink.label &&
+            isBetween(link.line - 1, linkStart, linkEnd),
+        )
+      );
+    });
+  if (!canonicalReferencesPresent) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_CANONICAL_REFERENCE",
+      "Pull request template must retain visible canonical-section and rationale fields, absolute PR-context owner links, and the separate repository enforcement mirror",
+    );
+  }
+
+  const classificationLines = [
+    ["- [ ] `既存仕様内の具体化`", "[ ] 既存仕様内の具体化"],
+    ["- [ ] `仕様変更`", "[ ] 仕様変更"],
+    ["- [ ] `Discoveryのみ`", "[ ] Discoveryのみ"],
+  ];
+  const classificationPrompt = "次の3分類から1つだけ選択してください。";
+  if (
+    !hasVisiblePrompt(classificationPrompt, classificationPrompt) ||
+    !isBetween(
+      exactLineIndex(classificationPrompt),
+      classificationStart,
+      crossReferenceStart,
+    ) ||
+    !classificationLines.every(
+      ([sourceLine, visibleText]) =>
+        hasVisiblePrompt(sourceLine, visibleText) &&
+        isBetween(
+          exactLineIndex(sourceLine),
+          classificationStart,
+          crossReferenceStart,
+        ),
+    )
+  ) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_CLASSIFICATION",
+      "Pull request template must retain the three visible Specification Impact choices and the exactly-one human-review instruction",
+    );
+  }
+
+  const impactAreas = [
+    "Product / UX",
+    "Domain / state",
+    "DB / migration",
+    "API",
+    "Frontend",
+    "AI",
+    "Security / Privacy",
+    "Operations",
+    "Test",
+  ];
+  const impactPrompt =
+    "各行を必ず埋め、影響がない場合は `N/A — 理由` と記載してください。空欄または理由のない `N/A` は認めません。";
+  const visibleImpactPrompt =
+    "各行を必ず埋め、影響がない場合は N/A — 理由 と記載してください。空欄または理由のない N/A は認めません。";
+  const impactReviewPresent =
+    hasVisiblePrompt(impactPrompt, visibleImpactPrompt) &&
+    isBetween(
+      exactLineIndex(impactPrompt),
+      crossReferenceStart,
+      gateStart,
+    ) &&
+    impactAreas.every((area) => {
+      const rowIndex = exactLineIndex(`| ${area} | <!-- 必須 --> |`);
+      return (
+        isBetween(rowIndex, crossReferenceStart, gateStart) &&
+        template.visibleTextBlocks.filter((block) => block.text === area)
+          .length === 1
+      );
+    });
+  if (!impactReviewPresent) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_IMPACT_REVIEW",
+      "Pull request template must retain every visible cross-reference area and the impact-or-explicit-N/A-reason human-review instruction",
+    );
+  }
+
+  const productOwnerEvidenceLine =
+    "- Product Owner approval: <!-- 仕様変更では、理由・影響・選択肢を含む承認証跡を記載。その他は `N/A — 理由`。 -->";
+  const ownerFirstLine =
+    "- [ ] `仕様変更`はProduct Owner承認後に着手し、canonical ownerをcodeより前またはこのPull Requestで更新した。その他の分類はその根拠を上に記載した。";
+  const visibleOwnerFirstLine =
+    "[ ] 仕様変更はProduct Owner承認後に着手し、canonical ownerをcodeより前またはこのPull Requestで更新した。その他の分類はその根拠を上に記載した。";
+  const enforcementMirrorLine =
+    "- [ ] DDL、API Schema、Prompt、Test等のenforcement mirrorと実装をcanonical ownerと同じ変更で整合した。該当しない場合はCross-reference reviewに理由を記載した。";
+  const visibleEnforcementMirrorLine = enforcementMirrorLine.slice(2);
+  if (
+    !hasVisiblePrompt(productOwnerEvidenceLine, "Product Owner approval:") ||
+    !isBetween(
+      exactLineIndex(productOwnerEvidenceLine),
+      classificationStart,
+      crossReferenceStart,
+    ) ||
+    !hasVisiblePrompt(ownerFirstLine, visibleOwnerFirstLine) ||
+    !isBetween(exactLineIndex(ownerFirstLine), gateStart, verificationStart) ||
+    !hasVisiblePrompt(
+      enforcementMirrorLine,
+      visibleEnforcementMirrorLine,
+    ) ||
+    !isBetween(
+      exactLineIndex(enforcementMirrorLine),
+      gateStart,
+      verificationStart,
+    )
+  ) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_OWNER_FIRST",
+      "Pull request template must retain the visible Product Owner evidence, owner-first or same-PR, and enforcement-mirror human-review prompts",
+    );
+  }
+
+  const stopConditionLine =
+    "- [ ] Product質問、仕様矛盾、security/data retention/auth/permission/production上の重要な判断不能、または影響範囲不明は未解決でない。発見した場合は該当変更を停止し、Product Ownerの判断を記録した。";
+  if (
+    !hasVisiblePrompt(stopConditionLine, stopConditionLine.slice(2)) ||
+    !isBetween(
+      exactLineIndex(stopConditionLine),
+      gateStart,
+      verificationStart,
+    )
+  ) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_STOP_CONDITION",
+      "Pull request template must retain the visible unresolved-question stop-condition human-review prompt",
+    );
+  }
+
+  const mainConsistencyLine =
+    "- [ ] 仕様だけまたは実装だけが先行する一時的不整合をmainへmergeせず、Product / UX、Domain / state、DB / migration、API、Frontend、AI、Security / Privacy、Operations、Testが同じ現在形になっている。";
+  if (
+    !hasVisiblePrompt(mainConsistencyLine, mainConsistencyLine.slice(2)) ||
+    !isBetween(
+      exactLineIndex(mainConsistencyLine),
+      gateStart,
+      verificationStart,
+    )
+  ) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_MAIN_CONSISTENCY",
+      "Pull request template must retain the visible human-review prompt that prohibits specification-only or implementation-only inconsistency on main",
+    );
+  }
+
+  const evidenceLines = [
+    [
+      "- Commands and results: <!-- 実行commandと結果。SecretやUser Contentを記載しない。 -->",
+      "Commands and results:",
+    ],
+    [
+      "- Not run and reason: <!-- 未実行がある場合は対象と理由。なければ `N/A — 全必須check実行済み`。 -->",
+      "Not run and reason:",
+    ],
+    [
+      "- Manual / staging evidence: <!-- 必要な場合のみ。その他は `N/A — 理由`。 -->",
+      "Manual / staging evidence:",
+    ],
+  ];
+  const verificationEvidencePresent =
+    verificationStart !== -1 &&
+    evidenceLines.every(
+      ([sourceLine, visibleText]) =>
+        hasVisiblePrompt(sourceLine, visibleText) &&
+        isBetween(exactLineIndex(sourceLine), verificationStart),
+    );
+  if (!verificationEvidencePresent) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_VERIFICATION_EVIDENCE",
+      "Pull request template must retain visible fields for executed, omitted, and manual verification evidence",
+    );
+  }
+
+  const semanticScopeLines = [
+    "このtemplateは意味的整合性を自動証明しません。実装者とreviewerがcanonical ownerとconsumerを読み、同じ現在形に整合していることを確認してください。",
+    "Repository checkはtemplate sourceのprompt存在だけを検査します。個々のPull Request本文の選択数、記入内容、承認の有効性はreviewerが確認してください。",
+  ];
+  if (
+    !semanticScopeLines.every(
+      (line) =>
+        hasVisiblePrompt(line, line) &&
+        isBetween(exactLineIndex(line), sourceStart, classificationStart),
+    )
+  ) {
+    addProblem(
+      templatePath,
+      1,
+      "PULL_REQUEST_TEMPLATE_SEMANTIC_SCOPE",
+      "Pull request template must visibly state that source prompts do not prove semantic consistency or validate completed pull request bodies",
     );
   }
 }
@@ -433,6 +952,27 @@ function collectInlineLinks(tokens, line, links) {
     if (token.children !== null) {
       collectInlineLinks(token.children, line, links);
     }
+  }
+}
+
+function collectVisibleMarkdownLinks(tokens, line, links) {
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type !== "link_open") continue;
+
+    let depth = 1;
+    let end = index + 1;
+    for (; end < tokens.length; end += 1) {
+      if (tokens[end].type === "link_open") depth += 1;
+      if (tokens[end].type === "link_close") depth -= 1;
+      if (depth === 0) break;
+    }
+    const destination = token.attrGet("href");
+    const label = inlineText(tokens.slice(index + 1, end)).trim();
+    if (destination !== null && label !== "") {
+      links.push({ destination, label, line });
+    }
+    index = end;
   }
 }
 
