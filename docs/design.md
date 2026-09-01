@@ -6032,11 +6032,22 @@ Environment固有のDomain、capacity、provider availability/price、credential
 
 ## 52.5 Specification update procedure
 
-1. 変更対象のcanonical ownerを§54.2で特定する。
+変更は着手前に次のいずれか一つへ分類する。
+
+| Classification | 判定 | 実行条件 |
+|---|---|---|
+| `既存仕様内の具体化` | Canonical ownerの意味を変えないDeliveryまたはmaintenance（§52.4を含む）として、既存Contractを実装・修正・検証する | 根拠となるcanonical sectionと影響または非影響の理由を記録する |
+| `仕様変更` | Product Rule、Architecture Constraint、Implementation Contract、required verificationの意味を変える | 理由・影響・実行可能な選択肢を示し、Product Ownerの明示承認を得る |
+| `Discoveryのみ` | 仮説、調査、比較、計測だけを行い、canonical ownerまたはProduct behaviorを変更しない | 参照したcanonical sectionと、採用時は別のDelivery変更として再分類することを記録する |
+
+`仕様変更`は、Product Ownerが理由・影響・選択肢を明示して承認した後だけ、canonical ownerまたは実装の変更に着手できる。承認前は該当変更を停止し、承認証跡をIssueまたはPull Requestへ記録する。
+
+1. 上記分類を一つ選び、変更対象のcanonical ownerを§54.2で特定する。
 2. Product、Domain、DB、API、UI、AI、Security、Operations、Testへの影響を確認する。
-3. ownerを変更後の現在形へ更新し、summary/index/traceは参照先だけを同期する。
-4. DDL/API/Prompt/Test等のenforcement mirrorと実装を同じ変更で更新する。
-5. §48の検証と§53のacceptance traceを通し、理由・影響・trade-off・実行結果を記録する。
+3. `仕様変更`ではProduct Ownerの承認証跡を確認する。その他の分類では承認が不要な理由を記録する。
+4. ownerを変更後の現在形へ更新し、summary/index/traceは参照先だけを同期する。
+5. DDL/API/Prompt/Test等のenforcement mirrorと実装を同じ変更で更新する。
+6. §48の検証と§53のacceptance traceを通し、理由・影響・trade-off・実行結果を記録する。
 
 ## 52.6 Current-state document / history policy
 
