@@ -1,24 +1,34 @@
 package httpapi
 
 import (
+	"io/fs"
 	"net/http"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 )
 
 func newSPAHandler(directory string) http.Handler {
-	files := http.FileServer(http.Dir(directory))
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if strings.HasPrefix(request.URL.Path, "/api/") {
+		cleanPath := path.Clean("/" + request.URL.Path)
+		if strings.HasPrefix(request.URL.Path, "/api/") || strings.HasPrefix(cleanPath, "/api/") {
 			http.NotFound(writer, request)
 			return
 		}
-		relative := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(request.URL.Path)), "/")
+		root, rootErr := os.OpenRoot(directory)
+		if rootErr != nil {
+			http.NotFound(writer, request)
+			return
+		}
+		defer root.Close()
+
+		rootFS := root.FS()
+		files := http.FileServerFS(rootFS)
+		relative := strings.TrimPrefix(cleanPath, "/")
 		if relative == "." || relative == "" {
 			relative = "index.html"
 		}
-		info, err := os.Stat(filepath.Join(directory, filepath.FromSlash(relative)))
+		info, err := fs.Stat(rootFS, relative)
 		if err == nil && !info.IsDir() {
 			if strings.HasPrefix(relative, "assets/") {
 				writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
@@ -26,12 +36,12 @@ func newSPAHandler(directory string) http.Handler {
 			files.ServeHTTP(writer, request)
 			return
 		}
-		if strings.Contains(filepath.Base(relative), ".") {
+		if strings.Contains(path.Base(relative), ".") {
 			http.NotFound(writer, request)
 			return
 		}
 		writer.Header().Set("Cache-Control", "no-cache")
-		index, openErr := os.Open(filepath.Join(directory, "index.html"))
+		index, openErr := root.Open("index.html")
 		if openErr != nil {
 			http.NotFound(writer, request)
 			return
