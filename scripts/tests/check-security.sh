@@ -180,7 +180,7 @@ assert_immutable_image_pin "${SECURITY_GO_IMAGE}" "Go scanner runtime"
 assert_immutable_image_pin "${SECURITY_GITLEAKS_IMAGE}" "Gitleaks scanner"
 assert_immutable_image_pin "${SECURITY_TRIVY_IMAGE}" "Trivy scanner"
 assert_immutable_image_pin "${SECURITY_TERRAFORM_IMAGE}" "Terraform syntax parser"
-[[ "${SECURITY_GOSEC_VERSION}" == 'v2.22.11' ]] || fail "gosec version pin changed from v2.22.11"
+[[ "${SECURITY_GOSEC_VERSION}" == 'v2.29.0' ]] || fail "gosec version pin changed from v2.29.0"
 [[ "${SECURITY_GOVULNCHECK_VERSION}" == 'v1.7.0' ]] || fail "govulncheck version pin changed from v1.7.0"
 [[ "${SECURITY_LEGACY_BINARY_BLOB_OID}" == 'ac78d653896d639a4b9f93ae26d5009fcc39a4db' ]] || fail "legacy binary blob allowlist changed without review"
 [[ "${SECURITY_LEGACY_BINARY_BLOB_SIZE}" == '9181184' ]] || fail "legacy binary blob size changed without review"
@@ -735,7 +735,7 @@ pass "candidate go.mod cannot replace the digest-pinned local Go toolchain"
 go_policy_fixture="${test_root}/go-module-policy"
 go_policy_valid="${go_policy_fixture}/valid"
 mkdir -p -- "${go_policy_valid}"
-printf '%s\n' 'module example.invalid/go-policy-fixture' '' 'go 1.26.0' >"${go_policy_valid}/go.mod"
+printf '%s\n' 'module example.invalid/go-policy-fixture' '' 'go 1.27.0' >"${go_policy_valid}/go.mod"
 printf '%s\n' 'example.invalid/placeholder v0.0.0 h1:YWJjZA==' >"${go_policy_valid}/go.sum"
 security_validate_go_module_policy \
   "${go_policy_valid}" \
@@ -822,7 +822,7 @@ expect_failure \
 
 toolchain_fixture="${go_policy_fixture}/toolchain"
 cp -R -- "${go_policy_valid}" "${toolchain_fixture}"
-printf '%s\n' '' 'toolchain go1.26.6' >>"${toolchain_fixture}/go.mod"
+printf '%s\n' '' 'toolchain go1.27.0' >>"${toolchain_fixture}/go.mod"
 expect_failure \
   "Go module toolchain directive fixture" \
   security_validate_go_module_policy \
@@ -936,7 +936,7 @@ mkdir -p -- "${snapshot_repo}/backend" "${snapshot_repo}/infra/terraform/staging
 git -C "${snapshot_repo}" init --quiet
 printf '%s\n' '.env' '*.key' '*.tfvars' '.terraform/' >"${snapshot_repo}/.gitignore"
 printf '%s\n' '{"name":"snapshot-fixture","private":true}' >"${snapshot_repo}/package.json"
-printf '%s\n' 'module example.invalid/snapshotfixture' '' 'go 1.26.6' >"${snapshot_repo}/backend/go.mod"
+printf '%s\n' 'module example.invalid/snapshotfixture' '' 'go 1.27.0' >"${snapshot_repo}/backend/go.mod"
 printf '%s\n' 'terraform {}' >"${snapshot_repo}/infra/terraform/staging/main.tf"
 printf '%s\n' 'FROM scratch' >"${snapshot_repo}/Dockerfile"
 git -C "${snapshot_repo}" add .gitignore package.json backend/go.mod infra/terraform/staging/main.tf Dockerfile
@@ -1210,12 +1210,12 @@ printf '%s\n' '{"advisories":{},"metadata":{"vulnerabilities":{"info":0,"low":0,
 printf '%s\n' '{"advisories":{"1":{"severity":"high"}},"metadata":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":1,"critical":0}}}' >"${classifier_fixture}/node-finding.json"
 printf '%s\n' '{"advisories":{"1":{"severity":"critical"}},"metadata":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":0,"critical":0}}}' >"${classifier_fixture}/node-inconsistent-finding.json"
 printf '%s\n' '{"advisories":{"1":{"severity":"unknown"}},"metadata":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":0,"critical":0}}}' >"${classifier_fixture}/node-unknown-severity.json"
-printf '%s\n' '{"Golang errors":{},"Issues":[],"Stats":{"files":1,"lines":1,"nosec":0,"found":0},"GosecVersion":"v2.22.11"}' >"${classifier_fixture}/gosec-clean.json"
-printf '%s\n' '{"Golang errors":{},"Issues":[{"severity":"HIGH","confidence":"HIGH","rule_id":"G000","file":"fixture.go","line":"1"}],"Stats":{"files":1,"lines":1,"nosec":0,"found":1},"GosecVersion":"v2.22.11"}' >"${classifier_fixture}/gosec-finding.json"
-printf '%s\n' '{"Golang errors":{},"Issues":[],"Stats":{"files":1,"lines":1,"nosec":1,"found":0},"GosecVersion":"v2.22.11"}' >"${classifier_fixture}/gosec-suppressed.json"
-printf '%s\n' '{"Golang errors":{},"Issues":[{"severity":"LOW","confidence":"HIGH","rule_id":"G000","file":"fixture.go","line":"1"}],"Stats":{"files":1,"lines":1,"nosec":0,"found":1},"GosecVersion":"v2.22.11"}' >"${classifier_fixture}/gosec-low-severity.json"
-printf '%s\n' '{"Golang errors":{},"Issues":[{"severity":"HIGH","confidence":"MEDIUM","rule_id":"G000","file":"fixture.go","line":"1"}],"Stats":{"files":1,"lines":1,"nosec":0,"found":1},"GosecVersion":"v2.22.11"}' >"${classifier_fixture}/gosec-low-confidence.json"
-printf '%s\n' '{"Golang errors":{},"Issues":[],"Stats":{"files":0,"lines":0,"nosec":0,"found":0},"GosecVersion":"v2.22.11"}' >"${classifier_fixture}/gosec-zero-coverage.json"
+printf '%s\n' '{"Golang errors":{},"Issues":[],"Stats":{"files":1,"lines":1,"nosec":0,"found":0},"GosecVersion":"v2.29.0"}' >"${classifier_fixture}/gosec-clean.json"
+printf '%s\n' '{"Golang errors":{},"Issues":[{"severity":"HIGH","confidence":"HIGH","rule_id":"G000","file":"fixture.go","line":"1"}],"Stats":{"files":1,"lines":1,"nosec":0,"found":1},"GosecVersion":"v2.29.0"}' >"${classifier_fixture}/gosec-finding.json"
+printf '%s\n' '{"Golang errors":{},"Issues":[],"Stats":{"files":1,"lines":1,"nosec":1,"found":0},"GosecVersion":"v2.29.0"}' >"${classifier_fixture}/gosec-suppressed.json"
+printf '%s\n' '{"Golang errors":{},"Issues":[{"severity":"LOW","confidence":"HIGH","rule_id":"G000","file":"fixture.go","line":"1"}],"Stats":{"files":1,"lines":1,"nosec":0,"found":1},"GosecVersion":"v2.29.0"}' >"${classifier_fixture}/gosec-low-severity.json"
+printf '%s\n' '{"Golang errors":{},"Issues":[{"severity":"HIGH","confidence":"MEDIUM","rule_id":"G000","file":"fixture.go","line":"1"}],"Stats":{"files":1,"lines":1,"nosec":0,"found":1},"GosecVersion":"v2.29.0"}' >"${classifier_fixture}/gosec-low-confidence.json"
+printf '%s\n' '{"Golang errors":{},"Issues":[],"Stats":{"files":0,"lines":0,"nosec":0,"found":0},"GosecVersion":"v2.29.0"}' >"${classifier_fixture}/gosec-zero-coverage.json"
 printf '%s\n' '{"Golang errors":{},"Issues":[],"Stats":{"files":1,"lines":1,"nosec":0,"found":0},"GosecVersion":""}' >"${classifier_fixture}/gosec-empty-version.json"
 cp -- "${classifier_fixture}/gosec-clean.json" "${classifier_fixture}/gosec-wrong-module.json"
 for gosec_report in \
@@ -1226,9 +1226,9 @@ for gosec_report in \
   gosec-low-confidence.json \
   gosec-zero-coverage.json \
   gosec-empty-version.json; do
-  printf '%s\n' 'v2.22.11' >"${classifier_fixture}/${gosec_report}.module-version"
+  printf '%s\n' 'v2.29.0' >"${classifier_fixture}/${gosec_report}.module-version"
 done
-printf '%s\n' 'v2.22.10' >"${classifier_fixture}/gosec-wrong-module.json.module-version"
+printf '%s\n' 'v2.28.0' >"${classifier_fixture}/gosec-wrong-module.json.module-version"
 printf '%s\n' '{"SchemaVersion":2,"ArtifactType":"filesystem","Trivy":{"Version":"0.73.0"},"Results":[{"Target":"fixture.tf","Class":"config","Type":"terraform","MisconfSummary":{"Successes":1,"Failures":0}}]}' >"${classifier_fixture}/trivy-config-clean.json"
 printf '%s\n' '{"SchemaVersion":2,"ArtifactType":"filesystem","Trivy":{"Version":"0.73.0"},"Results":[{"Target":"fixture.tf","Class":"config","Type":"terraform","MisconfSummary":{"Successes":0,"Failures":1},"Misconfigurations":[{"ID":"FIX-0001","Severity":"HIGH","CauseMetadata":{"StartLine":1}}]}]}' >"${classifier_fixture}/trivy-config-finding.json"
 printf '%s\n' '{"SchemaVersion":2,"ArtifactType":"filesystem","Trivy":{"Version":"0.73.0"},"Results":[{"Target":"fixture.tf","Class":"config","Type":"terraform","MisconfSummary":{"Successes":1,"Failures":0,"Exceptions":1}}]}' >"${classifier_fixture}/trivy-config-suppressed.json"
@@ -1965,7 +1965,7 @@ pass "Terraform syntax preflight rejects unparsed files; Trivy rejects public SS
 
 gosec_fixture="${test_root}/gosec"
 mkdir -p -- "${gosec_fixture}"
-printf '%s\n' 'module example.invalid/securityfixture' '' 'go 1.26.6' >"${gosec_fixture}/go.mod"
+printf '%s\n' 'module example.invalid/securityfixture' '' 'go 1.27.0' >"${gosec_fixture}/go.mod"
 gosec_lines=(
   '//go:build !cgo'
   ''
@@ -2030,7 +2030,7 @@ mkdir -p -- "${govuln_fixture}"
 govuln_mod_lines=(
   'module example.invalid/vulnfixture'
   ''
-  'go 1.26.6'
+  'go 1.27.0'
   ''
   'require golang.org/x/text v0.3.5'
 )

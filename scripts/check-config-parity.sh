@@ -23,8 +23,8 @@ node_major="$(node --print 'process.versions.node.split(".")[0]')"
 [[ "${node_major}" =~ ^[0-9]+$ && "${node_major}" -ge 24 ]] \
   || die "Node.js 24 or newer is required for configuration parity checks."
 go_version="$(GOENV=off GOTOOLCHAIN=local go env GOVERSION)"
-[[ "${go_version}" == "go1.26.6" ]] \
-  || die "Go 1.26.6 is required for configuration parity checks; found ${go_version}."
+[[ "${go_version}" == "go1.27.0" ]] \
+  || die "Go 1.27.0 is required for configuration parity checks; found ${go_version}."
 
 candidate_root="$(mktemp -d)"
 candidate_metadata_root="$(mktemp -d)"

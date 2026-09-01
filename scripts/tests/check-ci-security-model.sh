@@ -328,7 +328,7 @@ validate_secret_workflow_exact_digest() {
 
   case "${contract}" in
     deploy)
-      expected_digest="e1d50de89892fb2207def3590878a100a62f43a7a18dac9cb05a9ba0d457f44e"
+      expected_digest="fe2e12a75d44e761e2d1c5d8c45562a2c305d9b0c5a339b47919b0ccfbdd03e0"
       ;;
     terraform-plan)
       expected_digest="3401da86fcb13bec1335fae58fa523c83cffcc1be7ddabedfcc976e900ec2bd7"
@@ -734,7 +734,7 @@ validate_exact_functional_steps() {
           "          persist-credentials: false" \
           "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0" \
           "        with:" \
-          '          go-version: "1.26.6"' \
+          '          go-version: "1.27.0"' \
           "          cache-dependency-path: backend/go.sum" \
           "      - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1" \
           "      - run: sqlc compile" \
@@ -797,7 +797,7 @@ validate_exact_functional_steps() {
           "          install: false" \
           "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0" \
           "        with:" \
-          '          go-version: "1.26.6"' \
+          '          go-version: "1.27.0"' \
           "          cache-dependency-path: backend/go.sum" \
           "      - run: pnpm install --frozen-lockfile --ignore-scripts" \
           "      - name: Verify dependency install preserved candidate tree" \
@@ -1105,7 +1105,7 @@ validate_workflow() {
     "        run: bash ./scripts/check-security.sh" \
     "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0" \
     "        with:" \
-    '          go-version: "1.26.6"' \
+    '          go-version: "1.27.0"' \
     "          cache-dependency-path: backend/go.sum" \
     "      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0" \
     "        with:" \

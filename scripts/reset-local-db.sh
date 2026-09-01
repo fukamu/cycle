@@ -116,8 +116,8 @@ host_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "54
 
 go_version="$(GOENV=off GOTOOLCHAIN=local go env GOVERSION)"
 go_version="${go_version#go}"
-[[ "${go_version}" == "1.26.6" ]] \
-  || die "Go 1.26.6 is required before reset so migrations can run. No database was changed."
+[[ "${go_version}" == "1.27.0" ]] \
+  || die "Go 1.27.0 is required before reset so migrations can run. No database was changed."
 
 docker exec "${container_name}" \
   dropdb --username "${postgres_user}" --if-exists --force "${database_name}" \

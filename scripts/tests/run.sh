@@ -86,7 +86,7 @@ EOF
 set -euo pipefail
 [[ "${GOENV:-}" == "off" && "${GOTOOLCHAIN:-}" == "local" ]]
 if [[ "${1:-}" == "env" && "${2:-}" == "GOVERSION" ]]; then
-  printf '%s\n' 'go1.26.6'
+  printf '%s\n' 'go1.27.0'
 else
   [[ "${GOWORK:-}" == "off" && "${GOFLAGS:-}" == "-mod=readonly" ]]
   printf 'go %s\n' "$*" >>"${TEST_COMMAND_LOG}"
@@ -422,7 +422,7 @@ set -euo pipefail
 [[ "${GOENV:-}" == "off" ]]
 [[ "${GOTOOLCHAIN:-}" == "local" ]]
 printf 'go env GOVERSION GOENV=%s GOTOOLCHAIN=%s\n' "${GOENV}" "${GOTOOLCHAIN}" >>"${TEST_COMMAND_LOG}"
-printf '%s\n' 'go1.26.6'
+printf '%s\n' 'go1.27.0'
 EOF
   cat >"${bin}/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -705,7 +705,7 @@ EOF
 set -euo pipefail
 if [[ "${1:-}" == "env" && "${2:-}" == "GOVERSION" ]]; then
   [[ "${GOENV:-}" == "off" && "${GOTOOLCHAIN:-}" == "local" ]]
-  printf '%s\n' 'go1.26.6'
+  printf '%s\n' 'go1.27.0'
 elif [[ "${1:-}" == "run" ]]; then
   [[ "${GOENV:-}" == "off" ]]
   [[ "${GOWORK:-}" == "off" ]]

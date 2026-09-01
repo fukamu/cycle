@@ -74,8 +74,8 @@ require_standard_tool_versions() {
 
   go_version="$(GOENV=off GOTOOLCHAIN=local go env GOVERSION)"
   go_version="${go_version#go}"
-  [[ "${go_version}" == "1.26.6" ]] \
-    || die "Go 1.26.6 is required for reproducible local/CI builds; found ${go_version}."
+  [[ "${go_version}" == "1.27.0" ]] \
+    || die "Go 1.27.0 is required for reproducible local/CI builds; found ${go_version}."
 }
 
 require_terraform_version() {
