@@ -328,7 +328,7 @@ validate_secret_workflow_exact_digest() {
 
   case "${contract}" in
     deploy)
-      expected_digest="486553aa19961c972a2e5bd463324135b35f82bf39c766af41e956c7ae5a1cd4"
+      expected_digest="4bd71409bb57720707a5700a29ab207e1b7b872d98c1ce057862e3496eca165d"
       ;;
     terraform-plan)
       expected_digest="3401da86fcb13bec1335fae58fa523c83cffcc1be7ddabedfcc976e900ec2bd7"
@@ -707,7 +707,7 @@ validate_exact_functional_steps() {
           "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
           "        with:" \
           "          persist-credentials: false" \
-          "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0" \
+          "      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2" \
           "        with:" \
           "          runtime: node@24" \
           "          cache: true" \
@@ -755,7 +755,7 @@ validate_exact_functional_steps() {
           "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
           "        with:" \
           "          persist-credentials: false" \
-          "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0" \
+          "      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2" \
           "        with:" \
           "          runtime: node@24" \
           "          cache: true" \
@@ -790,7 +790,7 @@ validate_exact_functional_steps() {
           "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" \
           "        with:" \
           "          persist-credentials: false" \
-          "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0" \
+          "      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2" \
           "        with:" \
           "          runtime: node@24" \
           "          cache: true" \
@@ -1107,7 +1107,7 @@ validate_workflow() {
     "        with:" \
     '          go-version: "1.26.6"' \
     "          cache-dependency-path: backend/go.sum" \
-    "      - uses: pnpm/setup@c9883cc79df532ad1a7b81bf9ab944ceb090d65c # v2.0.0" \
+    "      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2" \
     "        with:" \
     "          runtime: node@24" \
     "          cache: true" \

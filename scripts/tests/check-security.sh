@@ -216,6 +216,34 @@ security_entry_trusted_git_count="$(awk 'index($0, "trusted_git") { count += 1 }
   || fail "a repository check bypasses the trusted Git wrapper"
 unset trusted_git_body trusted_git_clean_environment_count trusted_git_git_pager_count trusted_git_pager_count trusted_git_no_pager_count trusted_git_fsmonitor_count trusted_git_untracked_cache_count trusted_git_hooks_count trusted_git_no_lazy_fetch_count trusted_git_no_replace_count commit_gate_trusted_git_count check_trusted_git_count docs_snapshot_trusted_git_count security_snapshot_trusted_git_count security_entry_trusted_git_count
 pass "host Git calls clear ambient Git inputs and disable fsmonitor, untracked-cache, hooks, and replacement objects"
+
+git_mount_body="$(declare -f security_append_git_repository_mount)" || fail "could not inspect Git metadata mount helper"
+git_mount_common_ro_count="$(awk 'index($0, "${git_common_directory}:/git-common:ro") { count += 1 } END { print count + 0 }' <<<"${git_mount_body}")"
+git_mount_directory_count="$(awk 'index($0, "GIT_DIR=${container_git_directory}") { count += 1 } END { print count + 0 }' <<<"${git_mount_body}")"
+git_mount_common_directory_count="$(awk 'index($0, "GIT_COMMON_DIR=/git-common") { count += 1 } END { print count + 0 }' <<<"${git_mount_body}")"
+git_mount_work_tree_count="$(awk 'index($0, "GIT_WORK_TREE=/source") { count += 1 } END { print count + 0 }' <<<"${git_mount_body}")"
+git_mount_commondir_contract_count="$(awk 'index($0, "== '\''../..'\''") { count += 1 } END { print count + 0 }' <<<"${git_mount_body}")"
+git_mount_backlink_count="$(awk 'index($0, "${git_directory}/gitdir") { count += 1 } END { print count + 0 }' <<<"${git_mount_body}")"
+[[ "${git_mount_common_ro_count}" -eq 1 && "${git_mount_directory_count}" -eq 1 &&
+  "${git_mount_common_directory_count}" -eq 1 && "${git_mount_work_tree_count}" -eq 1 &&
+  "${git_mount_commondir_contract_count}" -eq 1 && "${git_mount_backlink_count}" -eq 3 ]] \
+  || fail "Git metadata mount does not pin a structurally validated repository to fixed read-only paths"
+for git_mount_consumer in \
+  security_validate_git_repository_inputs \
+  security_validate_text_inventory \
+  security_run_gitleaks_normalized_text \
+  security_run_gitleaks_history \
+  security_run_gitleaks_staged; do
+  git_mount_consumer_body="$(declare -f "${git_mount_consumer}")" || fail "could not inspect ${git_mount_consumer}"
+  git_mount_consumer_count="$(awk 'index($0, "security_append_git_repository_mount") { count += 1 } END { print count + 0 }' <<<"${git_mount_consumer_body}")"
+  [[ "${git_mount_consumer_count}" -eq 1 ]] || fail "${git_mount_consumer} does not use the Git metadata mount exactly once"
+done
+git_directory_body="$(declare -f security_run_gitleaks_directory)" || fail "could not inspect directory-only Gitleaks helper"
+git_directory_mount_count="$(awk 'index($0, "security_append_git_repository_mount") { count += 1 } END { print count + 0 }' <<<"${git_directory_body}")"
+[[ "${git_directory_mount_count}" -eq 0 ]] || fail "directory-only Gitleaks received unnecessary Git metadata"
+unset git_mount_body git_mount_common_ro_count git_mount_directory_count git_mount_common_directory_count git_mount_work_tree_count git_mount_commondir_contract_count git_mount_backlink_count git_mount_consumer git_mount_consumer_body git_mount_consumer_count git_directory_body git_directory_mount_count
+pass "Git consumers mount normal and linked-worktree metadata through one fixed read-only boundary"
+
 commit_gate_trusted_diff_count="$(awk 'index($0, "trusted_git diff ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-before-commit.sh")"
 commit_gate_hardened_diff_count="$(awk 'index($0, "trusted_git diff --no-ext-diff --no-textconv ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-before-commit.sh")"
 [[ "${commit_gate_trusted_diff_count}" -eq 8 && "${commit_gate_hardened_diff_count}" -eq 8 ]] \
@@ -362,6 +390,113 @@ git -C "${git_guard_repo}" -c user.name='Git Guard Fixture' -c user.email='git-g
 guarded_replacement_commit="$(git -C "${git_guard_repo}" rev-parse HEAD)"
 security_validate_git_repository_inputs "${git_guard_repo}" \
   || fail "self-contained Git fixture was rejected"
+git_guard_linked_worktree="${text_policy_fixture}/git-guard-linked-worktree"
+git -C "${git_guard_repo}" worktree add --quiet --detach "${git_guard_linked_worktree}" HEAD
+security_validate_git_repository_inputs "${git_guard_linked_worktree}" \
+  || fail "linked Git worktree fixture was rejected"
+printf 'linked binary\0fixture\n' >"${git_guard_linked_worktree}/plain.txt"
+git -C "${git_guard_linked_worktree}" add plain.txt
+expect_failure \
+  "linked Git worktree-specific staged binary fixture" \
+  security_validate_staged_text_files \
+  "${git_guard_linked_worktree}"
+git_guard_linked_runtime_secret="$(printf '%s%s%s%s' 'gh' 'p_' 'L1m2N3o4P5q6R7s8' 'T9u0V1w2X3y4Z5a6B7c8')"
+printf 'token=%s\n' "${git_guard_linked_runtime_secret}" >"${git_guard_linked_worktree}/plain.txt"
+git -C "${git_guard_linked_worktree}" add plain.txt
+expect_failure \
+  "linked Git worktree-specific normalized staged secret fixture" \
+  security_run_gitleaks_normalized_text \
+  "${git_guard_linked_worktree}" \
+  staged \
+  "${gitleaks_config}" \
+  "${output_root}/linked-worktree-normalized-staged-negative.log"
+grep -Fq -- 'leaks found' "${output_root}/linked-worktree-normalized-staged-negative.log" \
+  || fail "linked Git worktree normalized staged failure did not contain a finding"
+if grep -Fq -- "${git_guard_linked_runtime_secret}" "${output_root}/linked-worktree-normalized-staged-negative.log"; then
+  fail "linked Git worktree normalized staged output exposed the runtime secret"
+fi
+expect_failure \
+  "linked Git worktree-specific staged secret fixture" \
+  security_run_gitleaks_staged \
+  "${git_guard_linked_worktree}" \
+  "${gitleaks_config}" \
+  '' \
+  "${output_root}/linked-worktree-staged-negative.log"
+grep -Fq -- 'leaks found' "${output_root}/linked-worktree-staged-negative.log" \
+  || fail "linked Git worktree staged failure did not contain a finding"
+if grep -Fq -- "${git_guard_linked_runtime_secret}" "${output_root}/linked-worktree-staged-negative.log"; then
+  fail "linked Git worktree staged output exposed the runtime secret"
+fi
+printf '%s\n' 'second revision' >"${git_guard_linked_worktree}/plain.txt"
+git -C "${git_guard_linked_worktree}" add plain.txt
+git -C "${git_guard_linked_worktree}" diff --cached --quiet -- \
+  || fail "linked Git worktree staged fixture was not restored"
+unset git_guard_linked_runtime_secret
+security_validate_staged_text_files "${git_guard_linked_worktree}" \
+  || fail "linked Git worktree staged inventory was rejected"
+security_validate_history_text_files "${git_guard_linked_worktree}" \
+  || fail "linked Git worktree history inventory was rejected"
+security_run_gitleaks_normalized_text \
+  "${git_guard_linked_worktree}" \
+  staged \
+  "${gitleaks_config}" \
+  "${output_root}/linked-worktree-normalized-staged.log" \
+  || fail "linked Git worktree normalized staged scan was rejected"
+security_run_gitleaks_normalized_text \
+  "${git_guard_linked_worktree}" \
+  history \
+  "${gitleaks_config}" \
+  "${output_root}/linked-worktree-normalized-history.log" \
+  || fail "linked Git worktree normalized history scan was rejected"
+security_run_gitleaks_history \
+  "${git_guard_linked_worktree}" \
+  "${gitleaks_config}" \
+  '' \
+  "${output_root}/linked-worktree-history.log" \
+  || fail "linked Git worktree history secret scan was rejected"
+security_run_gitleaks_staged \
+  "${git_guard_linked_worktree}" \
+  "${gitleaks_config}" \
+  '' \
+  "${output_root}/linked-worktree-staged.log" \
+  || fail "linked Git worktree staged secret scan was rejected"
+
+git_guard_linked_git_directory="$(git -C "${git_guard_linked_worktree}" rev-parse --absolute-git-dir)"
+git_guard_linked_git_entry="$(<"${git_guard_linked_worktree}/.git")"
+git_guard_linked_backlink="$(<"${git_guard_linked_git_directory}/gitdir")"
+printf '%s\n' "${git_guard_linked_git_entry}" 'unexpected second line' >"${git_guard_linked_worktree}/.git"
+expect_failure \
+  "multiline linked Git pointer fixture" \
+  security_validate_git_repository_inputs \
+  "${git_guard_linked_worktree}"
+printf '%s\n' "${git_guard_linked_git_entry}" >"${git_guard_linked_worktree}/.git"
+mv -- "${git_guard_linked_worktree}/.git" "${git_guard_linked_worktree}/.git.fixture"
+ln -s -- .git.fixture "${git_guard_linked_worktree}/.git"
+expect_failure \
+  "symlinked linked Git pointer fixture" \
+  security_validate_git_repository_inputs \
+  "${git_guard_linked_worktree}"
+unlink -- "${git_guard_linked_worktree}/.git"
+mv -- "${git_guard_linked_worktree}/.git.fixture" "${git_guard_linked_worktree}/.git"
+printf '%s\n' '../../..' >"${git_guard_linked_git_directory}/commondir"
+expect_failure \
+  "out-of-layout linked Git common directory fixture" \
+  security_validate_git_repository_inputs \
+  "${git_guard_linked_worktree}"
+printf '%s\n' '../..' >"${git_guard_linked_git_directory}/commondir"
+printf '%s\n' "${text_policy_fixture}/unrelated-git-entry" >"${git_guard_linked_git_directory}/gitdir"
+expect_failure \
+  "mismatched linked Git backlink fixture" \
+  security_validate_git_repository_inputs \
+  "${git_guard_linked_worktree}"
+printf '%s\n' "${git_guard_linked_backlink}" >"${git_guard_linked_git_directory}/gitdir"
+git -C "${git_guard_repo}" config --local core.fsmonitor /bin/false
+expect_failure \
+  "linked Git common execution config fixture" \
+  security_validate_git_repository_inputs \
+  "${git_guard_linked_worktree}"
+git -C "${git_guard_repo}" config --local --unset-all core.fsmonitor
+git -C "${git_guard_repo}" worktree remove --force "${git_guard_linked_worktree}"
 fsmonitor_marker="${text_policy_fixture}/fsmonitor-executed"
 fsmonitor_hook="${text_policy_fixture}/fsmonitor-hook.sh"
 printf '%s\n' \
