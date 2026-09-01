@@ -20,11 +20,6 @@ updates:
       day: "tuesday"
       time: "05:00"
       timezone: "Asia/Tokyo"
-    groups:
-      docker-version-updates:
-        applies-to: "version-updates"
-        patterns:
-          - "*"
     open-pull-requests-limit: 1
   - package-ecosystem: "docker-compose"
     directory: "/"

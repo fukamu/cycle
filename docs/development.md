@@ -28,7 +28,7 @@ sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1
 
 GitHub Actionsの外部Actionは完全な40文字commit SHAと同じ行のsemantic version comment、外部Container imageは可読なtagと`sha256` digestの組で固定します。`./scripts/check-supply-chain.sh`はworkflow、Dockerfile、Compose、運用tool registry、文書の全参照と同一tagのdigest一致を検証し、`./scripts/check-security.sh`もsecret scan完了後のcandidate snapshotへ同じpolicyを適用します。
 
-`.github/dependabot.yml`はGitHub Actionsを月曜、Dockerfileを火曜、Docker Composeを水曜の05:00（Asia/Tokyo）に週次確認し、ecosystemごとに全version updateを1つのPRへまとめます。PRではupstream release/tagと変更履歴を確認し、ActionのSHAとversion comment、またはimageのtagとdigestを同じ変更で更新して全gateを通します。障害時も固定自体を外さず、直前に確認済みのSHAまたはtag/digest組へreviewed commitで戻します。
+`.github/dependabot.yml`はGitHub Actionsを月曜、Dockerfileを火曜、Docker Composeを水曜の05:00（Asia/Tokyo）に週次確認します。GitHub ActionsとDocker Composeはecosystemごとの全version updateを1つのPRへまとめます。Dockerfile imageはgroupingせず、dependency単位のversion update PRとして1件ずつreviewします。各ecosystemの`open-pull-requests-limit: 1`はversion updateの同時open上限であり、別枠のsecurity updateを抑止しません。PRではupstream release/tagと変更履歴を確認し、ActionのSHAとversion comment、またはimageのtagとdigestを同じ変更で更新して全gateを通します。障害時も固定自体を外さず、直前に確認済みのSHAまたはtag/digest組へreviewed commitで戻します。
 
 `docker://`形式のActionはDependabotの更新対象外です。Actionlintのrelease確認、workflow参照、`scripts/lib/tool-images.sh`の対応値は手動で同じPRへ更新し、policy fixtureとsecurity gateでdriftを拒否します。
 
