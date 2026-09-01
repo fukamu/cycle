@@ -95,6 +95,77 @@ func TestRefreshRotatesCSRFAndVerifyCSRF(t *testing.T) {
 	}
 }
 
+func TestAuthenticateCoalescesActivityTouchAtThreshold(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		lastSeenAt  time.Time
+		wantTouch   bool
+		wantTouchAt time.Time
+		wantIdleAt  time.Time
+	}{
+		{
+			name:       "immediately before threshold",
+			lastSeenAt: testTime.Add(-15 * time.Minute).Add(time.Nanosecond),
+			wantTouch:  false,
+		},
+		{
+			name:        "exactly at threshold",
+			lastSeenAt:  testTime.Add(-15 * time.Minute),
+			wantTouch:   true,
+			wantTouchAt: testTime,
+			wantIdleAt:  testTime.Add(30 * 24 * time.Hour),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			repository := &fakeRepository{found: AuthenticatedSession{
+				ID:         "00000000-0000-7000-8000-000000000009",
+				UserID:     user.ID("00000000-0000-7000-8000-000000000001"),
+				LastSeenAt: test.lastSeenAt,
+			}}
+			record, err := testService(repository).Authenticate(context.Background(), "session-token")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.ID != repository.found.ID {
+				t.Fatalf("Authenticate() record = %#v, want %#v", record, repository.found)
+			}
+			if repository.touchCalls != boolToInt(test.wantTouch) {
+				t.Fatalf("Touch() calls = %d, want %d", repository.touchCalls, boolToInt(test.wantTouch))
+			}
+			if test.wantTouch && (!repository.touchAt.Equal(test.wantTouchAt) || !repository.touchIdleAt.Equal(test.wantIdleAt)) {
+				t.Fatalf("Touch() times = %s/%s, want %s/%s",
+					repository.touchAt, repository.touchIdleAt, test.wantTouchAt, test.wantIdleAt)
+			}
+		})
+	}
+}
+
+func TestAuthenticateKeepsTouchBestEffort(t *testing.T) {
+	t.Parallel()
+
+	touchErr := errors.New("touch failed")
+	repository := &fakeRepository{
+		found: AuthenticatedSession{
+			ID:         "00000000-0000-7000-8000-000000000009",
+			UserID:     user.ID("00000000-0000-7000-8000-000000000001"),
+			LastSeenAt: testTime.Add(-time.Hour),
+		},
+		touchErr: touchErr,
+	}
+	record, err := testService(repository).Authenticate(context.Background(), "session-token")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v, want nil despite %v", err, touchErr)
+	}
+	if record.ID != repository.found.ID || repository.touchCalls != 1 {
+		t.Fatalf("Authenticate() record/calls = %#v/%d, want original record and one best-effort touch", record, repository.touchCalls)
+	}
+}
+
 var testTime = time.Date(2026, time.August, 16, 0, 0, 0, 0, time.UTC)
 
 func testService(repository Repository) *Service {
@@ -143,6 +214,10 @@ type fakeRepository struct {
 	found        AuthenticatedSession
 	rotatedHash  []byte
 	touched      bool
+	touchCalls   int
+	touchAt      time.Time
+	touchIdleAt  time.Time
+	touchErr     error
 	replayed     bool
 	replayUserID user.ID
 }
@@ -159,9 +234,12 @@ func (repository *fakeRepository) RotateCSRF(_ context.Context, _ string, hash [
 	return nil
 }
 
-func (repository *fakeRepository) Touch(context.Context, string, time.Time, time.Time) error {
+func (repository *fakeRepository) Touch(_ context.Context, _ string, now time.Time, idleExpiresAt time.Time) error {
 	repository.touched = true
-	return nil
+	repository.touchCalls++
+	repository.touchAt = now
+	repository.touchIdleAt = idleExpiresAt
+	return repository.touchErr
 }
 
 func (repository *fakeRepository) CreateOrResumeAnonymous(_ context.Context, input CreateAnonymousRecord) (AnonymousRecord, error) {
@@ -173,4 +251,11 @@ func (repository *fakeRepository) CreateOrResumeAnonymous(_ context.Context, inp
 		return AnonymousRecord{UserID: repository.replayUserID, Created: false}, nil
 	}
 	return AnonymousRecord{UserID: input.UserID, Created: true}, nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
