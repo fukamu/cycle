@@ -78,8 +78,8 @@ func (repository *SessionRepository) RotateCSRF(ctx context.Context, sessionID s
 
 func (repository *SessionRepository) Touch(ctx context.Context, sessionID string, now time.Time, idleExpiresAt time.Time) error {
 	return repository.queries.TouchSession(ctx, db.TouchSessionParams{
-		ID:            mustUUID(sessionID),
-		LastSeenAt:    timestamptz(now),
+		SessionID:     mustUUID(sessionID),
+		TouchedAt:     timestamptz(now),
 		IdleExpiresAt: timestamptz(idleExpiresAt),
 	})
 }

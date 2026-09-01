@@ -256,74 +256,135 @@ func TestSessionRepositoryRotateCSRFRequiresExactlyOneActiveSession(t *testing.T
 	}
 }
 
-func TestSessionRepositoryTouchCapsIdleExpiryAtAbsoluteExpiry(t *testing.T) {
+func TestSessionRepositoryTouchUpdatesSessionAndUserMonotonically(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	now := integrationNow()
 	const userID = "10000000-0000-7000-8000-000000000031"
 	insertSessionRepositoryUser(t, pool, userID, now)
-
-	fixtures := []struct {
-		fixture     sessionRepositoryFixture
-		proposed    time.Time
-		wantIdle    time.Time
-		wantTouched bool
-	}{
-		{
-			fixture: sessionRepositoryFixture{
-				id: "20000000-0000-7000-8000-000000000031", userID: userID,
-				tokenHash: []byte("touch-capped-token"), csrfHash: []byte("touch-capped-csrf"),
-				lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), absoluteExpiresAt: now.Add(2 * time.Hour),
-			},
-			proposed: now.Add(3 * time.Hour), wantIdle: now.Add(2 * time.Hour), wantTouched: true,
-		},
-		{
-			fixture: sessionRepositoryFixture{
-				id: "20000000-0000-7000-8000-000000000032", userID: userID,
-				tokenHash: []byte("touch-uncapped-token"), csrfHash: []byte("touch-uncapped-csrf"),
-				lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), absoluteExpiresAt: now.Add(4 * time.Hour),
-			},
-			proposed: now.Add(90 * time.Minute), wantIdle: now.Add(90 * time.Minute), wantTouched: true,
-		},
+	fixture := sessionRepositoryFixture{
+		id: "20000000-0000-7000-8000-000000000031", userID: userID,
+		tokenHash: []byte("touch-monotonic-token"), csrfHash: []byte("touch-monotonic-csrf"),
+		lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), absoluteExpiresAt: now.Add(2 * time.Hour),
 	}
-	revokedAt := now.Add(-time.Minute)
-	fixtures = append(fixtures, struct {
-		fixture     sessionRepositoryFixture
-		proposed    time.Time
-		wantIdle    time.Time
-		wantTouched bool
-	}{
-		fixture: sessionRepositoryFixture{
-			id: "20000000-0000-7000-8000-000000000033", userID: userID,
-			tokenHash: []byte("touch-revoked-token"), csrfHash: []byte("touch-revoked-csrf"),
-			lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), absoluteExpiresAt: now.Add(4 * time.Hour), revokedAt: &revokedAt,
-		},
-		proposed: now.Add(2 * time.Hour), wantIdle: now.Add(time.Hour), wantTouched: false,
+	insertSessionRepositorySession(t, pool, fixture)
+	repository := NewSessionRepository(pool)
+	newerTouchAt := now.Add(30 * time.Minute)
+	if err := repository.Touch(context.Background(), fixture.id, newerTouchAt, now.Add(3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionRepositoryActivityTimes(t, pool, fixture.id, userID, sessionRepositoryActivityTimes{
+		lastSeenAt: newerTouchAt, idleExpiresAt: fixture.absoluteExpiresAt,
+		lastActiveAt: newerTouchAt, userUpdatedAt: newerTouchAt,
 	})
 
-	repository := NewSessionRepository(pool)
+	if _, err := pool.Exec(context.Background(), `UPDATE users
+SET last_active_at=$2, updated_at=$2
+WHERE id=$1`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Touch(context.Background(), fixture.id, now.Add(10*time.Minute), now.Add(90*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionRepositoryActivityTimes(t, pool, fixture.id, userID, sessionRepositoryActivityTimes{
+		lastSeenAt: newerTouchAt, idleExpiresAt: fixture.absoluteExpiresAt,
+		lastActiveAt: newerTouchAt, userUpdatedAt: newerTouchAt,
+	})
+}
+
+func TestSessionRepositoryTouchUsesUncappedIdleProposal(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const (
+		userID    = "10000000-0000-7000-8000-000000000035"
+		sessionID = "20000000-0000-7000-8000-000000000035"
+	)
+	insertSessionRepositoryUser(t, pool, userID, now)
+	insertSessionRepositorySession(t, pool, sessionRepositoryFixture{
+		id: sessionID, userID: userID,
+		tokenHash: []byte("touch-uncapped-token"), csrfHash: []byte("touch-uncapped-csrf"),
+		lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), absoluteExpiresAt: now.Add(4 * time.Hour),
+	})
 	touchedAt := now.Add(30 * time.Minute)
-	for _, test := range fixtures {
-		insertSessionRepositorySession(t, pool, test.fixture)
-		if err := repository.Touch(context.Background(), test.fixture.id, touchedAt, test.proposed); err != nil {
-			t.Fatal(err)
-		}
-		var lastSeenAt, idleExpiresAt, absoluteExpiresAt time.Time
-		if err := pool.QueryRow(context.Background(), `SELECT last_seen_at,idle_expires_at,absolute_expires_at
-FROM sessions WHERE id=$1`, test.fixture.id).Scan(&lastSeenAt, &idleExpiresAt, &absoluteExpiresAt); err != nil {
-			t.Fatal(err)
-		}
-		wantLastSeenAt := test.fixture.lastSeenAt
-		if test.wantTouched {
-			wantLastSeenAt = touchedAt
-		}
-		if !lastSeenAt.Equal(wantLastSeenAt) || !idleExpiresAt.Equal(test.wantIdle) ||
-			!absoluteExpiresAt.Equal(test.fixture.absoluteExpiresAt) {
-			t.Fatalf("Touch(%s) times = %s / %s / %s; want %s / %s / %s", test.fixture.id,
-				lastSeenAt, idleExpiresAt, absoluteExpiresAt,
-				wantLastSeenAt, test.wantIdle, test.fixture.absoluteExpiresAt)
+	idleExpiresAt := now.Add(90 * time.Minute)
+	if err := NewSessionRepository(pool).Touch(context.Background(), sessionID, touchedAt, idleExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionRepositoryActivityTimes(t, pool, sessionID, userID, sessionRepositoryActivityTimes{
+		lastSeenAt: touchedAt, idleExpiresAt: idleExpiresAt,
+		lastActiveAt: touchedAt, userUpdatedAt: touchedAt,
+	})
+}
+
+func TestSessionRepositoryTouchDoesNotMutateRevokedOrMissingSessionOwner(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const (
+		userID    = "10000000-0000-7000-8000-000000000032"
+		sessionID = "20000000-0000-7000-8000-000000000032"
+		missingID = "20000000-0000-7000-8000-000000000033"
+	)
+	insertSessionRepositoryUser(t, pool, userID, now)
+	revokedAt := now.Add(-time.Minute)
+	fixture := sessionRepositoryFixture{
+		id: sessionID, userID: userID,
+		tokenHash: []byte("touch-revoked-token"), csrfHash: []byte("touch-revoked-csrf"),
+		lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), absoluteExpiresAt: now.Add(4 * time.Hour),
+		revokedAt: &revokedAt,
+	}
+	insertSessionRepositorySession(t, pool, fixture)
+
+	repository := NewSessionRepository(pool)
+	for _, id := range []string{sessionID, missingID} {
+		if err := repository.Touch(context.Background(), id, now.Add(30*time.Minute), now.Add(2*time.Hour)); err != nil {
+			t.Fatalf("Touch(%s) error = %v", id, err)
 		}
 	}
+	assertSessionRepositoryActivityTimes(t, pool, sessionID, userID, sessionRepositoryActivityTimes{
+		lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), lastActiveAt: now, userUpdatedAt: now,
+	})
+}
+
+func TestSessionRepositoryTouchRollsBackSessionWhenUserUpdateFails(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const (
+		userID    = "10000000-0000-7000-8000-000000000034"
+		sessionID = "20000000-0000-7000-8000-000000000034"
+	)
+	insertSessionRepositoryUser(t, pool, userID, now)
+	fixture := sessionRepositoryFixture{
+		id: sessionID, userID: userID,
+		tokenHash: []byte("touch-atomic-token"), csrfHash: []byte("touch-atomic-csrf"),
+		lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), absoluteExpiresAt: now.Add(4 * time.Hour),
+	}
+	insertSessionRepositorySession(t, pool, fixture)
+	if _, err := pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS reject_session_activity_user_update ON users`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `CREATE OR REPLACE FUNCTION reject_session_activity_user_update()
+RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'reject activity update'; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `CREATE TRIGGER reject_session_activity_user_update
+BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION reject_session_activity_user_update()`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS reject_session_activity_user_update ON users`)
+		_, _ = pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS reject_session_activity_user_update()`)
+	})
+
+	err := NewSessionRepository(pool).Touch(context.Background(), sessionID, now.Add(30*time.Minute), now.Add(2*time.Hour))
+	if err == nil {
+		t.Fatal("Touch() succeeded despite rejecting the User update")
+	}
+	assertSessionRepositoryActivityTimes(t, pool, sessionID, userID, sessionRepositoryActivityTimes{
+		lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), lastActiveAt: now, userUpdatedAt: now,
+	})
 }
 
 func TestSessionRepositoryResumesLiveAnonymousBootstrap(t *testing.T) {
@@ -475,6 +536,13 @@ type sessionRepositoryFixture struct {
 	revokedAt         *time.Time
 }
 
+type sessionRepositoryActivityTimes struct {
+	lastSeenAt    time.Time
+	idleExpiresAt time.Time
+	lastActiveAt  time.Time
+	userUpdatedAt time.Time
+}
+
 func insertSessionRepositoryUser(t *testing.T, pool *pgxpool.Pool, userID string, now time.Time) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `INSERT INTO users(id,last_active_at,created_at,updated_at)
@@ -490,6 +558,35 @@ func insertSessionRepositorySession(t *testing.T, pool *pgxpool.Pool, fixture se
 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, fixture.id, fixture.userID, fixture.tokenHash, fixture.csrfHash,
 		fixture.lastSeenAt, fixture.lastSeenAt, fixture.idleExpiresAt, fixture.absoluteExpiresAt, fixture.revokedAt); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertSessionRepositoryActivityTimes(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	sessionID string,
+	userID string,
+	want sessionRepositoryActivityTimes,
+) {
+	t.Helper()
+	var got sessionRepositoryActivityTimes
+	if err := pool.QueryRow(context.Background(), `SELECT
+(SELECT last_seen_at FROM sessions WHERE id=$1),
+(SELECT idle_expires_at FROM sessions WHERE id=$1),
+(SELECT last_active_at FROM users WHERE id=$2),
+(SELECT updated_at FROM users WHERE id=$2)`, sessionID, userID).Scan(
+		&got.lastSeenAt,
+		&got.idleExpiresAt,
+		&got.lastActiveAt,
+		&got.userUpdatedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !got.lastSeenAt.Equal(want.lastSeenAt) ||
+		!got.idleExpiresAt.Equal(want.idleExpiresAt) ||
+		!got.lastActiveAt.Equal(want.lastActiveAt) ||
+		!got.userUpdatedAt.Equal(want.userUpdatedAt) {
+		t.Fatalf("activity times = %#v, want %#v", got, want)
 	}
 }
 
