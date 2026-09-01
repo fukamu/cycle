@@ -608,11 +608,6 @@ const canonicalDependabot = [
   '      day: "tuesday"',
   '      time: "05:00"',
   '      timezone: "Asia/Tokyo"',
-  "    groups:",
-  "      docker-version-updates:",
-  '        applies-to: "version-updates"',
-  "        patterns:",
-  '          - "*"',
   "    open-pull-requests-limit: 1",
   '  - package-ecosystem: "docker-compose"',
   '    directory: "/"',
@@ -728,7 +723,7 @@ if (dependabotSource !== null && dependabotSource !== canonicalDependabot) {
   report(
     ".github/dependabot.yml",
     1,
-    "Dependabot must retain the reviewed weekly, one-group-per-ecosystem update contract",
+    "Dependabot must retain the reviewed ecosystem-specific weekly update contract",
   );
 }
 

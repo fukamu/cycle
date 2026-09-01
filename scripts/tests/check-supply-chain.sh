@@ -80,7 +80,7 @@ node "${checker}" "${fixture}" >"${test_root}/positive-output" \
   || fail "canonical immutable supply-chain fixture was rejected"
 grep -Fq -- 'Supply-chain policy passed' "${test_root}/positive-output" \
   || fail "canonical fixture did not report policy success"
-pass "canonical Actions, images, documentation, and Dependabot configuration pass"
+pass "canonical Actions/Compose grouping and individual Docker updates pass"
 
 fixture="$(new_fixture mutable-action)"
 replace_first "${fixture}/.github/workflows/ci.yml" \
@@ -134,10 +134,35 @@ replace_first "${fixture}/compose.local.yaml" \
   'postgres:18.6-alpine3.24@sha256:0000000000000000000000000000000000000000000000000000000000000000'
 assert_policy_failure "same image tag with conflicting digests" "${fixture}"
 
-fixture="$(new_fixture dependabot-schedule-drift)"
+dependabot_docker_block=$'  - package-ecosystem: "docker"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n      day: "tuesday"\n      time: "05:00"\n      timezone: "Asia/Tokyo"\n    open-pull-requests-limit: 1'
+
+fixture="$(new_fixture dependabot-docker-group-reintroduced)"
 replace_first "${fixture}/.github/dependabot.yml" \
-  '      interval: "weekly"' '      interval: "daily"'
-assert_policy_failure "Dependabot weekly schedule drift" "${fixture}"
+  "${dependabot_docker_block}" \
+  $'  - package-ecosystem: "docker"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n      day: "tuesday"\n      time: "05:00"\n      timezone: "Asia/Tokyo"\n    groups:\n      docker-version-updates:\n        applies-to: "version-updates"\n        patterns:\n          - "*"\n    open-pull-requests-limit: 1'
+assert_policy_failure "Dependabot Docker wildcard group reintroduced" "${fixture}"
+
+fixture="$(new_fixture dependabot-docker-schedule-drift)"
+replace_first "${fixture}/.github/dependabot.yml" \
+  "${dependabot_docker_block}" \
+  $'  - package-ecosystem: "docker"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n      day: "thursday"\n      time: "05:00"\n      timezone: "Asia/Tokyo"\n    open-pull-requests-limit: 1'
+assert_policy_failure "Dependabot Docker schedule drift" "${fixture}"
+
+fixture="$(new_fixture dependabot-docker-open-limit-drift)"
+replace_first "${fixture}/.github/dependabot.yml" \
+  "${dependabot_docker_block}" \
+  $'  - package-ecosystem: "docker"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n      day: "tuesday"\n      time: "05:00"\n      timezone: "Asia/Tokyo"\n    open-pull-requests-limit: 2'
+assert_policy_failure "Dependabot Docker open PR limit drift" "${fixture}"
+
+fixture="$(new_fixture dependabot-actions-group-removed)"
+replace_first "${fixture}/.github/dependabot.yml" \
+  $'    groups:\n      github-actions-version-updates:\n        applies-to: "version-updates"\n        patterns:\n          - "*"\n' ''
+assert_policy_failure "Dependabot GitHub Actions group removed" "${fixture}"
+
+fixture="$(new_fixture dependabot-compose-group-removed)"
+replace_first "${fixture}/.github/dependabot.yml" \
+  $'    groups:\n      docker-compose-version-updates:\n        applies-to: "version-updates"\n        patterns:\n          - "*"\n' ''
+assert_policy_failure "Dependabot Docker Compose group removed" "${fixture}"
 
 fixture="$(new_fixture dependabot-ecosystem-drift)"
 replace_first "${fixture}/.github/dependabot.yml" \
