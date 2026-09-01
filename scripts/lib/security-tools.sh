@@ -5,11 +5,11 @@
 # by scripts/check-supply-chain.mjs against the candidate snapshot.
 readonly SECURITY_PNPM_IMAGE='ghcr.io/pnpm/pnpm:11.22.0@sha256:eba76954b37ec1ba6187f0adb39caee1e31733194857eedd01319da0af3fa00d'
 readonly SECURITY_NODE_IMAGE='node:24.19.0@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584'
-readonly SECURITY_GO_IMAGE='golang:1.26.6@sha256:0d1d3a794be25f809dd2cb3160d8c73276c4056a9f8242a138e908ddeee7b6b6'
+readonly SECURITY_GO_IMAGE='golang:1.27.0@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146'
 readonly SECURITY_GITLEAKS_IMAGE='ghcr.io/gitleaks/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9'
 readonly SECURITY_TRIVY_IMAGE='ghcr.io/aquasecurity/trivy:0.73.0@sha256:7cced7cae583819fc7806d4cbc0dbbc7cad18b99f7d3e235192e6da8c091045c'
 readonly SECURITY_TERRAFORM_IMAGE='hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963'
-readonly SECURITY_GOSEC_VERSION='v2.22.11'
+readonly SECURITY_GOSEC_VERSION='v2.29.0'
 readonly SECURITY_GOVULNCHECK_VERSION='v1.7.0'
 # backend/server.exe was an accidentally committed local Go build in the
 # repository-foundation commit and was removed in 8ba77db. Printable ASCII and
@@ -1379,7 +1379,8 @@ security_validate_go_module_policy() {
           !object(report) || !object(report.Module) ||
           typeof report.Module.Path !== "string" || report.Module.Path.length < 1 ||
           typeof report.Go !== "string" || report.Go.length < 1 ||
-          report.Replace !== null || report.Ignore !== null ||
+          (Object.prototype.hasOwnProperty.call(report, "Replace") && report.Replace !== null) ||
+          (Object.prototype.hasOwnProperty.call(report, "Ignore") && report.Ignore !== null) ||
           (Object.prototype.hasOwnProperty.call(report, "Toolchain") && report.Toolchain !== null)
         ) {
           throw new Error("unapproved Go module directive");
@@ -2283,7 +2284,7 @@ security_classify_json_report() {
           requireSchema(
             moduleVersionStat.isFile() && !moduleVersionStat.isSymbolicLink() &&
             moduleVersionStat.size > 0 && moduleVersionStat.size <= 32 &&
-            fs.readFileSync(moduleVersionPath, "utf8") === "v2.22.11\n",
+            fs.readFileSync(moduleVersionPath, "utf8") === "v2.29.0\n",
           );
           for (const field of ["files", "lines", "nosec", "found"]) {
             requireSchema(own(report.Stats, field) && integer(report.Stats[field]));

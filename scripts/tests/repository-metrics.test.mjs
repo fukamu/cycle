@@ -79,7 +79,7 @@ function createFixture(parent, name, expanded) {
     "backend/go.mod",
     `module example.test/metrics
 
-go 1.26.0
+go 1.27.0
 
 require example.test/direct v1.0.0
 

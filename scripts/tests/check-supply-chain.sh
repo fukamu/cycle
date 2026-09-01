@@ -72,7 +72,7 @@ checkout_pin='actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 actionlint_pin='docker://rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12'
 postgres_pin='postgres:18.6-alpine3.24@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2'
 syntax_pin='docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e'
-golang_alpine_pin='golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83'
+golang_alpine_pin='golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc'
 shellcheck_pin='koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d'
 
 fixture="$(new_fixture valid)"
@@ -108,7 +108,7 @@ assert_policy_failure "BuildKit syntax image without a digest" "${fixture}"
 
 fixture="$(new_fixture mutable-base-image)"
 replace_first "${fixture}/Dockerfile" \
-  "${golang_alpine_pin}" 'golang:1.26.6-alpine'
+  "${golang_alpine_pin}" 'golang:1.27.0-alpine'
 assert_policy_failure "Dockerfile base image without a digest" "${fixture}"
 
 fixture="$(new_fixture mutable-compose-image)"

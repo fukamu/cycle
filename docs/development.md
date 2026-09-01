@@ -6,15 +6,15 @@
 
 - Bash 5.0以上とGNU userland（Ubuntu 20.04/24.04、WSL2）
 - Node.js 24以上、pnpm 11.22.0（lock fileはrootの `pnpm-lock.yaml`）
-- Go 1.26.6
+- Go 1.27.0
 - PostgreSQL（version、固定Docker image、起動方法は [`database.md`](database.md#local-postgresql)）
-- sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.26.6によるfallbackも利用可能）
+- sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.27.0によるfallbackも利用可能）
 - Docker EngineとDocker Buildx（PostgreSQLの簡易起動、Cloudflare Container imageのbuild、InfrastructureのDocker build context監査に必要）
 - Chromium（E2Eを実行する場合）
 - Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
 - Python 3と`curl`、`jq`、`openssl`、`realpath`、`sha256sum`、`base64`、`tar`、`zip`、`script`、`sed`、`awk`、`find`、`sort`、`mktemp`
 
-CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.26.6と [`database.md`のPostgreSQL pin](database.md#構成)を前提にします。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
+CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.27.0と [`database.md`のPostgreSQL pin](database.md#構成)を前提にします。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
 
 sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1.31.1がHostにあればそれを使い、なければ`sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537`を`docker run --rm`で起動します。Docker serverも利用できない場合は、Goでpin済みの一時toolを`.tmp/tools`へbuildしてfallbackします。これによりsqlcをHostへ常設する必要はありません。Docker/Goはいずれも初回だけimageまたはmoduleのdownloadが必要で、一時toolは通常のsafe clean対象です。
 
@@ -159,7 +159,7 @@ Security profileだけを実行する場合は、次を使います。
 ./scripts/check-security.sh
 ```
 
-このprofileはpnpm 11.22.0、Gitleaks 8.30.0、Trivy 0.73.0、Terraform 1.15.8のscanner/parser imageをdigestで固定し、`govulncheck` 1.7.0と`gosec` 2.22.11を固定して実行します。Node lockfile、到達可能なGo脆弱性、GoのHIGH/high-confidence静的所見、Git全履歴・stage済みindex・trackedとGit非ignoreのcandidate treeにあるsecret、Terraformとproduction Dockerfile、実際にbuildしたproduction container imageが対象です。Candidate snapshotはtrackedと非ignoreの通常fileだけから作成し、tracked+ignored path、symlink、special fileを拒否します。Candidate・index・全履歴はapproved ASCII path/type、UTF-8、control byte、1 objectあたり16 MiB、entry/manifest sizeの上限をfail-closedに検証し、全merge historyのblobに加えてcommit/tag本文、candidate/index/history path、ref名もpath/MIME skipを受けない正規化viewでscanします。既知の旧`backend/server.exe`はexact object/path/size、正規化viewのreview済み履歴blobはexact OID、Gitleaks例外はexact commit/path/rule/line fingerprintだけを許可し、globやrule単位の例外を拒否します。Gitleaks本体は`--max-target-megabytes=0`でfile size skipを無効化しますが、前段のapproved-text inventoryには前述の16 MiB/object境界があります。
+このprofileはpnpm 11.22.0、Gitleaks 8.30.0、Trivy 0.73.0、Terraform 1.15.8のscanner/parser imageをdigestで固定し、`govulncheck` 1.7.0と`gosec` 2.29.0を固定して実行します。Node lockfile、到達可能なGo脆弱性、GoのHIGH/high-confidence静的所見、Git全履歴・stage済みindex・trackedとGit非ignoreのcandidate treeにあるsecret、Terraformとproduction Dockerfile、実際にbuildしたproduction container imageが対象です。Candidate snapshotはtrackedと非ignoreの通常fileだけから作成し、tracked+ignored path、symlink、special fileを拒否します。Candidate・index・全履歴はapproved ASCII path/type、UTF-8、control byte、1 objectあたり16 MiB、entry/manifest sizeの上限をfail-closedに検証し、全merge historyのblobに加えてcommit/tag本文、candidate/index/history path、ref名もpath/MIME skipを受けない正規化viewでscanします。既知の旧`backend/server.exe`はexact object/path/size、正規化viewのreview済み履歴blobはexact OID、Gitleaks例外はexact commit/path/rule/line fingerprintだけを許可し、globやrule単位の例外を拒否します。Gitleaks本体は`--max-target-megabytes=0`でfile size skipを無効化しますが、前段のapproved-text inventoryには前述の16 MiB/object境界があります。
 
 Repositoryを読むGit commandはambient環境とglobal/system configを除去し、pager、external diff/textconv、fsmonitor、untracked cache、hook、lazy fetch、replace/graft、alternate object store、include/worktree config、promisor/partial-cloneを無効化または拒否して、完全な自己完結object graphを検証します。Container内でGit metadataが必要な検査は、通常checkoutの`.git` directoryまたはlinked worktreeの`.git` pointer、`commondir`、backlinkを構造検証し、common Git directoryだけを固定pathへread-only mountして対象worktreeを明示します。`check.sh`がcompile確認用に生成する一時Go binaryは配布せず、linked worktreeでも未隔離のVCS commandを起動しないよう`-buildvcs=false`でbuildします。Node policyはroot `packageManager`、workspace/package/script集合、build許可、lockfileのsemantic dependency graphとregistry-integrity形式をexactに照合し、lifecycle script、package patch/source override、非exact dependency、runtime selector、`.npmrc`、pnpm hook fileを実行前に拒否します。Goは`GOENV=off`、`GOWORK=off`、`GOTOOLCHAIN=local`、`-mod=readonly`とproduction同等の`CGO_ENABLED=0`、`GOOS=linux`で、workspace/vendor/replace/ignore/toolchain overrideを拒否します。Terraformはnetworkless lexerと固定Terraform parserで`.tf.json`、`.tfvars*`、`.terraform`、実module blockを拒否し、文字列・comment・heredoc内のdecoyは区別します。Archive展開と再帰decodeはreview済みの深度5へ固定し、archiveの深度超過・暗号化・解析error・size skipはgateを失敗させます。Decode深度6以上は検出保証外とする意図的なbounded policyで、深度変更には負例とsecurity reviewが必要です。Scanner・registry・advisory databaseの取得失敗、report schema不一致、解析不能、対象severityのfindingはいずれもgateを失敗させ、秘密値やsource snippetを含むraw reportは表示しません。一時image tagとscan用fileは終了時に削除します。
 
