@@ -26,6 +26,7 @@ type apiError struct {
 }
 
 var (
+	errSessionRefreshFailed      = errors.New("session refresh failed")
 	errSessionIdentityChanged    = errors.New("authenticated session identity changed")
 	errAccountUpgradeFailed      = errors.New("account upgrade failed")
 	errGoogleLoginFailed         = errors.New("google login failed")
