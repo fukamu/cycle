@@ -26,9 +26,10 @@ import type {
   Home,
   Session,
 } from "../shared/api/schemas";
-import { APIError } from "../shared/api/client";
+import { APIError, type AuthenticatedRequestLease } from "../shared/api/client";
 import {
   adoptGoalDraft,
+  createGoalDraft,
   discardGoalDraft,
   getGoalDraft,
   getHome,
@@ -190,6 +191,373 @@ describe("NewGoalPage", () => {
       cycle: startedCycle,
       replayed: true,
     });
+  });
+
+  it("converges an exact creation conflict through canonical Home without resending POST", async () => {
+    const emptyHome: Home = {
+      ...home,
+      creationDraft: null,
+      canCreateGoalDraft: true,
+    };
+    const existingDraft: GoalDraft = {
+      ...draft,
+      id: "20000000-0000-7000-8000-000000000010",
+      body: "別のタブで保存された目標",
+      revision: 3,
+      updatedAt: "2026-08-20T00:10:00.000Z",
+    };
+    const canonicalHome: Home = {
+      ...home,
+      creationDraft: existingDraft,
+    };
+    vi.mocked(getHome)
+      .mockReset()
+      .mockResolvedValueOnce(emptyHome)
+      .mockResolvedValueOnce(canonicalHome);
+    vi.mocked(createGoalDraft).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_CREATION_DRAFT_ALREADY_EXISTS",
+        "conflict",
+        "request-create-conflict",
+        { draftId: "details-must-not-be-used" },
+      ),
+    );
+    const cache = createCache();
+
+    renderPage(cache);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "下書きを作成" }),
+    );
+
+    expect(
+      await screen.findByRole("textbox", { name: "あなたの目標" }),
+    ).toHaveValue(existingDraft.body);
+    expect(createGoalDraft).toHaveBeenCalledOnce();
+    expect(createGoalDraft).toHaveBeenCalledWith(
+      sessionLease,
+      "",
+      session.csrfToken,
+    );
+    expect(getHome).toHaveBeenCalledTimes(2);
+    expect(getGoalDraft).not.toHaveBeenCalled();
+    expect(
+      cache.getQueryData<Home>(userQueryKeys.home(session.user.id)),
+    ).toEqual(canonicalHome);
+  });
+
+  it("does not converge or resend POST when canonical Home has no creation draft", async () => {
+    const emptyHome: Home = {
+      ...home,
+      creationDraft: null,
+      canCreateGoalDraft: true,
+    };
+    vi.mocked(getHome)
+      .mockReset()
+      .mockResolvedValueOnce(emptyHome)
+      .mockResolvedValueOnce(emptyHome);
+    vi.mocked(createGoalDraft).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_CREATION_DRAFT_ALREADY_EXISTS",
+        "conflict",
+        "request-create-missing",
+      ),
+    );
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "下書きを作成" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "下書きを作成できませんでした。時間をおいて再試行してください。",
+    );
+    expect(createGoalDraft).toHaveBeenCalledOnce();
+    expect(getHome).toHaveBeenCalledTimes(2);
+    expect(
+      screen.queryByRole("textbox", { name: "あなたの目標" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the original conflict when canonical Home recovery fails", async () => {
+    const emptyHome: Home = {
+      ...home,
+      creationDraft: null,
+      canCreateGoalDraft: true,
+    };
+    const conflict = new APIError(
+      409,
+      "GOAL_CREATION_DRAFT_ALREADY_EXISTS",
+      "conflict",
+      "request-create-fetch-failure",
+    );
+    vi.mocked(getHome)
+      .mockReset()
+      .mockResolvedValueOnce(emptyHome)
+      .mockRejectedValueOnce(new Error("canonical Home unavailable"));
+    vi.mocked(createGoalDraft).mockRejectedValueOnce(conflict);
+    const cache = createCache();
+
+    renderPage(cache);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "下書きを作成" }),
+    );
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(createGoalDraft).toHaveBeenCalledOnce();
+    expect(getHome).toHaveBeenCalledTimes(2);
+    expect(cache.getMutationCache().getAll()).toHaveLength(1);
+    expect(cache.getMutationCache().getAll()[0]?.state.error).toBe(conflict);
+  });
+
+  it("cancels an older in-flight Home query before canonical conflict recovery", async () => {
+    const emptyHome: Home = {
+      ...home,
+      creationDraft: null,
+      canCreateGoalDraft: true,
+    };
+    const staleHome: Home = {
+      ...emptyHome,
+      canStartProgressingGoal: false,
+    };
+    const canonicalDraft: GoalDraft = {
+      ...draft,
+      id: "20000000-0000-7000-8000-000000000012",
+      body: "競合後の canonical Home",
+    };
+    const canonicalHome: Home = {
+      ...home,
+      creationDraft: canonicalDraft,
+    };
+    const olderRefetch = deferred<Home>();
+    vi.mocked(getHome)
+      .mockReset()
+      .mockResolvedValueOnce(emptyHome)
+      .mockReturnValueOnce(olderRefetch.promise)
+      .mockResolvedValueOnce(canonicalHome);
+    vi.mocked(createGoalDraft).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_CREATION_DRAFT_ALREADY_EXISTS",
+        "conflict",
+        "request-create-deduplication",
+      ),
+    );
+    const cache = createCache();
+
+    renderPage(cache);
+    await screen.findByRole("button", { name: "下書きを作成" });
+    const olderRequest = cache.fetchQuery({
+      queryKey: userQueryKeys.home(session.user.id),
+      queryFn: ({ signal }) => getHome(sessionLease, signal),
+      staleTime: 0,
+      retry: false,
+    });
+    void olderRequest.catch(() => undefined);
+    await waitFor(() => expect(getHome).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "下書きを作成" }));
+
+    expect(
+      await screen.findByRole("textbox", { name: "あなたの目標" }),
+    ).toHaveValue(canonicalDraft.body);
+    expect(getHome).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(getHome).mock.calls[1]?.[1]?.aborted).toBe(true);
+    expect(createGoalDraft).toHaveBeenCalledOnce();
+
+    await act(async () => olderRefetch.resolve(staleHome));
+    await olderRequest.catch(() => undefined);
+    expect(
+      cache.getQueryData<Home>(userQueryKeys.home(session.user.id)),
+    ).toEqual(canonicalHome);
+  });
+
+  it("preserves a newer Home publication while conflict recovery is in flight", async () => {
+    const emptyHome: Home = {
+      ...home,
+      creationDraft: null,
+      canCreateGoalDraft: true,
+    };
+    const olderDraft: GoalDraft = {
+      ...draft,
+      id: "20000000-0000-7000-8000-000000000013",
+      body: "遅れて届いた revision 3",
+      revision: 3,
+    };
+    const newerDraft: GoalDraft = {
+      ...olderDraft,
+      body: "先に公開された revision 4",
+      revision: 4,
+    };
+    const olderHome: Home = { ...home, creationDraft: olderDraft };
+    const newerHome: Home = { ...home, creationDraft: newerDraft };
+    const recovery = deferred<Home>();
+    vi.mocked(getHome)
+      .mockReset()
+      .mockResolvedValueOnce(emptyHome)
+      .mockReturnValueOnce(recovery.promise);
+    vi.mocked(createGoalDraft).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_CREATION_DRAFT_ALREADY_EXISTS",
+        "conflict",
+        "request-create-newer-home",
+      ),
+    );
+    const cache = createCache();
+
+    renderPage(cache);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "下書きを作成" }),
+    );
+    await waitFor(() => expect(getHome).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      cache.setQueryData(userQueryKeys.home(session.user.id), newerHome);
+    });
+    expect(
+      await screen.findByRole("textbox", { name: "あなたの目標" }),
+    ).toHaveValue(newerDraft.body);
+
+    await act(async () => recovery.resolve(olderHome));
+    await waitFor(() =>
+      expect(cache.getMutationCache().getAll()[0]?.state.status).toBe(
+        "success",
+      ),
+    );
+
+    expect(
+      cache.getQueryData<Home>(userQueryKeys.home(session.user.id)),
+    ).toEqual(newerHome);
+    expect(screen.getByRole("textbox", { name: "あなたの目標" })).toHaveValue(
+      newerDraft.body,
+    );
+    expect(createGoalDraft).toHaveBeenCalledOnce();
+  });
+
+  it("does not overwrite a recreated Home query with the same update count", async () => {
+    const homeQueryKey = userQueryKeys.home(session.user.id);
+    const emptyHome: Home = {
+      ...home,
+      creationDraft: null,
+      canCreateGoalDraft: true,
+    };
+    const olderDraft: GoalDraft = {
+      ...draft,
+      id: "20000000-0000-7000-8000-000000000014",
+      body: "remove前のqueryへ届いた revision 3",
+      revision: 3,
+    };
+    const recreatedDraft: GoalDraft = {
+      ...olderDraft,
+      body: "再作成queryの revision 4",
+      revision: 4,
+    };
+    const olderHome: Home = { ...home, creationDraft: olderDraft };
+    const recreatedHome: Home = { ...home, creationDraft: recreatedDraft };
+    const recovery = deferred<Home>();
+    vi.mocked(getHome)
+      .mockReset()
+      .mockResolvedValueOnce(emptyHome)
+      .mockReturnValueOnce(recovery.promise);
+    vi.mocked(createGoalDraft).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_CREATION_DRAFT_ALREADY_EXISTS",
+        "conflict",
+        "request-create-home-query-aba",
+      ),
+    );
+    const cache = createCache();
+
+    renderPage(cache);
+    const createButton = await screen.findByRole("button", {
+      name: "下書きを作成",
+    });
+    const originalQuery = cache
+      .getQueryCache()
+      .find({ queryKey: homeQueryKey, exact: true });
+    const originalUpdateCount = originalQuery?.state.dataUpdateCount;
+
+    fireEvent.click(createButton);
+    await waitFor(() => expect(getHome).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      cache.removeQueries({ queryKey: homeQueryKey, exact: true });
+      cache.setQueryData(homeQueryKey, recreatedHome);
+    });
+    const recreatedQuery = cache
+      .getQueryCache()
+      .find({ queryKey: homeQueryKey, exact: true });
+    expect(recreatedQuery).not.toBe(originalQuery);
+    expect(recreatedQuery?.state.dataUpdateCount).toBe(originalUpdateCount);
+
+    await act(async () => recovery.resolve(olderHome));
+    await waitFor(() =>
+      expect(cache.getMutationCache().getAll()[0]?.state.status).toBe(
+        "success",
+      ),
+    );
+
+    expect(cache.getQueryData<Home>(homeQueryKey)).toEqual(recreatedHome);
+    expect(createGoalDraft).toHaveBeenCalledOnce();
+  });
+
+  it("does not publish a late conflict recovery after the identity lease changes", async () => {
+    const emptyHome: Home = {
+      ...home,
+      creationDraft: null,
+      canCreateGoalDraft: true,
+    };
+    const canonicalHome: Home = {
+      ...home,
+      creationDraft: {
+        ...draft,
+        id: "20000000-0000-7000-8000-000000000011",
+        body: "切替後に届いた別User向け下書き",
+      },
+    };
+    const recovery = deferred<Home>();
+    let identityIsCurrent = true;
+    const requestController = new AbortController();
+    const changingLease: AuthenticatedRequestLease = {
+      expectedUserId: session.user.id,
+      signal: requestController.signal,
+      isCurrent: () => identityIsCurrent,
+    };
+    vi.mocked(getHome)
+      .mockReset()
+      .mockResolvedValueOnce(emptyHome)
+      .mockReturnValueOnce(recovery.promise);
+    vi.mocked(createGoalDraft).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_CREATION_DRAFT_ALREADY_EXISTS",
+        "conflict",
+        "request-create-identity",
+      ),
+    );
+    const cache = createCache();
+
+    renderPage(cache, false, false, false, changingLease);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "下書きを作成" }),
+    );
+    await waitFor(() => expect(getHome).toHaveBeenCalledTimes(2));
+
+    identityIsCurrent = false;
+    await act(async () => recovery.resolve(canonicalHome));
+    await act(async () => undefined);
+
+    expect(createGoalDraft).toHaveBeenCalledOnce();
+    expect(
+      cache.getQueryData<Home>(userQueryKeys.home(session.user.id)),
+    ).toEqual(emptyHome);
+    expect(
+      screen.queryByRole("textbox", { name: "あなたの目標" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("accepts 80 non-BMP code points and rejects the 81st", async () => {
@@ -961,13 +1329,14 @@ function renderPage(
   realCanonicalRoutes = false,
   identityQuiesceControl = false,
   cleanupRouteSwitch = false,
+  requestLease = sessionLease,
 ) {
   return render(
     <QueryClientProvider client={cache}>
       <AutoSaveScopeProvider>
         {identityQuiesceControl ? <IdentityQuiesceControl /> : null}
         <AuthenticatedSessionTestProvider
-          lease={sessionLease}
+          lease={requestLease}
           session={session}
         >
           <MemoryRouter initialEntries={["/goals/new"]}>
