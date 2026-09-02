@@ -143,6 +143,39 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });
 
+test("a failed Settings route chunk recovers through a full-page retry", async ({
+  page,
+}) => {
+  const settingsChunkPath = /^\/assets\/SettingsPage-[^/]+\.js$/;
+  let settingsChunkRequests = 0;
+  page.on("request", (request) => {
+    if (settingsChunkPath.test(new URL(request.url()).pathname)) {
+      settingsChunkRequests += 1;
+    }
+  });
+
+  await page.goto("/");
+  await page.route(
+    "**/assets/SettingsPage-*.js",
+    (route) => route.abort("connectionfailed"),
+    { times: 1 },
+  );
+
+  await page.goto("/settings");
+  await expect(page.getByRole("alert")).toContainText(
+    "予期しないエラーが発生しました",
+  );
+  expect(settingsChunkRequests).toBe(1);
+
+  const reloaded = page.waitForEvent("domcontentloaded");
+  await page.getByRole("button", { name: "再試行" }).click();
+  await reloaded;
+
+  await expect(page).toHaveURL("/settings");
+  await expect(page.getByRole("heading", { name: "設定" })).toBeVisible();
+  expect(settingsChunkRequests).toBe(2);
+});
+
 test("cycle completion reuses its operation after committed response loss and converges to the current workspace", async ({
   page,
 }) => {

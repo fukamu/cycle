@@ -10,6 +10,7 @@ import { AppRoot } from "./AppRoot";
 const appRootMocks = vi.hoisted(() => ({
   appShouldThrow: false,
   providerShouldThrow: false,
+  routeModuleShouldThrow: false,
   sessionMounts: 0,
   sessionUnmounts: 0,
 }));
@@ -164,6 +165,7 @@ vi.mock("../features/auth/SessionProvider", async () => {
 });
 
 vi.mock("./App", async () => {
+  const { RouteModuleLoadError } = await import("./routeModuleLoader");
   const { useAccountSwitchNotice, useAnnounceAccountSwitch } =
     await import("../features/auth/sessionTransitionNoticeContext");
   const { useRunSessionTransition, useSession } =
@@ -185,6 +187,9 @@ vi.mock("./App", async () => {
 
       if (appRootMocks.appShouldThrow) {
         throw new Error("application private failure");
+      }
+      if (appRootMocks.routeModuleShouldThrow) {
+        throw new RouteModuleLoadError();
       }
       const switchIdentity = async () => {
         const previousUserId = session.user.id;
@@ -210,6 +215,7 @@ describe("AppRoot production composition", () => {
   beforeEach(() => {
     appRootMocks.appShouldThrow = false;
     appRootMocks.providerShouldThrow = false;
+    appRootMocks.routeModuleShouldThrow = false;
     appRootMocks.sessionMounts = 0;
     appRootMocks.sessionUnmounts = 0;
   });
@@ -281,6 +287,32 @@ describe("AppRoot production composition", () => {
       expect(screen.getByTestId("application")).toHaveTextContent(
         "00000000-0000-7000-8000-000000000001",
       );
+      expect(screen.getByTestId("session-provider")).toBe(sessionProvider);
+      expect(appRootMocks.sessionMounts).toBe(1);
+      expect(appRootMocks.sessionUnmounts).toBe(0);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("uses a full reload callback for a route module failure inside the provider tree", async () => {
+    const user = userEvent.setup();
+    const reloadApplication = vi.fn();
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    appRootMocks.routeModuleShouldThrow = true;
+
+    try {
+      render(<AppRoot reloadApplication={reloadApplication} />);
+      const sessionProvider = screen.getByTestId("session-provider");
+      const alert = screen.getByRole("alert");
+
+      expect(sessionProvider).toContainElement(alert.closest("main"));
+      await user.click(screen.getByRole("button", { name: "再試行" }));
+
+      expect(reloadApplication).toHaveBeenCalledOnce();
+      expect(alert).toBeInTheDocument();
       expect(screen.getByTestId("session-provider")).toBe(sessionProvider);
       expect(appRootMocks.sessionMounts).toBe(1);
       expect(appRootMocks.sessionUnmounts).toBe(0);

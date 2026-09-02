@@ -4,36 +4,43 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { HomePage } from "../pages/HomePage";
 import { PageLoading } from "../shared/components/AsyncState";
 import { AppLayout } from "./AppLayout";
+import { loadRouteModule } from "./routeModuleLoader";
 
 const GoalHistoryPage = lazy(() =>
-  import("../pages/GoalHistoryPage").then((module) => ({
-    default: module.GoalHistoryPage,
-  })),
+  loadRouteModule(
+    () => import("../pages/GoalHistoryPage"),
+    (module) => module.GoalHistoryPage,
+  ),
 );
 const GoalReviewPage = lazy(() =>
-  import("../pages/GoalReviewPage").then((module) => ({
-    default: module.GoalReviewPage,
-  })),
+  loadRouteModule(
+    () => import("../pages/GoalReviewPage"),
+    (module) => module.GoalReviewPage,
+  ),
 );
 const GoalTimelinePage = lazy(() =>
-  import("../pages/GoalTimelinePage").then((module) => ({
-    default: module.GoalTimelinePage,
-  })),
+  loadRouteModule(
+    () => import("../pages/GoalTimelinePage"),
+    (module) => module.GoalTimelinePage,
+  ),
 );
 const GoalWorkspacePage = lazy(() =>
-  import("../pages/GoalWorkspacePage").then((module) => ({
-    default: module.GoalWorkspacePage,
-  })),
+  loadRouteModule(
+    () => import("../pages/GoalWorkspacePage"),
+    (module) => module.GoalWorkspacePage,
+  ),
 );
 const NewGoalPage = lazy(() =>
-  import("../pages/NewGoalPage").then((module) => ({
-    default: module.NewGoalPage,
-  })),
+  loadRouteModule(
+    () => import("../pages/NewGoalPage"),
+    (module) => module.NewGoalPage,
+  ),
 );
 const SettingsPage = lazy(() =>
-  import("../pages/SettingsPage").then((module) => ({
-    default: module.SettingsPage,
-  })),
+  loadRouteModule(
+    () => import("../pages/SettingsPage"),
+    (module) => module.SettingsPage,
+  ),
 );
 
 function LazyPage({ children }: { readonly children: ReactNode }) {
