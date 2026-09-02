@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
@@ -42,9 +43,14 @@ func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	if cookie, err := request.Cookie(sessionCookieName); err == nil {
-		if view, refreshErr := server.dependencies.Sessions.Refresh(request.Context(), cookie.Value); refreshErr == nil {
+		view, refreshErr := server.dependencies.Sessions.Refresh(request.Context(), cookie.Value)
+		if refreshErr == nil {
 			metricResult = "idempotent"
 			writeJSON(writer, http.StatusOK, mapSession(view))
+			return
+		}
+		if !errors.Is(refreshErr, appsession.ErrSessionExpired) && !errors.Is(refreshErr, appsession.ErrSessionMissing) {
+			server.writeError(writer, request, errSessionRefreshFailed, nil)
 			return
 		}
 	}

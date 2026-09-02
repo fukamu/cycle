@@ -533,6 +533,86 @@ func TestAnonymousBootstrapHTTPBoundary(t *testing.T) {
 		if response.Code != http.StatusOK || len(response.Result().Cookies()) != 0 {
 			t.Fatalf("reuse response/cookies = %d/%#v", response.Code, response.Result().Cookies())
 		}
+		var body contractSessionResponse
+		decodeContractJSON(t, response, &body)
+		if body.User.ID != contractUserID || body.CSRFToken != "rotated-csrf" {
+			t.Fatalf("reuse session response = %#v", body)
+		}
+	})
+
+	for _, test := range []struct {
+		name       string
+		refreshErr error
+	}{
+		{name: "expired existing cookie creates a replacement", refreshErr: appsession.ErrSessionExpired},
+		{name: "missing existing cookie creates a replacement", refreshErr: appsession.ErrSessionMissing},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const replacementToken = "replacement-session-token"
+			createCalls := 0
+			sessions := &contractSessionStub{
+				refresh: func(_ context.Context, token string) (appsession.View, error) {
+					if token != contractSessionToken {
+						t.Fatalf("Refresh token = %q", token)
+					}
+					return appsession.View{}, fmt.Errorf("refresh existing cookie: %w", test.refreshErr)
+				},
+				createAnonymous: func(_ context.Context, input appsession.CreateAnonymousInput) (appsession.View, error) {
+					createCalls++
+					if input.BootstrapID != contractOperationID || input.TurnstileToken != "token" {
+						t.Fatalf("bootstrap input = %#v", input)
+					}
+					return appsession.View{
+						UserID:       user.ID(contractUserID),
+						CSRFToken:    contractCSRFToken,
+						SessionToken: replacementToken,
+						Created:      true,
+					}, nil
+				},
+			}
+			router := contractRouter(sessions, &contractWorkspaceStub{}, nil, nil)
+			response := serveContract(router, http.MethodPost, "/api/v1/session/anonymous",
+				`{"bootstrapId":"`+contractOperationID+`","turnstileToken":"token"}`,
+				func(request *http.Request) {
+					request.Header.Set("Origin", contractOrigin)
+					request.AddCookie(contractSessionCookie())
+				})
+			if response.Code != http.StatusCreated || createCalls != 1 {
+				t.Fatalf("fallback response/create calls = %d/%d: %s", response.Code, createCalls, response.Body.String())
+			}
+			assertSessionCookie(t, findContractCookie(t, response.Result()), replacementToken)
+			var body contractSessionResponse
+			decodeContractJSON(t, response, &body)
+			if body.User.ID != contractUserID || body.CSRFToken != contractCSRFToken || strings.Contains(response.Body.String(), replacementToken) {
+				t.Fatalf("fallback session response = %#v / %s", body, response.Body.String())
+			}
+		})
+	}
+
+	t.Run("unexpected refresh error stops before anonymous creation", func(t *testing.T) {
+		refreshErr := errors.New("session storage unavailable: sensitive detail")
+		sessions := &contractSessionStub{
+			refresh: func(context.Context, string) (appsession.View, error) {
+				return appsession.View{}, refreshErr
+			},
+			createAnonymous: func(context.Context, appsession.CreateAnonymousInput) (appsession.View, error) {
+				panic("CreateAnonymous ran after an unexpected refresh error")
+			},
+		}
+		router := contractRouter(sessions, &contractWorkspaceStub{}, nil, nil)
+		response := serveContract(router, http.MethodPost, "/api/v1/session/anonymous",
+			`{"bootstrapId":"`+contractOperationID+`","turnstileToken":"token"}`,
+			func(request *http.Request) {
+				request.Header.Set("Origin", contractOrigin)
+				request.AddCookie(contractSessionCookie())
+			})
+		assertContractError(t, response, http.StatusInternalServerError, "INTERNAL_ERROR", nil)
+		if len(response.Result().Cookies()) != 0 {
+			t.Fatalf("refresh failure set cookies: %#v", response.Result().Cookies())
+		}
+		if strings.Contains(response.Body.String(), refreshErr.Error()) || strings.Contains(response.Body.String(), "sensitive detail") {
+			t.Fatalf("refresh error leaked to response: %s", response.Body.String())
+		}
 	})
 }
 
