@@ -10,6 +10,7 @@ import {
   cacheReview,
   cacheReviewDraft,
   preferGoal,
+  removeGoalFromCache,
   userMutationKeys,
   userQueryKeys,
 } from "./goalCache";
@@ -114,6 +115,34 @@ describe("goal cache", () => {
       userId,
       "create-goal-draft",
     ]);
+  });
+
+  it("removes deleted Goal collections and details without touching other ownership", () => {
+    const cache = new QueryClient();
+    const otherGoalId = "20000000-0000-7000-8000-000000000099";
+    const affectedKeys = [
+      userQueryKeys.home(userId),
+      userQueryKeys.goals(userId, "all"),
+      userQueryKeys.goal(userId, goal.id),
+      userQueryKeys.review(userId, goal.id),
+      userQueryKeys.goalCycles(userId, goal.id),
+      userQueryKeys.cycle(userId, goal.id, cycle.id),
+    ] as const;
+    const retainedKeys = [
+      userQueryKeys.goal(userId, otherGoalId),
+      userQueryKeys.cycle(userId, otherGoalId, cycle.id),
+      userQueryKeys.home(otherUserId),
+      userQueryKeys.goal(otherUserId, goal.id),
+    ] as const;
+    for (const key of [...affectedKeys, ...retainedKeys])
+      cache.setQueryData(key, { marker: key.join(":") });
+
+    removeGoalFromCache(cache, userId, goal.id);
+
+    for (const key of affectedKeys)
+      expect(cache.getQueryData(key)).toBeUndefined();
+    for (const key of retainedKeys)
+      expect(cache.getQueryData(key)).toEqual({ marker: key.join(":") });
   });
 
   it("primes goal and cycle details from a transition response", () => {

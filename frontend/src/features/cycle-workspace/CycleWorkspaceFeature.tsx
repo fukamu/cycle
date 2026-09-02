@@ -17,6 +17,7 @@ import {
   cacheGoal,
   cacheReview,
   preferGoal,
+  removeGoalFromCache,
   userQueryKeys,
 } from "../goal-collection";
 import { APIError } from "../../shared/api/client";
@@ -44,6 +45,7 @@ import {
   SaveBadge,
 } from "../../shared/components/AsyncState";
 import {
+  type PostCommitRouteOwnershipToken,
   useCapturePostCommitRouteOwnership,
   usePostCommitCleanup,
 } from "../../shared/cleanup/postCommitCleanupContext";
@@ -87,7 +89,11 @@ type CycleRevisionConflict = {
 };
 type MovedWorkspace = {
   readonly currentWorkspace: CurrentWork | null;
+  readonly href?: string;
+  readonly recovery?: "loading" | "failed" | "deleted";
 };
+
+type CycleTerminalCommand = "complete" | "terminate" | "delete";
 
 function preferCycle(current: Cycle | undefined, incoming: Cycle): Cycle {
   if (!current) return incoming;
@@ -120,6 +126,34 @@ function isCycleWorkspaceRecoveryError(error: unknown): error is APIError {
       error.code === "GOAL_STATE_CONFLICT" ||
       error.code === "CYCLE_NOT_ACTIVE")
   );
+}
+
+function isGoalNotFound(error: unknown): error is APIError {
+  return (
+    error instanceof APIError &&
+    error.status === 404 &&
+    error.code === "GOAL_NOT_FOUND"
+  );
+}
+
+function isCycleCommandWorkspaceConflict(
+  command: CycleTerminalCommand,
+  error: unknown,
+): error is APIError {
+  if (isGoalNotFound(error)) return true;
+  if (!(error instanceof APIError) || error.status !== 409) return false;
+  if (command === "complete")
+    return (
+      error.code === "GOAL_STATE_CONFLICT" ||
+      error.code === "GOAL_VERSION_CONFLICT" ||
+      error.code === "CYCLE_NOT_ACTIVE"
+    );
+  if (command === "terminate")
+    return (
+      error.code === "GOAL_STATE_CONFLICT" ||
+      error.code === "GOAL_ALREADY_TERMINAL"
+    );
+  return error.code === "GOAL_DELETE_CONFLICT";
 }
 
 type WorkspaceConfirmation =
@@ -232,6 +266,7 @@ function CycleWorkspace({
   );
   const conflictsRef = useRef(new Map<Frame, BrowserDraft>());
   const movedWorkspaceRef = useRef<MovedWorkspace | undefined>(undefined);
+  const commandRecoveryEpochRef = useRef(0);
   const cycleRevisionRefreshEpochRef = useRef(0);
   const cycleRevisionRefreshInFlightRef = useRef(new Map<Frame, object>());
   const cycleRevisionConflictsRef = useRef(
@@ -421,6 +456,63 @@ function CycleWorkspace({
     coordinator.getState,
   );
 
+  const freezeCycleWorkspace = useCallback(
+    (
+      nextMovedWorkspace: MovedWorkspace,
+      options: { readonly preserveUnsaved?: boolean } = {},
+    ) => {
+      if (!isActivePage()) return;
+      const preserveUnsaved = options.preserveUnsaved ?? true;
+      const firstFence = movedWorkspaceRef.current === undefined;
+      const runtimeConflicts = new Map(cycleRevisionConflictsRef.current);
+      movedWorkspaceRef.current = nextMovedWorkspace;
+      if (firstFence) {
+        coordinator.fail("CYCLE_WORKSPACE_MOVED");
+        coordinator.pause(true);
+        cycleRevisionRefreshEpochRef.current += 1;
+        cycleRevisionRefreshInFlightRef.current.clear();
+        if (preserveUnsaved) {
+          for (const candidate of frames) {
+            const explicitConflict = conflictsRef.current.get(candidate);
+            const runtimeConflict = runtimeConflicts.get(candidate);
+            const current =
+              coordinator.getCurrentValue(candidate) ??
+              valuesRef.current[candidate];
+            const saved =
+              coordinator.getSavedValue(candidate) ??
+              initialValuesRef.current[candidate];
+            if (
+              current !== saved ||
+              explicitConflict ||
+              runtimeConflict ||
+              coordinator.needsDraftPreservation(candidate)
+            )
+              void cacheFrameDraft(
+                candidate,
+                current,
+                explicitConflict?.baseRevision ??
+                  runtimeConflict?.baseRevision ??
+                  revisions.current[candidate],
+              );
+          }
+        }
+        cacheDisabledRef.current = true;
+        coordinator.setPersistenceEnabled(false);
+        cycleRevisionConflictsRef.current.clear();
+        deferredHydrationEditsRef.current.clear();
+      }
+      if (!preserveUnsaved) {
+        cacheDisabledRef.current = true;
+        coordinator.setPersistenceEnabled(false);
+      }
+      if (mountedRef.current) {
+        setMovedWorkspace(nextMovedWorkspace);
+        setError(undefined);
+      }
+    },
+    [cacheFrameDraft, coordinator, isActivePage],
+  );
+
   const recoverCycleRevisionConflict = useCallback(
     async (
       frame: Frame,
@@ -521,36 +613,7 @@ function CycleWorkspace({
           const nextMovedWorkspace: MovedWorkspace = {
             currentWorkspace: canonicalWorkspace,
           };
-          const runtimeConflicts = new Map(cycleRevisionConflictsRef.current);
-          movedWorkspaceRef.current = nextMovedWorkspace;
-          coordinator.fail("CYCLE_WORKSPACE_MOVED");
-          coordinator.pause(true);
-          cycleRevisionRefreshEpochRef.current += 1;
-          for (const candidate of frames) {
-            const explicitConflict = conflictsRef.current.get(candidate);
-            const runtimeConflict = runtimeConflicts.get(candidate);
-            const current =
-              coordinator.getCurrentValue(candidate) ??
-              valuesRef.current[candidate];
-            const saved =
-              coordinator.getSavedValue(candidate) ??
-              initialValuesRef.current[candidate];
-            if (current !== saved || explicitConflict || runtimeConflict)
-              void cacheFrameDraft(
-                candidate,
-                current,
-                explicitConflict?.baseRevision ??
-                  runtimeConflict?.baseRevision ??
-                  revisions.current[candidate],
-              );
-          }
-          cacheDisabledRef.current = true;
-          coordinator.setPersistenceEnabled(false);
-          cycleRevisionConflictsRef.current.clear();
-          if (mountedRef.current) {
-            setMovedWorkspace(nextMovedWorkspace);
-            setError(undefined);
-          }
+          freezeCycleWorkspace(nextMovedWorkspace);
           return;
         }
 
@@ -706,6 +769,7 @@ function CycleWorkspace({
       cacheFrameDraft,
       coordinator,
       cycle.id,
+      freezeCycleWorkspace,
       goal.id,
       isActivePage,
       lease.signal,
@@ -765,7 +829,12 @@ function CycleWorkspace({
       }),
     )
       .then((results) => {
-        if (canceled || !isActivePage() || hydrationRunRef.current !== run)
+        if (
+          canceled ||
+          !isActivePage() ||
+          movedWorkspaceRef.current ||
+          hydrationRunRef.current !== run
+        )
           return;
         let nextValues = valuesRef.current;
         const nextConflicts = new Map(conflictsRef.current);
@@ -991,6 +1060,153 @@ function CycleWorkspace({
     }
   }
 
+  const markDeletedGoal = useCallback(
+    (routeOwnership: PostCommitRouteOwnershipToken) => {
+      commandRecoveryEpochRef.current += 1;
+      freezeCycleWorkspace(
+        { currentWorkspace: null, href: "/", recovery: "deleted" },
+        { preserveUnsaved: false },
+      );
+      void runPostCommitCleanup({
+        expectedUserId: userId,
+        routeOwnership,
+        // The boundary first quiesces every autosave scope and drains its browser
+        // operation tail. Retrying this task therefore repeats local cleanup only.
+        cleanup: async () => {
+          await clearGoalDrafts(userId, goal.id);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+          removeGoalFromCache(cache, userId, goal.id);
+        },
+        onSuccess: async (publicationIsCurrent) => {
+          if (!publicationIsCurrent()) return;
+          navigate("/", { replace: true, flushSync: true });
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        },
+        pendingMessage: "削除済みGoalのブラウザ下書きを削除しています…",
+        failureMessage: "削除済みGoalのブラウザ下書きを削除できませんでした。",
+        retryLabel: "ブラウザデータの削除を再試行",
+      });
+    },
+    [
+      cache,
+      freezeCycleWorkspace,
+      goal.id,
+      navigate,
+      runPostCommitCleanup,
+      userId,
+    ],
+  );
+
+  const refreshCanonicalWorkspace = useCallback(
+    async (
+      routeOwnership: PostCommitRouteOwnershipToken = captureRouteOwnership(),
+    ) => {
+      const epoch = ++commandRecoveryEpochRef.current;
+      const loading: MovedWorkspace = {
+        currentWorkspace: movedWorkspaceRef.current?.currentWorkspace ?? null,
+        href: `/goals/${goal.id}`,
+        recovery: "loading",
+      };
+      movedWorkspaceRef.current = loading;
+      if (mountedRef.current) {
+        setMovedWorkspace(loading);
+        setError(undefined);
+      }
+      try {
+        const latestGoal = await getGoal(
+          sessionLease,
+          goal.id,
+          sessionLease.signal,
+        );
+        if (!isActivePage() || commandRecoveryEpochRef.current !== epoch)
+          return;
+        const canonicalGoal = cacheGoal(cache, userId, latestGoal.goal);
+        const currentWorkspace = canonicalGoal.currentWork;
+        if (currentWorkspace?.kind === "active_cycle") {
+          const latestCycle = await getCycle(
+            sessionLease,
+            goal.id,
+            currentWorkspace.cycleId,
+            sessionLease.signal,
+          );
+          if (!isActivePage() || commandRecoveryEpochRef.current !== epoch)
+            return;
+          cache.setQueryData<{ readonly cycle: Cycle }>(
+            userQueryKeys.cycle(userId, goal.id, currentWorkspace.cycleId),
+            (current) => ({
+              cycle: preferCycle(current?.cycle, latestCycle.cycle),
+            }),
+          );
+        }
+        await cache.invalidateQueries({
+          queryKey: userQueryKeys.root(userId),
+          refetchType: "none",
+        });
+        if (!isActivePage() || commandRecoveryEpochRef.current !== epoch)
+          return;
+        const ready: MovedWorkspace = {
+          currentWorkspace,
+          href: `/goals/${goal.id}`,
+        };
+        movedWorkspaceRef.current = ready;
+        if (mountedRef.current) {
+          setMovedWorkspace(ready);
+          setError(undefined);
+        }
+      } catch (cause) {
+        if (isGoalNotFound(cause)) {
+          markDeletedGoal(routeOwnership);
+          return;
+        }
+        if (!isActivePage() || commandRecoveryEpochRef.current !== epoch)
+          return;
+        const failed: MovedWorkspace = {
+          currentWorkspace: movedWorkspaceRef.current?.currentWorkspace ?? null,
+          href: `/goals/${goal.id}`,
+          recovery: "failed",
+        };
+        movedWorkspaceRef.current = failed;
+        if (mountedRef.current) {
+          setMovedWorkspace(failed);
+          setError(
+            "現在の作業を取得できませんでした。入力は読み取り専用で保持されています。",
+          );
+        }
+      }
+    },
+    [
+      cache,
+      captureRouteOwnership,
+      goal.id,
+      isActivePage,
+      markDeletedGoal,
+      sessionLease,
+      userId,
+    ],
+  );
+
+  async function recoverTerminalCommand(
+    command: CycleTerminalCommand,
+    cause: unknown,
+    routeOwnership: PostCommitRouteOwnershipToken,
+  ): Promise<boolean> {
+    if (!isCycleCommandWorkspaceConflict(command, cause)) return false;
+    if (command === "complete") completeOperation.abandon();
+    else if (command === "terminate") terminateOperation.abandon();
+    else deleteOperation.abandon();
+    if (isGoalNotFound(cause)) {
+      markDeletedGoal(routeOwnership);
+      return true;
+    }
+    freezeCycleWorkspace({
+      currentWorkspace: null,
+      href: `/goals/${goal.id}`,
+      recovery: "loading",
+    });
+    await refreshCanonicalWorkspace(routeOwnership);
+    return true;
+  }
+
   function applyAI(
     action: string,
     actionRevision: number,
@@ -1100,7 +1316,7 @@ function CycleWorkspace({
                   },
                 ),
             );
-      if (!isActivePage()) return;
+      if (!isActivePage() || movedWorkspaceRef.current) return;
       if (
         result.action === undefined ||
         result.actionRevision === undefined ||
@@ -1121,10 +1337,10 @@ function CycleWorkspace({
           "AI処理中にP/D/Cが変更されています。必要に応じて再生成してください。",
         );
     } catch {
-      if (isActivePage())
+      if (isActivePage() && !movedWorkspaceRef.current)
         setError("AI処理を完了できませんでした。現在のAは保持されています。");
     } finally {
-      if (isActivePage()) setAIState("idle");
+      if (isActivePage() && !movedWorkspaceRef.current) setAIState("idle");
     }
   }
 
@@ -1144,6 +1360,7 @@ function CycleWorkspace({
 
   async function finish() {
     if (!eligibility.canCompleteCycle || !startTerminalCommand()) return;
+    const routeOwnership = captureRouteOwnership();
     try {
       const expectedGoalRevision = goal.revision;
       const expectedContentRevision = contentRevision.current;
@@ -1207,8 +1424,14 @@ function CycleWorkspace({
           "サイクルは完了しましたが、この端末の復旧用保存を削除できませんでした。",
         retryLabel: "端末データの削除を再試行",
       });
-    } catch {
+    } catch (cause) {
+      if (isGoalNotFound(cause)) {
+        await recoverTerminalCommand("complete", cause, routeOwnership);
+        return;
+      }
       if (!isActivePage()) return;
+      if (await recoverTerminalCommand("complete", cause, routeOwnership))
+        return;
       resumeSaves();
       setError("サイクルを完了できませんでした。入力内容を確認してください。");
     }
@@ -1217,6 +1440,7 @@ function CycleWorkspace({
   async function terminate(outcome: "achieved" | "ended") {
     const wording = outcome === "achieved" ? "達成として終了" : "終了";
     if (!eligibility.canTerminateActiveGoal || !startTerminalCommand()) return;
+    const routeOwnership = captureRouteOwnership();
     try {
       const expectedContentRevision = contentRevision.current;
       await terminateOperation.invoke(
@@ -1261,8 +1485,14 @@ function CycleWorkspace({
           "目標の終了は完了しましたが、この端末の復旧用保存を削除できませんでした。",
         retryLabel: "端末データの削除を再試行",
       });
-    } catch {
+    } catch (cause) {
+      if (isGoalNotFound(cause)) {
+        await recoverTerminalCommand("terminate", cause, routeOwnership);
+        return;
+      }
       if (!isActivePage()) return;
+      if (await recoverTerminalCommand("terminate", cause, routeOwnership))
+        return;
       resumeSaves();
       setError(`目標を${wording}できませんでした。`);
     }
@@ -1270,6 +1500,7 @@ function CycleWorkspace({
 
   async function remove() {
     if (!startTerminalCommand()) return;
+    const routeOwnership = captureRouteOwnership();
     try {
       await deleteOperation.invoke(
         commandFingerprint("goal_delete", {
@@ -1301,8 +1532,13 @@ function CycleWorkspace({
           "目標は削除されましたが、この端末の復旧用保存を削除できませんでした。",
         retryLabel: "端末データの削除を再試行",
       });
-    } catch {
+    } catch (cause) {
+      if (isGoalNotFound(cause)) {
+        await recoverTerminalCommand("delete", cause, routeOwnership);
+        return;
+      }
       if (!isActivePage()) return;
+      if (await recoverTerminalCommand("delete", cause, routeOwnership)) return;
       resumeSaves();
       setError("目標を削除できませんでした。");
     }
@@ -1360,20 +1596,44 @@ function CycleWorkspace({
         {movedWorkspace && (
           <div className="draft-notice draft-notice--conflict" role="alert">
             <div>
-              <strong>現在の作業状態が更新されました</strong>
-              <p>この端末の入力は保持されています。</p>
+              <strong>
+                {movedWorkspace.recovery === "deleted"
+                  ? "このGoalはすでに削除されています"
+                  : "現在の作業状態が更新されました"}
+              </strong>
+              {movedWorkspace.recovery !== "deleted" && (
+                <p>この端末の入力は保持されています。</p>
+              )}
+              {movedWorkspace.recovery === "loading" && (
+                <p>現在の作業を確認しています…</p>
+              )}
             </div>
             <div className="button-row">
-              <Link
-                className="button button--primary"
-                replace
-                to={replayWorkspacePath(
-                  goal.id,
-                  movedWorkspace.currentWorkspace,
-                )}
-              >
-                現在の作業へ移動
-              </Link>
+              {movedWorkspace.recovery === "failed" ? (
+                <button
+                  className="button button--primary"
+                  type="button"
+                  onClick={() => void refreshCanonicalWorkspace()}
+                >
+                  現在の作業を再取得
+                </button>
+              ) : movedWorkspace.recovery !== "loading" ? (
+                <Link
+                  className="button button--primary"
+                  replace
+                  to={
+                    movedWorkspace.href ??
+                    replayWorkspacePath(
+                      goal.id,
+                      movedWorkspace.currentWorkspace,
+                    )
+                  }
+                >
+                  {movedWorkspace.recovery === "deleted"
+                    ? "ホームへ戻る"
+                    : "現在の作業へ移動"}
+                </Link>
+              ) : null}
             </div>
           </div>
         )}

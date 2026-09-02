@@ -1,4 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   act,
   fireEvent,
@@ -2227,6 +2231,426 @@ describe("GoalWorkspacePage", () => {
         ),
     ).toBe(true);
   });
+  it.each([
+    { command: "complete", code: "GOAL_STATE_CONFLICT" },
+    { command: "complete", code: "GOAL_VERSION_CONFLICT" },
+    { command: "complete", code: "CYCLE_NOT_ACTIVE" },
+    { command: "terminate", code: "GOAL_STATE_CONFLICT" },
+    { command: "terminate", code: "GOAL_ALREADY_TERMINAL" },
+    { command: "delete", code: "GOAL_DELETE_CONFLICT" },
+  ] as const)(
+    "fences a stale $command command on exact $code and converges with GET only",
+    async ({ command, code }) => {
+      const canonicalGoal: Goal =
+        command === "delete"
+          ? { ...goal, revision: goal.revision + 1 }
+          : {
+              ...goal,
+              status: command === "complete" ? "goal_review" : "ended",
+              revision: goal.revision + 1,
+              currentWork:
+                command === "complete"
+                  ? {
+                      kind: "goal_review",
+                      reviewDraftId,
+                      triggerCycleId: cycle.id,
+                      triggerCycleSequenceNumber: cycle.sequenceNumber,
+                    }
+                  : null,
+              terminalAt:
+                command === "terminate" ? "2026-08-20T00:06:00.000Z" : null,
+            };
+      vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+      vi.mocked(getGoal)
+        .mockResolvedValueOnce({ goal })
+        .mockResolvedValueOnce({ goal: canonicalGoal });
+      const conflict = new APIError(
+        409,
+        code,
+        "stale workspace",
+        `request-${command}-${code}`,
+      );
+      if (command === "complete")
+        vi.mocked(completeCycle).mockRejectedValueOnce(conflict);
+      else if (command === "terminate")
+        vi.mocked(terminateGoal).mockRejectedValueOnce(conflict);
+      else vi.mocked(deleteGoal).mockRejectedValueOnce(conflict);
+
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      renderPage(cache);
+      const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+      await invokeCycleTerminalCommand(command);
+
+      expect(
+        await screen.findByText("現在の作業状態が更新されました"),
+      ).toBeInTheDocument();
+      expect(editor).toHaveAttribute("readonly");
+      expect(
+        screen.getByRole("link", { name: "現在の作業へ移動" }),
+      ).toHaveAttribute("href", `/goals/${goal.id}`);
+      expect(getGoal).toHaveBeenCalledTimes(2);
+      if (command === "complete") expect(completeCycle).toHaveBeenCalledOnce();
+      else if (command === "terminate")
+        expect(terminateGoal).toHaveBeenCalledOnce();
+      else expect(deleteGoal).toHaveBeenCalledOnce();
+      await act(async () => undefined);
+      expect(putBrowserDraft).not.toHaveBeenCalled();
+
+      fireEvent.blur(editor);
+      window.dispatchEvent(new Event("online"));
+      await act(() => new Promise((resolve) => window.setTimeout(resolve, 20)));
+      if (command === "complete") expect(completeCycle).toHaveBeenCalledOnce();
+      else if (command === "terminate")
+        expect(terminateGoal).toHaveBeenCalledOnce();
+      else expect(deleteGoal).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("retries only canonical GET after a Complete conflict refresh fails", async () => {
+    const reviewGoal: Goal = {
+      ...goal,
+      status: "goal_review",
+      revision: goal.revision + 1,
+      currentWork: {
+        kind: "goal_review",
+        reviewDraftId,
+        triggerCycleId: cycle.id,
+        triggerCycleSequenceNumber: cycle.sequenceNumber,
+      },
+    };
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    vi.mocked(getGoal)
+      .mockResolvedValueOnce({ goal })
+      .mockRejectedValueOnce(new TypeError("GET failed"))
+      .mockResolvedValueOnce({ goal: reviewGoal });
+    vi.mocked(completeCycle).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_STATE_CONFLICT",
+        "stale workspace",
+        "request-complete-refresh",
+      ),
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await invokeCycleTerminalCommand("complete");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "現在の作業を再取得" }),
+    );
+
+    expect(
+      await screen.findByRole("link", { name: "現在の作業へ移動" }),
+    ).toHaveAttribute("href", `/goals/${goal.id}`);
+    expect(getGoal).toHaveBeenCalledTimes(3);
+    expect(completeCycle).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat an unrelated Complete 409 as workspace movement", async () => {
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    vi.mocked(completeCycle).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_REVIEW_NOT_ACTIVE",
+        "different command conflict",
+        "request-unrelated-complete",
+      ),
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await invokeCycleTerminalCommand("complete");
+
+    expect(
+      await screen.findByText(
+        "サイクルを完了できませんでした。入力内容を確認してください。",
+      ),
+    ).toBeInTheDocument();
+    expect(getGoal).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByText("現在の作業状態が更新されました"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "A — Action" }),
+    ).not.toHaveAttribute("readonly");
+  });
+
+  it("preserves the latest reversion when a Delete conflict fences an in-flight save", async () => {
+    const inFlightSave = deferred<Awaited<ReturnType<typeof saveCycleFrame>>>();
+    const inFlightBody = "競合前に送信中だった計画";
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockReturnValueOnce(inFlightSave.promise);
+    vi.mocked(deleteGoal).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_DELETE_CONFLICT",
+        "stale delete",
+        "request-delete-in-flight-reversion",
+      ),
+    );
+    vi.mocked(getGoal)
+      .mockResolvedValueOnce({ goal })
+      .mockResolvedValueOnce({
+        goal: { ...goal, revision: goal.revision + 1 },
+      });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+
+    fireEvent.change(editor, { target: { value: inFlightBody } });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledOnce());
+    fireEvent.change(editor, { target: { value: cycle.plan } });
+
+    await invokeCycleTerminalCommand("delete");
+
+    await screen.findByRole("link", { name: "現在の作業へ移動" });
+    await waitFor(() =>
+      expect(putBrowserDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subjectKey: `cycle:${cycle.id}:plan`,
+          body: cycle.plan,
+          baseRevision: cycle.frameRevisions.plan,
+        }),
+      ),
+    );
+    expect(editor).toHaveValue(cycle.plan);
+    expect(editor).toHaveAttribute("readonly");
+    expect(deleteGoal).toHaveBeenCalledOnce();
+
+    await act(async () =>
+      inFlightSave.resolve({
+        cycleId: cycle.id,
+        frame: "plan",
+        content: inFlightBody,
+        frameRevision: 1,
+        contentRevision: 1,
+        savedAt: "2026-08-20T00:08:00.000Z",
+      }),
+    );
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    expect(editor).toHaveValue(cycle.plan);
+  });
+
+  it.each(["complete", "terminate", "delete"] as const)(
+    "cleans a deleted Goal when a pending $command receives GOAL_NOT_FOUND after route leave",
+    async (command) => {
+      const commandFailure = deferred<never>();
+      vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+      if (command === "complete")
+        vi.mocked(completeCycle).mockReturnValueOnce(commandFailure.promise);
+      else if (command === "terminate")
+        vi.mocked(terminateGoal).mockReturnValueOnce(commandFailure.promise);
+      else vi.mocked(deleteGoal).mockReturnValueOnce(commandFailure.promise);
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      const removeQueries = vi.spyOn(cache, "removeQueries");
+      renderPage(cache, { commandRouteSwitch: true });
+      await screen.findByRole("textbox", { name: "P — Plan" });
+
+      await invokeCycleTerminalCommand(command);
+      if (command === "complete")
+        await waitFor(() => expect(completeCycle).toHaveBeenCalledOnce());
+      else if (command === "terminate")
+        await waitFor(() => expect(terminateGoal).toHaveBeenCalledOnce());
+      else await waitFor(() => expect(deleteGoal).toHaveBeenCalledOnce());
+      const goalReadsBeforeFailure = vi.mocked(getGoal).mock.calls.length;
+
+      fireEvent.click(
+        screen.getByRole("link", { name: "コマンド中に外部routeへ移動" }),
+      );
+      expect(await screen.findByText("外部route")).toBeInTheDocument();
+      await act(async () =>
+        commandFailure.reject(
+          new APIError(
+            404,
+            "GOAL_NOT_FOUND",
+            "deleted",
+            `request-late-${command}-deleted-goal`,
+          ),
+        ),
+      );
+
+      await waitFor(() => expect(clearGoalDrafts).toHaveBeenCalledOnce());
+      await waitFor(() => expect(removeQueries).toHaveBeenCalled());
+      expect(screen.getByText("外部route")).toBeInTheDocument();
+      expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+      expect(
+        cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+      ).toBeUndefined();
+      expect(
+        cache.getQueryData(
+          userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+        ),
+      ).toBeUndefined();
+      expect(getGoal).toHaveBeenCalledTimes(goalReadsBeforeFailure);
+      if (command === "complete") expect(completeCycle).toHaveBeenCalledOnce();
+      else if (command === "terminate")
+        expect(terminateGoal).toHaveBeenCalledOnce();
+      else expect(deleteGoal).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("cleans a deleted Goal when a canonical GET receives GOAL_NOT_FOUND after route leave", async () => {
+    const canonicalFailure = deferred<never>();
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    vi.mocked(getGoal)
+      .mockResolvedValueOnce({ goal })
+      .mockReturnValueOnce(canonicalFailure.promise);
+    vi.mocked(completeCycle).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_STATE_CONFLICT",
+        "stale workspace",
+        "request-late-canonical-cycle",
+      ),
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const removeQueries = vi.spyOn(cache, "removeQueries");
+    renderPage(cache, { commandRouteSwitch: true });
+
+    await invokeCycleTerminalCommand("complete");
+    await waitFor(() => expect(getGoal).toHaveBeenCalledTimes(2));
+    fireEvent.click(
+      screen.getByRole("link", { name: "コマンド中に外部routeへ移動" }),
+    );
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+    await act(async () =>
+      canonicalFailure.reject(
+        new APIError(
+          404,
+          "GOAL_NOT_FOUND",
+          "deleted",
+          "request-late-canonical-cycle-deleted-goal",
+        ),
+      ),
+    );
+
+    await waitFor(() => expect(clearGoalDrafts).toHaveBeenCalledOnce());
+    await waitFor(() => expect(removeQueries).toHaveBeenCalled());
+    expect(screen.getByText("外部route")).toBeInTheDocument();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(
+      cache.getQueryData(
+        userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+      ),
+    ).toBeUndefined();
+    expect(completeCycle).toHaveBeenCalledOnce();
+    expect(getGoal).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only local cleanup after GOAL_NOT_FOUND and ignores late hydration", async () => {
+    const hydration = deferred<Awaited<ReturnType<typeof getBrowserDraft>>>();
+    vi.mocked(getBrowserDraft).mockReturnValue(hydration.promise);
+    vi.mocked(deleteGoal).mockRejectedValueOnce(
+      new APIError(404, "GOAL_NOT_FOUND", "deleted", "request-deleted-goal"),
+    );
+    vi.mocked(clearGoalDrafts)
+      .mockRejectedValueOnce(new Error("indexedDB unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const removeQueries = vi.spyOn(cache, "removeQueries");
+    renderPage(cache);
+    await screen.findByRole("textbox", { name: "P — Plan" });
+
+    await invokeCycleTerminalCommand("delete");
+    expect(
+      await screen.findByText("削除済みGoalのブラウザ下書きを削除しています…"),
+    ).toBeInTheDocument();
+    await act(async () =>
+      hydration.resolve({
+        userId: session.user.id,
+        goalId: goal.id,
+        subjectKey: `cycle:${cycle.id}:plan`,
+        body: "削除後に到着した端末下書き",
+        baseRevision: 0,
+        updatedAt: "2026-08-20T00:07:00.000Z",
+      }),
+    );
+    expect(
+      await screen.findByText(
+        "削除済みGoalのブラウザ下書きを削除できませんでした。",
+      ),
+    ).toBeInTheDocument();
+    expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id);
+    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+    expect(deleteGoal).toHaveBeenCalledOnce();
+    const goalReadsBeforeRetry = vi.mocked(getGoal).mock.calls.length;
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "ブラウザデータの削除を再試行",
+      }),
+    );
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
+    expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
+    expect(deleteGoal).toHaveBeenCalledOnce();
+    await waitFor(() => expect(removeQueries).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(
+        cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+      ).toBeUndefined();
+      expect(
+        cache.getQueryData(
+          userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+        ),
+      ).toBeUndefined();
+    });
+    expect(getGoal).toHaveBeenCalledTimes(goalReadsBeforeRetry);
+  });
+
+  it("does not publish a late AI result after a deleted-Goal fence", async () => {
+    const refinement = deferred<Awaited<ReturnType<typeof refineAction>>>();
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    vi.mocked(refineAction).mockReturnValue(refinement.promise);
+    vi.mocked(deleteGoal).mockRejectedValueOnce(
+      new APIError(404, "GOAL_NOT_FOUND", "deleted", "request-ai-deleted-goal"),
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+    fireEvent.click(await screen.findByRole("tab", { name: /A\s*Action/ }));
+    const editor = screen.getByRole("textbox", { name: "A — Action" });
+    fireEvent.click(screen.getByRole("button", { name: "AIで推敲" }));
+    await waitFor(() => expect(refineAction).toHaveBeenCalledOnce());
+
+    await invokeCycleTerminalCommand("delete");
+    await screen.findByText("このGoalはすでに削除されています");
+    await act(async () =>
+      refinement.resolve({
+        generationId: "50000000-0000-7000-8000-000000000009",
+        action: "削除後に到着したAI本文",
+        actionRevision: 2,
+        contentRevision: 5,
+        contextChanged: false,
+        replayed: false,
+      }),
+    );
+
+    expect(editor).toHaveValue(completableCycle.action);
+    expect(editor).toHaveAttribute("readonly");
+  });
 });
 
 async function confirmCycleCompletion() {
@@ -2238,9 +2662,40 @@ async function confirmCycleCompletion() {
   );
 }
 
+async function invokeCycleTerminalCommand(
+  command: "complete" | "terminate" | "delete",
+) {
+  if (command === "complete") {
+    await confirmCycleCompletion();
+    return;
+  }
+  fireEvent.click(await screen.findByText("目標の操作"));
+  const label = command === "terminate" ? "目標を終了" : "目標を削除";
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: label }));
+}
+
+function CacheInspectingHome() {
+  const cache = useQueryClient();
+  const hasDeletedGoalCache =
+    cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)) !==
+      undefined ||
+    cache.getQueryData(
+      userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+    ) !== undefined;
+  return (
+    <>
+      <p>ホーム</p>
+      <p>{hasDeletedGoalCache ? "Goal cache残存" : "Goal cache削除済み"}</p>
+    </>
+  );
+}
+
 function renderPage(
   cache: QueryClient,
   options: {
+    readonly commandRouteSwitch?: boolean;
     readonly cleanupSwitchCycleId?: string;
     readonly identityQuiesceControl?: boolean;
     readonly strictMode?: boolean;
@@ -2258,6 +2713,9 @@ function renderPage(
             initialEntries={[`/workspace/${goal.id}/cycles/${cycle.id}`]}
           >
             {options.identityQuiesceControl ? <IdentityQuiesceControl /> : null}
+            {options.commandRouteSwitch ? (
+              <Link to="/external">コマンド中に外部routeへ移動</Link>
+            ) : null}
             {options.cleanupSwitchCycleId ? (
               <Link
                 to={`/workspace/${goal.id}/cycles/${options.cleanupSwitchCycleId}`}
@@ -2282,7 +2740,7 @@ function renderPage(
                   path="/workspace/:goalId/cycles/:cycleId"
                   element={<GoalWorkspacePage />}
                 />
-                <Route path="/" element={<p>ホーム</p>} />
+                <Route path="/" element={<CacheInspectingHome />} />
                 <Route
                   path="/goals/:goalId/cycles/:cycleId"
                   element={<p>現在のサイクル</p>}
@@ -2295,6 +2753,7 @@ function renderPage(
                   path="/history/goals/:goalId"
                   element={<p>現在の目標履歴</p>}
                 />
+                <Route path="/external" element={<p>外部route</p>} />
               </Routes>
             </PostCommitCleanupBoundary>
           </MemoryRouter>

@@ -626,11 +626,10 @@ it("fences every route-owned post-commit publication by route generation", () =>
 
   for (const feature of routeOwnedFeatures) {
     const source = readFileSync(resolve(srcDirectory, feature), "utf8");
-    const taskCount =
-      source.match(/\bvoid runPostCommitCleanup\(\{/g)?.length ?? 0;
+    const taskCount = source.match(/\brunPostCommitCleanup\(\{/g)?.length ?? 0;
     const routeOwnershipCount =
-      source.match(/\brouteOwnership: captureRouteOwnership\(\),/g)?.length ??
-      0;
+      source.match(/\brouteOwnership(?:\s*:\s*captureRouteOwnership\(\))?\s*,/g)
+        ?.length ?? 0;
 
     expect(taskCount).toBeGreaterThan(0);
     expect(routeOwnershipCount).toBe(taskCount);

@@ -65,6 +65,10 @@ type ConflictSnapshot = {
   readonly baseRevision: number;
 };
 
+export type DraftScopeMovedOptions = {
+  readonly preserveUnsaved?: boolean;
+};
+
 const bodyKey = "body";
 
 export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
@@ -117,6 +121,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
   const [resolvingConflict, setResolvingConflict] = useState(false);
   const [browserCacheFailed, setBrowserCacheFailed] = useState(false);
   const [scopeMovedHref, setScopeMovedHref] = useState<string | null>(null);
+  const scopeMovedHrefRef = useRef<string | null>(null);
 
   const revisionRef = useRef(runtime.initialRevision);
   const conflictSnapshotRef = useRef<ConflictSnapshot | undefined>(undefined);
@@ -268,11 +273,26 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
   } | null>(null);
 
   const markScopeMoved = useCallback(
-    (href: string) => {
+    async (
+      href: string,
+      options: DraftScopeMovedOptions = {},
+    ): Promise<void> => {
       if (!lease.isCurrent()) return;
+      const preserveUnsaved = options.preserveUnsaved ?? true;
+      const conflict = conflictSnapshotRef.current;
       conflictSnapshotRef.current = undefined;
       const current = coordinator.getCurrentValue(bodyKey);
+      const saved = coordinator.getSavedValue(bodyKey) ?? runtime.initialBody;
+      const shouldPreserve =
+        preserveUnsaved &&
+        current !== undefined &&
+        (current !== saved ||
+          conflict !== undefined ||
+          coordinator.needsDraftPreservation(bodyKey));
+      scopeMovedHrefRef.current = href;
       coordinator.pause(true);
+      coordinator.fail("AUTOSAVE_SCOPE_MOVED");
+      coordinator.setPersistenceEnabled(false);
       if (current !== undefined)
         coordinator.block(bodyKey, current, "AUTOSAVE_SCOPE_MOVED");
       if (mountedRef.current) {
@@ -281,10 +301,44 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
         setRecoveryConflict(null);
         setResolvingConflict(false);
       }
+      try {
+        if (shouldPreserve) {
+          const draft: BrowserDraft = {
+            userId: runtime.userId,
+            goalId: runtime.goalId,
+            subjectKey: runtime.subjectKey,
+            body: current,
+            baseRevision: conflict?.baseRevision ?? revisionRef.current,
+            updatedAt: new Date().toISOString(),
+          };
+          const stored = await queueBrowserOperation(async () => {
+            await putBrowserDraft(draft);
+            return true;
+          });
+          if (stored !== true)
+            throw new Error("browser draft scope is inactive");
+          lastCachedDraftRef.current = draft;
+        } else {
+          const cleared = await lease.queueBrowserOperation(async () => {
+            await deleteBrowserDraft(runtime.userId, runtime.subjectKey);
+            return true;
+          });
+          if (cleared !== true)
+            throw new Error("browser draft scope is inactive");
+          lastCachedDraftRef.current = undefined;
+        }
+        if (mountedRef.current && lease.isCurrent())
+          setBrowserCacheFailed(false);
+      } catch {
+        if (mountedRef.current && lease.isCurrent())
+          setBrowserCacheFailed(true);
+      }
     },
-    [coordinator, lease],
+    [coordinator, lease, queueBrowserOperation, runtime],
   );
-  markScopeMovedRef.current = markScopeMoved;
+  markScopeMovedRef.current = (href) => {
+    void markScopeMoved(href);
+  };
 
   const resolveRevisionConflict = useCallback(
     async (signal: AbortSignal) => {
@@ -396,7 +450,13 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
         const draft = await lease.queueBrowserOperation(() =>
           getBrowserDraft(runtime.userId, runtime.subjectKey),
         );
-        if (canceled || !draft || hasEditedRef.current || !lease.isCurrent())
+        if (
+          canceled ||
+          !draft ||
+          hasEditedRef.current ||
+          !lease.isCurrent() ||
+          scopeMovedHrefRef.current !== null
+        )
           return;
 
         const canonicalBody = normalizeLineEndings(draft.body);
@@ -414,7 +474,13 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
             throw new Error("browser draft scope is inactive");
           lastCachedDraftRef.current = canonicalDraft;
         }
-        if (canceled || hasEditedRef.current || !lease.isCurrent()) return;
+        if (
+          canceled ||
+          hasEditedRef.current ||
+          !lease.isCurrent() ||
+          scopeMovedHrefRef.current !== null
+        )
+          return;
 
         if (canonicalDraft.baseRevision !== revisionRef.current) {
           conflictSnapshotRef.current = {
@@ -488,7 +554,9 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
       setRecoveryConflict(null);
       setResolvingConflict(false);
       setScopeMovedHref(null);
+      scopeMovedHrefRef.current = null;
       revisionRef.current = nextRevision;
+      coordinator.setPersistenceEnabled(true);
       coordinator.synchronize(bodyKey, nextBody);
       setBodyValue(nextBody);
       setRevision(nextRevision);
@@ -507,6 +575,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     setRecoveryConflict(null);
     setResolvingConflict(false);
     setScopeMovedHref(null);
+    scopeMovedHrefRef.current = null;
     await coordinator.discard();
     return clearBrowserDraft();
   }, [clearBrowserDraft, coordinator]);
@@ -567,9 +636,11 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     revisionConflictActive,
     resolvingConflict,
     scopeMovedHref,
+    markScopeMoved,
     restoreRecovery,
     discardRecovery,
     browserCacheFailed,
-    isActiveScope: lease.isCurrent,
+    isActiveScope: () =>
+      lease.isCurrent() && scopeMovedHrefRef.current === null,
   };
 }

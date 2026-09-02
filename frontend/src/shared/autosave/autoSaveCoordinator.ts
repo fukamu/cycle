@@ -116,6 +116,10 @@ export class AutoSaveCoordinator<TKey, TValue, TResult> {
     return this.savedValues.get(key);
   }
 
+  needsDraftPreservation(key: TKey): boolean {
+    return !this.isKeySettled(key);
+  }
+
   isHydrating(): boolean {
     return this.hydrating;
   }
