@@ -46,6 +46,7 @@ export function PostCommitCleanupBoundary({
   runSessionOperation,
 }: PostCommitCleanupBoundaryProps) {
   const location = useLocation();
+  const routeChangeWaitersRef = useRef(new Map<number, Set<() => void>>());
   const routeGenerationRef = useRef({
     generation: 0,
     locationKey: location.key,
@@ -57,12 +58,41 @@ export function PostCommitCleanupBoundary({
       generation: current.generation + 1,
       locationKey: location.key,
     };
+    const waiters = routeChangeWaitersRef.current.get(current.generation);
+    routeChangeWaitersRef.current.delete(current.generation);
+    waiters?.forEach((resolve) => resolve());
   }, [location.key]);
+  useLayoutEffect(
+    () => () => {
+      routeChangeWaitersRef.current.forEach((waiters) => {
+        waiters.forEach((resolve) => resolve());
+      });
+      routeChangeWaitersRef.current.clear();
+    },
+    [],
+  );
   const captureRouteOwnership =
     useCallback<CapturePostCommitRouteOwnership>(() => {
       const generation = routeGenerationRef.current.generation;
+      const isCurrent = () =>
+        routeGenerationRef.current.generation === generation;
       return Object.freeze({
-        isCurrent: () => routeGenerationRef.current.generation === generation,
+        isCurrent,
+        waitUntilStale: () => {
+          if (!isCurrent()) return Promise.resolve();
+          return new Promise<void>((resolve) => {
+            const waiters =
+              routeChangeWaitersRef.current.get(generation) ?? new Set();
+            waiters.add(resolve);
+            routeChangeWaitersRef.current.set(generation, waiters);
+            if (!isCurrent()) {
+              waiters.delete(resolve);
+              if (waiters.size === 0)
+                routeChangeWaitersRef.current.delete(generation);
+              resolve();
+            }
+          });
+        },
       }) as PostCommitRouteOwnershipToken;
     }, []);
   const registry = useAutoSaveScopeRegistry();
@@ -96,10 +126,18 @@ export function PostCommitCleanupBoundary({
             // unregister callbacks before the browser-operation tail is fenced.
             await registry.quiesce({ preserveDrafts: true });
           }
-          setCleanupState({ kind: "pending", entry });
+          flushSync(() => {
+            setCleanupState({ kind: "pending", entry });
+          });
           await entry.task.cleanup();
           if (publicationIsCurrent()) {
             await entry.task.onSuccess(publicationIsCurrent);
+            if (entry.task.routeOwnership && publicationIsCurrent()) {
+              // Declarative routers may commit navigate() in a transition even
+              // when callers request flushSync. Keep the terminal fence until
+              // the captured route generation has actually been replaced.
+              await entry.task.routeOwnership.waitUntilStale();
+            }
           }
           return {
             succeeded: true,

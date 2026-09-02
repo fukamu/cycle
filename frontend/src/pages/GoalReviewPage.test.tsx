@@ -1274,7 +1274,8 @@ describe("GoalReviewPage", () => {
       .mockRejectedValueOnce(new Error("indexeddb unavailable"))
       .mockResolvedValueOnce(undefined);
 
-    renderPage();
+    const cache = createCache();
+    renderPage(cache);
     await screen.findByRole("textbox", {
       name: "次のサイクルで目指す目標",
     });
@@ -1283,7 +1284,7 @@ describe("GoalReviewPage", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "目標を削除" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "目標は削除されましたが、このブラウザの関連下書きを削除できませんでした。",
+      "削除済みGoalのブラウザ下書きを削除できませんでした。",
     );
     expect(deleteGoal).toHaveBeenCalledOnce();
     expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id);
@@ -1300,6 +1301,8 @@ describe("GoalReviewPage", () => {
     );
 
     expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(getReview).toHaveBeenCalledOnce();
+    expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
     expect(deleteGoal).toHaveBeenCalledOnce();
     expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
   });
@@ -1639,6 +1642,46 @@ describe("GoalReviewPage", () => {
     },
   );
 
+  it("cleans a deleted Goal when Delete succeeds after route leave", async () => {
+    const deletion = deferred<Awaited<ReturnType<typeof deleteGoal>>>();
+    vi.mocked(deleteGoal).mockReturnValueOnce(deletion.promise);
+    const cache = createCache();
+    const removeQueries = vi.spyOn(cache, "removeQueries");
+    renderPage(cache, false, false, true);
+    await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    expect(
+      cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+    ).toBeDefined();
+
+    await invokeReviewTerminalCommand("delete");
+    await waitFor(() => expect(deleteGoal).toHaveBeenCalledOnce());
+    fireEvent.click(
+      screen.getByRole("link", {
+        name: "クリーンアップ中に別routeへ移動",
+      }),
+    );
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+
+    await act(async () => deletion.resolve(undefined));
+
+    await waitFor(() =>
+      expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id),
+    );
+    await waitFor(() => expect(removeQueries).toHaveBeenCalled());
+    expect(screen.getByText("外部route")).toBeInTheDocument();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(
+      cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(deleteGoal).toHaveBeenCalledOnce();
+    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+  });
+
   it("cleans a deleted Goal when a canonical GET receives GOAL_NOT_FOUND after route leave", async () => {
     const canonicalFailure = deferred<never>();
     vi.mocked(continueReview).mockRejectedValueOnce(
@@ -1735,6 +1778,7 @@ describe("GoalReviewPage", () => {
     );
 
     expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(getReview).toHaveBeenCalledOnce();
     expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
     expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
     expect(continueReview).toHaveBeenCalledOnce();

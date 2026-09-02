@@ -6,6 +6,7 @@ declare const postCommitSessionOwnershipBrand: unique symbol;
 export type PostCommitRouteOwnershipToken = {
   readonly [postCommitRouteOwnershipBrand]: true;
   readonly isCurrent: () => boolean;
+  readonly waitUntilStale: () => Promise<void>;
 };
 
 export type PostCommitSessionOwnershipToken = {
