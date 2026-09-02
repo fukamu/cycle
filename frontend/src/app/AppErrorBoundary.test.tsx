@@ -3,12 +3,14 @@ import userEvent from "@testing-library/user-event";
 
 import { APIError } from "../shared/api/client";
 import { AppErrorBoundary } from "./AppErrorBoundary";
+import { RouteModuleLoadError } from "./routeModuleLoader";
 
 const requestId = "00000000-0000-7000-8000-000000000001";
 
 describe("AppErrorBoundary", () => {
   it("replaces a render failure with a safe alert and can retry", async () => {
     const user = userEvent.setup();
+    const reloadRouteModule = vi.fn();
     const consoleError = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
@@ -21,7 +23,7 @@ describe("AppErrorBoundary", () => {
 
     try {
       render(
-        <AppErrorBoundary>
+        <AppErrorBoundary onRouteModuleRetry={reloadRouteModule}>
           <UnstableContent />
         </AppErrorBoundary>,
       );
@@ -37,6 +39,38 @@ describe("AppErrorBoundary", () => {
       expect(
         screen.getByRole("heading", { name: "回復しました" }),
       ).toBeInTheDocument();
+      expect(reloadRouteModule).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("requests a full reload when retrying a route module load failure", async () => {
+    const user = userEvent.setup();
+    const reloadRouteModule = vi.fn();
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    function FailingRoute(): never {
+      throw new RouteModuleLoadError();
+    }
+
+    try {
+      render(
+        <AppErrorBoundary onRouteModuleRetry={reloadRouteModule}>
+          <FailingRoute />
+        </AppErrorBoundary>,
+      );
+
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent(
+        "予期しないエラーが発生しました。もう一度お試しください。",
+      );
+      await user.click(screen.getByRole("button", { name: "再試行" }));
+
+      expect(reloadRouteModule).toHaveBeenCalledOnce();
+      expect(alert).toBeInTheDocument();
     } finally {
       consoleError.mockRestore();
     }

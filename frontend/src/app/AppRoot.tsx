@@ -32,7 +32,7 @@ export function AppRoot({
               <SessionPostCommitCleanupBoundary>
                 <SessionIdentityBoundary>
                   <AccountDeletionProvider>
-                    <AppErrorBoundary>
+                    <AppErrorBoundary onRouteModuleRetry={reloadApplication}>
                       <App />
                     </AppErrorBoundary>
                   </AccountDeletionProvider>
