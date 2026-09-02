@@ -14,7 +14,10 @@ import type { SessionRecoveryEvent } from "../../shared/api/sessionRecoveryEvent
 import { BetaAdmissionGate } from "../beta-admission/BetaAdmissionGate";
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
 import type { RuntimeRecoveryState } from "./sessionBoundaryContracts";
-import { isBetaAdmissionRequired } from "./sessionDiscovery";
+import {
+  isBetaAdmissionRequired,
+  isInitialSessionRateLimited,
+} from "./sessionDiscovery";
 import {
   AuthenticatedRequestLeaseContext,
   RunPostCommitSessionOperationContext,
@@ -248,6 +251,18 @@ function InitialSessionError({
   }
   if (isBetaAdmissionRequired(error)) {
     return <BetaAdmissionGate onAdmitted={retryAdmission} />;
+  }
+  if (isInitialSessionRateLimited(error)) {
+    return (
+      <div className="app-message app-message--error" role="alert">
+        <p>
+          短時間に新しい利用の開始が続いています。時間を空けてから再試行してください。再試行を繰り返すと、待ち時間が延びる場合があります。
+        </p>
+        <button type="button" onClick={retry}>
+          再試行
+        </button>
+      </div>
+    );
   }
   return (
     <div className="app-message app-message--error" role="alert">

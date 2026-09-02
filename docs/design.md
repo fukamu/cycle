@@ -1595,6 +1595,15 @@ CREATE TABLE abuse_rate_buckets (
 );
 CREATE INDEX idx_abuse_bucket_expiry
     ON abuse_rate_buckets(expires_at);
+
+CREATE TABLE anonymous_rate_limit_guards (
+    scope TEXT NOT NULL,
+    key_hash BYTEA NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY(scope, key_hash)
+);
+CREATE INDEX idx_anonymous_rate_limit_guard_expiry
+    ON anonymous_rate_limit_guards(expires_at, scope, key_hash);
 ```
 
 ## 16.3 Cross-table invariants
@@ -1746,18 +1755,27 @@ User lockが不要なOperationではGoalから開始してよいが、Goal→Cyc
 
 AI開始Transactionが`ai_budget_monthly`とAI用`abuse_rate_buckets`の両方を扱う場合、expired recoveryを含む全経路でBudget rowを先にlockしてからrate bucketをlockする。業務判定とstable rejection errorの優先順はUser rolling quota→rate limit→service budgetのままとし、Budget上限判定とreservation更新はrate limit判定後に行う。
 
+Anonymous create rate limitは、対象IP-HMACの`anonymous_ip` guard rowを先にlockし、その後に同じkeyの`anonymous_ip_hour`当時刻bucketをlockする。Limiterと期限cleanupはこの順序を逆転させず、cleanupはlock中のrowを`SKIP LOCKED`する。
+
 AI開始・finalization、Draft破棄、Goal / Account Delete、既存Anonymous bootstrap再開はUserからlockする。識別子取得だけのnon-locking locator queryは許可するが、locator取得後もUserより先に配下rowをlock・更新せず、User lock後にtargetを`FOR UPDATE`で再検証する。同一種別の複数rowはUUIDまたは月の昇順でlockし、状態遷移・reservation・usage settlementのCASが期待するrow数を満たさない場合はTransaction全体をrollbackする。
 
 ## 18.2 Anonymous User creation
 
-Transaction:
+Turnstile検証後、Anonymous create rate limitはUser作成Transactionとは分離したexplicit `READ COMMITTED` Transactionで次の順序を守る。
 
-1. Turnstile / rate limit判定。
-2. `bootstrapId` HMACを確認。
-3. `BEGIN`。
-4. 既存有効bootstrapなら同UserへSession再発行。
-5. ない場合、User + Session + AnonymousBootstrapを作成。
-6. `COMMIT`。
+1. 対象scope / IP-HMACのguard rowをupsertしてlockする。新規rowの`expires_at`は同じTransactionで後続更新するための`-infinity` sentinelとし、競合時は既存expiryを変更しないno-op updateでrow lockだけを取得する。
+2. Guard lock取得後の別statementでPostgreSQL `clock_timestamp()`を読み、`expires_at = GREATEST(expires_at, clock_timestamp() + 25 hours)`へ更新する。この更新値から25時間を引いた値をDB-canonical decision timeとし、caller時刻、Transaction開始時刻、statement開始時刻、guard待機前の時刻を判定へ使わない。
+3. Canonical decision timeをUTC hourへ切り捨て、当hour bucketを1増分する。Bucket expiryも既存値とcanonical decision time + 25時間の大きい方へ単調更新する。
+4. 当hour bucketと、`current_hour - 24 hours`から`current_hour`まで両端を含む最大25 bucketの合計を検査する。Future bucketは合算しない。
+5. 許可・拒否のどちらでもTransactionをcommitする。新規guardのsentinelを後続更新できないerror経路はTransaction全体をrollbackする。
+
+拒否時も当attemptのbucket増分をcommitしてからgeneric `429 RATE_LIMIT_EXCEEDED`を返し、User作成Transactionへ進まない。許可時だけ次を行う。
+
+1. `bootstrapId` HMACを確認。
+2. `BEGIN`。
+3. 既存有効bootstrapなら同UserへSession再発行。
+4. ない場合、User + Session + AnonymousBootstrapを作成。
+5. `COMMIT`。
 
 既存bootstrapを再開する場合は、non-locking locatorで対応User IDを観測し、そのUserを`FOR UPDATE`した後、同じbootstrap rowをexpected User条件付きで`FOR UPDATE`して対応と有効期限を再検証する。locatorで既存対応を観測した後、User lock待機中にAccount Deleteが対応を削除した場合はTransactionを失敗させ、candidate User / Session / bootstrapを再作成しない。新規作成へ進めるのは最初のlocatorでbootstrapが存在しなかった場合だけとする。
 
@@ -3903,7 +3921,7 @@ Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTa
 | Cycle editor | P/D/C/A Tab、Textarea、Frame別revision、Save state、Action AI、Cycle completionを扱う |
 | Action eligibility | Generate / Refine / Completeのpredicateをpure logicとして算出し、UI文言で判定しない |
 | Goal history timeline | Cycleの`goalVersionId`変化からVersion change markerを生成し、Completed / Canceled detailをread-only表示する |
-| Session / account UI | Anonymous state、Google connection、identity collision、Account Deleteを扱う |
+| Session / account UI | Anonymous state、Google connection、identity collision、Account Deleteを扱う。Anonymous bootstrapの`429 RATE_LIMIT_EXCEEDED`は自動再送せず、待ってからの手動Retryを案内する |
 
 Route-level UIまたは汎用ComponentへProduct Ruleを直接埋め込まず、Feature-level model / reducer / predicateまたはshared domain-facing clientへ分離する。
 
@@ -4942,6 +4960,10 @@ rate_limits:
 
 これらはProduct Ruleではなく運営設定である。
 
+Anonymous createの1時間上限は固定UTC hour bucket、24時間上限はDB-canonical current hourとその24時間前の境界hourを両端込みで合算する。したがって24時間判定は最大25 bucketを含む保守的な近似であり、実際の24時間windowより古いattemptを60分未満だけ余分に数え得る。Hour rolloverを跨ぐ並行requestはscope / IP-HMACごとのguard rowで直列化し、guard取得後のDB時刻で判定するため、複数instanceのclock skew、lock待機中の時刻逆転、上限判定後の並行超過を許容しない。Rolling queryはlower / upper boundの両方を持ち、後から処理された古いcaller時刻によってfuture bucketを合算しない。
+
+Anonymous createは許可・拒否を問わずattemptをcountへ保存する。境界hourの保守的包含とblocked attempt feedbackにより、default 5/hour・20/24hでも構成によって誤拒否が約22時間残り、一般の設定では約25時間へ近づき得る。Userの手動Retryを繰り返すと待機が延び得るため、Frontendは`429 RATE_LIMIT_EXCEEDED`をnetwork / 5xxと同じ自動Retry対象にせず、待ってから手動Retryする日本語案内を表示する。安全な正確値を算出できないため、exact `Retry-After`や解除時刻は返さない。
+
 Goal StartはUser row lock後に同じoperationのreplayを先に判定し、fresh startだけUser / Sessionの1分bucketを同じTransactionで消費する。Replayはbucketを追加消費しない。どちらかの上限超過はgeneric `429 RATE_LIMIT_EXCEEDED`とし、Draft、Goal、Version、Cycle、rate bucket増分をすべてrollbackする。User / Sessionのraw IDはbucket keyへ保存せず、scopeとidentityを区切ったHMAC digestを使用する。
 
 ## 39.3 IP handling
@@ -4965,7 +4987,7 @@ Invisible challengeを採用し、通常操作の摩擦を抑える。Risk判定
 
 ## 39.5 Retention cleanup
 
-`abuse_rate_buckets.expires_at`でlazy cleanupまたは運用batchを行える。§38.2の期限へ到達した確定済み・content-deleted AIUsageEventも同じmaintenance commandの別resourceとしてcleanupする。Cleanup BatchをUser向けMVP機能として提供する必要はないが、対象recordが無期限に蓄積しないようRepository methodとmaintenance commandを実装する。
+`abuse_rate_buckets.expires_at`と`anonymous_rate_limit_guards.expires_at`でlazy cleanupまたは運用batchを行える。Guardはrate bucketと別resourceとしてcleanupし、limiterが保持中のrowを待たずにskipする。§38.2の期限へ到達した確定済み・content-deleted AIUsageEventも同じmaintenance commandの別resourceとしてcleanupする。Cleanup BatchをUser向けMVP機能として提供する必要はないが、対象recordが無期限に蓄積しないようRepository methodとmaintenance commandを実装する。
 
 Maintenance commandはread-only repeatable-read snapshotでresource別件数だけを返す`dry-run`と、明示した1..1000のbatch sizeで削除する`execute`を排他的に提供する。1000は一つのTransactionを短く保つhard safety ceilingであり、Productionのdefault batch sizeではない。起動時のUTC時刻を一度だけdeadlineとしてcaptureし、User入力で時刻を上書きしない。Executeはresourceごとの短いTransactionで安定順のcandidateを`FOR UPDATE SKIP LOCKED`し、Delete側でも期限・確定・content-deleted条件を再検証する。並行worker、late settlement、Goal / Account Deleteとの競合はskipまたは0件へ収束し、再実行で安全に完了する。途中まで成功した削除を補償復元しない。
 
@@ -5045,6 +5067,7 @@ Network / 5xx / timeout / revision conflictで、Frontendは現在のTextarea値
 - Goal termination failure: Goal/Cycle/Draftを処理前状態に維持。
 - Goal Delete failure: Aggregateを削除済み扱いにしない。
 - Account Delete failure: Session/Userを維持。
+- Anonymous bootstrap rate limit: 自動再送でblocked attemptを追加せず、待ってからの手動Retryを案内する。正確な解除時刻は表示しない。
 
 ## 40.5 Revision conflict UX
 
@@ -5825,6 +5848,8 @@ Exact test file名やcase IDはRepositoryのTest suiteをSourceとし、本書�
 7. 各永続化step失敗時のall-or-none rollback。
 8. Browser identity/route generation変更後に旧payloadを公開しないこと。
 9. 削除後にcontent、cache、late callbackがresourceを復元しないこと。
+
+Anonymous create rate limitでは、UTC hour境界の両端包含、23.5時間離れたbucketの24時間上限、guard待機後のcanonical time、future bucket除外、hour rollover並行request、guard / bucket expiryの単調性、sentinel更新失敗時のrollback、blocked attemptの永続化、limiterとcleanupの競合を実PostgreSQLで追加検証する。Frontendはrate-limit 429を自動再送しないこと、手動Retryと専用案内が残ることを検証する。
 
 Read operationはcursor tamper、scope mismatch、ordering、pagination境界、cross-user非開示を適用可能な範囲で検証する。
 

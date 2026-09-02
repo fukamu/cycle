@@ -23,6 +23,65 @@ const (
 
 type cleanupGoalDeleteUsageLockKey struct{}
 
+type cleanupAnonymousLimiterAdvanceKey struct{}
+
+type cleanupAnonymousLimiterBarrier struct {
+	guardAdvanced chan error
+	releaseGuard  chan struct{}
+	advanceOnce   sync.Once
+	releaseOnce   sync.Once
+}
+
+func newCleanupAnonymousLimiterBarrier() *cleanupAnonymousLimiterBarrier {
+	return &cleanupAnonymousLimiterBarrier{
+		guardAdvanced: make(chan error, 1),
+		releaseGuard:  make(chan struct{}),
+	}
+}
+
+func (barrier *cleanupAnonymousLimiterBarrier) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if isAnonymousRateLimitGuardAdvance(data.SQL) {
+		return context.WithValue(ctx, cleanupAnonymousLimiterAdvanceKey{}, true)
+	}
+	return ctx
+}
+
+func (barrier *cleanupAnonymousLimiterBarrier) TraceQueryEnd(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryEndData,
+) {
+	advanced, _ := ctx.Value(cleanupAnonymousLimiterAdvanceKey{}).(bool)
+	if !advanced {
+		return
+	}
+	barrier.advanceOnce.Do(func() {
+		barrier.guardAdvanced <- data.Err
+		if data.Err != nil {
+			return
+		}
+		select {
+		case <-barrier.releaseGuard:
+		case <-ctx.Done():
+		}
+	})
+}
+
+func (barrier *cleanupAnonymousLimiterBarrier) release() {
+	barrier.releaseOnce.Do(func() { close(barrier.releaseGuard) })
+}
+
+func isAnonymousRateLimitGuardAdvance(statement string) bool {
+	normalized := normalizeObservedSQL(statement)
+	return strings.Contains(normalized, "update public.anonymous_rate_limit_guards") &&
+		strings.Contains(normalized, "clock_timestamp()") &&
+		strings.Contains(normalized, "returning (expires_at - interval '25 hours')")
+}
+
 type cleanupGoalDeleteBarrier struct {
 	usageLocked chan error
 	releaseLock chan struct{}
@@ -96,26 +155,31 @@ func TestCleanupDryRunAndExecuteRespectAllDeadlineAndSettlementPredicates(t *tes
 	insertCleanupBucket(t, pool, "test_past", []byte{1}, now.Add(-2*time.Minute), now.Add(-time.Microsecond))
 	insertCleanupBucket(t, pool, "test_exact", []byte{2}, now.Add(-time.Minute), now)
 	insertCleanupBucket(t, pool, "test_future", []byte{3}, now, now.Add(time.Microsecond))
+	insertCleanupGuard(t, pool, "test_past", []byte{1}, now.Add(-time.Microsecond))
+	insertCleanupGuard(t, pool, "test_exact", []byte{2}, now)
+	insertCleanupGuard(t, pool, "test_future", []byte{3}, now.Add(time.Microsecond))
 
 	service := applicationcleanup.NewService(NewCleanupRepository(pool))
 	dryResult, err := service.DryRun(t.Context(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dryResult.AIUsageEvents.CandidateCount != 2 || dryResult.AbuseRateBuckets.CandidateCount != 2 {
-		t.Fatalf("dry-run candidates = %+v, want 2/2", dryResult)
+	if dryResult.AIUsageEvents.CandidateCount != 2 || dryResult.AbuseRateBuckets.CandidateCount != 2 ||
+		dryResult.AnonymousRateLimitGuards.CandidateCount != 2 {
+		t.Fatalf("dry-run candidates = %+v, want 2/2/2", dryResult)
 	}
-	assertCleanupTableCounts(t, pool, 5, 3)
+	assertCleanupTableCounts(t, pool, 5, 3, 3)
 
 	executeResult, err := service.Execute(t.Context(), now, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if executeResult.AIUsageEvents != (applicationcleanup.ResourceResult{CandidateCount: 2, DeletedCount: 2, BatchCount: 2}) ||
-		executeResult.AbuseRateBuckets != (applicationcleanup.ResourceResult{CandidateCount: 2, DeletedCount: 2, BatchCount: 2}) {
+		executeResult.AbuseRateBuckets != (applicationcleanup.ResourceResult{CandidateCount: 2, DeletedCount: 2, BatchCount: 2}) ||
+		executeResult.AnonymousRateLimitGuards != (applicationcleanup.ResourceResult{CandidateCount: 2, DeletedCount: 2, BatchCount: 2}) {
 		t.Fatalf("execute result = %+v", executeResult)
 	}
-	assertCleanupTableCounts(t, pool, 3, 1)
+	assertCleanupTableCounts(t, pool, 3, 1, 1)
 	assertCleanupUsageExists(t, pool, "91000000-0000-7000-8000-000000000001", false)
 	assertCleanupUsageExists(t, pool, "91000000-0000-7000-8000-000000000002", false)
 	assertCleanupUsageExists(t, pool, "91000000-0000-7000-8000-000000000003", true)
@@ -123,7 +187,8 @@ func TestCleanupDryRunAndExecuteRespectAllDeadlineAndSettlementPredicates(t *tes
 	assertCleanupUsageExists(t, pool, "91000000-0000-7000-8000-000000000005", true)
 
 	replay, err := service.Execute(t.Context(), now, 1)
-	if err != nil || replay.AIUsageEvents.DeletedCount != 0 || replay.AbuseRateBuckets.DeletedCount != 0 {
+	if err != nil || replay.AIUsageEvents.DeletedCount != 0 || replay.AbuseRateBuckets.DeletedCount != 0 ||
+		replay.AnonymousRateLimitGuards.DeletedCount != 0 {
 		t.Fatalf("idempotent replay = %+v/%v", replay, err)
 	}
 }
@@ -136,6 +201,7 @@ func TestCleanupTargetsPublicSchemaWhenSearchPathContainsShadowTables(t *testing
 	insertFinalizedCleanupUsage(t, pool, "90000000-0000-7000-8000-000000000011",
 		now.Add(-workspace.AIUsageRetentionDuration-time.Minute), true)
 	insertCleanupBucket(t, pool, "public_expired", []byte{1}, now.Add(-time.Minute), now)
+	insertCleanupGuard(t, pool, "public_expired", []byte{1}, now)
 
 	_, err := pool.Exec(t.Context(), `DROP SCHEMA IF EXISTS cleanup_shadow CASCADE;
 CREATE SCHEMA cleanup_shadow;
@@ -151,7 +217,23 @@ CREATE TABLE cleanup_shadow.abuse_rate_buckets (
     window_start timestamptz NOT NULL,
     expires_at timestamptz NOT NULL,
     PRIMARY KEY (scope, key_hash, window_start)
+);
+CREATE TABLE cleanup_shadow.anonymous_rate_limit_guards (
+    scope text NOT NULL,
+    key_hash bytea NOT NULL,
+    expires_at timestamptz NOT NULL,
+    PRIMARY KEY (scope, key_hash)
 );`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Exec(t.Context(), `INSERT INTO cleanup_shadow.anonymous_rate_limit_guards
+    (scope, key_hash, expires_at)
+VALUES
+    ('shadow_1', '\x01', $1),
+    ('shadow_2', '\x02', $1),
+    ('shadow_3', '\x03', $1),
+    ('shadow_4', '\x04', $1)`, now.Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,28 +283,32 @@ VALUES
 
 	service := applicationcleanup.NewService(NewCleanupRepository(shadowPool))
 	dryResult, err := service.DryRun(t.Context(), now)
-	if err != nil || dryResult.AIUsageEvents.CandidateCount != 1 || dryResult.AbuseRateBuckets.CandidateCount != 1 {
-		t.Fatalf("public-schema dry-run = %+v/%v, want 1/1", dryResult, err)
+	if err != nil || dryResult.AIUsageEvents.CandidateCount != 1 || dryResult.AbuseRateBuckets.CandidateCount != 1 ||
+		dryResult.AnonymousRateLimitGuards.CandidateCount != 1 {
+		t.Fatalf("public-schema dry-run = %+v/%v, want 1/1/1", dryResult, err)
 	}
 	executeResult, err := service.Execute(t.Context(), now, 10)
 	if err != nil || executeResult.AIUsageEvents.DeletedCount != 1 ||
-		executeResult.AbuseRateBuckets.DeletedCount != 1 {
-		t.Fatalf("public-schema execute = %+v/%v, want 1/1", executeResult, err)
+		executeResult.AbuseRateBuckets.DeletedCount != 1 || executeResult.AnonymousRateLimitGuards.DeletedCount != 1 {
+		t.Fatalf("public-schema execute = %+v/%v, want 1/1/1", executeResult, err)
 	}
 
-	var publicUsage, publicBuckets, shadowUsage, shadowBuckets int
+	var publicUsage, publicBuckets, publicGuards, shadowUsage, shadowBuckets, shadowGuards int
 	if err = pool.QueryRow(t.Context(), `SELECT
     (SELECT count(*) FROM public.ai_usage_events),
     (SELECT count(*) FROM public.abuse_rate_buckets),
+	(SELECT count(*) FROM public.anonymous_rate_limit_guards),
     (SELECT count(*) FROM cleanup_shadow.ai_usage_events),
-    (SELECT count(*) FROM cleanup_shadow.abuse_rate_buckets)`).Scan(
-		&publicUsage, &publicBuckets, &shadowUsage, &shadowBuckets,
+	(SELECT count(*) FROM cleanup_shadow.abuse_rate_buckets),
+	(SELECT count(*) FROM cleanup_shadow.anonymous_rate_limit_guards)`).Scan(
+		&publicUsage, &publicBuckets, &publicGuards, &shadowUsage, &shadowBuckets, &shadowGuards,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if publicUsage != 0 || publicBuckets != 0 || shadowUsage != 2 || shadowBuckets != 3 {
-		t.Fatalf("schema counts = public:%d/%d shadow:%d/%d, want 0/0 and 2/3",
-			publicUsage, publicBuckets, shadowUsage, shadowBuckets)
+	if publicUsage != 0 || publicBuckets != 0 || publicGuards != 0 ||
+		shadowUsage != 2 || shadowBuckets != 3 || shadowGuards != 4 {
+		t.Fatalf("schema counts = public:%d/%d/%d shadow:%d/%d/%d, want 0/0/0 and 2/3/4",
+			publicUsage, publicBuckets, publicGuards, shadowUsage, shadowBuckets, shadowGuards)
 	}
 }
 
@@ -309,6 +395,142 @@ WHERE operation_id=$1 AND provider_usage_finalized_at IS NULL`, operationID, now
 	}
 }
 
+func TestCleanupSkipsLockedAnonymousGuardAndRevalidatesExpiryOnNextRun(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow().Add(9 * 24 * time.Hour)
+	keyHash := []byte{1, 2, 3}
+	insertCleanupGuard(t, pool, "anonymous_ip", keyHash, now.Add(-time.Microsecond))
+
+	tx, err := pool.BeginTx(t.Context(), pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if tag, updateErr := tx.Exec(t.Context(), `UPDATE public.anonymous_rate_limit_guards
+SET expires_at=$3 WHERE scope=$1 AND key_hash=$2`, "anonymous_ip", keyHash, now.Add(time.Hour)); updateErr != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("advance locked guard expiry = %d/%v", tag.RowsAffected(), updateErr)
+	}
+
+	type batchResult struct {
+		deleted int64
+		err     error
+	}
+	finished := make(chan batchResult, 1)
+	cleanupCtx, cancelCleanup := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancelCleanup()
+	go func() {
+		deleted, deleteErr := NewCleanupRepository(pool).DeleteAnonymousRateLimitGuardsBatch(cleanupCtx, now, 1)
+		finished <- batchResult{deleted: deleted, err: deleteErr}
+	}()
+	select {
+	case result := <-finished:
+		if result.err != nil || result.deleted != 0 {
+			t.Fatalf("cleanup while guard is locked = %+v", result)
+		}
+	case <-cleanupCtx.Done():
+		t.Fatalf("cleanup waited on guard instead of SKIP LOCKED: %v", cleanupCtx.Err())
+	}
+	if err = tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := NewCleanupRepository(pool).DeleteAnonymousRateLimitGuardsBatch(t.Context(), now, 1)
+	if err != nil || deleted != 0 {
+		t.Fatalf("cleanup revalidated future guard expiry = %d/%v, want 0", deleted, err)
+	}
+	if _, err = pool.Exec(t.Context(), `UPDATE public.anonymous_rate_limit_guards
+SET expires_at=$3 WHERE scope=$1 AND key_hash=$2`, "anonymous_ip", keyHash, now); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err = NewCleanupRepository(pool).DeleteAnonymousRateLimitGuardsBatch(t.Context(), now, 1)
+	if err != nil || deleted != 1 {
+		t.Fatalf("cleanup expired guard after revalidation = %d/%v, want 1", deleted, err)
+	}
+}
+
+func TestCleanupSkipsGuardHeldByAnonymousLimiterAndPreservesAdvancedExpiry(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	keyHash := []byte("cleanup-limiter-race")
+	var capturedNow time.Time
+	if err := pool.QueryRow(t.Context(), `SELECT clock_timestamp()`).Scan(&capturedNow); err != nil {
+		t.Fatal(err)
+	}
+	insertCleanupGuard(t, pool, "anonymous_ip", keyHash, capturedNow.Add(-time.Microsecond))
+
+	barrier := newCleanupAnonymousLimiterBarrier()
+	defer barrier.release()
+	config := pool.Config()
+	config.ConnConfig.Tracer = barrier
+	config.MinConns = 0
+	config.MaxConns = 1
+	limiterPool, err := pgxpool.NewWithConfig(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(limiterPool.Close)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	limiterCalls := make(chan error, 1)
+	go func() {
+		limiterCalls <- NewAnonymousRateLimiter(limiterPool, 5, 20).Check(
+			ctx,
+			keyHash,
+			integrationNow(),
+		)
+	}()
+
+	select {
+	case advanceErr := <-barrier.guardAdvanced:
+		if advanceErr != nil {
+			t.Fatalf("anonymous limiter guard advance: %v", advanceErr)
+		}
+	case limiterErr := <-limiterCalls:
+		t.Fatalf("anonymous limiter returned before cleanup overlap: %v", limiterErr)
+	case <-ctx.Done():
+		t.Fatalf("anonymous limiter did not advance and hold guard: %v", ctx.Err())
+	}
+
+	deleted, err := NewCleanupRepository(pool).DeleteAnonymousRateLimitGuardsBatch(ctx, capturedNow, 1)
+	if err != nil || deleted != 0 {
+		t.Fatalf("cleanup while anonymous limiter holds guard = %d/%v, want 0/nil", deleted, err)
+	}
+
+	barrier.release()
+	select {
+	case limiterErr := <-limiterCalls:
+		if limiterErr != nil {
+			t.Fatalf("anonymous limiter commit: %v", limiterErr)
+		}
+	case <-ctx.Done():
+		t.Fatalf("anonymous limiter did not commit after guard release: %v", ctx.Err())
+	}
+
+	deleted, err = NewCleanupRepository(pool).DeleteAnonymousRateLimitGuardsBatch(ctx, capturedNow, 1)
+	if err != nil || deleted != 0 {
+		t.Fatalf("cleanup after limiter expiry advance = %d/%v, want 0/nil", deleted, err)
+	}
+	var guardExpiry time.Time
+	var guardCount, bucketCount int
+	if err := pool.QueryRow(ctx, `SELECT
+    (SELECT count(*) FROM public.anonymous_rate_limit_guards
+     WHERE scope='anonymous_ip' AND key_hash=$1),
+    (SELECT expires_at FROM public.anonymous_rate_limit_guards
+     WHERE scope='anonymous_ip' AND key_hash=$1),
+    (SELECT count(*) FROM public.abuse_rate_buckets
+     WHERE scope='anonymous_ip_hour' AND key_hash=$1)`, keyHash).Scan(
+		&guardCount, &guardExpiry, &bucketCount,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if guardCount != 1 || !guardExpiry.After(capturedNow) || bucketCount != 1 {
+		t.Fatalf("post-race guard/count/bucket = %d/%s/%d, want 1/future/1",
+			guardCount, guardExpiry, bucketCount)
+	}
+}
+
 func TestConcurrentCleanupWorkersDeleteEachCandidateExactlyOnce(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
@@ -319,6 +541,8 @@ func TestConcurrentCleanupWorkersDeleteEachCandidateExactlyOnce(t *testing.T) {
 		operationID := fmt.Sprintf("97000000-0000-7000-8000-%012d", index)
 		insertFinalizedCleanupUsage(t, pool, operationID,
 			now.Add(-workspace.AIUsageRetentionDuration-time.Duration(index)*time.Microsecond), true)
+		insertCleanupGuard(t, pool, fmt.Sprintf("concurrent_%02d", index), []byte{byte(index)},
+			now.Add(-time.Duration(index)*time.Microsecond))
 	}
 
 	start := make(chan struct{})
@@ -337,22 +561,25 @@ func TestConcurrentCleanupWorkersDeleteEachCandidateExactlyOnce(t *testing.T) {
 		}()
 	}
 	close(start)
-	var deleted int64
+	var deletedUsage int64
+	var deletedGuards int64
 	for range 2 {
 		select {
 		case result := <-results:
 			if result.err != nil {
 				t.Fatal(result.err)
 			}
-			deleted += result.result.AIUsageEvents.DeletedCount
+			deletedUsage += result.result.AIUsageEvents.DeletedCount
+			deletedGuards += result.result.AnonymousRateLimitGuards.DeletedCount
 		case <-workerCtx.Done():
 			t.Fatalf("parallel cleanup workers did not finish: %v", workerCtx.Err())
 		}
 	}
-	if deleted != total {
-		t.Fatalf("parallel workers deleted = %d, want %d", deleted, total)
+	if deletedUsage != total || deletedGuards != total {
+		t.Fatalf("parallel workers deleted = usage:%d guards:%d, want %d/%d",
+			deletedUsage, deletedGuards, total, total)
 	}
-	assertCleanupTableCounts(t, pool, 0, 0)
+	assertCleanupTableCounts(t, pool, 0, 0, 0)
 }
 
 func TestCleanupBatchFailureRollsBackAndRerunCompletes(t *testing.T) {
@@ -393,7 +620,7 @@ FOR EACH ROW EXECUTE FUNCTION test_cleanup_batch_failure()`)
 		result.AIUsageEvents != (applicationcleanup.ResourceResult{CandidateCount: 1, DeletedCount: 1, BatchCount: 1}) {
 		t.Fatalf("partially completed cleanup result/error = %+v/%v", result, err)
 	}
-	assertCleanupTableCounts(t, pool, 1, 0)
+	assertCleanupTableCounts(t, pool, 1, 0, 0)
 	assertCleanupUsageExists(t, pool, firstID, false)
 	assertCleanupUsageExists(t, pool, secondID, true)
 
@@ -525,7 +752,7 @@ func TestCleanupSkipsUsageLockedByAccountDelete(t *testing.T) {
 	if err = tx.Commit(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	assertCleanupTableCounts(t, pool, 0, 0)
+	assertCleanupTableCounts(t, pool, 0, 0, 0)
 }
 
 func insertCleanupUser(t *testing.T, pool *pgxpool.Pool, now time.Time) {
@@ -609,16 +836,26 @@ VALUES($1,$2,$3,1,$4)`, scope, keyHash, windowStart, expiresAt); err != nil {
 	}
 }
 
-func assertCleanupTableCounts(t *testing.T, pool *pgxpool.Pool, wantUsage, wantBuckets int) {
+func insertCleanupGuard(t *testing.T, pool *pgxpool.Pool, scope string, keyHash []byte, expiresAt time.Time) {
 	t.Helper()
-	var usage, buckets int
-	if err := pool.QueryRow(t.Context(), `SELECT
-(SELECT count(*) FROM ai_usage_events),
-(SELECT count(*) FROM abuse_rate_buckets)`).Scan(&usage, &buckets); err != nil {
+	if _, err := pool.Exec(t.Context(), `INSERT INTO public.anonymous_rate_limit_guards(scope,key_hash,expires_at)
+VALUES($1,$2,$3)`, scope, keyHash, expiresAt); err != nil {
 		t.Fatal(err)
 	}
-	if usage != wantUsage || buckets != wantBuckets {
-		t.Fatalf("cleanup table counts = usage:%d buckets:%d, want %d/%d", usage, buckets, wantUsage, wantBuckets)
+}
+
+func assertCleanupTableCounts(t *testing.T, pool *pgxpool.Pool, wantUsage, wantBuckets, wantGuards int) {
+	t.Helper()
+	var usage, buckets, guards int
+	if err := pool.QueryRow(t.Context(), `SELECT
+(SELECT count(*) FROM ai_usage_events),
+(SELECT count(*) FROM abuse_rate_buckets),
+(SELECT count(*) FROM anonymous_rate_limit_guards)`).Scan(&usage, &buckets, &guards); err != nil {
+		t.Fatal(err)
+	}
+	if usage != wantUsage || buckets != wantBuckets || guards != wantGuards {
+		t.Fatalf("cleanup table counts = usage:%d buckets:%d guards:%d, want %d/%d/%d",
+			usage, buckets, guards, wantUsage, wantBuckets, wantGuards)
 	}
 }
 

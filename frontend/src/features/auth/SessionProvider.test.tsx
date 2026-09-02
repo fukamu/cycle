@@ -196,6 +196,51 @@ describe("SessionProvider admission boundary", () => {
     ]);
   });
 
+  it("does not automatically retry a rate-limited anonymous bootstrap and keeps an explicit retry", async () => {
+    let sessionRequests = 0;
+    let anonymousRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = typeof input === "string" ? input : input.toString();
+        if (path === "/api/v1/session") {
+          sessionRequests += 1;
+          return errorResponse(401, "SESSION_MISSING");
+        }
+        if (
+          path === "/api/v1/session/anonymous" &&
+          (init?.method ?? "GET") === "POST"
+        ) {
+          anonymousRequests += 1;
+          return anonymousRequests === 1
+            ? errorResponse(429, "RATE_LIMIT_EXCEEDED")
+            : sessionResponse(session);
+        }
+        throw new Error(`unexpected request: ${path}`);
+      }),
+    );
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, retryDelay: 0 } },
+    });
+
+    renderProvider(undefined, client);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "時間を空けてから再試行してください。再試行を繰り返すと、待ち時間が延びる場合があります。",
+    );
+    expect(sessionRequests).toBe(1);
+    expect(anonymousRequests).toBe(1);
+    expect(screen.queryByText("application ready")).not.toBeInTheDocument();
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "再試行" }));
+
+    expect(await screen.findByText("application ready")).toBeInTheDocument();
+    expect(sessionRequests).toBe(2);
+    expect(anonymousRequests).toBe(2);
+  });
+
   it("aborts a lock-waiting anonymous bootstrap when another tab changes identity", async () => {
     const advisory = createAdvisoryChannelHarness();
     const reloadApplication = vi.fn();

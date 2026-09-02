@@ -33,10 +33,13 @@ type commandRepository struct {
 	countNow       time.Time
 	aiTimes        []time.Time
 	abuseTimes     []time.Time
+	guardTimes     []time.Time
 	aiBatch        []int32
 	abuseBatch     []int32
+	guardBatch     []int32
 	aiRemaining    int64
 	abuseRemain    int64
+	guardRemain    int64
 }
 
 func (repository *commandRepository) CountCandidates(_ context.Context, now time.Time) (applicationcleanup.CandidateCounts, error) {
@@ -63,6 +66,18 @@ func (repository *commandRepository) DeleteAbuseRateBucketsBatch(_ context.Conte
 	}
 	deleted := min(repository.abuseRemain, int64(batchSize))
 	repository.abuseRemain -= deleted
+	return deleted, nil
+}
+
+func (repository *commandRepository) DeleteAnonymousRateLimitGuardsBatch(
+	_ context.Context,
+	now time.Time,
+	batchSize int32,
+) (int64, error) {
+	repository.guardTimes = append(repository.guardTimes, now)
+	repository.guardBatch = append(repository.guardBatch, batchSize)
+	deleted := min(repository.guardRemain, int64(batchSize))
+	repository.guardRemain -= deleted
 	return deleted, nil
 }
 
@@ -190,7 +205,9 @@ func TestDryRunReadsOnlyDatabaseURLCapturesNowOnceAndLogsAggregates(t *testing.T
 	const databaseURL = "postgres://cleanup-user:DATABASE_URL_SECRET_CANARY@db.example:5432/cleanup-db?sslmode=disable"
 	now := time.Date(2026, time.August, 25, 12, 34, 56, 789, time.FixedZone("JST", 9*60*60))
 	clock := &commandClock{now: now}
-	repository := &commandRepository{counts: applicationcleanup.CandidateCounts{AIUsageEvents: 2, AbuseRateBuckets: 4}}
+	repository := &commandRepository{counts: applicationcleanup.CandidateCounts{
+		AIUsageEvents: 2, AbuseRateBuckets: 4, AnonymousRateLimitGuards: 6,
+	}}
 	var output bytes.Buffer
 	lookupKeys := []string{}
 	closed := 0
@@ -210,26 +227,29 @@ func TestDryRunReadsOnlyDatabaseURLCapturesNowOnceAndLogsAggregates(t *testing.T
 		t.Fatalf("dry-run exit/clock/close/lookups = %d/%d/%d/%v", exitCode, clock.calls, closed, lookupKeys)
 	}
 	if !repository.countNow.Equal(now.UTC()) || repository.countNow.Location() != time.UTC ||
-		len(repository.aiTimes) != 0 || len(repository.abuseTimes) != 0 {
-		t.Fatalf("dry-run repository time/mutations = %s/%d/%d", repository.countNow, len(repository.aiTimes), len(repository.abuseTimes))
+		len(repository.aiTimes) != 0 || len(repository.abuseTimes) != 0 || len(repository.guardTimes) != 0 {
+		t.Fatalf("dry-run repository time/mutations = %s/%d/%d/%d",
+			repository.countNow, len(repository.aiTimes), len(repository.abuseTimes), len(repository.guardTimes))
 	}
 	if strings.Contains(output.String(), "DATABASE_URL_SECRET_CANARY") {
 		t.Fatalf("dry-run leaked database URL: %s", output.String())
 	}
 	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
-	if len(lines) != 2 {
+	if len(lines) != 3 {
 		t.Fatalf("dry-run log lines = %d: %s", len(lines), output.String())
 	}
 	ai := decodeCleanupLog(t, lines[0])
 	abuse := decodeCleanupLog(t, lines[1])
+	guards := decodeCleanupLog(t, lines[2])
 	assertCleanupAggregate(t, ai, "dry_run", "ai_usage_events", 2, 0, 0)
 	assertCleanupAggregate(t, abuse, "dry_run", "abuse_rate_buckets", 4, 0, 0)
+	assertCleanupAggregate(t, guards, "dry_run", "anonymous_rate_limit_guards", 6, 0, 0)
 }
 
 func TestExecuteUsesFixedCaptureAndExplicitBatch(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 1, 2, 3, 4, time.UTC)
 	clock := &commandClock{now: now}
-	repository := &commandRepository{aiRemaining: 3, abuseRemain: 1}
+	repository := &commandRepository{aiRemaining: 3, abuseRemain: 1, guardRemain: 2}
 	var output bytes.Buffer
 	exitCode := runCleanupCommand(t.Context(), []string{"--execute", "--batch-size=2"}, fixedDatabaseLookup, &output, commandDependencies{
 		clock: clock,
@@ -240,10 +260,14 @@ func TestExecuteUsesFixedCaptureAndExplicitBatch(t *testing.T) {
 	if exitCode != 0 || clock.calls != 1 {
 		t.Fatalf("execute exit/clock = %d/%d", exitCode, clock.calls)
 	}
-	if len(repository.aiBatch) != 3 || len(repository.abuseBatch) != 2 {
-		t.Fatalf("execute batch calls = ai:%v abuse:%v", repository.aiBatch, repository.abuseBatch)
+	if len(repository.aiBatch) != 3 || len(repository.abuseBatch) != 2 || len(repository.guardBatch) != 2 {
+		t.Fatalf("execute batch calls = ai:%v abuse:%v guards:%v",
+			repository.aiBatch, repository.abuseBatch, repository.guardBatch)
 	}
-	for _, captured := range append(repository.aiTimes, repository.abuseTimes...) {
+	allCaptured := append([]time.Time{}, repository.aiTimes...)
+	allCaptured = append(allCaptured, repository.abuseTimes...)
+	allCaptured = append(allCaptured, repository.guardTimes...)
+	for _, captured := range allCaptured {
 		if !captured.Equal(now) {
 			t.Fatalf("execute changed captured deadline to %s", captured)
 		}
@@ -251,6 +275,7 @@ func TestExecuteUsesFixedCaptureAndExplicitBatch(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
 	assertCleanupAggregate(t, decodeCleanupLog(t, lines[0]), "execute", "ai_usage_events", 3, 3, 2)
 	assertCleanupAggregate(t, decodeCleanupLog(t, lines[1]), "execute", "abuse_rate_buckets", 1, 1, 1)
+	assertCleanupAggregate(t, decodeCleanupLog(t, lines[2]), "execute", "anonymous_rate_limit_guards", 2, 2, 1)
 }
 
 func TestExecuteFailureLogsCommittedPartialAggregatesBeforeSafeFailure(t *testing.T) {
@@ -271,12 +296,13 @@ func TestExecuteFailureLogsCommittedPartialAggregatesBeforeSafeFailure(t *testin
 		t.Fatalf("partial failure exit/log = %d/%s", exitCode, output.String())
 	}
 	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
-	if len(lines) != 3 {
+	if len(lines) != 4 {
 		t.Fatalf("partial failure lines = %d: %s", len(lines), output.String())
 	}
 	assertCleanupAggregate(t, decodeCleanupLog(t, lines[0]), "execute", "ai_usage_events", 1, 1, 1)
 	assertCleanupAggregate(t, decodeCleanupLog(t, lines[1]), "execute", "abuse_rate_buckets", 0, 0, 0)
-	failure := decodeCleanupLog(t, lines[2])
+	assertCleanupAggregate(t, decodeCleanupLog(t, lines[2]), "execute", "anonymous_rate_limit_guards", 0, 0, 0)
+	failure := decodeCleanupLog(t, lines[3])
 	if failure["error_class"] != "cleanup_execution_failed" || failure["cleanup_mode"] != "execute" {
 		t.Fatalf("partial failure classification = %v", failure)
 	}

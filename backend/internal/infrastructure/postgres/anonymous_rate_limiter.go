@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
@@ -22,30 +23,38 @@ func NewAnonymousRateLimiter(pool *pgxpool.Pool, hourLimit, dayLimit int) *Anony
 	return &AnonymousRateLimiter{pool: pool, hourLimit: hourLimit, dayLimit: dayLimit}
 }
 
-func (limiter *AnonymousRateLimiter) Check(ctx context.Context, keyHash []byte, now time.Time) (err error) {
-	tx, err := limiter.pool.BeginTx(ctx, pgx.TxOptions{})
+func (limiter *AnonymousRateLimiter) Check(ctx context.Context, keyHash []byte, _ time.Time) (err error) {
+	tx, err := limiter.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}
 	defer rollbackOnError(ctx, tx, &err)
 	queries := db.New(tx)
-	window := now.UTC().Truncate(time.Hour)
+	if err = queries.AcquireAnonymousIPRateLimitGuard(ctx, keyHash); err != nil {
+		return err
+	}
+	canonicalValue, err := queries.AdvanceAnonymousIPRateLimitGuard(ctx, keyHash)
+	if err != nil {
+		return err
+	}
+	if !canonicalValue.Valid || canonicalValue.InfinityModifier != pgtype.Finite {
+		return fmt.Errorf("invalid anonymous rate limit canonical time")
+	}
+	canonicalTime := canonicalValue.Time.UTC()
+	window := canonicalTime.Truncate(time.Hour)
 	hourCount, err := queries.IncrementAnonymousIPHourBucket(ctx, db.IncrementAnonymousIPHourBucketParams{
 		KeyHash:     keyHash,
 		WindowStart: timestamptz(window),
-		ExpiresAt:   timestamptz(now.Add(25 * time.Hour)),
+		ExpiresAt:   timestamptz(canonicalTime.Add(25 * time.Hour)),
 	})
 	if err != nil {
 		return err
 	}
-	rollingValue, err := queries.CountAnonymousIPRollingUsage(ctx, db.CountAnonymousIPRollingUsageParams{
-		KeyHash:       keyHash,
-		AcceptedAfter: timestamptz(now.Add(-24 * time.Hour)),
+	rollingCount, err := queries.CountAnonymousIPRollingUsage(ctx, db.CountAnonymousIPRollingUsageParams{
+		KeyHash:         keyHash,
+		IncludedFrom:    timestamptz(window.Add(-24 * time.Hour)),
+		IncludedThrough: timestamptz(window),
 	})
-	if err != nil {
-		return err
-	}
-	rollingCount, err := anonymousRollingCount(rollingValue)
 	if err != nil {
 		return err
 	}
@@ -57,12 +66,4 @@ func (limiter *AnonymousRateLimiter) Check(ctx context.Context, keyHash []byte, 
 		return ports.ErrRateLimitExceeded
 	}
 	return nil
-}
-
-func anonymousRollingCount(value any) (int64, error) {
-	count, ok := value.(int64)
-	if !ok || count < 0 {
-		return 0, fmt.Errorf("invalid anonymous rolling count type/value: %T", value)
-	}
-	return count, nil
 }

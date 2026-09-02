@@ -10,6 +10,11 @@ SELECT count(*)
 FROM public.abuse_rate_buckets
 WHERE expires_at <= sqlc.arg(captured_now)::timestamptz;
 
+-- name: CountCleanupAnonymousRateLimitGuards :one
+SELECT count(*)
+FROM public.anonymous_rate_limit_guards
+WHERE expires_at <= sqlc.arg(captured_now)::timestamptz;
+
 -- name: DeleteCleanupAIUsageEventsBatch :execrows
 WITH candidates AS (
     SELECT operation_id
@@ -42,4 +47,19 @@ USING candidates
 WHERE target.scope = candidates.scope
   AND target.key_hash = candidates.key_hash
   AND target.window_start = candidates.window_start
+  AND target.expires_at <= sqlc.arg(captured_now)::timestamptz;
+
+-- name: DeleteCleanupAnonymousRateLimitGuardsBatch :execrows
+WITH candidates AS (
+    SELECT scope, key_hash
+    FROM public.anonymous_rate_limit_guards
+    WHERE expires_at <= sqlc.arg(captured_now)::timestamptz
+    ORDER BY expires_at, scope, key_hash
+    LIMIT sqlc.arg(batch_size)::integer
+    FOR UPDATE SKIP LOCKED
+)
+DELETE FROM public.anonymous_rate_limit_guards AS target
+USING candidates
+WHERE target.scope = candidates.scope
+  AND target.key_hash = candidates.key_hash
   AND target.expires_at <= sqlc.arg(captured_now)::timestamptz;

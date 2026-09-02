@@ -24,8 +24,9 @@ const (
 )
 
 type CandidateCounts struct {
-	AIUsageEvents    int64
-	AbuseRateBuckets int64
+	AIUsageEvents            int64
+	AbuseRateBuckets         int64
+	AnonymousRateLimitGuards int64
 }
 
 type ResourceResult struct {
@@ -35,15 +36,17 @@ type ResourceResult struct {
 }
 
 type Result struct {
-	Mode             Mode
-	AIUsageEvents    ResourceResult
-	AbuseRateBuckets ResourceResult
+	Mode                     Mode
+	AIUsageEvents            ResourceResult
+	AbuseRateBuckets         ResourceResult
+	AnonymousRateLimitGuards ResourceResult
 }
 
 type Repository interface {
 	CountCandidates(context.Context, time.Time) (CandidateCounts, error)
 	DeleteAIUsageEventsBatch(context.Context, time.Time, int32) (int64, error)
 	DeleteAbuseRateBucketsBatch(context.Context, time.Time, int32) (int64, error)
+	DeleteAnonymousRateLimitGuardsBatch(context.Context, time.Time, int32) (int64, error)
 }
 
 type Service struct {
@@ -66,11 +69,12 @@ func (service *Service) DryRun(ctx context.Context, capturedNow time.Time) (Resu
 	if err != nil {
 		return result, err
 	}
-	if counts.AIUsageEvents < 0 || counts.AbuseRateBuckets < 0 {
+	if counts.AIUsageEvents < 0 || counts.AbuseRateBuckets < 0 || counts.AnonymousRateLimitGuards < 0 {
 		return result, ErrRepositoryState
 	}
 	result.AIUsageEvents.CandidateCount = counts.AIUsageEvents
 	result.AbuseRateBuckets.CandidateCount = counts.AbuseRateBuckets
+	result.AnonymousRateLimitGuards.CandidateCount = counts.AnonymousRateLimitGuards
 	return result, nil
 }
 
@@ -93,6 +97,12 @@ func (service *Service) Execute(ctx context.Context, capturedNow time.Time, batc
 	}
 	result.AbuseRateBuckets, err = runBatches(ctx, batch, func(ctx context.Context) (int64, error) {
 		return service.repository.DeleteAbuseRateBucketsBatch(ctx, deadline, batch)
+	})
+	if err != nil {
+		return result, err
+	}
+	result.AnonymousRateLimitGuards, err = runBatches(ctx, batch, func(ctx context.Context) (int64, error) {
+		return service.repository.DeleteAnonymousRateLimitGuardsBatch(ctx, deadline, batch)
 	})
 	return result, err
 }

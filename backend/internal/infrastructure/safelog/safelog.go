@@ -124,7 +124,8 @@ func safeValue(key string, value slog.Value) bool {
 	case "cleanup_mode":
 		return value.Kind() == slog.KindString && (value.String() == "dry_run" || value.String() == "execute")
 	case "cleanup_resource":
-		return value.Kind() == slog.KindString && (value.String() == "ai_usage_events" || value.String() == "abuse_rate_buckets")
+		return value.Kind() == slog.KindString && (value.String() == "ai_usage_events" ||
+			value.String() == "abuse_rate_buckets" || value.String() == "anonymous_rate_limit_guards")
 	case "migration_file":
 		return value.Kind() == slog.KindString && migrationFilePattern.MatchString(value.String())
 	case "error_class", "error_code", "operation", "goal_state_from", "goal_state_to",

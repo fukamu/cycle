@@ -18,6 +18,11 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	guardDown, err := os.ReadFile(filepath.Join(directory, "000006_anonymous_rate_limit_guard.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, guardDown)
 	cleanupDown, err := os.ReadFile(filepath.Join(directory, "000005_retention_cleanup_index.down.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -49,15 +54,17 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 5 {
-		t.Fatalf("applied migrations = %v, want 5", result.Applied)
+	if len(result.Applied) != 6 {
+		t.Fatalf("applied migrations = %v, want 6", result.Applied)
 	}
-	baseline, retention, exposure, hashSplit, cleanupIndex := result.Applied[0], result.Applied[1], result.Applied[2], result.Applied[3], result.Applied[4]
+	baseline, retention, exposure := result.Applied[0], result.Applied[1], result.Applied[2]
+	hashSplit, cleanupIndex, guard := result.Applied[3], result.Applied[4], result.Applied[5]
 	if baseline.Version != 1 || baseline.Direction != "up" || baseline.File != "000001_fukamu_cycle_baseline.up.sql" ||
 		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" ||
 		exposure.Version != 3 || exposure.Direction != "up" || exposure.File != "000003_ai_usage_settlement_exposure.up.sql" ||
 		hashSplit.Version != 4 || hashSplit.Direction != "up" || hashSplit.File != "000004_ai_generation_hash_split.up.sql" ||
-		cleanupIndex.Version != 5 || cleanupIndex.Direction != "up" || cleanupIndex.File != "000005_retention_cleanup_index.up.sql" {
+		cleanupIndex.Version != 5 || cleanupIndex.Direction != "up" || cleanupIndex.File != "000005_retention_cleanup_index.up.sql" ||
+		guard.Version != 6 || guard.Direction != "up" || guard.File != "000006_anonymous_rate_limit_guard.up.sql" {
 		t.Fatalf("applied migrations = %+v", result.Applied)
 	}
 	result, err = Migrate(databaseURL, directory)
@@ -70,7 +77,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 5 || users != 0 {
+	if version != 6 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
@@ -86,6 +93,43 @@ VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000
 	if err == nil {
 		t.Fatal("oversize goal draft unexpectedly succeeded")
 	}
+}
+
+func TestAnonymousRateLimitGuardMigrationSupportsDownAndReUp(t *testing.T) {
+	pool := integrationPool(t)
+	directory := filepath.Join("..", "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(directory, "000006_anonymous_rate_limit_guard.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile(filepath.Join(directory, "000006_anonymous_rate_limit_guard.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := true
+	t.Cleanup(func() {
+		if !installed {
+			executeMigrationScript(t, pool, up)
+		}
+	})
+
+	assertAnonymousRateLimitGuardObjects(t, pool, true)
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO public.anonymous_rate_limit_guards(scope,key_hash,expires_at)
+VALUES ('anonymous_ip',$1,clock_timestamp() + INTERVAL '25 hours')`, []byte("migration-guard-key")); err != nil {
+		t.Fatal(err)
+	}
+	_, duplicateErr := pool.Exec(t.Context(), `
+INSERT INTO public.anonymous_rate_limit_guards(scope,key_hash,expires_at)
+VALUES ('anonymous_ip',$1,clock_timestamp() + INTERVAL '25 hours')`, []byte("migration-guard-key"))
+	assertPostgresSQLState(t, duplicateErr, "23505")
+
+	executeMigrationScript(t, pool, down)
+	installed = false
+	assertAnonymousRateLimitGuardObjects(t, pool, false)
+	executeMigrationScript(t, pool, up)
+	installed = true
+	assertAnonymousRateLimitGuardObjects(t, pool, true)
 }
 
 func TestMigratePinsPublicSchemaAndHistoryAgainstAmbientOptions(t *testing.T) {
@@ -126,9 +170,80 @@ INSERT INTO migration_runner_shadow.schema_migrations(version, dirty) VALUES(999
 	); err != nil {
 		t.Fatal(err)
 	}
-	if publicVersion != 5 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
+	if publicVersion != 6 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
 		t.Fatalf("migration schemas = public:%d/%t shadow:%d/%t tables:%d",
 			publicVersion, publicDirty, shadowVersion, shadowDirty, shadowTables)
+	}
+}
+
+func assertAnonymousRateLimitGuardObjects(t *testing.T, pool *pgxpool.Pool, installed bool) {
+	t.Helper()
+	var table, primaryKey, expiryIndex bool
+	var columnCount, notNullCount int
+	var primaryKeyDefinition, expiryIndexDefinition string
+	if err := pool.QueryRow(t.Context(), `
+SELECT
+    EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public'
+          AND c.relname='anonymous_rate_limit_guards'
+          AND c.relkind='r'
+    ),
+    (SELECT count(*) FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='anonymous_rate_limit_guards'
+       AND column_name IN ('scope','key_hash','expires_at')),
+    (SELECT count(*) FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='anonymous_rate_limit_guards'
+       AND column_name IN ('scope','key_hash','expires_at') AND is_nullable='NO'),
+    EXISTS (
+        SELECT 1 FROM pg_constraint c
+        JOIN pg_class r ON r.oid=c.conrelid
+        JOIN pg_namespace n ON n.oid=r.relnamespace
+        WHERE n.nspname='public' AND r.relname='anonymous_rate_limit_guards'
+          AND c.contype='p'
+    ),
+    COALESCE((
+        SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
+        JOIN pg_class r ON r.oid=c.conrelid
+        JOIN pg_namespace n ON n.oid=r.relnamespace
+        WHERE n.nspname='public' AND r.relname='anonymous_rate_limit_guards'
+          AND c.contype='p'
+    ),''),
+    EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname='public' AND tablename='anonymous_rate_limit_guards'
+          AND indexname='idx_anonymous_rate_limit_guard_expiry'
+    ),
+    COALESCE((
+        SELECT indexdef FROM pg_indexes
+        WHERE schemaname='public' AND tablename='anonymous_rate_limit_guards'
+          AND indexname='idx_anonymous_rate_limit_guard_expiry'
+    ),'')`).Scan(
+		&table, &columnCount, &notNullCount, &primaryKey, &primaryKeyDefinition,
+		&expiryIndex, &expiryIndexDefinition,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if table != installed || primaryKey != installed || expiryIndex != installed {
+		t.Fatalf("guard migration objects = table:%t primary-key:%t expiry-index:%t, want installed %t",
+			table, primaryKey, expiryIndex, installed)
+	}
+	wantColumns := 0
+	if installed {
+		wantColumns = 3
+	}
+	if columnCount != wantColumns || notNullCount != wantColumns {
+		t.Fatalf("guard migration columns/not-null = %d/%d, want %d/%d",
+			columnCount, notNullCount, wantColumns, wantColumns)
+	}
+	if installed {
+		if !strings.Contains(primaryKeyDefinition, "PRIMARY KEY (scope, key_hash)") {
+			t.Fatalf("guard primary key = %q, want (scope, key_hash)", primaryKeyDefinition)
+		}
+		if !strings.Contains(expiryIndexDefinition, "(expires_at, scope, key_hash)") {
+			t.Fatalf("guard expiry index = %q, want (expires_at, scope, key_hash)", expiryIndexDefinition)
+		}
 	}
 }
 
