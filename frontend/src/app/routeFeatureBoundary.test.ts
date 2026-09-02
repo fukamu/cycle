@@ -12,6 +12,7 @@ type RouteBoundary = {
   readonly feature: string;
   readonly featureExport: string;
   readonly queryExport: string;
+  readonly additionalFeatureExports?: readonly string[];
   readonly featureProp: string;
   readonly allowedJsx: readonly string[];
   readonly localDeclarations: readonly string[];
@@ -35,6 +36,7 @@ const boundaries: readonly RouteBoundary[] = [
     feature: "goal-creation",
     featureExport: "GoalCreationFeature",
     queryExport: "goalCreationQueryOptions",
+    additionalFeatureExports: ["useGoalCreationDraftCommand"],
     featureProp: "home",
     allowedJsx: ["GoalCreationFeature", "PageError", "PageLoading"],
     localDeclarations: [
@@ -381,6 +383,7 @@ describe.each(boundaries)(
     feature,
     featureExport,
     queryExport,
+    additionalFeatureExports = [],
     featureProp,
     allowedJsx,
     localDeclarations,
@@ -472,12 +475,12 @@ describe.each(boundaries)(
       }
     });
 
-    it("publishes only the feature component and query contract", () => {
+    it("publishes only the declared route and feature contracts", () => {
       const featureIndex = sourceFile(`features/${feature}/index.ts`);
       const contract = publicIndexContract(featureIndex);
       expect(contract.invalidStatements).toEqual([]);
       expect([...contract.names].sort()).toEqual(
-        [featureExport, queryExport].sort(),
+        [featureExport, queryExport, ...additionalFeatureExports].sort(),
       );
     });
 

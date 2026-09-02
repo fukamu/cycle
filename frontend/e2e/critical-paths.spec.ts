@@ -463,6 +463,107 @@ test("two stale tabs converge from Cycle Complete and Review Continue without re
   }
 });
 
+test("a stale Home tab converges to the existing creation draft without repeating POST", async ({
+  context,
+  page,
+}) => {
+  const savedBody = "別のタブで保存された既存の目標下書き";
+  await page.goto("/");
+  await expect(
+    page.getByRole("button", { name: "新しい目標を設定" }),
+  ).toBeVisible();
+
+  const stale = await context.newPage();
+  try {
+    await stale.goto("/");
+    await expect(
+      stale.getByRole("button", { name: "新しい目標を設定" }),
+    ).toBeVisible();
+
+    // Opening the second tab currently refreshes the session-wide CSRF token
+    // (tracked separately by #96). Authorize only the two creation POSTs with
+    // the current token so this test reaches the real Backend 201/409 pair.
+    const activeCSRFToken = (await getSession(stale)).csrfToken;
+    await page.route("**/api/v1/goal-drafts", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      await route.continue({
+        headers: {
+          ...route.request().headers(),
+          "x-csrf-token": activeCSRFToken,
+        },
+      });
+    });
+
+    const winnerCreationResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/v1/goal-drafts",
+    );
+    await page.getByRole("button", { name: "新しい目標を設定" }).click();
+    const winnerCreation = await winnerCreationResponse;
+    expect(winnerCreation.status()).toBe(201);
+    const winnerDraft = (await winnerCreation.json()) as {
+      readonly draft: { readonly id: string; readonly revision: number };
+    };
+
+    const saved = await requestFromPage(page, {
+      path: `/api/v1/goal-drafts/${winnerDraft.draft.id}`,
+      method: "PATCH",
+      csrfToken: activeCSRFToken,
+      body: {
+        body: savedBody,
+        expectedRevision: winnerDraft.draft.revision,
+      },
+    });
+    expect(saved).toMatchObject({
+      status: 200,
+      payload: { draft: { body: savedBody } },
+    });
+
+    let staleCreationRequests = 0;
+    await stale.route("**/api/v1/goal-drafts", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      staleCreationRequests += 1;
+      await route.continue({
+        headers: {
+          ...route.request().headers(),
+          "x-csrf-token": activeCSRFToken,
+        },
+      });
+    });
+    const staleCreationResponse = stale.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/v1/goal-drafts",
+    );
+
+    await stale.getByRole("button", { name: "新しい目標を設定" }).click();
+    const conflict = await staleCreationResponse;
+    expect(conflict.status()).toBe(409);
+    expect(
+      (
+        (await conflict.json()) as {
+          readonly error: { readonly code: string };
+        }
+      ).error.code,
+    ).toBe("GOAL_CREATION_DRAFT_ALREADY_EXISTS");
+
+    await expect(stale).toHaveURL("/goals/new");
+    await expect(
+      stale.getByRole("textbox", { name: "あなたの目標" }),
+    ).toHaveValue(savedBody);
+    expect(staleCreationRequests).toBe(1);
+  } finally {
+    await stale.close();
+  }
+});
+
 test("a failed autosave keeps the browser draft and retry persists it", async ({
   page,
 }) => {

@@ -5,14 +5,13 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../auth";
 import {
   cacheCreationDraft,
   cacheCycle,
-  userMutationKeys,
   userQueryKeys,
 } from "../goal-collection";
 import { GoalRefinementPanel, useGoalRefinement } from "../goal-refine";
@@ -20,7 +19,6 @@ import { APIError } from "../../shared/api/client";
 import type { GoalDraft, Home } from "../../shared/api/schemas";
 import {
   adoptGoalDraft,
-  createGoalDraft,
   discardGoalDraft,
   getGoalDraft,
   getHome,
@@ -54,17 +52,10 @@ import {
   hasNonWhitespace,
   normalizeBoundedTextInput,
 } from "../../shared/text/semantics";
+import { useGoalCreationDraftCommand } from "./useGoalCreationDraftCommand";
 
 export function GoalCreationFeature({ home }: { readonly home: Home }) {
-  const session = useSession();
-  const sessionLease = useAuthenticatedRequestLease();
-  const userId = session.user.id;
-  const cache = useQueryClient();
-  const create = useMutation({
-    mutationKey: userMutationKeys.createGoalDraft(userId),
-    mutationFn: () => createGoalDraft(sessionLease, "", session.csrfToken),
-    onSuccess: ({ draft }) => cacheCreationDraft(cache, userId, draft),
-  });
+  const create = useGoalCreationDraftCommand();
   if (!home.creationDraft)
     return (
       <main className="page">
@@ -77,7 +68,7 @@ export function GoalCreationFeature({ home }: { readonly home: Home }) {
             className="button button--primary"
             type="button"
             disabled={create.isPending}
-            onClick={() => create.mutate()}
+            onClick={create.create}
           >
             {create.isError ? "もう一度作成" : "下書きを作成"}
           </button>

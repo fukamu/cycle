@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
 import {
@@ -7,13 +7,12 @@ import {
   useSession,
 } from "../features/auth/sessionContext";
 import { AppReferralPromotion } from "../features/app-referral/AppReferralPromotion";
+import { useGoalCreationDraftCommand } from "../features/goal-creation";
 import {
-  cacheCreationDraft,
   cacheGoals,
-  userMutationKeys,
   userQueryKeys,
 } from "../features/goal-collection/goalCache";
-import { createGoalDraft, getHome } from "../shared/api/workspace";
+import { getHome } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
 import { statusLabel } from "../shared/copy/ja";
 
@@ -27,14 +26,11 @@ export function HomePage() {
     queryKey: userQueryKeys.home(userId),
     queryFn: ({ signal }) => getHome(sessionLease, signal),
   });
-  const create = useMutation({
-    mutationKey: userMutationKeys.createGoalDraft(userId),
-    mutationFn: () => createGoalDraft(sessionLease, "", session.csrfToken),
-    onSuccess: ({ draft }) => {
-      cacheCreationDraft(cache, userId, draft);
-      navigate("/goals/new");
-    },
-  });
+  const openCreationDraft = useCallback(
+    () => navigate("/goals/new"),
+    [navigate],
+  );
+  const create = useGoalCreationDraftCommand(openCreationDraft);
   useEffect(() => {
     if (query.data)
       cacheGoals(
@@ -111,7 +107,7 @@ export function HomePage() {
           className="button button--primary home-cta"
           type="button"
           disabled={create.isPending}
-          onClick={() => create.mutate()}
+          onClick={create.create}
         >
           {create.isPending ? "準備中…" : "新しい目標を設定"}
         </button>
