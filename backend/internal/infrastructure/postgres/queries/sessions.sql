@@ -33,11 +33,45 @@ WHERE id = $1
   AND absolute_expires_at > $3;
 
 -- name: TouchSession :exec
-UPDATE sessions
-SET last_seen_at = $2,
-    idle_expires_at = LEAST($3, absolute_expires_at)
-WHERE id = $1
-  AND revoked_at IS NULL;
+-- Keep the locator non-locking and the dependent CTEs in the global User -> Session lock order.
+WITH located_session AS MATERIALIZED (
+    SELECT user_id
+    FROM sessions
+    WHERE id = sqlc.arg(session_id)::uuid
+      AND revoked_at IS NULL
+),
+locked_user AS MATERIALIZED (
+    SELECT u.id
+    FROM users AS u
+    INNER JOIN located_session AS located ON located.user_id = u.id
+    FOR UPDATE OF u
+),
+locked_session AS MATERIALIZED (
+    SELECT s.id, s.user_id
+    FROM sessions AS s
+    INNER JOIN locked_user AS locked ON locked.id = s.user_id
+    WHERE s.id = sqlc.arg(session_id)::uuid
+      AND s.revoked_at IS NULL
+    FOR UPDATE OF s
+),
+updated_session AS (
+    UPDATE sessions AS s
+    SET last_seen_at = GREATEST(s.last_seen_at, sqlc.arg(touched_at)::timestamptz),
+        idle_expires_at = LEAST(
+            s.absolute_expires_at,
+            GREATEST(s.idle_expires_at, sqlc.arg(idle_expires_at)::timestamptz)
+        )
+    FROM locked_session AS locked
+    WHERE s.id = locked.id
+      AND s.user_id = locked.user_id
+      AND s.revoked_at IS NULL
+    RETURNING s.user_id, s.last_seen_at AS effective_last_seen_at
+)
+UPDATE users AS u
+SET last_active_at = GREATEST(u.last_active_at, activity.effective_last_seen_at),
+    updated_at = GREATEST(u.updated_at, activity.effective_last_seen_at)
+FROM updated_session AS activity
+WHERE u.id = activity.user_id;
 
 
 -- name: LocateAnonymousBootstrap :one
