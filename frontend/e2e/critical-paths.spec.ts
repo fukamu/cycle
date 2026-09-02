@@ -296,6 +296,173 @@ test("cycle completion reuses its operation after committed response loss and co
   );
 });
 
+test("two stale tabs converge from Cycle Complete and Review Continue without repeating commands", async ({
+  context,
+  page,
+}) => {
+  const goalText = "複数タブでも現在の作業へ安全に収束する目標";
+  await createProgressingGoal(page, goalText);
+  await saveFrame(page, "P — Plan", "二つのタブで確認する計画", "D");
+  await saveFrame(page, "D — Do", "先行タブで作業を完了した", "C");
+  await saveFrame(page, "C — Check", "後続タブは古い状態になった", "A");
+  await saveFrame(page, "A — Action", "現在の作業へ収束する", "A");
+  const cyclePath = new URL(page.url()).pathname;
+  const cycleRoute = cyclePath.match(/^\/goals\/([^/]+)\/cycles\/([^/]+)$/);
+  expect(cycleRoute).not.toBeNull();
+  const [, goalId, cycleId] = cycleRoute!;
+
+  const stale = await context.newPage();
+  try {
+    await stale.goto(cyclePath);
+    await expect(stale.getByText("Goal v1 · Cycle 1")).toBeVisible();
+    await stale.getByRole("tab", { name: /^A/ }).click();
+    await expect(
+      stale.getByRole("button", { name: "サイクルを完了" }),
+    ).toBeEnabled();
+
+    // Opening the second tab currently refreshes the session-wide CSRF token
+    // (tracked separately by #96). Authorize only the Complete/Continue
+    // requests from both tabs with the current token so this test isolates
+    // workspace-state convergence and still reaches the real Backend conflict
+    // contract without mocking either response.
+    const activeCSRFToken = (await getSession(stale)).csrfToken;
+    await page.route(
+      `**/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
+      async (route) => {
+        await route.continue({
+          headers: {
+            ...route.request().headers(),
+            "x-csrf-token": activeCSRFToken,
+          },
+        });
+      },
+    );
+    await page.route(
+      `**/api/v1/goals/${goalId}/review/continue`,
+      async (route) => {
+        await route.continue({
+          headers: {
+            ...route.request().headers(),
+            "x-csrf-token": activeCSRFToken,
+          },
+        });
+      },
+    );
+
+    await page.getByRole("button", { name: "サイクルを完了" }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "サイクルを完了" })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "この目標で次のサイクルへ" }),
+    ).toBeVisible();
+
+    let staleCompleteRequests = 0;
+    await stale.route(
+      `**/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
+      async (route) => {
+        if (route.request().method() === "POST") staleCompleteRequests += 1;
+        await route.continue({
+          headers: {
+            ...route.request().headers(),
+            "x-csrf-token": activeCSRFToken,
+          },
+        });
+      },
+    );
+    const staleCompleteResponse = stale.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response
+          .url()
+          .endsWith(`/api/v1/goals/${goalId}/cycles/${cycleId}/complete`),
+    );
+    await stale.getByRole("button", { name: "サイクルを完了" }).click();
+    await stale
+      .getByRole("dialog")
+      .getByRole("button", { name: "サイクルを完了" })
+      .click();
+    const completeConflict = await staleCompleteResponse;
+    expect(completeConflict.status()).toBe(409);
+    expect(
+      (
+        (await completeConflict.json()) as {
+          error: { code: string };
+        }
+      ).error.code,
+    ).toBe("GOAL_STATE_CONFLICT");
+    await expect(
+      stale.getByText("現在の作業状態が更新されました"),
+    ).toBeVisible();
+    await expect(
+      stale.getByRole("textbox", { name: "A — Action" }),
+    ).toHaveAttribute("readonly", "");
+    expect(staleCompleteRequests).toBe(1);
+
+    await stale.getByRole("link", { name: "現在の作業へ移動" }).click();
+    await expect(
+      stale.getByRole("button", { name: "この目標で次のサイクルへ" }),
+    ).toBeVisible();
+
+    await page
+      .getByRole("button", { name: "この目標で次のサイクルへ" })
+      .click();
+    await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
+
+    let staleContinueRequests = 0;
+    await stale.route(
+      `**/api/v1/goals/${goalId}/review/continue`,
+      async (route) => {
+        if (route.request().method() === "POST") staleContinueRequests += 1;
+        await route.continue({
+          headers: {
+            ...route.request().headers(),
+            "x-csrf-token": activeCSRFToken,
+          },
+        });
+      },
+    );
+    const staleContinueResponse = stale.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(`/api/v1/goals/${goalId}/review/continue`),
+    );
+    await stale
+      .getByRole("button", { name: "この目標で次のサイクルへ" })
+      .click();
+    const continueConflict = await staleContinueResponse;
+    expect(continueConflict.status()).toBe(409);
+    expect(
+      (
+        (await continueConflict.json()) as {
+          error: { code: string };
+        }
+      ).error.code,
+    ).toBe("GOAL_REVIEW_NOT_ACTIVE");
+    await expect(
+      stale.getByText("Reviewの作業場所は変わりました。", {
+        exact: false,
+      }),
+    ).toBeVisible();
+    await expect(
+      stale.getByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      }),
+    ).toHaveAttribute("readonly", "");
+    expect(staleContinueRequests).toBe(1);
+
+    await stale
+      .getByRole("link", { name: "現在のGoalを開いてください" })
+      .click();
+    await expect(stale.getByText("Goal v1 · Cycle 2")).toBeVisible();
+    expect(staleCompleteRequests).toBe(1);
+    expect(staleContinueRequests).toBe(1);
+  } finally {
+    await stale.close();
+  }
+});
+
 test("a failed autosave keeps the browser draft and retry persists it", async ({
   page,
 }) => {

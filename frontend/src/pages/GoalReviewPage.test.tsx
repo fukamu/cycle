@@ -1,4 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQueryClient,
+} from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import {
   act,
@@ -1363,12 +1367,472 @@ describe("GoalReviewPage", () => {
     );
     expect(getReview).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    { command: "continue", code: "GOAL_REVIEW_NOT_ACTIVE" },
+    { command: "continue", code: "GOAL_VERSION_CONFLICT" },
+    { command: "terminate", code: "GOAL_STATE_CONFLICT" },
+    { command: "terminate", code: "GOAL_ALREADY_TERMINAL" },
+    { command: "delete", code: "GOAL_DELETE_CONFLICT" },
+  ] as const)(
+    "fences a stale $command command on exact $code and converges with GET only",
+    async ({ command, code }) => {
+      const canonicalGoal: Goal =
+        command === "continue"
+          ? continuedGoal
+          : command === "terminate"
+            ? {
+                ...goal,
+                status: "ended",
+                revision: goal.revision + 1,
+                currentWork: null,
+                terminalAt: "2026-08-20T00:06:00.000Z",
+              }
+            : { ...goal, revision: goal.revision + 1 };
+      vi.mocked(getGoal).mockResolvedValueOnce({ goal: canonicalGoal });
+      const conflict = new APIError(
+        409,
+        code,
+        "stale workspace",
+        `request-${command}-${code}`,
+      );
+      if (command === "continue")
+        vi.mocked(continueReview).mockRejectedValueOnce(conflict);
+      else if (command === "terminate")
+        vi.mocked(terminateGoal).mockRejectedValueOnce(conflict);
+      else vi.mocked(deleteGoal).mockRejectedValueOnce(conflict);
+      renderPage();
+      const editor = await screen.findByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      });
+
+      await invokeReviewTerminalCommand(command);
+
+      const resolver = await screen.findByRole("link", {
+        name: "現在のGoalを開いてください",
+      });
+      expect(resolver).toHaveAttribute("href", `/goals/${goal.id}`);
+      expect(editor).toHaveAttribute("readonly");
+      expect(screen.getByText("読み取り専用")).toBeInTheDocument();
+      expect(getGoal).toHaveBeenCalledOnce();
+      expect(putBrowserDraft).not.toHaveBeenCalled();
+      if (command === "continue") expect(continueReview).toHaveBeenCalledOnce();
+      else if (command === "terminate")
+        expect(terminateGoal).toHaveBeenCalledOnce();
+      else expect(deleteGoal).toHaveBeenCalledOnce();
+
+      window.dispatchEvent(new Event("online"));
+      fireEvent.blur(editor);
+      await act(() => new Promise((resolve) => window.setTimeout(resolve, 20)));
+      if (command === "continue") expect(continueReview).toHaveBeenCalledOnce();
+      else if (command === "terminate")
+        expect(terminateGoal).toHaveBeenCalledOnce();
+      else expect(deleteGoal).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("retries only canonical GET after a Continue conflict refresh fails", async () => {
+    vi.mocked(continueReview).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_REVIEW_NOT_ACTIVE",
+        "stale review",
+        "request-review-refresh",
+      ),
+    );
+    vi.mocked(getGoal)
+      .mockRejectedValueOnce(new TypeError("GET failed"))
+      .mockResolvedValueOnce({ goal: continuedGoal });
+    renderPage();
+
+    await invokeReviewTerminalCommand("continue");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "現在のGoalを再取得" }),
+    );
+
+    expect(
+      await screen.findByRole("link", {
+        name: "現在のGoalを開いてください",
+      }),
+    ).toHaveAttribute("href", `/goals/${goal.id}`);
+    expect(getGoal).toHaveBeenCalledTimes(2);
+    expect(continueReview).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat an unrelated Continue 409 as workspace movement", async () => {
+    vi.mocked(continueReview).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_STATE_CONFLICT",
+        "different command conflict",
+        "request-unrelated-continue",
+      ),
+    );
+    renderPage();
+
+    await invokeReviewTerminalCommand("continue");
+
+    expect(
+      await screen.findByText(
+        "次のサイクルを開始できませんでした。保存状態を確認してください。",
+      ),
+    ).toBeInTheDocument();
+    expect(getGoal).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText("Reviewの作業場所は変わりました。", {
+        exact: false,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      }),
+    ).not.toHaveAttribute("readonly");
+  });
+
+  it("keeps only a dirty local Review after a Delete conflict", async () => {
+    const localBody = "削除競合後にコピーする端末入力";
+    vi.mocked(deleteGoal).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_DELETE_CONFLICT",
+        "stale delete",
+        "request-dirty-review-delete",
+      ),
+    );
+    vi.mocked(getGoal).mockResolvedValueOnce({
+      goal: { ...goal, revision: goal.revision + 1 },
+    });
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.change(editor, { target: { value: localBody } });
+
+    await invokeReviewTerminalCommand("delete");
+
+    await screen.findByRole("link", { name: "現在のGoalを開いてください" });
+    expect(editor).toHaveValue(localBody);
+    expect(editor).toHaveAttribute("readonly");
+    await waitFor(() =>
+      expect(putBrowserDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subjectKey: `goal-review:${goal.id}:${reviewDraft.id}`,
+          body: localBody,
+        }),
+      ),
+    );
+    expect(deleteGoal).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the latest reversion when a Delete conflict fences an in-flight Review save", async () => {
+    const inFlightSave = deferred<Awaited<ReturnType<typeof saveReview>>>();
+    const inFlightBody = "競合前に送信中だったReview";
+    vi.mocked(saveReview).mockReset().mockReturnValueOnce(inFlightSave.promise);
+    vi.mocked(deleteGoal).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_DELETE_CONFLICT",
+        "stale delete",
+        "request-review-delete-in-flight-reversion",
+      ),
+    );
+    vi.mocked(getGoal).mockResolvedValueOnce({
+      goal: { ...goal, revision: goal.revision + 1 },
+    });
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.change(editor, { target: { value: inFlightBody } });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(saveReview).toHaveBeenCalledOnce());
+    fireEvent.change(editor, { target: { value: reviewDraft.body } });
+
+    await invokeReviewTerminalCommand("delete");
+
+    await screen.findByRole("link", { name: "現在のGoalを開いてください" });
+    await waitFor(() =>
+      expect(putBrowserDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subjectKey: `goal-review:${goal.id}:${reviewDraft.id}`,
+          body: reviewDraft.body,
+          baseRevision: reviewDraft.revision,
+        }),
+      ),
+    );
+    expect(editor).toHaveValue(reviewDraft.body);
+    expect(editor).toHaveAttribute("readonly");
+    expect(deleteGoal).toHaveBeenCalledOnce();
+
+    await act(async () =>
+      inFlightSave.resolve({
+        reviewDraft: {
+          ...reviewDraft,
+          body: inFlightBody,
+          revision: reviewDraft.revision + 1,
+          updatedAt: "2026-08-20T00:08:00.000Z",
+        },
+      }),
+    );
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(editor).toHaveValue(reviewDraft.body);
+  });
+
+  it.each(["continue", "terminate", "delete"] as const)(
+    "cleans a deleted Goal when a pending $command receives GOAL_NOT_FOUND after route leave",
+    async (command) => {
+      const commandFailure = deferred<never>();
+      if (command === "continue")
+        vi.mocked(continueReview).mockReturnValueOnce(commandFailure.promise);
+      else if (command === "terminate")
+        vi.mocked(terminateGoal).mockReturnValueOnce(commandFailure.promise);
+      else vi.mocked(deleteGoal).mockReturnValueOnce(commandFailure.promise);
+      const cache = createCache();
+      const removeQueries = vi.spyOn(cache, "removeQueries");
+      renderPage(cache, false, false, true);
+      await screen.findByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      });
+
+      await invokeReviewTerminalCommand(command);
+      if (command === "continue")
+        await waitFor(() => expect(continueReview).toHaveBeenCalledOnce());
+      else if (command === "terminate")
+        await waitFor(() => expect(terminateGoal).toHaveBeenCalledOnce());
+      else await waitFor(() => expect(deleteGoal).toHaveBeenCalledOnce());
+      const goalReadsBeforeFailure = vi.mocked(getGoal).mock.calls.length;
+
+      fireEvent.click(
+        screen.getByRole("link", {
+          name: "クリーンアップ中に別routeへ移動",
+        }),
+      );
+      expect(await screen.findByText("外部route")).toBeInTheDocument();
+      await act(async () =>
+        commandFailure.reject(
+          new APIError(
+            404,
+            "GOAL_NOT_FOUND",
+            "deleted",
+            `request-late-review-${command}-deleted-goal`,
+          ),
+        ),
+      );
+
+      await waitFor(() => expect(clearGoalDrafts).toHaveBeenCalledOnce());
+      await waitFor(() => expect(removeQueries).toHaveBeenCalled());
+      expect(screen.getByText("外部route")).toBeInTheDocument();
+      expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+      expect(
+        cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+      ).toBeUndefined();
+      expect(
+        cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+      ).toBeUndefined();
+      expect(getGoal).toHaveBeenCalledTimes(goalReadsBeforeFailure);
+      if (command === "continue") expect(continueReview).toHaveBeenCalledOnce();
+      else if (command === "terminate")
+        expect(terminateGoal).toHaveBeenCalledOnce();
+      else expect(deleteGoal).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("cleans a deleted Goal when a canonical GET receives GOAL_NOT_FOUND after route leave", async () => {
+    const canonicalFailure = deferred<never>();
+    vi.mocked(continueReview).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_REVIEW_NOT_ACTIVE",
+        "stale review",
+        "request-late-canonical-review",
+      ),
+    );
+    vi.mocked(getGoal).mockReturnValueOnce(canonicalFailure.promise);
+    const cache = createCache();
+    const removeQueries = vi.spyOn(cache, "removeQueries");
+    renderPage(cache, false, false, true);
+
+    await invokeReviewTerminalCommand("continue");
+    await waitFor(() => expect(getGoal).toHaveBeenCalledOnce());
+    fireEvent.click(
+      screen.getByRole("link", {
+        name: "クリーンアップ中に別routeへ移動",
+      }),
+    );
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+    await act(async () =>
+      canonicalFailure.reject(
+        new APIError(
+          404,
+          "GOAL_NOT_FOUND",
+          "deleted",
+          "request-late-canonical-review-deleted-goal",
+        ),
+      ),
+    );
+
+    await waitFor(() => expect(clearGoalDrafts).toHaveBeenCalledOnce());
+    await waitFor(() => expect(removeQueries).toHaveBeenCalled());
+    expect(screen.getByText("外部route")).toBeInTheDocument();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(
+      cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(continueReview).toHaveBeenCalledOnce();
+    expect(getGoal).toHaveBeenCalledOnce();
+  });
+
+  it("retries only local cleanup after GOAL_NOT_FOUND and keeps Review fenced", async () => {
+    const localBody = "削除済みGoalに残さない端末入力";
+    vi.mocked(continueReview).mockRejectedValueOnce(
+      new APIError(
+        404,
+        "GOAL_NOT_FOUND",
+        "deleted",
+        "request-deleted-review-goal",
+      ),
+    );
+    vi.mocked(clearGoalDrafts)
+      .mockRejectedValueOnce(new Error("indexedDB unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const cache = createCache();
+    const removeQueries = vi.spyOn(cache, "removeQueries");
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.change(editor, { target: { value: localBody } });
+
+    await invokeReviewTerminalCommand("continue");
+
+    expect(
+      await screen.findByText(
+        "削除済みGoalのブラウザ下書きを削除できませんでした。",
+      ),
+    ).toBeInTheDocument();
+    expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id);
+    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    expect(deleteBrowserDraft).toHaveBeenCalledWith(
+      session.user.id,
+      `goal-review:${goal.id}:${reviewDraft.id}`,
+    );
+    vi.mocked(putBrowserDraft).mockClear();
+    await act(() => new Promise((resolve) => window.setTimeout(resolve, 350)));
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+    expect(continueReview).toHaveBeenCalledOnce();
+    expect(deleteGoal).not.toHaveBeenCalled();
+    expect(getGoal).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "ブラウザデータの削除を再試行",
+      }),
+    );
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
+    expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
+    expect(continueReview).toHaveBeenCalledOnce();
+    expect(getGoal).not.toHaveBeenCalled();
+    await waitFor(() => expect(removeQueries).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(
+        cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+      ).toBeUndefined();
+      expect(
+        cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+      ).toBeUndefined();
+    });
+  });
+
+  it("still clears Goal drafts when the route leaves during the deleted-Review fence", async () => {
+    const reviewDraftCleanup = deferred<void>();
+    vi.mocked(continueReview).mockRejectedValueOnce(
+      new APIError(
+        404,
+        "GOAL_NOT_FOUND",
+        "deleted",
+        "request-deleted-review-route-leave",
+      ),
+    );
+    vi.mocked(deleteBrowserDraft).mockImplementationOnce(
+      async () => reviewDraftCleanup.promise,
+    );
+    const cache = createCache();
+    const removeQueries = vi.spyOn(cache, "removeQueries");
+    renderPage(cache, false, false, true);
+
+    await invokeReviewTerminalCommand("continue");
+    await waitFor(() => expect(deleteBrowserDraft).toHaveBeenCalledOnce());
+    fireEvent.click(
+      screen.getByRole("link", {
+        name: "クリーンアップ中に別routeへ移動",
+      }),
+    );
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+
+    await act(async () => reviewDraftCleanup.resolve());
+
+    await waitFor(() =>
+      expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id),
+    );
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    expect(continueReview).toHaveBeenCalledOnce();
+    expect(getGoal).not.toHaveBeenCalled();
+    expect(deleteGoal).not.toHaveBeenCalled();
+    expect(removeQueries).toHaveBeenCalled();
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(
+      cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+  });
 });
 
 function createCache() {
   return new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+}
+
+async function invokeReviewTerminalCommand(
+  command: "continue" | "terminate" | "delete",
+) {
+  const label =
+    command === "continue"
+      ? "この目標で次のサイクルへ"
+      : command === "terminate"
+        ? "目標を終了"
+        : "目標を削除";
+  const button = await screen.findByRole("button", { name: label });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+  if (command === "continue") return;
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: label }));
+}
+
+function CacheInspectingHome() {
+  const cache = useQueryClient();
+  const hasDeletedGoalCache =
+    cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)) !==
+      undefined ||
+    cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)) !==
+      undefined;
+  return (
+    <>
+      <p>ホーム</p>
+      <p>{hasDeletedGoalCache ? "Goal cache残存" : "Goal cache削除済み"}</p>
+    </>
+  );
 }
 
 function renderPage(
@@ -1395,7 +1859,7 @@ function renderPage(
               }
             >
               <Routes>
-                <Route path="/" element={<p>ホーム</p>} />
+                <Route path="/" element={<CacheInspectingHome />} />
                 <Route
                   path="/goals/:goalId/review"
                   element={<GoalReviewPage />}

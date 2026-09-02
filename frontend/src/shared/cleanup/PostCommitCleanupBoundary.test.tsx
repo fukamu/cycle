@@ -68,6 +68,42 @@ describe("PostCommitCleanupBoundary", () => {
     expect(screen.queryByText("application route")).not.toBeInTheDocument();
   });
 
+  it("commits success navigation without briefly remounting the previous route", async () => {
+    const previousRouteMount = vi.fn();
+
+    render(
+      <AutoSaveScopeProvider>
+        <MemoryRouter initialEntries={["/start"]}>
+          <PostCommitCleanupBoundary
+            runSessionOperation={runCurrentSessionOperation}
+          >
+            <Routes>
+              <Route
+                path="/start"
+                element={
+                  <CleanupTrigger
+                    cleanup={async () => undefined}
+                    onSuccess={() => undefined}
+                    onMount={previousRouteMount}
+                  />
+                }
+              />
+              <Route path="/done" element={<p>completed route</p>} />
+            </Routes>
+          </PostCommitCleanupBoundary>
+        </MemoryRouter>
+      </AutoSaveScopeProvider>,
+    );
+
+    expect(previousRouteMount).toHaveBeenCalledOnce();
+    await userEvent.click(
+      screen.getByRole("button", { name: "server success" }),
+    );
+
+    expect(await screen.findByText("completed route")).toBeInTheDocument();
+    expect(previousRouteMount).toHaveBeenCalledOnce();
+  });
+
   it("fences the active browser-operation tail before raw cleanup", async () => {
     const lateWrite = deferred<void>();
     const events: string[] = [];
@@ -581,12 +617,17 @@ function QueueTrigger({
 function CleanupTrigger({
   cleanup,
   onSuccess,
+  onMount,
 }: {
   readonly cleanup: () => Promise<void>;
   readonly onSuccess: () => void;
+  readonly onMount?: () => void;
 }) {
   const runPostCommitCleanup = usePostCommitCleanup();
   const navigate = useNavigate();
+  useLayoutEffect(() => {
+    onMount?.();
+  }, [onMount]);
   return (
     <>
       <p>application route</p>

@@ -31,6 +31,30 @@ export const userMutationKeys = {
     [...userQueryRoot(userId), "create-goal-draft"] as const,
 };
 
+const goalCollectionQueryKinds = new Set(["home", "goals"]);
+const goalDetailQueryKinds = new Set([
+  "goal",
+  "goal-review",
+  "goal-cycles",
+  "cycle",
+]);
+
+export function removeGoalFromCache(
+  cache: QueryClient,
+  userId: string,
+  goalId: string,
+): void {
+  cache.removeQueries({
+    predicate: ({ queryKey }) => {
+      if (queryKey[0] !== "user" || queryKey[1] !== userId) return false;
+      const kind = queryKey[2];
+      if (typeof kind !== "string") return false;
+      if (goalCollectionQueryKinds.has(kind)) return true;
+      return goalDetailQueryKinds.has(kind) && queryKey[3] === goalId;
+    },
+  });
+}
+
 export function preferGoal(current: Goal | undefined, incoming: Goal): Goal {
   return current && current.revision >= incoming.revision ? current : incoming;
 }

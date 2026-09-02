@@ -135,7 +135,10 @@ export function PostCommitCleanupBoundary({
         }
 
         activeEntryRef.current = undefined;
-        setCleanupState(undefined);
+        // Commit an onSuccess navigation and terminal release together. If
+        // cleanup removed route-owned query data, briefly remounting the old
+        // route here could otherwise refetch and republish deleted content.
+        flushSync(() => setCleanupState(undefined));
         entry.resolveCompletion();
       });
     },
