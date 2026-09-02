@@ -11,22 +11,61 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const acquireAnonymousIPRateLimitGuard = `-- name: AcquireAnonymousIPRateLimitGuard :exec
+INSERT INTO public.anonymous_rate_limit_guards AS guard (
+    scope,
+    key_hash,
+    expires_at
+) VALUES (
+    'anonymous_ip',
+    $1::bytea,
+    '-infinity'::timestamptz
+)
+ON CONFLICT (scope, key_hash) DO UPDATE
+SET expires_at = guard.expires_at
+`
+
+func (q *Queries) AcquireAnonymousIPRateLimitGuard(ctx context.Context, keyHash []byte) error {
+	_, err := q.db.Exec(ctx, acquireAnonymousIPRateLimitGuard, keyHash)
+	return err
+}
+
+const advanceAnonymousIPRateLimitGuard = `-- name: AdvanceAnonymousIPRateLimitGuard :one
+UPDATE public.anonymous_rate_limit_guards
+SET expires_at = GREATEST(
+    expires_at,
+    clock_timestamp() + INTERVAL '25 hours'
+)
+WHERE scope = 'anonymous_ip'
+  AND key_hash = $1::bytea
+RETURNING (expires_at - INTERVAL '25 hours')::timestamptz AS canonical_time
+`
+
+func (q *Queries) AdvanceAnonymousIPRateLimitGuard(ctx context.Context, keyHash []byte) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, advanceAnonymousIPRateLimitGuard, keyHash)
+	var canonical_time pgtype.Timestamptz
+	err := row.Scan(&canonical_time)
+	return canonical_time, err
+}
+
 const countAnonymousIPRollingUsage = `-- name: CountAnonymousIPRollingUsage :one
-SELECT COALESCE(sum(request_count), 0) AS rolling_count
+SELECT COALESCE(sum(request_count), 0)::bigint AS rolling_count
 FROM abuse_rate_buckets
 WHERE scope = 'anonymous_ip_hour'
   AND key_hash = $1::bytea
-  AND window_start > $2::timestamptz
+  AND window_start BETWEEN $2::timestamptz
+                       AND $3::timestamptz
 `
 
 type CountAnonymousIPRollingUsageParams struct {
-	KeyHash       []byte
-	AcceptedAfter pgtype.Timestamptz
+	KeyHash         []byte
+	IncludedFrom    pgtype.Timestamptz
+	IncludedThrough pgtype.Timestamptz
 }
 
-func (q *Queries) CountAnonymousIPRollingUsage(ctx context.Context, arg CountAnonymousIPRollingUsageParams) (interface{}, error) {
-	row := q.db.QueryRow(ctx, countAnonymousIPRollingUsage, arg.KeyHash, arg.AcceptedAfter)
-	var rolling_count interface{}
+func (q *Queries) CountAnonymousIPRollingUsage(ctx context.Context, arg CountAnonymousIPRollingUsageParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAnonymousIPRollingUsage, arg.KeyHash, arg.IncludedFrom, arg.IncludedThrough)
+	var rolling_count int64
 	err := row.Scan(&rolling_count)
 	return rolling_count, err
 }
@@ -47,7 +86,7 @@ INSERT INTO abuse_rate_buckets (
 )
 ON CONFLICT (scope, key_hash, window_start) DO UPDATE
 SET request_count = abuse_rate_buckets.request_count + 1,
-    expires_at = EXCLUDED.expires_at
+    expires_at = GREATEST(abuse_rate_buckets.expires_at, EXCLUDED.expires_at)
 RETURNING request_count
 `
 

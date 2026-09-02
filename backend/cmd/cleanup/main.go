@@ -147,6 +147,7 @@ func logCleanupFailure(logger *slog.Logger, mode applicationcleanup.Mode, errorC
 func logCleanupResult(logger *slog.Logger, result applicationcleanup.Result) {
 	logCleanupResource(logger, result.Mode, "ai_usage_events", result.AIUsageEvents)
 	logCleanupResource(logger, result.Mode, "abuse_rate_buckets", result.AbuseRateBuckets)
+	logCleanupResource(logger, result.Mode, "anonymous_rate_limit_guards", result.AnonymousRateLimitGuards)
 }
 
 func logCleanupResource(

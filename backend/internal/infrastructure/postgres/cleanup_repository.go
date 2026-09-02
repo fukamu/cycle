@@ -209,6 +209,13 @@ func (repository *CleanupRepository) CountCandidates(
 	if err != nil {
 		return result, err
 	}
+	result.AnonymousRateLimitGuards, err = queries.CountCleanupAnonymousRateLimitGuards(
+		ctx,
+		timestamptz(capturedNow.UTC()),
+	)
+	if err != nil {
+		return result, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return result, err
 	}
@@ -238,6 +245,22 @@ func (repository *CleanupRepository) DeleteAbuseRateBucketsBatch(
 			CapturedNow: timestamptz(capturedNow.UTC()),
 			BatchSize:   batchSize,
 		})
+	})
+}
+
+func (repository *CleanupRepository) DeleteAnonymousRateLimitGuardsBatch(
+	ctx context.Context,
+	capturedNow time.Time,
+	batchSize int32,
+) (int64, error) {
+	return repository.deleteBatch(ctx, func(queries *db.Queries) (int64, error) {
+		return queries.DeleteCleanupAnonymousRateLimitGuardsBatch(
+			ctx,
+			db.DeleteCleanupAnonymousRateLimitGuardsBatchParams{
+				CapturedNow: timestamptz(capturedNow.UTC()),
+				BatchSize:   batchSize,
+			},
+		)
 	})
 }
 

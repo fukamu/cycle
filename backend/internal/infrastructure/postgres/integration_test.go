@@ -32,7 +32,7 @@ func integrationPool(t *testing.T) *pgxpool.Pool {
 func resetDatabase(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `TRUNCATE TABLE
-abuse_rate_buckets,goal_delete_receipts,ai_generations,ai_usage_events,goal_drafts,pdca_cycles,
+anonymous_rate_limit_guards,abuse_rate_buckets,goal_delete_receipts,ai_generations,ai_usage_events,goal_drafts,pdca_cycles,
 goal_versions,goals,ai_budget_monthly,sessions,auth_identities,anonymous_bootstraps,users CASCADE`)
 	if err != nil {
 		t.Fatal(err)

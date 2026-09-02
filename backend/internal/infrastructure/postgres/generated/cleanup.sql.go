@@ -39,6 +39,19 @@ func (q *Queries) CountCleanupAbuseRateBuckets(ctx context.Context, capturedNow 
 	return count, err
 }
 
+const countCleanupAnonymousRateLimitGuards = `-- name: CountCleanupAnonymousRateLimitGuards :one
+SELECT count(*)
+FROM public.anonymous_rate_limit_guards
+WHERE expires_at <= $1::timestamptz
+`
+
+func (q *Queries) CountCleanupAnonymousRateLimitGuards(ctx context.Context, capturedNow pgtype.Timestamptz) (int64, error) {
+	row := q.db.QueryRow(ctx, countCleanupAnonymousRateLimitGuards, capturedNow)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteCleanupAIUsageEventsBatch = `-- name: DeleteCleanupAIUsageEventsBatch :execrows
 WITH candidates AS (
     SELECT operation_id
@@ -95,6 +108,35 @@ type DeleteCleanupAbuseRateBucketsBatchParams struct {
 
 func (q *Queries) DeleteCleanupAbuseRateBucketsBatch(ctx context.Context, arg DeleteCleanupAbuseRateBucketsBatchParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteCleanupAbuseRateBucketsBatch, arg.CapturedNow, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteCleanupAnonymousRateLimitGuardsBatch = `-- name: DeleteCleanupAnonymousRateLimitGuardsBatch :execrows
+WITH candidates AS (
+    SELECT scope, key_hash
+    FROM public.anonymous_rate_limit_guards
+    WHERE expires_at <= $1::timestamptz
+    ORDER BY expires_at, scope, key_hash
+    LIMIT $2::integer
+    FOR UPDATE SKIP LOCKED
+)
+DELETE FROM public.anonymous_rate_limit_guards AS target
+USING candidates
+WHERE target.scope = candidates.scope
+  AND target.key_hash = candidates.key_hash
+  AND target.expires_at <= $1::timestamptz
+`
+
+type DeleteCleanupAnonymousRateLimitGuardsBatchParams struct {
+	CapturedNow pgtype.Timestamptz
+	BatchSize   int32
+}
+
+func (q *Queries) DeleteCleanupAnonymousRateLimitGuardsBatch(ctx context.Context, arg DeleteCleanupAnonymousRateLimitGuardsBatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCleanupAnonymousRateLimitGuardsBatch, arg.CapturedNow, arg.BatchSize)
 	if err != nil {
 		return 0, err
 	}

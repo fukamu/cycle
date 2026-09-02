@@ -15,12 +15,14 @@ func TestCleanupSQLUsesBoundedOrderedLocksAndOuterPredicateRevalidation(t *testi
 	for fragment, wantCount := range map[string]int{
 		"public.ai_usage_events":                                           3,
 		"public.abuse_rate_buckets":                                        3,
-		"for update skip locked":                                           2,
-		"limit sqlc.arg(batch_size)::integer":                              2,
+		"public.anonymous_rate_limit_guards":                               3,
+		"for update skip locked":                                           3,
+		"limit sqlc.arg(batch_size)::integer":                              3,
 		"target.content_deleted = true":                                    1,
 		"target.provider_usage_finalized_at is not null":                   1,
 		"target.quota_retain_until <= sqlc.arg(captured_now)::timestamptz": 1,
-		"target.expires_at <= sqlc.arg(captured_now)::timestamptz":         1,
+		"target.expires_at <= sqlc.arg(captured_now)::timestamptz":         2,
+		"order by expires_at, scope, key_hash":                             2,
 	} {
 		if got := strings.Count(normalized, fragment); got != wantCount {
 			t.Errorf("%q count = %d, want %d in %s", fragment, got, wantCount, normalized)

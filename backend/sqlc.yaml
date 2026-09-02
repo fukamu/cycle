@@ -7,6 +7,7 @@ sql:
       - "migrations/000003_ai_usage_settlement_exposure.up.sql"
       - "migrations/000004_ai_generation_hash_split.up.sql"
       - "migrations/000005_retention_cleanup_index.up.sql"
+      - "migrations/000006_anonymous_rate_limit_guard.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:

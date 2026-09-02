@@ -87,3 +87,11 @@ export function isSessionBoundaryOwnedError(error: unknown): boolean {
 export function isBetaAdmissionRequired(error: unknown): boolean {
   return error instanceof APIError && error.code === "BETA_ADMISSION_REQUIRED";
 }
+
+export function isInitialSessionRateLimited(error: unknown): boolean {
+  return (
+    error instanceof APIError &&
+    error.status === 429 &&
+    error.code === "RATE_LIMIT_EXCEEDED"
+  );
+}

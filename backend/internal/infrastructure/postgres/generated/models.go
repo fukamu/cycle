@@ -91,6 +91,12 @@ type AnonymousBootstrap struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type AnonymousRateLimitGuard struct {
+	Scope     string
+	KeyHash   []byte
+	ExpiresAt pgtype.Timestamptz
+}
+
 type AuthIdentity struct {
 	ID                  pgtype.UUID
 	UserID              pgtype.UUID

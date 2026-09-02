@@ -105,6 +105,23 @@ func TestJSONLoggerRejectsMalformedAllowedFieldValues(t *testing.T) {
 	}
 }
 
+func TestCleanupResourceUsesClosedCatalog(t *testing.T) {
+	for _, resource := range []string{"ai_usage_events", "abuse_rate_buckets", "anonymous_rate_limit_guards"} {
+		t.Run(resource, func(t *testing.T) {
+			var output bytes.Buffer
+			NewJSON(&output).LogAttrs(
+				t.Context(),
+				slog.LevelInfo,
+				"",
+				slog.String("cleanup_resource", resource),
+			)
+			if got := decodeRecord(t, output.String())["cleanup_resource"]; got != resource {
+				t.Fatalf("allowed cleanup resource %q emitted as %#v", resource, got)
+			}
+		})
+	}
+}
+
 func TestRouteTemplateUsesClosedChiCatalog(t *testing.T) {
 	for route := range allowedHTTPRoutes {
 		var output bytes.Buffer

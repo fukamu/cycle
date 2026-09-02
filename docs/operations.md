@@ -201,7 +201,7 @@ Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し�
 6. Turnstile hostname / action、Google login / upgrade、Goal Refine、Action Generate / Refine、account deletionを検証dataで最小回数確認する。
 7. Workers Logs / TracesとOTLP payloadにsecret、PDCA本文、email、raw user ID / IP、raw Turnstile tokenがない。
 8. Backend span / metricが承認済みcollectorへ到達し、collector障害中も`/readyz`と代表Application requestが影響を受けない。
-9. Neon、Container、OpenAI usage / cost、rate-limit拒否が承認済みlimit内である。
+9. Neon、Container、OpenAI usage / cost、rate-limit拒否が承認済みlimit内であり、Anonymous createのUTC hour境界やrollout直後に想定外の許可・拒否burstがない。
 10. Canonical Staging hostname以外と`workers.dev`から利用できない。
 
 Stagingはpublic internetから到達可能です。URLの秘匿をaccess controlとして扱わず、機密情報、Production data、失えないdataを入力しません。
@@ -238,7 +238,7 @@ OTLP failureでは固定error classと集約`failure_count`だけを確認し、
 
 ## Retention cleanup
 
-対象predicate、dry-run / execute、1..1000のhard ceiling、Transaction、再実行、安全な出力、実commandは [`database.md`のRetention cleanup command](database.md#retention-cleanup-command) が所有します。Productionのbatch size、cadence、起動owner、job経路とDB / index影響を承認するまで、Productionではdry-runを含め実行・scheduleしません。
+対象predicate、dry-run / execute、1..1000のhard ceiling、Transaction、再実行、安全な出力、実commandは [`database.md`のRetention cleanup command](database.md#retention-cleanup-command) が所有します。AI Usage、rate bucket、Anonymous rate-limit guardは独立resourceとして件数と削除結果を確認します。Productionのbatch size、cadence、起動owner、job経路とDB / index影響を承認するまで、Productionではdry-runを含め実行・scheduleしません。
 
 ## Staging critical journey cleanup
 
@@ -294,6 +294,12 @@ Browser networkとserver error codeをcredential値なしで確認し、Google C
 ### Turnstile
 
 Anonymous bootstrap errorとSiteverify response classを確認し、Raw token / secretをlogへ追加しません。Frontend site key、Backend secret、Staging hostname、`anonymous_bootstrap` actionを照合します。Production profileでTurnstileを無効化せずfail-closedを維持します。
+
+### Anonymous create rate limit
+
+`429 RATE_LIMIT_EXCEEDED`が増えた場合は、release version、route template、UTC hour境界、集約された`rate_limit_rejected_total`、共有network利用の可能性を確認します。Raw IP、IP-HMAC、bucket / guard row、正確な解除時刻をlogやsupport記録へ転記しません。Frontendの自動Retryを有効化せず、利用者には時間を置いて手動Retryするよう案内します。Blocked attemptもcountされ、境界hourの保守的包含により待機が長時間残り得るため、繰り返しRetryや手動row削除で解消しません。
+
+Guard migrationを含むreleaseはmigration-firstで適用し、旧Application instanceが完全にrollout対象から外れた後にだけper-IP直列化を保証済みとして扱います。Migration前またはmixed-version中の結果を新contractの検証結果へ含めません。想定外の拒否増加ではrate-limit値やDB rowをad-hocに変更せず、[`design.md` §39.2](design.md#392-default-operation-values)との整合、instance rollout、DB concurrencyを確認してreviewed forward fixまたはschema-compatible Application rollbackを選びます。
 
 ### Cloudflare Worker / Container
 

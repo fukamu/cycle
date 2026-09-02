@@ -5,6 +5,7 @@ import type { Session } from "../../shared/api/schemas";
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
 import {
   isBetaAdmissionRequired,
+  isInitialSessionRateLimited,
   isSessionBoundaryOwnedError,
   loadInitialSession,
   sessionQueryKey,
@@ -50,6 +51,7 @@ export function useInitialSessionDiscovery(
     refetchOnWindowFocus: false,
     retry: (failureCount, error) =>
       !isBetaAdmissionRequired(error) &&
+      !isInitialSessionRateLimited(error) &&
       !isSessionBoundaryOwnedError(error) &&
       failureCount < 2,
   });

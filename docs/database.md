@@ -9,7 +9,9 @@
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
 - Baseline schema: `000001_fukamu_cycle_baseline.up.sql`。未リリース・空DB・既存環境互換不要という明示承認に基づき、初期Schemaの80/200文字制約とUUID v7制約を直接含む1 migrationへrebaseline済みであり、今後編集しません。
-- 現在のschema head: `000005_retention_cleanup_index.up.sql`。期限cleanupの順序付きbatch scan用に、確定・content削除済みAI Usageのpartial indexとabuse rate bucketの複合indexを追加します。保持条件や期限は変更しません。`000004_ai_generation_hash_split.up.sql`はAI request replay identityとcanonical provider input identityを別columnへ保存し、旧`input_hash`は直前Application rollback専用aliasとして一時保持します。`000003_ai_usage_settlement_exposure.up.sql`の未確定settlement metadataと、`000002_ai_usage_retention_margin.up.sql`の24時間15分物理保持期限・24時間Quota windowは変更しません。
+- 現在のschema head: `000006_anonymous_rate_limit_guard.up.sql`。Anonymous createをIP-HMACごとに直列化する`anonymous_rate_limit_guards`と、期限cleanup用の`(expires_at, scope, key_hash)` indexを追加します。`000005_retention_cleanup_index.up.sql`は確定・content削除済みAI Usageとabuse rate bucketの順序付きbatch scan indexを所有します。保持条件や期限は変更しません。`000004_ai_generation_hash_split.up.sql`はAI request replay identityとcanonical provider input identityを別columnへ保存し、旧`input_hash`は直前Application rollback専用aliasとして一時保持します。`000003_ai_usage_settlement_exposure.up.sql`の未確定settlement metadataと、`000002_ai_usage_retention_margin.up.sql`の24時間15分物理保持期限・24時間Quota windowは変更しません。
+
+`000006`は既存dataのbackfillを行わず、空のguard tableを追加するadditive migrationです。Migration-firstでApplicationより先に適用し、旧Application instanceは新tableを無視できます。新Applicationだけがguardを取得するため、mixed-version rollout中はper-IP直列化を保証済みと扱わず、旧instanceがすべて停止した後にstrict contractへ切り替わったと判断します。Schema-compatibleなApplication rollbackではtableを残し、Productionでdownを実行しません。
 
 `000005`はplain transactional `CREATE INDEX`を使います。Data-bearing Productionへ適用する前に対象table規模でwrite lock影響と所要時間を評価し、未評価または許容不能ならdeployを停止します。適用済みmigrationは書き換えず、必要な修正は新しいforward migrationで行います。
 
@@ -47,13 +49,13 @@ PostgreSQL 18以降の公式imageは`PGDATA=/var/lib/postgresql/18/docker`を使
 6. 空のtest DBと、可能ならproduction相当データ量のcopyではない匿名化fixtureでupを検証する。downはローカルの破棄可能DBでのみ検証する。
 7. backward incompatibleな変更は一度に行わず、expand → application切替 → contractを複数releaseに分ける。
 
-AI Usage settlement migration testは、exact backfill、復元不能rowの全体rollback、旧writer補完、旧finalizer clear、CHECK/immutability違反、旧Account Delete guard、新Account Delete後のUser削除を検証します。AI Generation hash split migration testは、legacy backfill、復元不能canonical hashの`NULL`維持、旧・新writerのrolling互換、hash不変性、形式不正なlegacy/new hashでのatomic failure、破棄可能DBだけでのdown/re-upを検証します。Retention cleanup migration testは、2つのscan indexのpredicate・column順と破棄可能DBだけでのdown/re-upを検証します。
+AI Usage settlement migration testは、exact backfill、復元不能rowの全体rollback、旧writer補完、旧finalizer clear、CHECK/immutability違反、旧Account Delete guard、新Account Delete後のUser削除を検証します。AI Generation hash split migration testは、legacy backfill、復元不能canonical hashの`NULL`維持、旧・新writerのrolling互換、hash不変性、形式不正なlegacy/new hashでのatomic failure、破棄可能DBだけでのdown/re-upを検証します。Retention cleanup migration testは既存2つのscan indexのpredicate・column順、Anonymous rate-limit guard migration testはtable / PK / expiry indexと、いずれも破棄可能DBだけでのdown/re-upを検証します。
 
 この完了済みrebaselineを再実行・再編集してはいけません。今後はMigration番号の変更、適用済みfileの書き換え、別branchで同じ番号を使うことを禁止し、適用済みmigrationの訂正は新しいmigrationで行います。
 
 ## Retention cleanup command
 
-`backend/cmd/cleanup`は、[設計のAI Usage最小化契約](design.md#382-usage-data-minimization)と[retention cleanup契約](design.md#395-retention-cleanup)に従うmaintenance commandです。接続情報は引数に取らず`DATABASE_URL`だけを読みます。起動時のUTC時刻を一度だけ固定し、AI Usageは`content_deleted=true`、物理保持期限到達済み、Provider usage確定済みの3条件をすべて満たすrecordだけ、rate bucketは期限到達済みrecordだけを対象にします。
+`backend/cmd/cleanup`は、[設計のAI Usage最小化契約](design.md#382-usage-data-minimization)と[retention cleanup契約](design.md#395-retention-cleanup)に従うmaintenance commandです。接続情報は引数に取らず`DATABASE_URL`だけを読みます。起動時のUTC時刻を一度だけ固定し、AI Usageは`content_deleted=true`、物理保持期限到達済み、Provider usage確定済みの3条件をすべて満たすrecordだけ、rate bucketとAnonymous rate-limit guardは期限到達済みrecordだけを別々のresourceとして対象にします。
 
 Cleanup専用の`DATABASE_URL`は`postgres`または`postgresql` scheme、明示した非空user、単一host、単一database pathを必須とします。PasswordはURLに存在する場合だけその値を使用し、passwordless、明示TLS client certificate、Kerberosなどの認証はURLの明示設定とDB側の認証policyに従います。Port省略時はambient値を使わず`5432`へ固定し、`sslmode`省略時はpgxの`prefer`へ固定します。URL queryで許可するのは`channel_binding`、`connect_timeout`、`default_query_exec_mode`、`description_cache_capacity`、`krbspn`、`krbsrvname`、`max_protocol_version`、`min_protocol_version`、`require_auth`、`sslcert`、`sslkey`、`sslmode`、`sslnegotiation`、`sslpassword`、`sslrootcert`、`sslsni`、`statement_cache_capacity`、`target_session_attrs`だけです。Host・port・database・userの上書き、multiple host、`service`/`servicefile`、`passfile`、pool設定、任意runtime parameterは拒否します。
 
@@ -79,7 +81,7 @@ source ./scripts/import-env.sh
 
 `--dry-run`と`--execute`はexactly oneを指定します。Dry-runに`--batch-size`は指定できず、読み取り専用REPEATABLE READ snapshotで候補件数を返してDBを変更しません。Executeは1〜1000の明示batch sizeが必須で、単一接続pool上のresource別の短いTransactionを使います。各batchは期限順に`FOR UPDATE SKIP LOCKED`で候補をlockし、DELETE外側でも全predicateを再検証します。中断後は同じcommandを再実行でき、未確定AI Usageは期限を過ぎても削除しません。実行周期やbatch sizeの運用値はこのcommandでは推測・default化しません。
 
-出力はresource別のmode、候補・削除・batch件数だけをsafe JSON logへ記録します。Deadline、row ID、Database URL、SQL、raw errorは出力しません。Productionでの実行経路・周期を確定するまではdeployやserver起動へ自動接続しません。
+出力は`ai_usage_events`、`abuse_rate_buckets`、`anonymous_rate_limit_guards`のresource別にmode、候補・削除・batch件数だけをsafe JSON logへ記録します。Deadline、row ID、bucket / guard keyやhash、Database URL、SQL、raw errorは出力しません。Productionでの実行経路・周期を確定するまではdeployやserver起動へ自動接続しません。
 
 ## ローカル適用
 
