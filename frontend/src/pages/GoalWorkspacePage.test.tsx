@@ -2079,19 +2079,22 @@ describe("GoalWorkspacePage", () => {
 
     expect(
       await screen.findByText(
-        "目標は削除されましたが、この端末の復旧用保存を削除できませんでした。",
+        "削除済みGoalのブラウザ下書きを削除できませんでした。",
       ),
     ).toBeInTheDocument();
     expect(deleteGoal).toHaveBeenCalledOnce();
     expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    const cycleReadsBeforeRetry = vi.mocked(getCycle).mock.calls.length;
 
     fireEvent.click(
-      screen.getByRole("button", { name: "端末データの削除を再試行" }),
+      screen.getByRole("button", { name: "ブラウザデータの削除を再試行" }),
     );
 
     expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
     expect(deleteGoal).toHaveBeenCalledOnce();
     expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
+    expect(getCycle).toHaveBeenCalledTimes(cycleReadsBeforeRetry);
   });
 
   it("retries Terminate browser cleanup without resending Terminate", async () => {
@@ -2501,6 +2504,51 @@ describe("GoalWorkspacePage", () => {
     },
   );
 
+  it("cleans a deleted Goal when Delete succeeds after route leave", async () => {
+    const deletion = deferred<Awaited<ReturnType<typeof deleteGoal>>>();
+    vi.mocked(deleteGoal).mockReturnValueOnce(deletion.promise);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const removeQueries = vi.spyOn(cache, "removeQueries");
+    renderPage(cache, { commandRouteSwitch: true });
+    await screen.findByRole("textbox", { name: "P — Plan" });
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+    ).toBeDefined();
+    expect(
+      cache.getQueryData(
+        userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+      ),
+    ).toBeDefined();
+
+    await invokeCycleTerminalCommand("delete");
+    await waitFor(() => expect(deleteGoal).toHaveBeenCalledOnce());
+    fireEvent.click(
+      screen.getByRole("link", { name: "コマンド中に外部routeへ移動" }),
+    );
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+
+    await act(async () => deletion.resolve(undefined));
+
+    await waitFor(() =>
+      expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id),
+    );
+    await waitFor(() => expect(removeQueries).toHaveBeenCalled());
+    expect(screen.getByText("外部route")).toBeInTheDocument();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(
+      cache.getQueryData(
+        userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+      ),
+    ).toBeUndefined();
+    expect(deleteGoal).toHaveBeenCalledOnce();
+    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+  });
+
   it("cleans a deleted Goal when a canonical GET receives GOAL_NOT_FOUND after route leave", async () => {
     const canonicalFailure = deferred<never>();
     vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
@@ -2594,6 +2642,7 @@ describe("GoalWorkspacePage", () => {
     expect(putBrowserDraft).not.toHaveBeenCalled();
     expect(deleteGoal).toHaveBeenCalledOnce();
     const goalReadsBeforeRetry = vi.mocked(getGoal).mock.calls.length;
+    const cycleReadsBeforeRetry = vi.mocked(getCycle).mock.calls.length;
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -2617,6 +2666,7 @@ describe("GoalWorkspacePage", () => {
       ).toBeUndefined();
     });
     expect(getGoal).toHaveBeenCalledTimes(goalReadsBeforeRetry);
+    expect(getCycle).toHaveBeenCalledTimes(cycleReadsBeforeRetry);
   });
 
   it("does not publish a late AI result after a deleted-Goal fence", async () => {

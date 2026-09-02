@@ -13,6 +13,7 @@ import {
 
 import { PostCommitCleanupBoundary } from "./PostCommitCleanupBoundary";
 import {
+  useCapturePostCommitRouteOwnership,
   usePostCommitCleanup,
   type PostCommitCleanupTask,
   type PostCommitSessionOperationRunner,
@@ -624,6 +625,7 @@ function CleanupTrigger({
   readonly onMount?: () => void;
 }) {
   const runPostCommitCleanup = usePostCommitCleanup();
+  const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const navigate = useNavigate();
   useLayoutEffect(() => {
     onMount?.();
@@ -633,9 +635,11 @@ function CleanupTrigger({
       <p>application route</p>
       <button
         type="button"
-        onClick={() =>
+        onClick={() => {
+          const routeOwnership = captureRouteOwnership();
           void runPostCommitCleanup({
             expectedUserId: "user-1",
+            routeOwnership,
             cleanup,
             onSuccess: () => {
               onSuccess();
@@ -644,8 +648,8 @@ function CleanupTrigger({
             pendingMessage: "ローカル完了処理中…",
             failureMessage: "ローカル完了処理に失敗しました",
             retryLabel: "ローカル処理を再試行",
-          })
-        }
+          });
+        }}
       >
         server success
       </button>

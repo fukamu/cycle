@@ -1074,13 +1074,11 @@ function CycleWorkspace({
         // operation tail. Retrying this task therefore repeats local cleanup only.
         cleanup: async () => {
           await clearGoalDrafts(userId, goal.id);
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
           removeGoalFromCache(cache, userId, goal.id);
         },
         onSuccess: async (publicationIsCurrent) => {
           if (!publicationIsCurrent()) return;
           navigate("/", { replace: true, flushSync: true });
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
         },
         pendingMessage: "削除済みGoalのブラウザ下書きを削除しています…",
         failureMessage: "削除済みGoalのブラウザ下書きを削除できませんでした。",
@@ -1513,25 +1511,7 @@ function CycleWorkspace({
             csrfToken: session.csrfToken,
           }),
       );
-      if (!isActivePage()) return;
-      void runPostCommitCleanup({
-        expectedUserId: userId,
-        routeOwnership: captureRouteOwnership(),
-        cleanup: () => clearGoalDrafts(userId, goal.id),
-        onSuccess: async (publicationIsCurrent) => {
-          if (!publicationIsCurrent()) return;
-          await cache.invalidateQueries({
-            queryKey: userQueryKeys.root(userId),
-            refetchType: "none",
-          });
-          if (!publicationIsCurrent()) return;
-          navigate("/", { replace: true });
-        },
-        pendingMessage: "この端末の目標下書きを削除しています…",
-        failureMessage:
-          "目標は削除されましたが、この端末の復旧用保存を削除できませんでした。",
-        retryLabel: "端末データの削除を再試行",
-      });
+      markDeletedGoal(routeOwnership);
     } catch (cause) {
       if (isGoalNotFound(cause)) {
         await recoverTerminalCommand("delete", cause, routeOwnership);
