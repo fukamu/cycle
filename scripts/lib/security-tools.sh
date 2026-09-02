@@ -20,11 +20,11 @@ readonly SECURITY_LEGACY_BINARY_BLOB_OID='ac78d653896d639a4b9f93ae26d5009fcc39a4
 readonly SECURITY_LEGACY_BINARY_BLOB_SIZE='9181184'
 
 # The normalized text view deliberately bypasses Gitleaks MIME/path skips. These
-# immutable historical blobs are the only reviewed duplicates it omits: ten
+# immutable historical blobs are the only reviewed duplicates it omits: eleven
 # valid backend/go.sum snapshots and four source snapshots containing the two
 # synthetic values already scoped by .gitleaksignore. Normal Git/history scans
 # remain active, and any content change creates a new OID that is scanned.
-readonly SECURITY_NORMALIZED_TEXT_REVIEWED_BLOB_OIDS='00642c8c91ee37c45ce5cea406b4a102997e56cc:02e64350beb2a70155b8762b997bfe948152834b:1e9d48aab489b2214140224e888cb48776480779:23d1b139137ce39bf71ebe874614b86d71257ae6:479191b9e5f3ea733e5f78842e82f6df0eac3dd9:5bd22d43e489ec1c6c569faf3086d9fa559261e0:67c128fd0ebd0fba57ba07b3bce8f73d5bb276ba:bb0622f7e163fcd1516e2687e54e9e1b066904ea:cc5455b909a9f30a703ee6808dac190f86b47d7b:cfaf27abc1661d80a66743d5ec10dd13f4822bda:d1cf70a25ef1e83ba780a74dc5c988b18469eec4:daad0b38b5af009b74f9e83fdc1bd64ae5b55b68:ea5334dbb949fda452cd93e10dc7f36a04c2661c:fdc893ea0889c20926d1f3f3e7a131a20def837e'
+readonly SECURITY_NORMALIZED_TEXT_REVIEWED_BLOB_OIDS='00642c8c91ee37c45ce5cea406b4a102997e56cc:02e64350beb2a70155b8762b997bfe948152834b:1e9d48aab489b2214140224e888cb48776480779:23d1b139137ce39bf71ebe874614b86d71257ae6:479191b9e5f3ea733e5f78842e82f6df0eac3dd9:5bd22d43e489ec1c6c569faf3086d9fa559261e0:67c128fd0ebd0fba57ba07b3bce8f73d5bb276ba:8b6a3938884eca8ab159af34045901768a110c69:bb0622f7e163fcd1516e2687e54e9e1b066904ea:cc5455b909a9f30a703ee6808dac190f86b47d7b:cfaf27abc1661d80a66743d5ec10dd13f4822bda:d1cf70a25ef1e83ba780a74dc5c988b18469eec4:daad0b38b5af009b74f9e83fdc1bd64ae5b55b68:ea5334dbb949fda452cd93e10dc7f36a04c2661c:fdc893ea0889c20926d1f3f3e7a131a20def837e'
 
 # Immutable, intentionally obsolete input used only by the runtime-generated
 # container-vulnerability negative test. It is never a production base image.
@@ -1608,7 +1608,7 @@ security_run_gitleaks_normalized_text() {
       IFS=:
       set -- ${REVIEWED_BLOB_OIDS}
       IFS="${old_ifs}"
-      test "$#" -eq 14
+      test "$#" -eq 15
       for reviewed_oid in "$@"; do
         case "${reviewed_oid}" in
           "" | *[!0-9a-f]*) exit 1 ;;
