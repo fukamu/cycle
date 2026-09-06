@@ -17,6 +17,10 @@ import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
 import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import { userQueryKeys } from "../features/goal-collection/goalCache";
+import {
+  GoalDeletionAdvisoryContext,
+  type GoalDeletionAdvisoryRegistry,
+} from "../features/goal-deletion";
 import { APIError } from "../shared/api/client";
 import {
   AutoSaveScopeProvider,
@@ -39,6 +43,7 @@ import {
   deleteBrowserDraftIfUnchanged,
   getBrowserDraft,
   putBrowserDraft,
+  tombstoneDeletedGoalAndClearDrafts,
 } from "../shared/drafts/browserDraftCache";
 import { GoalWorkspacePage } from "./GoalWorkspacePage";
 
@@ -59,6 +64,7 @@ vi.mock("../shared/drafts/browserDraftCache", () => ({
   deleteBrowserDraftIfUnchanged: vi.fn(),
   getBrowserDraft: vi.fn(),
   putBrowserDraft: vi.fn(),
+  tombstoneDeletedGoalAndClearDrafts: vi.fn(),
 }));
 
 const goal: Goal = {
@@ -151,6 +157,8 @@ const session: Session = {
   },
   csrfToken: "csrf-token",
 };
+const otherUserId = "10000000-0000-7000-8000-000000000002";
+const otherGoalId = "20000000-0000-7000-8000-000000000002";
 
 const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
 
@@ -166,6 +174,7 @@ describe("GoalWorkspacePage", () => {
       async (userId, subjectKey) => deleteBrowserDraft(userId, subjectKey),
     );
     vi.mocked(clearGoalDrafts).mockResolvedValue(undefined);
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockResolvedValue(undefined);
     vi.mocked(saveCycleFrame).mockResolvedValue({
       cycleId: cycle.id,
       frame: "plan",
@@ -326,7 +335,8 @@ describe("GoalWorkspacePage", () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache);
+    const advisory = createGoalDeletionAdvisoryHarness();
+    renderPage(cache, { goalDeletionAdvisory: advisory });
     const editor = await screen.findByRole("textbox", { name: "P — Plan" });
     await waitFor(() => expect(getBrowserDraft).toHaveBeenCalledOnce());
 
@@ -372,6 +382,8 @@ describe("GoalWorkspacePage", () => {
       { timeout: 2_000 },
     );
     expect(editor).toHaveValue(localBody);
+    expect(tombstoneDeletedGoalAndClearDrafts).not.toHaveBeenCalled();
+    expect(advisory.publish).not.toHaveBeenCalled();
   });
 
   it("re-sends an aborted late-success frame after a Delete failure", async () => {
@@ -2058,16 +2070,60 @@ describe("GoalWorkspacePage", () => {
     expect(screen.queryByText("現在の目標レビュー")).not.toBeInTheDocument();
   });
 
+  it("synchronously fences one exact Goal advisory without echoing or deleting again", async () => {
+    const cleanup = deferred<void>();
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockReturnValue(
+      cleanup.promise,
+    );
+    const advisory = createGoalDeletionAdvisoryHarness();
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache, { goalDeletionAdvisory: advisory });
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    expect(advisory.subscribe).toHaveBeenCalledWith(
+      session.user.id,
+      goal.id,
+      expect.anything(),
+    );
+    expect(typeof advisory.subscribe.mock.calls[0]?.[2]).toBe("function");
+
+    act(() => advisory.dispatch(otherUserId, goal.id));
+    act(() => advisory.dispatch(session.user.id, otherGoalId));
+    expect(editor).not.toHaveAttribute("readonly");
+    expect(tombstoneDeletedGoalAndClearDrafts).not.toHaveBeenCalled();
+
+    act(() => advisory.dispatch(session.user.id, goal.id));
+    expect(editor).toHaveAttribute("readonly");
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+        session.user.id,
+        goal.id,
+      ),
+    );
+
+    act(() => advisory.dispatch(session.user.id, goal.id));
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(deleteGoal).not.toHaveBeenCalled();
+    expect(advisory.publish).not.toHaveBeenCalled();
+
+    await act(async () => cleanup.resolve());
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(advisory.publish).not.toHaveBeenCalled();
+  });
+
   it("retries Complete browser cleanup without resending Complete", async () => {
     vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
     vi.mocked(completeCycle).mockResolvedValue(goalReviewReplay);
     vi.mocked(deleteBrowserDraft)
       .mockRejectedValueOnce(new Error("indexedDB unavailable"))
       .mockResolvedValue(undefined);
+    const advisory = createGoalDeletionAdvisoryHarness();
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache);
+    renderPage(cache, { goalDeletionAdvisory: advisory });
 
     await confirmCycleCompletion();
 
@@ -2091,17 +2147,20 @@ describe("GoalWorkspacePage", () => {
         session.user.id,
         "cycle:" + completableCycle.id + ":" + frame,
       );
+    expect(tombstoneDeletedGoalAndClearDrafts).not.toHaveBeenCalled();
+    expect(advisory.publish).not.toHaveBeenCalled();
   });
 
   it("retries Delete browser cleanup without resending Delete", async () => {
     vi.mocked(deleteGoal).mockResolvedValue(undefined);
-    vi.mocked(clearGoalDrafts)
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts)
       .mockRejectedValueOnce(new Error("indexedDB unavailable"))
       .mockResolvedValue(undefined);
+    const advisory = createGoalDeletionAdvisoryHarness();
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache);
+    renderPage(cache, { goalDeletionAdvisory: advisory });
 
     await screen.findByRole("textbox", { name: "P — Plan" });
     expect(await screen.findByText("保存済み")).toBeInTheDocument();
@@ -2119,7 +2178,14 @@ describe("GoalWorkspacePage", () => {
       ),
     ).toBeInTheDocument();
     expect(deleteGoal).toHaveBeenCalledOnce();
-    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(clearGoalDrafts).not.toHaveBeenCalled();
+    expect(advisory.publish).toHaveBeenCalledOnce();
+    expect(advisory.publish).toHaveBeenCalledWith(session.user.id, goal.id);
+    expect(advisory.publish.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(tombstoneDeletedGoalAndClearDrafts).mock
+        .invocationCallOrder[0]!,
+    );
     const cycleReadsBeforeRetry = vi.mocked(getCycle).mock.calls.length;
 
     fireEvent.click(
@@ -2129,7 +2195,18 @@ describe("GoalWorkspacePage", () => {
     expect(await screen.findByText("ホーム")).toBeInTheDocument();
     expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
     expect(deleteGoal).toHaveBeenCalledOnce();
-    expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledTimes(2);
+    expect(clearGoalDrafts).not.toHaveBeenCalled();
+    expect(advisory.publish).toHaveBeenCalledTimes(2);
+    expect(advisory.publish).toHaveBeenNthCalledWith(
+      2,
+      session.user.id,
+      goal.id,
+    );
+    expect(advisory.publish.mock.invocationCallOrder[1]).toBeGreaterThan(
+      vi.mocked(tombstoneDeletedGoalAndClearDrafts).mock
+        .invocationCallOrder[1]!,
+    );
     expect(getCycle).toHaveBeenCalledTimes(cycleReadsBeforeRetry);
   });
 
@@ -2152,10 +2229,11 @@ describe("GoalWorkspacePage", () => {
     vi.mocked(clearGoalDrafts)
       .mockRejectedValueOnce(new Error("indexedDB unavailable"))
       .mockResolvedValue(undefined);
+    const advisory = createGoalDeletionAdvisoryHarness();
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache);
+    renderPage(cache, { goalDeletionAdvisory: advisory });
 
     await screen.findByRole("textbox", { name: "P — Plan" });
     expect(await screen.findByText("保存済み")).toBeInTheDocument();
@@ -2182,6 +2260,8 @@ describe("GoalWorkspacePage", () => {
     expect(await screen.findByText("ホーム")).toBeInTheDocument();
     expect(terminateGoal).toHaveBeenCalledOnce();
     expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
+    expect(tombstoneDeletedGoalAndClearDrafts).not.toHaveBeenCalled();
+    expect(advisory.publish).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -2493,8 +2573,12 @@ describe("GoalWorkspacePage", () => {
       const cache = new QueryClient({
         defaultOptions: { queries: { retry: false, staleTime: Infinity } },
       });
+      const advisory = createGoalDeletionAdvisoryHarness();
       const removeQueries = vi.spyOn(cache, "removeQueries");
-      renderPage(cache, { commandRouteSwitch: true });
+      renderPage(cache, {
+        commandRouteSwitch: true,
+        goalDeletionAdvisory: advisory,
+      });
       await screen.findByRole("textbox", { name: "P — Plan" });
 
       await invokeCycleTerminalCommand(command);
@@ -2520,7 +2604,9 @@ describe("GoalWorkspacePage", () => {
         ),
       );
 
-      await waitFor(() => expect(clearGoalDrafts).toHaveBeenCalledOnce());
+      await waitFor(() =>
+        expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+      );
       await waitFor(() => expect(removeQueries).toHaveBeenCalled());
       expect(screen.getByText("外部route")).toBeInTheDocument();
       expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
@@ -2537,6 +2623,18 @@ describe("GoalWorkspacePage", () => {
       else if (command === "terminate")
         expect(terminateGoal).toHaveBeenCalledOnce();
       else expect(deleteGoal).toHaveBeenCalledOnce();
+      expect(clearGoalDrafts).not.toHaveBeenCalled();
+      expect(advisory.publish).toHaveBeenCalledTimes(2);
+      expect(advisory.publish).toHaveBeenNthCalledWith(
+        1,
+        session.user.id,
+        goal.id,
+      );
+      expect(advisory.publish).toHaveBeenNthCalledWith(
+        2,
+        session.user.id,
+        goal.id,
+      );
     },
   );
 
@@ -2546,8 +2644,12 @@ describe("GoalWorkspacePage", () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
+    const advisory = createGoalDeletionAdvisoryHarness();
     const removeQueries = vi.spyOn(cache, "removeQueries");
-    renderPage(cache, { commandRouteSwitch: true });
+    renderPage(cache, {
+      commandRouteSwitch: true,
+      goalDeletionAdvisory: advisory,
+    });
     await screen.findByRole("textbox", { name: "P — Plan" });
     expect(
       cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
@@ -2568,7 +2670,10 @@ describe("GoalWorkspacePage", () => {
     await act(async () => deletion.resolve(undefined));
 
     await waitFor(() =>
-      expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id),
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+        session.user.id,
+        goal.id,
+      ),
     );
     await waitFor(() => expect(removeQueries).toHaveBeenCalled());
     expect(screen.getByText("外部route")).toBeInTheDocument();
@@ -2582,7 +2687,9 @@ describe("GoalWorkspacePage", () => {
       ),
     ).toBeUndefined();
     expect(deleteGoal).toHaveBeenCalledOnce();
-    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(clearGoalDrafts).not.toHaveBeenCalled();
+    expect(advisory.publish).toHaveBeenCalledTimes(2);
   });
 
   it("cleans a deleted Goal when a canonical GET receives GOAL_NOT_FOUND after route leave", async () => {
@@ -2602,8 +2709,12 @@ describe("GoalWorkspacePage", () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
+    const advisory = createGoalDeletionAdvisoryHarness();
     const removeQueries = vi.spyOn(cache, "removeQueries");
-    renderPage(cache, { commandRouteSwitch: true });
+    renderPage(cache, {
+      commandRouteSwitch: true,
+      goalDeletionAdvisory: advisory,
+    });
 
     await invokeCycleTerminalCommand("complete");
     await waitFor(() => expect(getGoal).toHaveBeenCalledTimes(2));
@@ -2622,7 +2733,9 @@ describe("GoalWorkspacePage", () => {
       ),
     );
 
-    await waitFor(() => expect(clearGoalDrafts).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
     await waitFor(() => expect(removeQueries).toHaveBeenCalled());
     expect(screen.getByText("外部route")).toBeInTheDocument();
     expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
@@ -2636,6 +2749,8 @@ describe("GoalWorkspacePage", () => {
     ).toBeUndefined();
     expect(completeCycle).toHaveBeenCalledOnce();
     expect(getGoal).toHaveBeenCalledTimes(2);
+    expect(clearGoalDrafts).not.toHaveBeenCalled();
+    expect(advisory.publish).toHaveBeenCalledTimes(2);
   });
 
   it("retries only local cleanup after GOAL_NOT_FOUND and ignores late hydration", async () => {
@@ -2644,14 +2759,15 @@ describe("GoalWorkspacePage", () => {
     vi.mocked(deleteGoal).mockRejectedValueOnce(
       new APIError(404, "GOAL_NOT_FOUND", "deleted", "request-deleted-goal"),
     );
-    vi.mocked(clearGoalDrafts)
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts)
       .mockRejectedValueOnce(new Error("indexedDB unavailable"))
       .mockResolvedValueOnce(undefined);
+    const advisory = createGoalDeletionAdvisoryHarness();
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
     const removeQueries = vi.spyOn(cache, "removeQueries");
-    renderPage(cache);
+    renderPage(cache, { goalDeletionAdvisory: advisory });
     await screen.findByRole("textbox", { name: "P — Plan" });
 
     await invokeCycleTerminalCommand("delete");
@@ -2673,8 +2789,13 @@ describe("GoalWorkspacePage", () => {
         "削除済みGoalのブラウザ下書きを削除できませんでした。",
       ),
     ).toBeInTheDocument();
-    expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id);
-    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+      session.user.id,
+      goal.id,
+    );
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(clearGoalDrafts).not.toHaveBeenCalled();
+    expect(advisory.publish).toHaveBeenCalledOnce();
     expect(putBrowserDraft).not.toHaveBeenCalled();
     expect(deleteGoal).toHaveBeenCalledOnce();
     const goalReadsBeforeRetry = vi.mocked(getGoal).mock.calls.length;
@@ -2688,8 +2809,10 @@ describe("GoalWorkspacePage", () => {
 
     expect(await screen.findByText("ホーム")).toBeInTheDocument();
     expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
-    expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledTimes(2);
+    expect(clearGoalDrafts).not.toHaveBeenCalled();
     expect(deleteGoal).toHaveBeenCalledOnce();
+    expect(advisory.publish).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(removeQueries).toHaveBeenCalled());
     await waitFor(() => {
       expect(
@@ -2783,11 +2906,14 @@ function renderPage(
   options: {
     readonly commandRouteSwitch?: boolean;
     readonly cleanupSwitchCycleId?: string;
+    readonly goalDeletionAdvisory?: GoalDeletionAdvisoryHarness;
     readonly identityQuiesceControl?: boolean;
     readonly strictMode?: boolean;
     readonly switchCycleId?: string;
   } = {},
 ) {
+  const goalDeletionAdvisory =
+    options.goalDeletionAdvisory ?? createGoalDeletionAdvisoryHarness();
   const tree = (
     <QueryClientProvider client={cache}>
       <AutoSaveScopeProvider>
@@ -2795,59 +2921,101 @@ function renderPage(
           lease={sessionLease}
           session={session}
         >
-          <MemoryRouter
-            initialEntries={[`/workspace/${goal.id}/cycles/${cycle.id}`]}
+          <GoalDeletionAdvisoryContext.Provider
+            value={goalDeletionAdvisory.registry}
           >
-            {options.identityQuiesceControl ? <IdentityQuiesceControl /> : null}
-            {options.commandRouteSwitch ? (
-              <Link to="/external">コマンド中に外部routeへ移動</Link>
-            ) : null}
-            {options.cleanupSwitchCycleId ? (
-              <Link
-                to={`/workspace/${goal.id}/cycles/${options.cleanupSwitchCycleId}`}
-              >
-                クリーンアップ中に別のCycleへ移動
-              </Link>
-            ) : null}
-            <PostCommitCleanupBoundary
-              runSessionOperation={async (_expectedUserId, operation) =>
-                operation(() => true)
-              }
+            <MemoryRouter
+              initialEntries={[`/workspace/${goal.id}/cycles/${cycle.id}`]}
             >
-              {options.switchCycleId ? (
+              {options.identityQuiesceControl ? (
+                <IdentityQuiesceControl />
+              ) : null}
+              {options.commandRouteSwitch ? (
+                <Link to="/external">コマンド中に外部routeへ移動</Link>
+              ) : null}
+              {options.cleanupSwitchCycleId ? (
                 <Link
-                  to={`/workspace/${goal.id}/cycles/${options.switchCycleId}`}
+                  to={`/workspace/${goal.id}/cycles/${options.cleanupSwitchCycleId}`}
                 >
-                  別のCycleへ移動
+                  クリーンアップ中に別のCycleへ移動
                 </Link>
               ) : null}
-              <Routes>
-                <Route
-                  path="/workspace/:goalId/cycles/:cycleId"
-                  element={<GoalWorkspacePage />}
-                />
-                <Route path="/" element={<CacheInspectingHome />} />
-                <Route
-                  path="/goals/:goalId/cycles/:cycleId"
-                  element={<p>現在のサイクル</p>}
-                />
-                <Route
-                  path="/goals/:goalId/review"
-                  element={<p>現在の目標レビュー</p>}
-                />
-                <Route
-                  path="/history/goals/:goalId"
-                  element={<p>現在の目標履歴</p>}
-                />
-                <Route path="/external" element={<p>外部route</p>} />
-              </Routes>
-            </PostCommitCleanupBoundary>
-          </MemoryRouter>
+              <PostCommitCleanupBoundary
+                runSessionOperation={async (_expectedUserId, operation) =>
+                  operation(() => true)
+                }
+              >
+                {options.switchCycleId ? (
+                  <Link
+                    to={`/workspace/${goal.id}/cycles/${options.switchCycleId}`}
+                  >
+                    別のCycleへ移動
+                  </Link>
+                ) : null}
+                <Routes>
+                  <Route
+                    path="/workspace/:goalId/cycles/:cycleId"
+                    element={<GoalWorkspacePage />}
+                  />
+                  <Route path="/" element={<CacheInspectingHome />} />
+                  <Route
+                    path="/goals/:goalId/cycles/:cycleId"
+                    element={<p>現在のサイクル</p>}
+                  />
+                  <Route
+                    path="/goals/:goalId/review"
+                    element={<p>現在の目標レビュー</p>}
+                  />
+                  <Route
+                    path="/history/goals/:goalId"
+                    element={<p>現在の目標履歴</p>}
+                  />
+                  <Route path="/external" element={<p>外部route</p>} />
+                </Routes>
+              </PostCommitCleanupBoundary>
+            </MemoryRouter>
+          </GoalDeletionAdvisoryContext.Provider>
         </AuthenticatedSessionTestProvider>
       </AutoSaveScopeProvider>
     </QueryClientProvider>
   );
   return render(options.strictMode ? <StrictMode>{tree}</StrictMode> : tree);
+}
+
+type GoalDeletionAdvisoryHarness = {
+  readonly registry: GoalDeletionAdvisoryRegistry;
+  readonly publish: ReturnType<
+    typeof vi.fn<(deletedUserId: string, deletedGoalId: string) => void>
+  >;
+  readonly subscribe: ReturnType<typeof vi.fn>;
+  readonly dispatch: (deletedUserId: string, deletedGoalId: string) => void;
+};
+
+function createGoalDeletionAdvisoryHarness(): GoalDeletionAdvisoryHarness {
+  const listeners = new Map<string, Set<() => void>>();
+  const publish =
+    vi.fn<(deletedUserId: string, deletedGoalId: string) => void>();
+  const subscribe = vi.fn(
+    (userId: string, goalId: string, listener: () => void) => {
+      const key = `${userId}:${goalId}`;
+      const matching = listeners.get(key) ?? new Set();
+      matching.add(listener);
+      listeners.set(key, matching);
+      return () => {
+        matching.delete(listener);
+        if (matching.size === 0) listeners.delete(key);
+      };
+    },
+  );
+  return {
+    registry: { publish, subscribe },
+    publish,
+    subscribe,
+    dispatch: (deletedUserId, deletedGoalId) => {
+      const matching = listeners.get(`${deletedUserId}:${deletedGoalId}`);
+      for (const listener of [...(matching ?? [])]) listener();
+    },
+  };
 }
 
 function IdentityQuiesceControl() {

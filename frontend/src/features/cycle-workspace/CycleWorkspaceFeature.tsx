@@ -20,6 +20,10 @@ import {
   removeGoalFromCache,
   userQueryKeys,
 } from "../goal-collection";
+import {
+  usePublishGoalDeletionAdvisory,
+  useSubscribeGoalDeletionAdvisory,
+} from "../goal-deletion";
 import { APIError } from "../../shared/api/client";
 import { AutoSaveCoordinator } from "../../shared/autosave/autoSaveCoordinator";
 import {
@@ -58,6 +62,7 @@ import {
   deleteBrowserDraftIfUnchanged,
   getBrowserDraft,
   putBrowserDraft,
+  tombstoneDeletedGoalAndClearDrafts,
 } from "../../shared/drafts/browserDraftCache";
 import {
   commandFingerprint,
@@ -94,6 +99,7 @@ type MovedWorkspace = {
 };
 
 type CycleTerminalCommand = "complete" | "terminate" | "delete";
+type GoalDeletionFenceSource = "local" | "advisory";
 
 function preferCycle(current: Cycle | undefined, incoming: Cycle): Cycle {
   if (!current) return incoming;
@@ -229,6 +235,8 @@ function CycleWorkspace({
   const cache = useQueryClient();
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const runPostCommitCleanup = usePostCommitCleanup();
+  const publishGoalDeletionAdvisory = usePublishGoalDeletionAdvisory();
+  const subscribeGoalDeletionAdvisory = useSubscribeGoalDeletionAdvisory();
   const cycle = initial;
   const generateOperation = useCommandOperation();
   const refineOperation = useCommandOperation();
@@ -266,6 +274,7 @@ function CycleWorkspace({
   );
   const conflictsRef = useRef(new Map<Frame, BrowserDraft>());
   const movedWorkspaceRef = useRef<MovedWorkspace | undefined>(undefined);
+  const deletedFenceStartedRef = useRef(false);
   const commandRecoveryEpochRef = useRef(0);
   const cycleRevisionRefreshEpochRef = useRef(0);
   const cycleRevisionRefreshInFlightRef = useRef(new Map<Frame, object>());
@@ -1065,20 +1074,27 @@ function CycleWorkspace({
   }
 
   const markDeletedGoal = useCallback(
-    (routeOwnership: PostCommitRouteOwnershipToken) => {
+    (
+      routeOwnership: PostCommitRouteOwnershipToken,
+      source: GoalDeletionFenceSource = "local",
+    ) => {
+      if (deletedFenceStartedRef.current) return;
+      deletedFenceStartedRef.current = true;
       commandRecoveryEpochRef.current += 1;
       freezeCycleWorkspace(
         { currentWorkspace: null, href: "/", recovery: "deleted" },
         { preserveUnsaved: false },
       );
+      if (source === "local") publishGoalDeletionAdvisory(userId, goal.id);
       void runPostCommitCleanup({
         expectedUserId: userId,
         routeOwnership,
         // The boundary first quiesces every autosave scope and drains its browser
         // operation tail. Retrying this task therefore repeats local cleanup only.
         cleanup: async () => {
-          await clearGoalDrafts(userId, goal.id);
+          await tombstoneDeletedGoalAndClearDrafts(userId, goal.id);
           removeGoalFromCache(cache, userId, goal.id);
+          if (source === "local") publishGoalDeletionAdvisory(userId, goal.id);
         },
         onSuccess: async (publicationIsCurrent) => {
           if (!publicationIsCurrent()) return;
@@ -1094,7 +1110,22 @@ function CycleWorkspace({
       freezeCycleWorkspace,
       goal.id,
       navigate,
+      publishGoalDeletionAdvisory,
       runPostCommitCleanup,
+      userId,
+    ],
+  );
+
+  useLayoutEffect(
+    () =>
+      subscribeGoalDeletionAdvisory(userId, goal.id, () => {
+        markDeletedGoal(captureRouteOwnership(), "advisory");
+      }),
+    [
+      captureRouteOwnership,
+      goal.id,
+      markDeletedGoal,
+      subscribeGoalDeletionAdvisory,
       userId,
     ],
   );

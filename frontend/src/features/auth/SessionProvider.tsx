@@ -7,12 +7,23 @@ import {
   type PropsWithChildren,
 } from "react";
 
+import type { Session } from "../../shared/api/schemas";
 import type { SessionRecoverySubscription } from "../../shared/api/sessionRecoveryEvents";
 import {
   AutoSaveScopeProvider,
   useAutoSaveScopeRegistry,
 } from "../../shared/autosave/AutoSaveScopeProvider";
-import { cleanupExpiredBrowserDrafts } from "../../shared/drafts/browserDraftCache";
+import {
+  cleanupExpiredBrowserDrafts,
+  tombstoneDeletedGoalAndClearDrafts,
+} from "../../shared/drafts/browserDraftCache";
+import { removeGoalFromCache } from "../goal-collection";
+import {
+  type AcceptedGoalDeletionAdvisory,
+  GoalDeletionAdvisoryContext,
+  type GoalDeletionAdvisoryFactory,
+  useGoalDeletionAdvisory,
+} from "../goal-deletion";
 import type { AccountDeletionAdvisoryFactory } from "./accountDeletionAdvisory";
 import { AccountDeletionAdvisoryPublishContext } from "./accountDeletionContext";
 import { useAuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
@@ -37,6 +48,7 @@ type SessionProviderProps = PropsWithChildren<{
   readonly reloadApplication?: () => void;
   readonly advisoryFactory?: SessionIdentityAdvisoryFactory;
   readonly accountDeletionAdvisoryFactory?: AccountDeletionAdvisoryFactory;
+  readonly goalDeletionAdvisoryFactory?: GoalDeletionAdvisoryFactory;
 }>;
 
 export function SessionProvider({
@@ -44,6 +56,7 @@ export function SessionProvider({
   reloadApplication = reloadFromServer,
   advisoryFactory,
   accountDeletionAdvisoryFactory,
+  goalDeletionAdvisoryFactory,
 }: SessionProviderProps) {
   const browserDraftCleanupStarted = useRef(false);
 
@@ -59,6 +72,7 @@ export function SessionProvider({
         reloadApplication={reloadApplication}
         advisoryFactory={advisoryFactory}
         accountDeletionAdvisoryFactory={accountDeletionAdvisoryFactory}
+        goalDeletionAdvisoryFactory={goalDeletionAdvisoryFactory}
       >
         {children}
       </SessionBoundary>
@@ -71,17 +85,21 @@ function SessionBoundary({
   reloadApplication,
   advisoryFactory,
   accountDeletionAdvisoryFactory,
+  goalDeletionAdvisoryFactory,
 }: PropsWithChildren<{
   readonly reloadApplication: () => void;
   readonly advisoryFactory: SessionIdentityAdvisoryFactory | undefined;
   readonly accountDeletionAdvisoryFactory:
     | AccountDeletionAdvisoryFactory
     | undefined;
+  readonly goalDeletionAdvisoryFactory: GoalDeletionAdvisoryFactory | undefined;
 }>) {
   const queryClient = useQueryClient();
   const leaseOwner = useAuthenticatedRequestLeaseOwner();
   const autoSaveScopes = useAutoSaveScopeRegistry();
   const transitionRef = useRef<Promise<void>>(Promise.resolve());
+  const goalDeletionFallbacksRef = useRef(new Map<string, Promise<void>>());
+  const goalDeletionsHandledBySubscriberRef = useRef(new Set<string>());
   const recoverySubscriptionRef = useRef<SessionRecoverySubscription | null>(
     null,
   );
@@ -137,6 +155,50 @@ function SessionBoundary({
     reloadApplication,
     factory: accountDeletionAdvisoryFactory,
   });
+  const getCurrentGoalDeletionUserId = useCallback(
+    () => queryClient.getQueryData<Session>(sessionQueryKey)?.user.id,
+    [queryClient],
+  );
+  const handleAcceptedGoalDeletionAdvisory = useCallback(
+    ({
+      deletedUserId,
+      deletedGoalId,
+      subscriberNotified,
+    }: AcceptedGoalDeletionAdvisory) => {
+      const fallbackKey = `${deletedUserId}:${deletedGoalId}`;
+      try {
+        removeGoalFromCache(queryClient, deletedUserId, deletedGoalId);
+      } catch {
+        // A matching editor has already been synchronously fenced. Durable
+        // cleanup remains authoritative if an in-memory cache is unavailable.
+      }
+      if (subscriberNotified) {
+        // The matching workspace owns durable cleanup. Remember that ownership
+        // after it navigates away so the sender's confirmation cannot start a
+        // second, subscriber-free cleanup for the same deletion.
+        goalDeletionsHandledBySubscriberRef.current.add(fallbackKey);
+        return;
+      }
+      if (goalDeletionsHandledBySubscriberRef.current.has(fallbackKey)) return;
+      if (goalDeletionFallbacksRef.current.has(fallbackKey)) return;
+      const fallback = tombstoneDeletedGoalAndClearDrafts(
+        deletedUserId,
+        deletedGoalId,
+      );
+      goalDeletionFallbacksRef.current.set(fallbackKey, fallback);
+      void fallback.catch(() => {
+        if (goalDeletionFallbacksRef.current.get(fallbackKey) === fallback) {
+          goalDeletionFallbacksRef.current.delete(fallbackKey);
+        }
+      });
+    },
+    [queryClient],
+  );
+  const goalDeletionAdvisory = useGoalDeletionAdvisory({
+    getCurrentUserId: getCurrentGoalDeletionUserId,
+    onAcceptedGoalDeletionAdvisory: handleAcceptedGoalDeletionAdvisory,
+    factory: goalDeletionAdvisoryFactory,
+  });
   const recovery = useSessionRecoveryController({
     queryClient,
     sessionQueryKey,
@@ -169,26 +231,28 @@ function SessionBoundary({
   });
 
   return (
-    <AccountDeletionAdvisoryPublishContext.Provider
-      value={publishAccountDeletionAdvisory}
-    >
-      <SessionBoundaryPresentation
-        query={query}
-        recoverySubscriptionReady={recovery.recoverySubscriptionReady}
-        leaseOwner={leaseOwner}
-        sessionBoundaryGeneration={publication.sessionBoundaryGeneration}
-        runtimeRecovery={publication.runtimeRecovery}
-        interactionSuspended={publication.interactionSuspended}
-        childrenWrapperRef={childrenWrapperRef}
-        recoverSession={recovery.recoverSession}
-        reloadApplication={reloadApplication}
-        runTerminalSessionOperation={runners.runTerminalSessionOperation}
-        runPostCommitSessionOperation={runners.runPostCommitSessionOperation}
-        runSessionTransition={runners.runSessionTransition}
+    <GoalDeletionAdvisoryContext.Provider value={goalDeletionAdvisory}>
+      <AccountDeletionAdvisoryPublishContext.Provider
+        value={publishAccountDeletionAdvisory}
       >
-        {children}
-      </SessionBoundaryPresentation>
-    </AccountDeletionAdvisoryPublishContext.Provider>
+        <SessionBoundaryPresentation
+          query={query}
+          recoverySubscriptionReady={recovery.recoverySubscriptionReady}
+          leaseOwner={leaseOwner}
+          sessionBoundaryGeneration={publication.sessionBoundaryGeneration}
+          runtimeRecovery={publication.runtimeRecovery}
+          interactionSuspended={publication.interactionSuspended}
+          childrenWrapperRef={childrenWrapperRef}
+          recoverSession={recovery.recoverSession}
+          reloadApplication={reloadApplication}
+          runTerminalSessionOperation={runners.runTerminalSessionOperation}
+          runPostCommitSessionOperation={runners.runPostCommitSessionOperation}
+          runSessionTransition={runners.runSessionTransition}
+        >
+          {children}
+        </SessionBoundaryPresentation>
+      </AccountDeletionAdvisoryPublishContext.Provider>
+    </GoalDeletionAdvisoryContext.Provider>
   );
 }
 

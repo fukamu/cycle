@@ -17,6 +17,10 @@ import {
   resolveGoalReviewPublication,
   userQueryKeys,
 } from "../goal-collection";
+import {
+  usePublishGoalDeletionAdvisory,
+  useSubscribeGoalDeletionAdvisory,
+} from "../goal-deletion";
 import { GoalRefinementPanel, useGoalRefinement } from "../goal-refine";
 import { APIError } from "../../shared/api/client";
 import type { Goal, GoalReview } from "../../shared/api/schemas";
@@ -43,8 +47,8 @@ import {
   usePostCommitCleanup,
 } from "../../shared/cleanup/postCommitCleanupContext";
 import {
-  clearGoalDrafts,
   deleteBrowserDraft,
+  tombstoneDeletedGoalAndClearDrafts,
 } from "../../shared/drafts/browserDraftCache";
 import {
   commandFingerprint,
@@ -67,6 +71,7 @@ type ReviewConfirmation =
   | { readonly kind: "delete" };
 
 type ReviewTerminalCommand = "continue" | "terminate" | "delete";
+type GoalDeletionFenceSource = "local" | "advisory";
 type ReviewCommandRecovery =
   | { readonly kind: "loading" }
   | { readonly kind: "ready" }
@@ -201,7 +206,10 @@ function ReviewEditor({
   const cache = useQueryClient();
   const runPostCommitCleanup = usePostCommitCleanup();
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
+  const publishGoalDeletionAdvisory = usePublishGoalDeletionAdvisory();
+  const subscribeGoalDeletionAdvisory = useSubscribeGoalDeletionAdvisory();
   const mountedGenerationRef = useRef(true);
+  const deletedFenceStartedRef = useRef(false);
   useLayoutEffect(() => {
     mountedGenerationRef.current = true;
     return () => {
@@ -315,22 +323,29 @@ function ReviewEditor({
   );
 
   const markDeletedGoal = useCallback(
-    (routeOwnership: PostCommitRouteOwnershipToken) => {
+    (
+      routeOwnership: PostCommitRouteOwnershipToken,
+      source: GoalDeletionFenceSource = "local",
+    ) => {
+      if (deletedFenceStartedRef.current) return;
+      deletedFenceStartedRef.current = true;
+      void markEditorScopeMoved("/", { preserveUnsaved: false });
       commandRecoveryEpochRef.current += 1;
       if (mountedGenerationRef.current) {
         setCommandRecovery({ kind: "deleted" });
         setPending(false);
         setError(undefined);
       }
-      void editor.markScopeMoved("/", { preserveUnsaved: false });
+      if (source === "local") publishGoalDeletionAdvisory(userId, goal.id);
       void runPostCommitCleanup({
         expectedUserId: userId,
         routeOwnership,
         // Quiescence drains the Review scope's browser-operation queue before
         // this Goal-wide delete. Retry never re-enters the failed API command.
         cleanup: async () => {
-          await clearGoalDrafts(userId, goal.id);
+          await tombstoneDeletedGoalAndClearDrafts(userId, goal.id);
           removeGoalFromCache(cache, userId, goal.id);
+          if (source === "local") publishGoalDeletionAdvisory(userId, goal.id);
         },
         onSuccess: async (publicationIsCurrent) => {
           if (!publicationIsCurrent()) return;
@@ -341,7 +356,28 @@ function ReviewEditor({
         retryLabel: "ブラウザデータの削除を再試行",
       });
     },
-    [cache, editor, goal.id, navigate, runPostCommitCleanup, userId],
+    [
+      cache,
+      goal.id,
+      markEditorScopeMoved,
+      navigate,
+      publishGoalDeletionAdvisory,
+      runPostCommitCleanup,
+      userId,
+    ],
+  );
+  useLayoutEffect(
+    () =>
+      subscribeGoalDeletionAdvisory(userId, goal.id, () => {
+        markDeletedGoal(captureRouteOwnership(), "advisory");
+      }),
+    [
+      captureRouteOwnership,
+      goal.id,
+      markDeletedGoal,
+      subscribeGoalDeletionAdvisory,
+      userId,
+    ],
   );
 
   const refreshCanonicalGoal = useCallback(
