@@ -1,6 +1,7 @@
 import {
   QueryClient,
   QueryClientProvider,
+  useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
@@ -13,6 +14,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { z } from "zod";
 
 import {
@@ -31,9 +33,13 @@ import {
   clearUserDrafts,
   tombstoneDeletedGoalAndClearDrafts,
 } from "../../shared/drafts/browserDraftCache";
+import { PostCommitCleanupBoundary } from "../../shared/cleanup/PostCommitCleanupBoundary";
+import { userQueryKeys } from "../goal-collection";
 import {
+  GoalDeletionFenceBoundary,
   type GoalDeletionAdvisoryChannelLike,
   type GoalDeletionAdvisoryFactory,
+  useBeginGoalDeletionCleanup,
   usePublishGoalDeletionAdvisory,
   useSubscribeGoalDeletionAdvisory,
 } from "../goal-deletion";
@@ -48,6 +54,7 @@ import type {
 } from "./sessionIdentityAdvisory";
 import {
   useAuthenticatedRequestLease,
+  useRunPostCommitSessionOperation,
   useRunSessionTransition,
   useRunTerminalSessionOperation,
   useSession,
@@ -2603,6 +2610,7 @@ describe("SessionProvider runtime recovery", () => {
       expect(client.getQueryData(goalQueryKey)).toBeUndefined(),
     );
 
+    client.setQueryData(goalQueryKey, { goal: "late deleted cache" });
     act(() => {
       advisory.dispatch({
         version: 1,
@@ -2611,6 +2619,7 @@ describe("SessionProvider runtime recovery", () => {
       });
     });
     expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2);
+    expect(client.getQueryData(goalQueryKey)).toBeUndefined();
   });
 
   it("remembers a confirmation that arrives before subscriber-free cleanup fails", async () => {
@@ -2679,6 +2688,190 @@ describe("SessionProvider runtime recovery", () => {
       });
     });
     expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("replays a pending subscriber-free deletion before a fresh cached route can paint", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000030";
+    const fallbackCleanup = deferredVoid();
+    tombstoneDeletedGoalAndClearDraftsMock.mockReturnValue(
+      fallbackCleanup.promise,
+    );
+    const advisory = createAdvisoryChannelHarness();
+    const client = createClient();
+    const goalQueryKey = userQueryKeys.goal(session.user.id, deletedGoalId);
+    client.setQueryData(goalQueryKey, { body: "削除済みのprivate Goal本文" });
+    const transport = vi.fn(async () => ({ body: "server Goal本文" }));
+    stubSession(session);
+
+    renderGoalDeletionLateMountHarness({
+      advisory,
+      client,
+      deletedGoalId,
+      transport,
+    });
+    await screen.findByRole("link", { name: "削除済みGoalを開く" });
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce(),
+    );
+
+    await userEvent.click(
+      screen.getByRole("link", { name: "削除済みGoalを開く" }),
+    );
+    expect(
+      screen.queryByText("削除済みのprivate Goal本文"),
+    ).not.toBeInTheDocument();
+    expect(transport).not.toHaveBeenCalled();
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce();
+
+    act(() => fallbackCleanup.resolve());
+    await screen.findByRole("link", { name: "削除済みGoalを開く" });
+    expect(client.getQueryData(goalQueryKey)).toBeUndefined();
+    expect(advisory.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("hands a failed subscriber-free cleanup to the late route and exposes only local retry", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000031";
+    const fallbackCleanup = deferredVoid();
+    tombstoneDeletedGoalAndClearDraftsMock
+      .mockReturnValueOnce(fallbackCleanup.promise)
+      .mockRejectedValueOnce(new Error("private IndexedDB failure"))
+      .mockResolvedValueOnce(undefined);
+    const advisory = createAdvisoryChannelHarness();
+    const client = createClient();
+    const goalQueryKey = userQueryKeys.goal(session.user.id, deletedGoalId);
+    client.setQueryData(goalQueryKey, { body: "cleanup失敗中のprivate本文" });
+    const transport = vi.fn(async () => ({ body: "server Goal本文" }));
+    stubSession(session);
+
+    renderGoalDeletionLateMountHarness({
+      advisory,
+      client,
+      deletedGoalId,
+      transport,
+    });
+    await screen.findByRole("link", { name: "削除済みGoalを開く" });
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce(),
+    );
+    await userEvent.click(
+      screen.getByRole("link", { name: "削除済みGoalを開く" }),
+    );
+
+    act(() => fallbackCleanup.reject(new Error("private fallback failure")));
+    expect(
+      await screen.findByText(
+        "削除済みGoalのブラウザ下書きを削除できませんでした。",
+      ),
+    ).toBeVisible();
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2);
+    expect(
+      screen.queryByText("cleanup失敗中のprivate本文"),
+    ).not.toBeInTheDocument();
+    expect(transport).not.toHaveBeenCalled();
+    expect(advisory.postMessage).not.toHaveBeenCalled();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "ブラウザデータの削除を再試行" }),
+    );
+    await screen.findByRole("link", { name: "削除済みGoalを開く" });
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(3);
+    expect(client.getQueryData(goalQueryKey)).toBeUndefined();
+    expect(transport).not.toHaveBeenCalled();
+    expect(advisory.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("replays a completed deletion to purge late cache without repeating durable cleanup", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000032";
+    const advisory = createAdvisoryChannelHarness();
+    const client = createClient();
+    const goalQueryKey = userQueryKeys.goal(session.user.id, deletedGoalId);
+    client.setQueryData(goalQueryKey, { body: "最初のprivate本文" });
+    const transport = vi.fn(async () => ({ body: "server Goal本文" }));
+    stubSession(session);
+
+    renderGoalDeletionLateMountHarness({
+      advisory,
+      client,
+      deletedGoalId,
+      transport,
+    });
+    await screen.findByRole("link", { name: "削除済みGoalを開く" });
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    await waitFor(() =>
+      expect(client.getQueryData(goalQueryKey)).toBeUndefined(),
+    );
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce();
+
+    client.setQueryData(goalQueryKey, { body: "後着のprivate Goal cache" });
+    await userEvent.click(
+      screen.getByRole("link", { name: "削除済みGoalを開く" }),
+    );
+
+    expect(
+      screen.queryByText("後着のprivate Goal cache"),
+    ).not.toBeInTheDocument();
+    expect(transport).not.toHaveBeenCalled();
+    await screen.findByRole("link", { name: "削除済みGoalを開く" });
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce();
+    expect(client.getQueryData(goalQueryKey)).toBeUndefined();
+    expect(advisory.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("purges late cache when the first fallback notification joins a completed route claim", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000033";
+    const advisory = createAdvisoryChannelHarness();
+    const client = createClient();
+    const goalQueryKey = userQueryKeys.goal(session.user.id, deletedGoalId);
+    stubSession(session);
+
+    renderProvider(
+      <CompletedGoalDeletionClaimProbe
+        userId={session.user.id}
+        goalId={deletedGoalId}
+      />,
+      client,
+      { goalDeletionAdvisoryFactory: () => advisory.channel },
+    );
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "complete route-owned Goal cleanup",
+      }),
+    );
+    client.setQueryData(goalQueryKey, { body: "late private Goal cache" });
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+
+    await waitFor(() =>
+      expect(client.getQueryData(goalQueryKey)).toBeUndefined(),
+    );
+    expect(tombstoneDeletedGoalAndClearDraftsMock).not.toHaveBeenCalled();
+    expect(advisory.postMessage).not.toHaveBeenCalled();
   });
 
   it("publishes the exact current User and Goal deletion tuple", async () => {
@@ -3014,6 +3207,27 @@ function GoalDeletionPublishProbe({ goalId }: { readonly goalId: string }) {
   );
 }
 
+function CompletedGoalDeletionClaimProbe({
+  userId,
+  goalId,
+}: {
+  readonly userId: string;
+  readonly goalId: string;
+}) {
+  const beginCleanup = useBeginGoalDeletionCleanup();
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        const claim = beginCleanup(userId, goalId);
+        if (claim.kind === "owner") claim.complete();
+      }}
+    >
+      complete route-owned Goal cleanup
+    </button>
+  );
+}
+
 function RuntimeRecoveryProbe({
   showEditor = false,
 }: {
@@ -3235,6 +3449,88 @@ function renderProvider(
       </SessionProvider>
     </QueryClientProvider>,
   );
+}
+
+function renderGoalDeletionLateMountHarness({
+  advisory,
+  client,
+  deletedGoalId,
+  transport,
+}: {
+  readonly advisory: ReturnType<typeof createAdvisoryChannelHarness>;
+  readonly client: QueryClient;
+  readonly deletedGoalId: string;
+  readonly transport: () => Promise<{ readonly body: string }>;
+}) {
+  render(
+    <QueryClientProvider client={client}>
+      <SessionProvider goalDeletionAdvisoryFactory={() => advisory.channel}>
+        <SessionIdentityBoundary>
+          <GoalDeletionLateMountRoutes
+            deletedGoalId={deletedGoalId}
+            transport={transport}
+          />
+        </SessionIdentityBoundary>
+      </SessionProvider>
+    </QueryClientProvider>,
+  );
+}
+
+function GoalDeletionLateMountRoutes({
+  deletedGoalId,
+  transport,
+}: {
+  readonly deletedGoalId: string;
+  readonly transport: () => Promise<{ readonly body: string }>;
+}) {
+  const currentSession = useSession();
+  const runPostCommitSessionOperation = useRunPostCommitSessionOperation();
+  return (
+    <MemoryRouter initialEntries={["/"]}>
+      <PostCommitCleanupBoundary
+        runSessionOperation={runPostCommitSessionOperation}
+      >
+        <Routes>
+          <Route
+            path="/"
+            element={<Link to="/deleted">削除済みGoalを開く</Link>}
+          />
+          <Route
+            path="/deleted"
+            element={
+              <GoalDeletionFenceBoundary
+                userId={currentSession.user.id}
+                goalId={deletedGoalId}
+              >
+                <CachedDeletedGoalProbe
+                  userId={currentSession.user.id}
+                  goalId={deletedGoalId}
+                  transport={transport}
+                />
+              </GoalDeletionFenceBoundary>
+            }
+          />
+        </Routes>
+      </PostCommitCleanupBoundary>
+    </MemoryRouter>
+  );
+}
+
+function CachedDeletedGoalProbe({
+  userId,
+  goalId,
+  transport,
+}: {
+  readonly userId: string;
+  readonly goalId: string;
+  readonly transport: () => Promise<{ readonly body: string }>;
+}) {
+  const query = useQuery({
+    queryKey: userQueryKeys.goal(userId, goalId),
+    queryFn: transport,
+    staleTime: Infinity,
+  });
+  return <p>{query.data?.body ?? "Goal loading"}</p>;
 }
 
 function stubSession(value: Session) {

@@ -91,6 +91,66 @@ describe("useGoalDeletionAdvisory", () => {
     expect(onAcceptedGoalDeletionAdvisory).not.toHaveBeenCalled();
   });
 
+  it("latches an accepted advisory and synchronously replays it to a late exact subscriber", () => {
+    const onAcceptedGoalDeletionAdvisory = vi.fn();
+    const channel = createChannelHarness();
+    const rendered = renderHook(() =>
+      useGoalDeletionAdvisory({
+        getCurrentUserId: () => userId,
+        onAcceptedGoalDeletionAdvisory,
+        factory: () => channel.channel,
+      }),
+    );
+
+    act(() => {
+      channel.dispatch(deletionMessage(userId, goalId));
+      channel.dispatch(deletionMessage(otherUserId, otherGoalId));
+    });
+    expect(rendered.result.current.isKnown(userId, goalId)).toBe(true);
+    expect(rendered.result.current.isKnown(otherUserId, otherGoalId)).toBe(
+      false,
+    );
+
+    const exact = vi.fn();
+    const otherGoal = vi.fn();
+    const otherUser = vi.fn();
+    act(() => {
+      rendered.result.current.subscribe(userId, goalId, exact);
+      rendered.result.current.subscribe(userId, otherGoalId, otherGoal);
+      rendered.result.current.subscribe(otherUserId, goalId, otherUser);
+    });
+
+    expect(exact).toHaveBeenCalledOnce();
+    expect(otherGoal).not.toHaveBeenCalled();
+    expect(otherUser).not.toHaveBeenCalled();
+    expect(onAcceptedGoalDeletionAdvisory).toHaveBeenCalledOnce();
+  });
+
+  it("latches a valid local publication before any route subscribes", () => {
+    const channel = createChannelHarness();
+    const rendered = renderHook(() =>
+      useGoalDeletionAdvisory({
+        getCurrentUserId: () => userId,
+        onAcceptedGoalDeletionAdvisory: vi.fn(),
+        factory: () => channel.channel,
+      }),
+    );
+
+    act(() => {
+      rendered.result.current.publish(userId, goalId);
+      rendered.result.current.publish("invalid", otherGoalId);
+    });
+    const exact = vi.fn();
+    act(() => {
+      rendered.result.current.subscribe(userId, goalId, exact);
+    });
+
+    expect(exact).toHaveBeenCalledOnce();
+    expect(rendered.result.current.isKnown(userId, goalId)).toBe(true);
+    expect(rendered.result.current.isKnown("invalid", otherGoalId)).toBe(false);
+    expect(channel.posted).toEqual([deletionMessage(userId, goalId)]);
+  });
+
   it("isolates subscriber failures and reports whether any fence completed", () => {
     const order: string[] = [];
     const onAcceptedGoalDeletionAdvisory = vi.fn(() => {
@@ -257,7 +317,7 @@ describe("useGoalDeletionAdvisory", () => {
     if (otherGoalOwner.kind === "owner") otherGoalOwner.complete();
   });
 
-  it("releases a completed claim idempotently and allows a fresh owner", async () => {
+  it("retains a completed claim so later cleanup attempts join it", async () => {
     const channel = createChannelHarness();
     const rendered = renderHook(() =>
       useGoalDeletionAdvisory({
@@ -274,19 +334,44 @@ describe("useGoalDeletionAdvisory", () => {
     firstOwner.complete();
     await firstOwner.completion;
 
-    const secondOwner = rendered.result.current.beginCleanup(userId, goalId);
-    const secondJoined = rendered.result.current.beginCleanup(userId, goalId);
-    expect(secondOwner.kind).toBe("owner");
-    expect(secondOwner.completion).not.toBe(firstOwner.completion);
-    expect(secondJoined.kind).toBe("joined");
-    expect(secondJoined.completion).toBe(secondOwner.completion);
+    const secondClaim = rendered.result.current.beginCleanup(userId, goalId);
+    expect(secondClaim.kind).toBe("joined");
+    expect(secondClaim.completion).toBe(firstOwner.completion);
+    expect(await secondClaim.completion).toBe("completed");
 
     firstOwner.complete();
     const stillJoined = rendered.result.current.beginCleanup(userId, goalId);
     expect(stillJoined.kind).toBe("joined");
-    expect(stillJoined.completion).toBe(secondOwner.completion);
-    if (secondOwner.kind === "owner") secondOwner.complete();
-    await secondOwner.completion;
+    expect(stillJoined.completion).toBe(firstOwner.completion);
+    expect(await stillJoined.completion).toBe("completed");
+  });
+
+  it("settles a failed claim for every joiner before allowing a fresh owner", async () => {
+    const channel = createChannelHarness();
+    const rendered = renderHook(() =>
+      useGoalDeletionAdvisory({
+        getCurrentUserId: () => userId,
+        onAcceptedGoalDeletionAdvisory: vi.fn(),
+        factory: () => channel.channel,
+      }),
+    );
+
+    const failedOwner = rendered.result.current.beginCleanup(userId, goalId);
+    const failedJoiner = rendered.result.current.beginCleanup(userId, goalId);
+    expect(failedOwner.kind).toBe("owner");
+    expect(failedJoiner.kind).toBe("joined");
+    if (failedOwner.kind !== "owner") throw new Error("expected owner");
+
+    failedOwner.fail();
+    failedOwner.complete();
+    expect(await failedOwner.completion).toBe("failed");
+    expect(await failedJoiner.completion).toBe("failed");
+
+    const replacement = rendered.result.current.beginCleanup(userId, goalId);
+    expect(replacement.kind).toBe("owner");
+    expect(replacement.completion).not.toBe(failedOwner.completion);
+    if (replacement.kind === "owner") replacement.complete();
+    expect(await replacement.completion).toBe("completed");
   });
 
   it("uses collision-free tuple identity without validating cleanup inputs", async () => {
@@ -415,6 +500,7 @@ describe("useGoalDeletionAdvisory", () => {
     expect(rendered.result.current.beginCleanup).toBe(
       firstRegistry.beginCleanup,
     );
+    expect(rendered.result.current.isKnown).toBe(firstRegistry.isKnown);
   });
 });
 
