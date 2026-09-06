@@ -176,6 +176,10 @@ describe("GoalWorkspacePage", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("keeps related commands gated until the current StrictMode hydration finishes", async () => {
     const discardedHydration =
       deferred<Awaited<ReturnType<typeof getBrowserDraft>>>();
@@ -789,6 +793,38 @@ describe("GoalWorkspacePage", () => {
         baseRevision: 0,
       }),
     );
+  });
+
+  it("preserves a dirty Cycle frame on pagehide before either debounce elapses", async () => {
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    await waitFor(() => expect(getBrowserDraft).toHaveBeenCalledTimes(4));
+    vi.useFakeTimers();
+
+    fireEvent.change(editor, { target: { value: "終了直前の計画" } });
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+
+    await act(async () => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+
+    expect(putBrowserDraft).toHaveBeenCalledOnce();
+    expect(putBrowserDraft).toHaveBeenCalledWith({
+      userId: session.user.id,
+      goalId: goal.id,
+      subjectKey: `cycle:${cycle.id}:plan`,
+      body: "終了直前の計画",
+      baseRevision: 0,
+      updatedAt: expect.any(String),
+    });
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    expect(putBrowserDraft).toHaveBeenCalledOnce();
+    expect(saveCycleFrame).not.toHaveBeenCalled();
   });
 
   it("keeps a successful server save successful when browser cleanup fails", async () => {

@@ -234,24 +234,27 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
         };
         const stored = await queueBrowserOperation(async () => {
           await putBrowserDraft(draft);
+          lastCachedDraftRef.current = draft;
           return true;
         });
         if (stored !== true) throw new Error("browser draft scope is inactive");
-        lastCachedDraftRef.current = draft;
       },
       clearPersisted: async () => {
-        const expected = lastCachedDraftRef.current;
-        if (!expected) return;
-        await queueBrowserOperation(() =>
-          deleteBrowserDraftIfUnchanged(
+        const cleared = await queueBrowserOperation(async () => {
+          const expected = lastCachedDraftRef.current;
+          if (!expected) return true;
+          await deleteBrowserDraftIfUnchanged(
             expected.userId,
             expected.subjectKey,
             expected.body,
             expected.baseRevision,
-          ),
-        );
-        if (lastCachedDraftRef.current === expected)
-          lastCachedDraftRef.current = undefined;
+          );
+          if (lastCachedDraftRef.current === expected)
+            lastCachedDraftRef.current = undefined;
+          return true;
+        });
+        if (cleared !== true)
+          throw new Error("browser draft scope is inactive");
       },
       onPersistenceStatus: (available) => {
         if (mountedRef.current && lease.isCurrent())
@@ -425,7 +428,10 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
       return;
     }
     coordinator.attach();
-    const unregister = lease.onQuiesce(async (lifecycle) => {
+    const unregisterPreserve = lease.onPreserve(() =>
+      coordinator.preserveDrafts(),
+    );
+    const unregisterQuiesce = lease.onQuiesce(async (lifecycle) => {
       quiesceQueueRef.current = lifecycle.queueBrowserOperation;
       try {
         await coordinator.quiesce(lifecycle.preserveDrafts);
@@ -436,7 +442,8 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     });
     return () => {
       mountedRef.current = false;
-      unregister();
+      unregisterPreserve();
+      unregisterQuiesce();
       coordinator.detach();
     };
   }, [coordinator, lease]);

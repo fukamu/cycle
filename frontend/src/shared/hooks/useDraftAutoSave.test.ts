@@ -179,6 +179,80 @@ describe("useDraftAutoSave", () => {
     );
   });
 
+  it("persists a dirty recovery snapshot immediately when the document becomes hidden", async () => {
+    vi.useFakeTimers();
+    const visibilityState = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockReturnValue("visible");
+    const save = vi
+      .fn()
+      .mockResolvedValue({ body: "hidden edit", revision: 1 });
+    const { result } = renderHook(() => useDraftAutoSave(input(save)));
+    await act(async () => undefined);
+
+    act(() => result.current.setBody("hidden edit"));
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+
+    visibilityState.mockReturnValue("hidden");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+
+    expect(putBrowserDraft).toHaveBeenCalledOnce();
+    expect(putBrowserDraft).toHaveBeenCalledWith({
+      userId: "user-1",
+      goalId: "goal-1",
+      subjectKey: "goal-review:goal-1",
+      body: "hidden edit",
+      baseRevision: 0,
+      updatedAt: expect.any(String),
+    });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("deletes a delayed lifecycle snapshot after the same value is saved by the API", async () => {
+    vi.useFakeTimers();
+    const visibilityState = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockReturnValue("visible");
+    const browserWrite = deferred<void>();
+    vi.mocked(putBrowserDraft).mockImplementationOnce(
+      () => browserWrite.promise,
+    );
+    const save = vi.fn().mockResolvedValue({ body: "saved edit", revision: 1 });
+    const { result } = renderHook(() => useDraftAutoSave(input(save)));
+    await act(async () => undefined);
+
+    act(() => result.current.setBody("saved edit"));
+    visibilityState.mockReturnValue("hidden");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+    expect(putBrowserDraft).toHaveBeenCalledOnce();
+
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    expect(save).toHaveBeenCalledWith("saved edit", 0, expect.any(AbortSignal));
+    expect(deleteBrowserDraftIfUnchanged).not.toHaveBeenCalled();
+
+    await act(async () => {
+      browserWrite.resolve();
+      await browserWrite.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(deleteBrowserDraftIfUnchanged).toHaveBeenCalledOnce();
+    expect(deleteBrowserDraftIfUnchanged).toHaveBeenCalledWith(
+      "user-1",
+      "goal-review:goal-1",
+      "saved edit",
+      0,
+    );
+  });
+
   it("keeps a successful server save successful when IndexedDB cleanup fails", async () => {
     vi.useFakeTimers();
     vi.mocked(deleteBrowserDraftIfUnchanged).mockRejectedValue(

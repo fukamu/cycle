@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useState,
   type PropsWithChildren,
 } from "react";
@@ -21,6 +22,8 @@ export type AutoSaveQuiesceCallback = (
   lifecycle: AutoSaveQuiesceLifecycle,
 ) => void | Promise<void>;
 
+export type AutoSavePreserveCallback = () => void | Promise<void>;
+
 export type AutoSaveScopeLease = {
   readonly scopeKey: string;
   readonly generation: number;
@@ -29,10 +32,12 @@ export type AutoSaveScopeLease = {
   readonly isCurrent: () => boolean;
   readonly queueBrowserOperation: AutoSaveBrowserOperationQueue;
   readonly onQuiesce: (callback: AutoSaveQuiesceCallback) => () => void;
+  readonly onPreserve: (callback: AutoSavePreserveCallback) => () => void;
 };
 
 export type AutoSaveScopeRegistry = {
   readonly prepare: (scopeKey: string) => AutoSaveScopeLease;
+  readonly preserve: () => Promise<void>;
   readonly quiesce: (options: AutoSaveQuiesceOptions) => Promise<void>;
 };
 
@@ -40,6 +45,7 @@ type ScopeGeneration = {
   generation: number;
   readonly requestController: AbortController;
   readonly quiesceCallbacks: Set<AutoSaveQuiesceCallback>;
+  readonly preserveCallbacks: Set<AutoSavePreserveCallback>;
   acceptCompletions: boolean;
   browserSchedulingOpen: boolean;
 };
@@ -91,6 +97,7 @@ export function createAutoSaveScopeRegistry(): AutoSaveScopeRegistry {
       generation: 0,
       requestController: new AbortController(),
       quiesceCallbacks: new Set(),
+      preserveCallbacks: new Set(),
       acceptCompletions: true,
       browserSchedulingOpen: true,
     };
@@ -117,6 +124,7 @@ export function createAutoSaveScopeRegistry(): AutoSaveScopeRegistry {
           previous.acceptCompletions = false;
           previous.browserSchedulingOpen = false;
           previous.quiesceCallbacks.clear();
+          previous.preserveCallbacks.clear();
           previous.requestController.abort();
         }
         generation.generation = slot.nextGeneration + 1;
@@ -145,7 +153,32 @@ export function createAutoSaveScopeRegistry(): AutoSaveScopeRegistry {
         generation.quiesceCallbacks.add(callback);
         return () => generation.quiesceCallbacks.delete(callback);
       },
+      onPreserve: (callback) => {
+        if (!isGenerationCurrent() || !generation.acceptCompletions) {
+          return () => undefined;
+        }
+        generation.preserveCallbacks.add(callback);
+        return () => generation.preserveCallbacks.delete(callback);
+      },
     };
+  }
+
+  async function preserveCurrent(): Promise<void> {
+    if (quiescing) return;
+    const callbacks = [...scopes.values()].flatMap((slot) => {
+      const generation = slot.current;
+      if (!generation?.acceptCompletions) return [];
+      return [...generation.preserveCallbacks];
+    });
+    await Promise.allSettled(
+      callbacks.map((callback) => {
+        try {
+          return Promise.resolve(callback());
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      }),
+    );
   }
 
   async function quiesceCurrent(
@@ -194,6 +227,7 @@ export function createAutoSaveScopeRegistry(): AutoSaveScopeRegistry {
       if (slot.current !== generation) continue;
       generation.browserSchedulingOpen = false;
       generation.quiesceCallbacks.clear();
+      generation.preserveCallbacks.clear();
       slot.current = undefined;
     }
 
@@ -206,6 +240,7 @@ export function createAutoSaveScopeRegistry(): AutoSaveScopeRegistry {
 
   return {
     prepare,
+    preserve: preserveCurrent,
     quiesce: (options) => {
       const pending = quiesceTail.then(() => quiesceCurrent(options));
       quiesceTail = pending.then(
@@ -219,6 +254,20 @@ export function createAutoSaveScopeRegistry(): AutoSaveScopeRegistry {
 
 export function AutoSaveScopeProvider({ children }: PropsWithChildren) {
   const [registry] = useState(createAutoSaveScopeRegistry);
+  useEffect(() => {
+    const preserve = () => {
+      void registry.preserve();
+    };
+    const preserveWhenHidden = () => {
+      if (document.visibilityState === "hidden") preserve();
+    };
+    document.addEventListener("visibilitychange", preserveWhenHidden);
+    window.addEventListener("pagehide", preserve);
+    return () => {
+      document.removeEventListener("visibilitychange", preserveWhenHidden);
+      window.removeEventListener("pagehide", preserve);
+    };
+  }, [registry]);
   return (
     <AutoSaveScopeContext.Provider value={registry}>
       {children}

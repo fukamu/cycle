@@ -237,6 +237,17 @@ export class AutoSaveCoordinator<TKey, TValue, TResult> {
     this.scheduleSave(0);
   }
 
+  preserveDrafts(): Promise<void> {
+    const keys = new Set(this.persistenceTimers.keys());
+    for (const key of this.currentValues.keys()) {
+      if (!this.isKeySettled(key)) keys.add(key);
+    }
+    this.clearPersistenceTimers();
+    return Promise.all(
+      Array.from(keys, (key) => this.persistCurrent(key)),
+    ).then(() => undefined);
+  }
+
   retry(): void {
     if (
       this.paused ||
