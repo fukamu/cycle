@@ -149,6 +149,42 @@ const replacementReview: GoalReview = {
   triggerCycle,
 };
 
+const newerTriggerCycle: Cycle = {
+  ...triggerCycle,
+  id: "40000000-0000-7000-8000-000000000006",
+  sequenceNumber: 2,
+  startedAt: "2026-08-20T00:03:00.000Z",
+  completedAt: "2026-08-20T00:04:00.000Z",
+};
+
+const newerReviewDraft: GoalDraft = {
+  ...reviewDraft,
+  id: "40000000-0000-7000-8000-000000000007",
+  reviewCycleId: newerTriggerCycle.id,
+  body: "新しいReview B",
+  revision: 0,
+  updatedAt: "2026-08-20T00:04:00.000Z",
+};
+
+const newerReviewGoal: Goal = {
+  ...goal,
+  revision: goal.revision + 2,
+  currentWork: {
+    kind: "goal_review",
+    reviewDraftId: newerReviewDraft.id,
+    triggerCycleId: newerTriggerCycle.id,
+    triggerCycleSequenceNumber: newerTriggerCycle.sequenceNumber,
+  },
+  nextCycleSequenceNumber: newerTriggerCycle.sequenceNumber + 1,
+  cycleCount: newerTriggerCycle.sequenceNumber,
+};
+
+const newerReview: GoalReview = {
+  goal: newerReviewGoal,
+  reviewDraft: newerReviewDraft,
+  triggerCycle: newerTriggerCycle,
+};
+
 const replayedCycle: Cycle = {
   ...triggerCycle,
   id: "40000000-0000-7000-8000-000000000003",
@@ -182,6 +218,27 @@ const continuedGoal: Goal = {
   },
   nextCycleSequenceNumber: 4,
   cycleCount: 3,
+};
+
+const activeGoalAfterReview: Goal = {
+  ...goal,
+  status: "active_cycle",
+  revision: goal.revision + 1,
+  currentWork: {
+    kind: "active_cycle",
+    cycleId: "40000000-0000-7000-8000-000000000008",
+    cycleSequenceNumber: 2,
+  },
+  nextCycleSequenceNumber: 3,
+  cycleCount: 2,
+};
+
+const terminalGoalAfterReview: Goal = {
+  ...goal,
+  status: "ended",
+  revision: goal.revision + 1,
+  currentWork: null,
+  terminalAt: "2026-08-20T00:03:00.000Z",
 };
 
 const session: Session = {
@@ -434,15 +491,16 @@ describe("GoalReviewPage", () => {
     },
   );
 
-  it("ignores a late adoption from a replaced review-draft generation", async () => {
+  it("keeps the admitted Review read-only when a late adoption outlives its generation", async () => {
     const completion = deferred<Awaited<ReturnType<typeof adoptReview>>>();
     vi.mocked(adoptReview).mockReturnValue(completion.promise);
     const cache = createCache();
     renderPage(cache);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "AIで目標を整える" }),
-    );
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
     expect(
       await screen.findByText("整理されたレビュー目標"),
     ).toBeInTheDocument();
@@ -455,16 +513,14 @@ describe("GoalReviewPage", () => {
         replacementReview,
       );
     });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("textbox", {
-          name: "次のサイクルで目指す目標",
-        }),
-      ).toHaveValue(replacementReviewDraft.body),
-    );
-    const replacementEditor = screen.getByRole("textbox", {
-      name: "次のサイクルで目指す目標",
-    });
+    await waitFor(() => expect(editor).toHaveAttribute("readonly"));
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toBe(editor);
+    expect(editor).toHaveValue(reviewDraft.body);
+    expect(
+      screen.getByRole("link", { name: "現在のGoalを開いてください" }),
+    ).toHaveAttribute("href", `/goals/${goal.id}`);
 
     await act(async () =>
       completion.resolve({
@@ -480,16 +536,18 @@ describe("GoalReviewPage", () => {
 
     expect(
       screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
-    ).toBe(replacementEditor);
-    expect(replacementEditor).toHaveValue(replacementReviewDraft.body);
+    ).toBe(editor);
+    expect(editor).toHaveValue(reviewDraft.body);
+    expect(editor).toHaveAttribute("readonly");
     expect(
       cache.getQueryData<GoalReview>(
         userQueryKeys.review(session.user.id, goal.id),
       )?.reviewDraft,
     ).toEqual(replacementReviewDraft);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
-    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "現在のGoalを開いてください" }),
+    ).toBeInTheDocument();
   });
 
   it.each(["resolve", "reject"] as const)(
@@ -618,26 +676,33 @@ describe("GoalReviewPage", () => {
       revision: 3,
       updatedAt: "2026-08-20T00:04:00.000Z",
     };
+    const revisionTwoReview: GoalReview = {
+      ...revisionOneReview,
+      reviewDraft: revisionTwoDraft,
+    };
     const lateGet = deferred<Awaited<ReturnType<typeof getReview>>>();
-    vi.mocked(getReview).mockReturnValueOnce(lateGet.promise);
+    vi.mocked(getReview)
+      .mockResolvedValueOnce(revisionOneReview)
+      .mockReturnValueOnce(lateGet.promise)
+      .mockResolvedValueOnce(revisionTwoReview);
     vi.mocked(saveReview)
       .mockResolvedValueOnce({ reviewDraft: revisionTwoDraft })
       .mockResolvedValueOnce({ reviewDraft: revisionThreeDraft });
     const cache = createCache();
     const reviewKey = userQueryKeys.review(session.user.id, goal.id);
-    cache.setQueryData(reviewKey, revisionOneReview);
     const firstMount = renderPage(cache);
     const firstEditor = await screen.findByRole("textbox", {
       name: "次のサイクルで目指す目標",
     });
     expect(firstEditor).toHaveValue(revisionOneDraft.body);
+    const transportKey = activeReviewTransportKey(cache);
 
     let refetch!: Promise<void>;
     act(() => {
-      refetch = cache.refetchQueries({ queryKey: reviewKey, exact: true });
+      refetch = cache.refetchQueries({ queryKey: transportKey, exact: true });
     });
-    await waitFor(() => expect(getReview).toHaveBeenCalledOnce());
-    expect(cache.getQueryState(reviewKey)?.fetchStatus).toBe("fetching");
+    await waitFor(() => expect(getReview).toHaveBeenCalledTimes(2));
+    expect(cache.getQueryState(transportKey)?.fetchStatus).toBe("fetching");
 
     fireEvent.change(firstEditor, { target: { value: revisionTwoDraft.body } });
     fireEvent.blur(firstEditor);
@@ -673,7 +738,7 @@ describe("GoalReviewPage", () => {
       name: "次のサイクルで目指す目標",
     });
     expect(remountedEditor).toHaveValue(revisionTwoDraft.body);
-    expect(getReview).toHaveBeenCalledOnce();
+    expect(getReview).toHaveBeenCalledTimes(3);
 
     fireEvent.change(remountedEditor, {
       target: { value: revisionThreeDraft.body },
@@ -954,7 +1019,7 @@ describe("GoalReviewPage", () => {
     );
   });
 
-  it("isolates a cached and in-flight review when its draft identity changes", async () => {
+  it("latches a dirty Review when its cached draft identity changes", async () => {
     let resolveReviewA!: (value: { reviewDraft: GoalDraft }) => void;
     const reviewASave = new Promise<{ reviewDraft: GoalDraft }>((resolve) => {
       resolveReviewA = resolve;
@@ -972,16 +1037,7 @@ describe("GoalReviewPage", () => {
       },
     );
     const reviewABody = "レビューAの未完了入力";
-    const reviewBBody = "レビューBでの入力";
-    vi.mocked(saveReview)
-      .mockImplementationOnce(() => reviewASave)
-      .mockResolvedValueOnce({
-        reviewDraft: {
-          ...replacementReviewDraft,
-          body: reviewBBody,
-          revision: 1,
-        },
-      });
+    vi.mocked(saveReview).mockImplementationOnce(() => reviewASave);
     const cache = createCache();
     renderPage(cache);
     const editorA = await screen.findByRole("textbox", {
@@ -1009,21 +1065,16 @@ describe("GoalReviewPage", () => {
         replacementReview,
       );
     });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("textbox", {
-          name: "次のサイクルで目指す目標",
-        }),
-      ).toHaveValue(replacementReviewDraft.body),
-    );
-    const editorB = screen.getByRole("textbox", {
-      name: "次のサイクルで目指す目標",
-    });
+    await waitFor(() => expect(editorA).toHaveAttribute("readonly"));
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toBe(editorA);
+    expect(editorA).toHaveValue(reviewABody);
     expect(getBrowserDraft).toHaveBeenCalledWith(
       session.user.id,
       `goal-review:${goal.id}:${reviewDraft.id}`,
     );
-    expect(getBrowserDraft).toHaveBeenCalledWith(
+    expect(getBrowserDraft).not.toHaveBeenCalledWith(
       session.user.id,
       `goal-review:${goal.id}:${replacementReviewDraft.id}`,
     );
@@ -1034,30 +1085,341 @@ describe("GoalReviewPage", () => {
       });
     });
 
-    expect(editorB).toHaveValue(replacementReviewDraft.body);
+    expect(editorA).toHaveValue(reviewABody);
+    expect(editorA).toHaveAttribute("readonly");
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toBe(editorA);
     expect(
       cache.getQueryData<GoalReview>(
         userQueryKeys.review(session.user.id, goal.id),
       )?.reviewDraft,
     ).toEqual(replacementReviewDraft);
 
-    fireEvent.blur(editorB);
-    await act(async () => undefined);
     expect(saveReview).toHaveBeenCalledOnce();
+    expect(
+      browserDrafts.get(`goal-review:${goal.id}:${reviewDraft.id}`),
+    ).toEqual(expect.objectContaining({ body: reviewABody }));
+  });
 
-    fireEvent.change(editorB, { target: { value: reviewBBody } });
-    fireEvent.blur(editorB);
-    await waitFor(() =>
-      expect(saveReview).toHaveBeenLastCalledWith(
-        sessionLease,
-        goal.id,
-        replacementReviewDraft.id,
-        reviewBBody,
-        replacementReviewDraft.revision,
-        session.csrfToken,
-        expect.any(AbortSignal),
-      ),
+  it("does not let a late Review A response mutate a published Review B editor or live cache", async () => {
+    const lateReviewA = deferred<GoalReview>();
+    const reviewBPublication = deferred<GoalReview>();
+    vi.mocked(getReview)
+      .mockResolvedValueOnce(review)
+      .mockReturnValueOnce(lateReviewA.promise)
+      .mockReturnValueOnce(reviewBPublication.promise);
+    const cache = createCache();
+    const firstMount = renderPage(cache);
+    const editorA = await within(firstMount.container).findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    const reviewATransportKey = activeReviewTransportKey(cache);
+
+    let lateRefetch!: Promise<void>;
+    act(() => {
+      lateRefetch = cache.refetchQueries({
+        queryKey: reviewATransportKey,
+        exact: true,
+      });
+    });
+    await waitFor(() => expect(getReview).toHaveBeenCalledTimes(2));
+
+    const secondMount = renderPage(cache);
+    await waitFor(() => expect(getReview).toHaveBeenCalledTimes(3));
+    await act(async () => reviewBPublication.resolve(newerReview));
+    const editorB = await within(secondMount.container).findByDisplayValue(
+      newerReviewDraft.body,
     );
+    expect(editorB).toHaveValue(newerReviewDraft.body);
+    await waitFor(() => expect(editorA).toHaveAttribute("readonly"));
+
+    const reviewKey = userQueryKeys.review(session.user.id, goal.id);
+    const goalKey = userQueryKeys.goal(session.user.id, goal.id);
+    const cachedReviewB = cache.getQueryData<GoalReview>(reviewKey);
+    const cachedGoalB = cache.getQueryData<{ goal: Goal }>(goalKey);
+    const reviewStateBeforeLateA = cache.getQueryState(reviewKey);
+    const goalStateBeforeLateA = cache.getQueryState(goalKey);
+    expect(cachedReviewB).toEqual(newerReview);
+    expect(cachedGoalB?.goal).toEqual(newerReviewGoal);
+
+    await act(async () => {
+      lateReviewA.resolve({
+        ...review,
+        reviewDraft: {
+          ...reviewDraft,
+          body: "遅れて届いたReview A",
+          revision: 99,
+          updatedAt: "2026-08-20T00:20:00.000Z",
+        },
+      });
+      await lateRefetch;
+    });
+
+    expect(
+      within(secondMount.container).getByDisplayValue(newerReviewDraft.body),
+    ).toBe(editorB);
+    expect(editorB).toHaveValue(newerReviewDraft.body);
+    expect(cache.getQueryData(reviewKey)).toBe(cachedReviewB);
+    expect(cache.getQueryData(goalKey)).toBe(cachedGoalB);
+    expect(cache.getQueryState(reviewKey)?.dataUpdatedAt).toBe(
+      reviewStateBeforeLateA?.dataUpdatedAt,
+    );
+    expect(cache.getQueryState(reviewKey)?.dataUpdateCount).toBe(
+      reviewStateBeforeLateA?.dataUpdateCount,
+    );
+    expect(cache.getQueryState(goalKey)?.dataUpdatedAt).toBe(
+      goalStateBeforeLateA?.dataUpdatedAt,
+    );
+    expect(cache.getQueryState(goalKey)?.dataUpdateCount).toBe(
+      goalStateBeforeLateA?.dataUpdateCount,
+    );
+  });
+
+  it.each([
+    ["active_cycle", activeGoalAfterReview],
+    ["terminal", terminalGoalAfterReview],
+  ] as const)(
+    "keeps a dirty mounted Review A copyable after the canonical Goal becomes %s",
+    async (_state, canonicalGoal) => {
+      const lateReviewA = deferred<GoalReview>();
+      vi.mocked(getReview)
+        .mockResolvedValueOnce(review)
+        .mockReturnValueOnce(lateReviewA.promise);
+      const cache = createCache();
+      renderPage(cache);
+      const editor = await screen.findByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      });
+      const localBody = `canonical ${canonicalGoal.status} 後もコピーする入力`;
+      fireEvent.change(editor, { target: { value: localBody } });
+      const transportKey = activeReviewTransportKey(cache);
+
+      let lateRefetch!: Promise<void>;
+      act(() => {
+        lateRefetch = cache.refetchQueries({
+          queryKey: transportKey,
+          exact: true,
+        });
+      });
+      await waitFor(() => expect(getReview).toHaveBeenCalledTimes(2));
+
+      const reviewKey = userQueryKeys.review(session.user.id, goal.id);
+      const goalKey = userQueryKeys.goal(session.user.id, goal.id);
+      act(() => {
+        cache.setQueryData(goalKey, { goal: canonicalGoal });
+      });
+      await waitFor(() => expect(editor).toHaveAttribute("readonly"));
+      expect(editor).not.toBeDisabled();
+      expect(editor).toHaveValue(localBody);
+      expect(
+        screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+      ).toBe(editor);
+      expect(
+        screen.getByRole("link", { name: "現在のGoalを開いてください" }),
+      ).toHaveAttribute("href", `/goals/${goal.id}`);
+      await waitFor(() =>
+        expect(putBrowserDraft).toHaveBeenCalledWith(
+          expect.objectContaining({
+            subjectKey: `goal-review:${goal.id}:${reviewDraft.id}`,
+            body: localBody,
+          }),
+        ),
+      );
+      const cachedReview = cache.getQueryData(reviewKey);
+      const cachedCanonicalGoal = cache.getQueryData(goalKey);
+
+      await act(async () => {
+        lateReviewA.resolve({
+          ...review,
+          reviewDraft: {
+            ...reviewDraft,
+            body: "canonical Goalより遅いReview A",
+            revision: reviewDraft.revision + 1,
+          },
+        });
+        await lateRefetch;
+      });
+
+      expect(
+        screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+      ).toBe(editor);
+      expect(editor).toHaveValue(localBody);
+      expect(editor).toHaveAttribute("readonly");
+      expect(cache.getQueryData(reviewKey)).toBe(cachedReview);
+      expect(cache.getQueryData(goalKey)).toBe(cachedCanonicalGoal);
+      expect(deleteBrowserDraft).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["active_cycle", activeGoalAfterReview],
+    ["terminal", terminalGoalAfterReview],
+  ] as const)(
+    "never mounts the old Review textbox after a route round trip to a %s Goal",
+    async (_state, canonicalGoal) => {
+      const staleReviewOnReturn = deferred<GoalReview>();
+      vi.mocked(getReview)
+        .mockResolvedValueOnce(review)
+        .mockReturnValueOnce(staleReviewOnReturn.promise);
+      vi.mocked(getGoal).mockResolvedValue({ goal: canonicalGoal });
+      const cache = createCache();
+      renderPage(cache, false, false, false, true);
+      const editor = await screen.findByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      });
+      const localBody = `route往復前の${canonicalGoal.status}入力`;
+      fireEvent.change(editor, { target: { value: localBody } });
+
+      act(() => {
+        cache.setQueryData(userQueryKeys.goal(session.user.id, goal.id), {
+          goal: canonicalGoal,
+        });
+      });
+      const currentGoalLink = await screen.findByRole("link", {
+        name: "現在のGoalを開いてください",
+      });
+      await waitFor(() => expect(editor).toHaveAttribute("readonly"));
+      await waitFor(() =>
+        expect(putBrowserDraft).toHaveBeenCalledWith(
+          expect.objectContaining({
+            subjectKey: `goal-review:${goal.id}:${reviewDraft.id}`,
+            body: localBody,
+          }),
+        ),
+      );
+
+      fireEvent.click(currentGoalLink);
+      expect(await screen.findByText("現在のGoal route")).toBeInTheDocument();
+      expect(editor).not.toBeInTheDocument();
+      const browserDraftReads = vi.mocked(getBrowserDraft).mock.calls.length;
+      const mountedReviewTextareas: Element[] = [];
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (!(node instanceof Element)) continue;
+            if (node.matches("textarea#review-goal"))
+              mountedReviewTextareas.push(node);
+            mountedReviewTextareas.push(
+              ...node.querySelectorAll("textarea#review-goal"),
+            );
+          }
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+
+      fireEvent.click(screen.getByRole("link", { name: "Reviewへ戻る" }));
+      await waitFor(() => expect(getReview).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      await act(async () => staleReviewOnReturn.resolve(review));
+      expect(
+        await screen.findByRole("link", {
+          name: "現在のGoalを開いてください",
+        }),
+      ).toHaveAttribute("href", `/goals/${goal.id}`);
+      observer.disconnect();
+
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      expect(mountedReviewTextareas).toHaveLength(0);
+      expect(getBrowserDraft).toHaveBeenCalledTimes(browserDraftReads);
+      expect(deleteBrowserDraft).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed when an equal Goal revision arrives with a different Review Draft ID", async () => {
+    const conflictingPublication = deferred<GoalReview>();
+    const equalRevisionDifferentDraft: GoalReview = {
+      ...replacementReview,
+      goal: { ...replacementGoal, revision: goal.revision },
+    };
+    vi.mocked(getReview)
+      .mockResolvedValueOnce(review)
+      .mockReturnValueOnce(conflictingPublication.promise);
+    const cache = createCache();
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    const localBody = "同じGoal revisionで保持するReview A";
+    fireEvent.change(editor, { target: { value: localBody } });
+    const transportKey = activeReviewTransportKey(cache);
+    const reviewKey = userQueryKeys.review(session.user.id, goal.id);
+    const goalKey = userQueryKeys.goal(session.user.id, goal.id);
+    const cachedReview = cache.getQueryData(reviewKey);
+    const cachedGoal = cache.getQueryData(goalKey);
+    const reviewState = cache.getQueryState(reviewKey);
+    const goalState = cache.getQueryState(goalKey);
+
+    let refetch!: Promise<void>;
+    act(() => {
+      refetch = cache.refetchQueries({ queryKey: transportKey, exact: true });
+    });
+    await waitFor(() => expect(getReview).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      conflictingPublication.resolve(equalRevisionDifferentDraft);
+      await refetch;
+    });
+
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toBe(editor);
+    expect(editor).toHaveValue(localBody);
+    await waitFor(() => expect(editor).toHaveAttribute("readonly"));
+    expect(
+      screen.getByRole("link", { name: "現在のGoalを開いてください" }),
+    ).toHaveAttribute("href", `/goals/${goal.id}`);
+    expect(cache.getQueryData(reviewKey)).toBe(cachedReview);
+    expect(cache.getQueryData(goalKey)).toBe(cachedGoal);
+    expect(cache.getQueryState(reviewKey)?.dataUpdatedAt).toBe(
+      reviewState?.dataUpdatedAt,
+    );
+    expect(cache.getQueryState(reviewKey)?.dataUpdateCount).toBe(
+      reviewState?.dataUpdateCount,
+    );
+    expect(cache.getQueryState(goalKey)?.dataUpdatedAt).toBe(
+      goalState?.dataUpdatedAt,
+    );
+    expect(cache.getQueryState(goalKey)?.dataUpdateCount).toBe(
+      goalState?.dataUpdateCount,
+    );
+  });
+
+  it("accepts a newer coherent Review generation even when its Draft revision resets to zero", async () => {
+    const reviewBPublication = deferred<GoalReview>();
+    const highDraftRevisionReviewA: GoalReview = {
+      ...review,
+      reviewDraft: { ...reviewDraft, revision: 99 },
+    };
+    vi.mocked(getReview).mockReturnValueOnce(reviewBPublication.promise);
+    const cache = createCache();
+    cache.setQueryData(userQueryKeys.goal(session.user.id, goal.id), {
+      goal: highDraftRevisionReviewA.goal,
+    });
+    cache.setQueryData(
+      userQueryKeys.review(session.user.id, goal.id),
+      highDraftRevisionReviewA,
+    );
+    renderPage(cache);
+    await waitFor(() => expect(getReview).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+
+    await act(async () => reviewBPublication.resolve(newerReview));
+
+    const editorB = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    expect(editorB).toHaveValue(newerReviewDraft.body);
+    expect(editorB).not.toHaveAttribute("readonly");
+    expect(
+      cache.getQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+      ),
+    ).toEqual(newerReview);
+    expect(
+      cache.getQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+      )?.reviewDraft.revision,
+    ).toBe(0);
   });
 
   it("preserves the local review when the server reports the exact inactive-workspace error", async () => {
@@ -1138,15 +1500,17 @@ describe("GoalReviewPage", () => {
     expect(screen.getByRole("button", { name: "目標を終了" })).toBeDisabled();
   });
 
-  it("ignores a Continue completion from a replaced review generation and preserves the new local input", async () => {
+  it("ignores a Continue completion after the admitted Review generation moves", async () => {
     const completion = deferred<Awaited<ReturnType<typeof continueReview>>>();
-    const replacementBody = "新しいReview世代の端末入力";
     vi.mocked(continueReview).mockReturnValue(completion.promise);
     const cache = createCache();
     renderPage(cache);
 
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
     fireEvent.click(
-      await screen.findByRole("button", {
+      screen.getByRole("button", {
         name: "この目標で次のサイクルへ",
       }),
     );
@@ -1158,15 +1522,11 @@ describe("GoalReviewPage", () => {
         replacementReview,
       );
     });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
-      ).toHaveValue(replacementReviewDraft.body),
-    );
-    const replacementEditor = screen.getByRole("textbox", {
-      name: "次のサイクルで目指す目標",
-    });
-    fireEvent.change(replacementEditor, { target: { value: replacementBody } });
+    await waitFor(() => expect(editor).toHaveAttribute("readonly"));
+    expect(
+      screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
+    ).toBe(editor);
+    expect(editor).toHaveValue(reviewDraft.body);
     vi.mocked(deleteBrowserDraft).mockClear();
 
     await act(async () =>
@@ -1179,11 +1539,17 @@ describe("GoalReviewPage", () => {
     );
     await act(async () => undefined);
 
-    expect(replacementEditor).toHaveValue(replacementBody);
+    expect(editor).toHaveValue(reviewDraft.body);
+    expect(editor).toHaveAttribute("readonly");
     expect(
       screen.getByRole("textbox", { name: "次のサイクルで目指す目標" }),
-    ).toBe(replacementEditor);
-    expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
+    ).toBe(editor);
+    expect(
+      cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+    ).toEqual(replacementReview);
+    expect(
+      screen.getByRole("link", { name: "現在のGoalを開いてください" }),
+    ).toBeInTheDocument();
     expect(deleteBrowserDraft).not.toHaveBeenCalled();
   });
 
@@ -1193,11 +1559,13 @@ describe("GoalReviewPage", () => {
     const cache = createCache();
     renderPage(cache, false, true);
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "この目標で次のサイクルへ",
-      }),
+    const continueButton = await screen.findByRole("button", {
+      name: "この目標で次のサイクルへ",
+    });
+    const cachedGoal = cache.getQueryData(
+      userQueryKeys.goal(session.user.id, goal.id),
     );
+    fireEvent.click(continueButton);
     await waitFor(() => expect(continueReview).toHaveBeenCalledOnce());
     fireEvent.click(
       screen.getByRole("button", { name: "異なるUserへの切替を模擬" }),
@@ -1221,7 +1589,7 @@ describe("GoalReviewPage", () => {
     expect(screen.queryByText("現在のワークスペース")).not.toBeInTheDocument();
     expect(
       cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
-    ).toBeUndefined();
+    ).toBe(cachedGoal);
     expect(deleteBrowserDraft).not.toHaveBeenCalled();
   });
 
@@ -1305,11 +1673,13 @@ describe("GoalReviewPage", () => {
     const invalidateQueries = vi.spyOn(cache, "invalidateQueries");
     renderPage(cache, false, false, true);
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "この目標で次のサイクルへ",
-      }),
+    const continueButton = await screen.findByRole("button", {
+      name: "この目標で次のサイクルへ",
+    });
+    const cachedGoal = cache.getQueryData(
+      userQueryKeys.goal(session.user.id, goal.id),
     );
+    fireEvent.click(continueButton);
     await waitFor(() => expect(continueReview).toHaveBeenCalledOnce());
     await waitFor(() => expect(deleteBrowserDraft).toHaveBeenCalledOnce());
     expect(
@@ -1329,7 +1699,7 @@ describe("GoalReviewPage", () => {
     });
     expect(
       cache.getQueryData(userQueryKeys.goal(session.user.id, goal.id)),
-    ).toBeUndefined();
+    ).toBe(cachedGoal);
     expect(
       cache.getQueryData(
         userQueryKeys.cycle(session.user.id, goal.id, replayedCycle.id),
@@ -1641,7 +2011,8 @@ describe("GoalReviewPage", () => {
     vi.mocked(getGoal).mockResolvedValueOnce({
       goal: { ...goal, revision: goal.revision + 1 },
     });
-    renderPage();
+    const cache = createCache();
+    renderPage(cache);
     const editor = await screen.findByRole("textbox", {
       name: "次のサイクルで目指す目標",
     });
@@ -1666,6 +2037,9 @@ describe("GoalReviewPage", () => {
     expect(editor).toHaveValue(reviewDraft.body);
     expect(editor).toHaveAttribute("readonly");
     expect(deleteGoal).toHaveBeenCalledOnce();
+    const reviewKey = userQueryKeys.review(session.user.id, goal.id);
+    const cachedReview = cache.getQueryData(reviewKey);
+    const cachedReviewState = cache.getQueryState(reviewKey);
 
     await act(async () =>
       inFlightSave.resolve({
@@ -1679,6 +2053,8 @@ describe("GoalReviewPage", () => {
     );
     expect(saveReview).toHaveBeenCalledOnce();
     expect(editor).toHaveValue(reviewDraft.body);
+    expect(cache.getQueryData(reviewKey)).toBe(cachedReview);
+    expect(cache.getQueryState(reviewKey)).toBe(cachedReviewState);
   });
 
   it.each(["continue", "terminate", "delete"] as const)(
@@ -1945,6 +2321,22 @@ function createCache() {
   });
 }
 
+function activeReviewTransportKey(cache: QueryClient) {
+  const transportQueries = cache
+    .getQueryCache()
+    .findAll({
+      queryKey: userQueryKeys.review(session.user.id, goal.id),
+      type: "active",
+    })
+    .filter(({ queryKey }) => queryKey.at(-2) === "transport");
+  const transportQuery = transportQueries[0];
+  if (transportQueries.length !== 1 || transportQuery === undefined)
+    throw new Error(
+      `active Review transport query count = ${transportQueries.length}, want 1`,
+    );
+  return transportQuery.queryKey;
+}
+
 async function invokeReviewTerminalCommand(
   command: "continue" | "terminate" | "delete",
 ) {
@@ -1977,11 +2369,21 @@ function CacheInspectingHome() {
   );
 }
 
+function CanonicalGoalRoundTrip() {
+  return (
+    <>
+      <p>現在のGoal route</p>
+      <Link to={`/goals/${goal.id}/review`}>Reviewへ戻る</Link>
+    </>
+  );
+}
+
 function renderPage(
   cache = createCache(),
   realCanonicalRoutes = false,
   identityQuiesceControl = false,
   cleanupRouteSwitch = false,
+  canonicalGoalRoundTrip = false,
 ) {
   return render(
     <QueryClientProvider client={cache}>
@@ -2011,6 +2413,8 @@ function renderPage(
                   element={
                     realCanonicalRoutes ? (
                       <GoalWorkspacePage />
+                    ) : canonicalGoalRoundTrip ? (
+                      <CanonicalGoalRoundTrip />
                     ) : (
                       <p>現在のワークスペース</p>
                     )

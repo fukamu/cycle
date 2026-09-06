@@ -17,7 +17,9 @@ import {
   cacheReviewDraft,
   preferGoal,
   preferGoalReview,
+  publishGoalReview,
   removeGoalFromCache,
+  resolveGoalReviewPublication,
   userMutationKeys,
   userQueryKeys,
 } from "./goalCache";
@@ -88,6 +90,59 @@ const goalReview: GoalReview = {
   triggerCycle: cycle,
 };
 
+function reviewGeneration({
+  goalRevision,
+  draftId,
+  draftRevision,
+  cycleId,
+  cycleSequenceNumber,
+}: {
+  readonly goalRevision: number;
+  readonly draftId: string;
+  readonly draftRevision: number;
+  readonly cycleId: string;
+  readonly cycleSequenceNumber: number;
+}): GoalReview {
+  const triggerCycle: Cycle = {
+    ...cycle,
+    id: cycleId,
+    sequenceNumber: cycleSequenceNumber,
+    status: "completed",
+    completedAt: "2026-08-20T01:00:00.000Z",
+  };
+  const generationDraft: GoalDraft = {
+    ...reviewDraft,
+    id: draftId,
+    reviewCycleId: cycleId,
+    revision: draftRevision,
+  };
+  return {
+    goal: {
+      ...goal,
+      status: "goal_review",
+      revision: goalRevision,
+      currentWork: {
+        kind: "goal_review",
+        reviewDraftId: draftId,
+        triggerCycleId: cycleId,
+        triggerCycleSequenceNumber: cycleSequenceNumber,
+      },
+      nextCycleSequenceNumber: cycleSequenceNumber + 1,
+      cycleCount: cycleSequenceNumber,
+    },
+    reviewDraft: generationDraft,
+    triggerCycle,
+  };
+}
+
+const editableGoalReview = reviewGeneration({
+  goalRevision: 1,
+  draftId: reviewDraft.id,
+  draftRevision: reviewDraft.revision,
+  cycleId: cycle.id,
+  cycleSequenceNumber: cycle.sequenceNumber,
+});
+
 describe("goal cache", () => {
   it("defines every server-state key under the owning user root", () => {
     expect(userQueryKeys.root(userId)).toEqual(["user", userId]);
@@ -109,6 +164,14 @@ describe("goal cache", () => {
       userId,
       "goal-review",
       goal.id,
+    ]);
+    expect(userQueryKeys.reviewTransport(userId, goal.id, "entry-1")).toEqual([
+      "user",
+      userId,
+      "goal-review",
+      goal.id,
+      "transport",
+      "entry-1",
     ]);
     expect(userQueryKeys.goalCycles(userId, goal.id)).toEqual([
       "user",
@@ -291,6 +354,344 @@ describe("goal cache", () => {
     });
   });
 
+  describe("Goal Review publication resolution", () => {
+    const reviewA = reviewGeneration({
+      goalRevision: 1,
+      draftId: "10000000-0000-7000-8000-000000000011",
+      draftRevision: 2,
+      cycleId: "40000000-0000-7000-8000-000000000011",
+      cycleSequenceNumber: 1,
+    });
+    const reviewB = reviewGeneration({
+      goalRevision: 3,
+      draftId: "10000000-0000-7000-8000-000000000012",
+      draftRevision: 0,
+      cycleId: "40000000-0000-7000-8000-000000000012",
+      cycleSequenceNumber: 2,
+    });
+    const reviewAWork = reviewA.goal.currentWork;
+    if (reviewAWork?.kind !== "goal_review")
+      throw new Error("Review A fixture must own a Review workspace");
+
+    it("accepts the incoming whole snapshot when no cache has been published", () => {
+      expect(
+        resolveGoalReviewPublication({
+          canonicalGoal: undefined,
+          currentReview: undefined,
+          incoming: reviewA,
+        }),
+      ).toEqual({ kind: "accept", snapshot: reviewA });
+    });
+
+    it.each([
+      { label: "older", revision: 1 },
+      { label: "equal", revision: 2 },
+    ])(
+      "preserves the exact current snapshot for a $label same-Draft payload",
+      ({ revision }) => {
+        const incoming: GoalReview = {
+          ...reviewA,
+          reviewDraft: {
+            ...reviewA.reviewDraft,
+            body: "遅延した同一Draft payload",
+            revision,
+          },
+        };
+
+        expect(
+          resolveGoalReviewPublication({
+            canonicalGoal: reviewA.goal,
+            currentReview: reviewA,
+            incoming,
+          }),
+        ).toEqual({ kind: "preserve-current", snapshot: reviewA });
+      },
+    );
+
+    it("accepts a strictly newer same-Draft payload as one whole snapshot", () => {
+      const incoming: GoalReview = {
+        ...reviewA,
+        goal: {
+          ...reviewA.goal,
+          currentVersion: {
+            ...reviewA.goal.currentVersion,
+            body: "incoming snapshotのGoal",
+          },
+        },
+        reviewDraft: {
+          ...reviewA.reviewDraft,
+          body: "incoming snapshotのDraft",
+          revision: 3,
+        },
+        triggerCycle: {
+          ...reviewA.triggerCycle,
+          plan: "incoming snapshotのCycle",
+        },
+      };
+
+      expect(
+        resolveGoalReviewPublication({
+          canonicalGoal: reviewA.goal,
+          currentReview: reviewA,
+          incoming,
+        }),
+      ).toEqual({ kind: "accept", snapshot: incoming });
+    });
+
+    it("preserves a newer Review generation without comparing Draft revisions", () => {
+      const lateReviewA: GoalReview = {
+        ...reviewA,
+        reviewDraft: { ...reviewA.reviewDraft, revision: 99 },
+      };
+
+      expect(
+        resolveGoalReviewPublication({
+          canonicalGoal: undefined,
+          currentReview: reviewB,
+          incoming: lateReviewA,
+        }),
+      ).toEqual({ kind: "preserve-current", snapshot: reviewB });
+    });
+
+    it("accepts a newer valid Review generation without comparing Draft revisions", () => {
+      const currentReviewA: GoalReview = {
+        ...reviewA,
+        reviewDraft: { ...reviewA.reviewDraft, revision: 99 },
+      };
+
+      expect(
+        resolveGoalReviewPublication({
+          canonicalGoal: reviewA.goal,
+          currentReview: currentReviewA,
+          incoming: reviewB,
+        }),
+      ).toEqual({ kind: "accept", snapshot: reviewB });
+    });
+
+    it("fails closed for different Draft IDs at the same Goal revision", () => {
+      const conflicting = reviewGeneration({
+        goalRevision: reviewA.goal.revision,
+        draftId: reviewB.reviewDraft.id,
+        draftRevision: 0,
+        cycleId: reviewB.triggerCycle.id,
+        cycleSequenceNumber: reviewB.triggerCycle.sequenceNumber,
+      });
+
+      expect(
+        resolveGoalReviewPublication({
+          canonicalGoal: undefined,
+          currentReview: reviewA,
+          incoming: conflicting,
+        }),
+      ).toEqual({ kind: "invariant" });
+    });
+
+    it.each(["active_cycle", "achieved", "ended"] as const)(
+      "reports a same-revision %s canonical Goal as a moved workspace",
+      (status) => {
+        const canonicalGoal: Goal = {
+          ...reviewA.goal,
+          status,
+          currentWork:
+            status === "active_cycle"
+              ? {
+                  kind: "active_cycle",
+                  cycleId: "40000000-0000-7000-8000-000000000099",
+                  cycleSequenceNumber: 2,
+                }
+              : null,
+          terminalAt:
+            status === "active_cycle" ? null : "2026-08-20T02:00:00.000Z",
+        };
+
+        expect(
+          resolveGoalReviewPublication({
+            canonicalGoal,
+            currentReview: reviewA,
+            incoming: reviewA,
+          }),
+        ).toEqual({ kind: "workspace-moved", goal: canonicalGoal });
+      },
+    );
+
+    it("reports any newer canonical Goal as a moved workspace", () => {
+      expect(
+        resolveGoalReviewPublication({
+          canonicalGoal: reviewB.goal,
+          currentReview: reviewA,
+          incoming: reviewA,
+        }),
+      ).toEqual({ kind: "workspace-moved", goal: reviewB.goal });
+    });
+
+    it("reports a newer Active Cycle as a moved workspace", () => {
+      const activeGoal: Goal = {
+        ...reviewA.goal,
+        status: "active_cycle",
+        revision: reviewA.goal.revision + 1,
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: "40000000-0000-7000-8000-000000000099",
+          cycleSequenceNumber: 2,
+        },
+      };
+
+      expect(
+        resolveGoalReviewPublication({
+          canonicalGoal: activeGoal,
+          currentReview: reviewA,
+          incoming: reviewA,
+        }),
+      ).toEqual({ kind: "workspace-moved", goal: activeGoal });
+    });
+
+    it.each(["achieved", "ended"] as const)(
+      "never accepts a Review newer than an irreversible %s Goal",
+      (status) => {
+        const terminalGoal: Goal = {
+          ...reviewA.goal,
+          status,
+          currentWork: null,
+          terminalAt: "2026-08-20T02:00:00.000Z",
+        };
+
+        expect(
+          resolveGoalReviewPublication({
+            canonicalGoal: terminalGoal,
+            currentReview: reviewA,
+            incoming: reviewB,
+          }),
+        ).toEqual({ kind: "workspace-moved", goal: terminalGoal });
+      },
+    );
+
+    it("preserves a live Review matching the newer canonical workspace", () => {
+      expect(
+        resolveGoalReviewPublication({
+          canonicalGoal: reviewB.goal,
+          currentReview: reviewB,
+          incoming: reviewA,
+        }),
+      ).toEqual({ kind: "preserve-current", snapshot: reviewB });
+    });
+
+    it.each([
+      {
+        label: "Draft",
+        currentWork: {
+          ...reviewAWork,
+          reviewDraftId: reviewB.reviewDraft.id,
+        },
+      },
+      {
+        label: "trigger Cycle",
+        currentWork: {
+          ...reviewAWork,
+          triggerCycleId: reviewB.triggerCycle.id,
+        },
+      },
+      {
+        label: "trigger Cycle sequence",
+        currentWork: {
+          ...reviewAWork,
+          triggerCycleSequenceNumber: reviewB.triggerCycle.sequenceNumber,
+        },
+      },
+    ])(
+      "fails closed when the same-revision canonical $label differs",
+      ({ currentWork }) => {
+        const canonicalGoal: Goal = { ...reviewA.goal, currentWork };
+
+        expect(
+          resolveGoalReviewPublication({
+            canonicalGoal,
+            currentReview: undefined,
+            incoming: reviewA,
+          }),
+        ).toEqual({ kind: "invariant" });
+      },
+    );
+
+    it("fails closed instead of crossing Goal identities", () => {
+      const canonicalGoal: Goal = {
+        ...reviewA.goal,
+        id: "20000000-0000-7000-8000-000000000099",
+      };
+
+      expect(
+        resolveGoalReviewPublication({
+          canonicalGoal,
+          currentReview: reviewA,
+          incoming: reviewA,
+        }),
+      ).toEqual({ kind: "invariant" });
+    });
+
+    it("publishes only an accepted whole snapshot", () => {
+      const cache = new QueryClient();
+      const goalKey = userQueryKeys.goal(userId, reviewA.goal.id);
+      const reviewKey = userQueryKeys.review(userId, reviewA.goal.id);
+
+      expect(publishGoalReview(cache, userId, reviewA)).toEqual({
+        kind: "accept",
+        snapshot: reviewA,
+      });
+      expect(
+        cache.getQueryData<{ readonly goal: Goal }>(goalKey)?.goal,
+      ).toEqual(reviewA.goal);
+      expect(cache.getQueryData(reviewKey)).toEqual(reviewA);
+
+      expect(publishGoalReview(cache, userId, reviewB)).toEqual({
+        kind: "accept",
+        snapshot: reviewB,
+      });
+      expect(
+        cache.getQueryData<{ readonly goal: Goal }>(goalKey)?.goal,
+      ).toEqual(reviewB.goal);
+      expect(cache.getQueryData(reviewKey)).toEqual(reviewB);
+    });
+
+    it("keeps every cache signal unchanged when Review A arrives after Review B", () => {
+      const cache = new QueryClient();
+      const goalKey = userQueryKeys.goal(userId, reviewA.goal.id);
+      const reviewKey = userQueryKeys.review(userId, reviewA.goal.id);
+      publishGoalReview(cache, userId, reviewA);
+      publishGoalReview(cache, userId, reviewB);
+
+      const goalBefore = cache.getQueryData(goalKey);
+      const reviewBefore = cache.getQueryData(reviewKey);
+      const goalStateBefore = cache.getQueryState(goalKey);
+      const reviewStateBefore = cache.getQueryState(reviewKey);
+      if (goalStateBefore === undefined || reviewStateBefore === undefined)
+        throw new Error(
+          "Review B fixture must be published before late Review A",
+        );
+
+      const resolution = publishGoalReview(cache, userId, reviewA);
+      expect(resolution.kind).toBe("preserve-current");
+      if (resolution.kind !== "preserve-current")
+        throw new Error("late Review A must preserve Review B");
+      expect(resolution.snapshot).toBe(reviewBefore);
+
+      expect(cache.getQueryData(goalKey)).toBe(goalBefore);
+      expect(cache.getQueryData(reviewKey)).toBe(reviewBefore);
+      expect(cache.getQueryState(goalKey)).toBe(goalStateBefore);
+      expect(cache.getQueryState(reviewKey)).toBe(reviewStateBefore);
+      expect(cache.getQueryState(goalKey)?.dataUpdatedAt).toBe(
+        goalStateBefore.dataUpdatedAt,
+      );
+      expect(cache.getQueryState(goalKey)?.dataUpdateCount).toBe(
+        goalStateBefore.dataUpdateCount,
+      );
+      expect(cache.getQueryState(reviewKey)?.dataUpdatedAt).toBe(
+        reviewStateBefore.dataUpdatedAt,
+      );
+      expect(cache.getQueryState(reviewKey)?.dataUpdateCount).toBe(
+        reviewStateBefore.dataUpdateCount,
+      );
+    });
+  });
+
   it.each([
     { label: "older", revision: 1 },
     { label: "equal", revision: 2 },
@@ -391,7 +792,7 @@ describe("goal cache", () => {
 
   it("keeps a saved review draft in the canonical review detail", () => {
     const cache = new QueryClient();
-    cacheReview(cache, userId, goalReview);
+    cacheReview(cache, userId, editableGoalReview);
     const saved = { ...reviewDraft, body: "保存後の目標", revision: 1 };
 
     cacheReviewDraft(cache, userId, goal.id, saved);
@@ -399,9 +800,9 @@ describe("goal cache", () => {
     const cached = cache.getQueryData<GoalReview>(
       userQueryKeys.review(userId, goal.id),
     );
-    expect(cached).not.toBe(goalReview);
+    expect(cached).not.toBe(editableGoalReview);
     expect(cached?.reviewDraft).toEqual(saved);
-    expect(cached).toEqual({ goal, reviewDraft: saved, triggerCycle: cycle });
+    expect(cached).toEqual({ ...editableGoalReview, reviewDraft: saved });
   });
 
   it.each([
@@ -412,7 +813,7 @@ describe("goal cache", () => {
     ({ revision }) => {
       const cache = new QueryClient();
       const current: GoalReview = {
-        ...goalReview,
+        ...editableGoalReview,
         reviewDraft: {
           ...reviewDraft,
           body: "現在のReview",
@@ -435,7 +836,7 @@ describe("goal cache", () => {
 
   it("rejects a mutation result for an old review draft generation", () => {
     const cache = new QueryClient();
-    cacheReview(cache, userId, goalReview);
+    cacheReview(cache, userId, editableGoalReview);
 
     cacheReviewDraft(cache, userId, goal.id, {
       ...reviewDraft,
@@ -445,9 +846,56 @@ describe("goal cache", () => {
     });
 
     expect(cache.getQueryData(userQueryKeys.review(userId, goal.id))).toBe(
-      goalReview,
+      editableGoalReview,
     );
   });
+
+  it.each([
+    {
+      status: "active_cycle",
+      currentWork: {
+        kind: "active_cycle",
+        cycleId: "40000000-0000-7000-8000-000000000099",
+        cycleSequenceNumber: 2,
+      },
+      terminalAt: null,
+    },
+    {
+      status: "achieved",
+      currentWork: null,
+      terminalAt: "2026-08-20T02:00:00.000Z",
+    },
+    {
+      status: "ended",
+      currentWork: null,
+      terminalAt: "2026-08-20T02:00:00.000Z",
+    },
+  ] as const)(
+    "does not freshen a Review Draft after its Goal becomes $status",
+    ({ status, currentWork, terminalAt }) => {
+      const cache = new QueryClient();
+      const reviewKey = userQueryKeys.review(userId, goal.id);
+      cacheReview(cache, userId, editableGoalReview);
+      cacheGoal(cache, userId, {
+        ...editableGoalReview.goal,
+        status,
+        revision: editableGoalReview.goal.revision + 1,
+        currentWork,
+        terminalAt,
+      });
+      const reviewBefore = cache.getQueryData(reviewKey);
+      const stateBefore = cache.getQueryState(reviewKey);
+
+      cacheReviewDraft(cache, userId, goal.id, {
+        ...editableGoalReview.reviewDraft,
+        body: "Goal遷移後に届いた保存結果",
+        revision: editableGoalReview.reviewDraft.revision + 1,
+      });
+
+      expect(cache.getQueryData(reviewKey)).toBe(reviewBefore);
+      expect(cache.getQueryState(reviewKey)).toBe(stateBefore);
+    },
+  );
 
   it("does not create or cross-publish a review for mismatched Goal identity", () => {
     const cache = new QueryClient();
@@ -458,14 +906,14 @@ describe("goal cache", () => {
       cache.getQueryData(userQueryKeys.review(userId, goal.id)),
     ).toBeUndefined();
 
-    cacheReview(cache, userId, goalReview);
+    cacheReview(cache, userId, editableGoalReview);
     cacheReviewDraft(cache, userId, goal.id, {
       ...reviewDraft,
       goalId: otherGoalId,
       revision: 1,
     });
     expect(cache.getQueryData(userQueryKeys.review(userId, goal.id))).toBe(
-      goalReview,
+      editableGoalReview,
     );
 
     cache.setQueryData(userQueryKeys.review(userId, otherGoalId), goalReview);

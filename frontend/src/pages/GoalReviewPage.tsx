@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useId } from "react";
 import { useParams } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../features/auth";
@@ -13,7 +14,10 @@ export function GoalReviewPage() {
   const sessionLease = useAuthenticatedRequestLease();
   const userId = session.user.id;
   const { goalId = "" } = useParams();
-  const query = useQuery(goalReviewQueryOptions(userId, goalId, sessionLease));
+  const entryId = useId();
+  const query = useQuery(
+    goalReviewQueryOptions(userId, goalId, entryId, sessionLease),
+  );
   if (query.isPending) return <PageLoading />;
   if (query.isError) return <PageError retry={() => void query.refetch()} />;
   return <GoalReviewFeature review={query.data} />;
