@@ -42,6 +42,11 @@ func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Req
 		server.writeError(writer, request, appsession.ErrCSRFInvalid, nil)
 		return
 	}
+	var input createAnonymousRequest
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
 	if cookie, err := request.Cookie(sessionCookieName); err == nil {
 		view, refreshErr := server.dependencies.Sessions.Refresh(request.Context(), cookie.Value)
 		if refreshErr == nil {
@@ -53,11 +58,6 @@ func (server *api) createAnonymous(writer http.ResponseWriter, request *http.Req
 			server.writeError(writer, request, errSessionRefreshFailed, nil)
 			return
 		}
-	}
-	var input createAnonymousRequest
-	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
-		server.writeError(writer, request, err, nil)
-		return
 	}
 	view, err := server.dependencies.Sessions.CreateAnonymous(request.Context(), appsession.CreateAnonymousInput{
 		BootstrapID: input.BootstrapID, TurnstileToken: input.TurnstileToken,

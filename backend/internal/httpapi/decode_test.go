@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"testing"
@@ -10,21 +11,30 @@ import (
 )
 
 func TestDecodeAndValidateJSONRejectsCommonFormatErrors(t *testing.T) {
+	const validBody = `{"operationId":"0198c20b-7b95-7000-8000-000000000001","expectedDraftRevision":0}`
 	server := &api{}
 	tests := []struct {
-		name string
-		body string
+		name  string
+		body  string
+		limit int64
 	}{
-		{"unknown field", `{"operationId":"0198c20b-7b95-7000-8000-000000000001","expectedDraftRevision":0,"extra":true}`},
-		{"negative revision", `{"operationId":"0198c20b-7b95-7000-8000-000000000001","expectedDraftRevision":-1}`},
-		{"non-canonical UUID", `{"operationId":"0198C20B-7B95-7000-8000-000000000001","expectedDraftRevision":0}`},
-		{"UUID v4", `{"operationId":"123e4567-e89b-42d3-a456-426614174000","expectedDraftRevision":0}`},
+		{name: "unknown field", body: `{"operationId":"0198c20b-7b95-7000-8000-000000000001","expectedDraftRevision":0,"extra":true}`},
+		{name: "case-insensitive field alias", body: `{"operationId":"0198c20b-7b95-7000-8000-000000000001","OperationId":null,"expectedDraftRevision":0}`},
+		{name: "negative revision", body: `{"operationId":"0198c20b-7b95-7000-8000-000000000001","expectedDraftRevision":-1}`},
+		{name: "non-canonical UUID", body: `{"operationId":"0198C20B-7B95-7000-8000-000000000001","expectedDraftRevision":0}`},
+		{name: "UUID v4", body: `{"operationId":"123e4567-e89b-42d3-a456-426614174000","expectedDraftRevision":0}`},
+		{name: "trailing JSON value", body: validBody + `{}`},
+		{name: "body limit", body: validBody, limit: int64(len(validBody) - 1)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			limit := test.limit
+			if limit == 0 {
+				limit = defaultBodyLimit
+			}
 			request := httptest.NewRequest("POST", "/", bytes.NewBufferString(test.body))
 			var input startGoalRequest
-			err := server.decodeAndValidateJSON(httptest.NewRecorder(), request, &input, defaultBodyLimit)
+			err := server.decodeAndValidateJSON(httptest.NewRecorder(), request, &input, limit)
 			if !errors.Is(err, errRequestValidation) {
 				t.Fatalf("error = %v, want request validation error", err)
 			}
@@ -39,6 +49,218 @@ func TestDecodeAndValidateJSONAcceptsContractShape(t *testing.T) {
 	if err := server.decodeAndValidateJSON(httptest.NewRecorder(), request, &input, defaultBodyLimit); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestDecodeAndValidateJSONEnforcesTypedMemberContracts(t *testing.T) {
+	const validID = "0198c20b-7b95-7000-8000-000000000001"
+	tests := []struct {
+		name        string
+		body        string
+		required    []string
+		destination func() any
+	}{
+		{
+			name: "anonymous session", body: `{"bootstrapId":"` + validID + `","turnstileToken":""}`,
+			required: []string{"bootstrapId", "turnstileToken"}, destination: func() any { return &createAnonymousRequest{} },
+		},
+		{
+			name: "Google token", body: `{"idToken":"token"}`,
+			required: []string{"idToken"}, destination: func() any { return &googleTokenRequest{} },
+		},
+		{
+			name: "account delete", body: `{"confirmed":false}`,
+			required: []string{"confirmed"}, destination: func() any { return &deleteAccountRequest{} },
+		},
+		{
+			name: "draft create", body: `{}`,
+			destination: func() any { return &createDraftRequest{} },
+		},
+		{
+			name: "draft save", body: `{"body":"","expectedRevision":0}`,
+			required: []string{"body", "expectedRevision"}, destination: func() any { return &saveDraftRequest{} },
+		},
+		{
+			name: "review save", body: `{"body":"","expectedReviewDraftId":"` + validID + `","expectedRevision":0}`,
+			required: []string{"body", "expectedReviewDraftId", "expectedRevision"}, destination: func() any { return &saveReviewRequest{} },
+		},
+		{
+			name: "goal start", body: `{"operationId":"` + validID + `","expectedDraftRevision":0}`,
+			required: []string{"operationId", "expectedDraftRevision"}, destination: func() any { return &startGoalRequest{} },
+		},
+		{
+			name: "goal refine", body: `{"expectedDraftRevision":0}`,
+			required: []string{"expectedDraftRevision"}, destination: func() any { return &refineGoalRequest{} },
+		},
+		{
+			name: "suggestion adopt", body: `{"expectedDraftRevision":0}`,
+			required: []string{"expectedDraftRevision"}, destination: func() any { return &adoptSuggestionRequest{} },
+		},
+		{
+			name: "review continue", body: `{"operationId":"` + validID + `","expectedGoalRevision":0,"expectedDraftRevision":0}`,
+			required: []string{"operationId", "expectedGoalRevision", "expectedDraftRevision"}, destination: func() any { return &continueReviewRequest{} },
+		},
+		{
+			name: "frame save", body: `{"content":"","expectedFrameRevision":0}`,
+			required: []string{"content", "expectedFrameRevision"}, destination: func() any { return &saveFrameRequest{} },
+		},
+		{
+			name: "action generate", body: `{"expectedContentRevision":0,"confirmReplace":false}`,
+			required: []string{"expectedContentRevision", "confirmReplace"}, destination: func() any { return &actionGenerateRequest{} },
+		},
+		{
+			name: "action refine", body: `{"expectedContentRevision":0}`,
+			required: []string{"expectedContentRevision"}, destination: func() any { return &actionRefineRequest{} },
+		},
+		{
+			name: "cycle complete", body: `{"operationId":"` + validID + `","expectedGoalRevision":0,"expectedContentRevision":0}`,
+			required: []string{"operationId", "expectedGoalRevision", "expectedContentRevision"}, destination: func() any { return &completeCycleRequest{} },
+		},
+		{
+			name: "goal terminate", body: `{"operationId":"` + validID + `","outcome":"ended","expectedGoalRevision":0,"expectedState":"goal_review","confirmDiscardReviewDraft":false}`,
+			required: []string{"operationId", "outcome", "expectedGoalRevision", "expectedState"}, destination: func() any { return &terminateGoalRequest{} },
+		},
+		{
+			name: "goal delete", body: `{"confirmed":false,"expectedGoalRevision":0}`,
+			required: []string{"confirmed", "expectedGoalRevision"}, destination: func() any { return &deleteGoalRequest{} },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertDecodeAccepted(t, test.body, test.destination())
+			assertDecodeRejected(t, `null`, test.destination())
+			for _, member := range test.required {
+				t.Run("missing "+member, func(t *testing.T) {
+					assertDecodeRejected(t, jsonWithoutMember(t, test.body, member), test.destination())
+				})
+				t.Run("null "+member, func(t *testing.T) {
+					assertDecodeRejected(t, jsonWithNullMember(t, test.body, member), test.destination())
+				})
+			}
+		})
+	}
+}
+
+func TestDecodeAndValidateJSONPreservesOptionalMemberContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		missingBody string
+		presentBody string
+		nullBody    string
+		destination func() any
+	}{
+		{
+			name: "initial body", missingBody: `{}`, presentBody: `{"initialBody":""}`, nullBody: `{"initialBody":null}`,
+			destination: func() any { return &createDraftRequest{} },
+		},
+		{
+			name: "goal refine expected Goal revision", missingBody: `{"expectedDraftRevision":0}`,
+			presentBody: `{"expectedDraftRevision":0,"expectedGoalRevision":0}`,
+			nullBody:    `{"expectedDraftRevision":0,"expectedGoalRevision":null}`,
+			destination: func() any { return &refineGoalRequest{} },
+		},
+		{
+			name: "suggestion adopt expected Goal revision", missingBody: `{"expectedDraftRevision":0}`,
+			presentBody: `{"expectedDraftRevision":0,"expectedGoalRevision":0}`,
+			nullBody:    `{"expectedDraftRevision":0,"expectedGoalRevision":null}`,
+			destination: func() any { return &adoptSuggestionRequest{} },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertDecodeAccepted(t, test.missingBody, test.destination())
+			assertDecodeAccepted(t, test.presentBody, test.destination())
+			assertDecodeRejected(t, test.nullBody, test.destination())
+		})
+	}
+}
+
+func TestDecodeAndValidateJSONPreservesDuplicateMemberLastWins(t *testing.T) {
+	const validID = "0198c20b-7b95-7000-8000-000000000001"
+	tests := []struct {
+		name      string
+		body      string
+		wantError bool
+	}{
+		{
+			name: "last revision is valid",
+			body: `{"operationId":"` + validID + `","expectedDraftRevision":-1,"expectedDraftRevision":0}`,
+		},
+		{
+			name:      "last revision is invalid",
+			body:      `{"operationId":"` + validID + `","expectedDraftRevision":0,"expectedDraftRevision":-1}`,
+			wantError: true,
+		},
+		{
+			name: "last revision replaces null",
+			body: `{"operationId":"` + validID + `","expectedDraftRevision":null,"expectedDraftRevision":0}`,
+		},
+		{
+			name:      "last revision is null",
+			body:      `{"operationId":"` + validID + `","expectedDraftRevision":0,"expectedDraftRevision":null}`,
+			wantError: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.wantError {
+				assertDecodeRejected(t, test.body, &startGoalRequest{})
+				return
+			}
+			assertDecodeAccepted(t, test.body, &startGoalRequest{})
+		})
+	}
+}
+
+func assertDecodeAccepted(t *testing.T, body string, destination any) {
+	t.Helper()
+	request := httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
+	if err := (&api{}).decodeAndValidateJSON(httptest.NewRecorder(), request, destination, defaultBodyLimit); err != nil {
+		t.Fatalf("decode body %s: %v", body, err)
+	}
+}
+
+func assertDecodeRejected(t *testing.T, body string, destination any) {
+	t.Helper()
+	request := httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
+	err := (&api{}).decodeAndValidateJSON(httptest.NewRecorder(), request, destination, defaultBodyLimit)
+	if !errors.Is(err, errRequestValidation) {
+		t.Fatalf("decode body %s error = %v, want request validation error", body, err)
+	}
+}
+
+func jsonWithoutMember(t *testing.T, body, member string) string {
+	t.Helper()
+	object := decodeJSONObjectForTest(t, body)
+	delete(object, member)
+	return encodeJSONObjectForTest(t, object)
+}
+
+func jsonWithNullMember(t *testing.T, body, member string) string {
+	t.Helper()
+	object := decodeJSONObjectForTest(t, body)
+	object[member] = json.RawMessage("null")
+	return encodeJSONObjectForTest(t, object)
+}
+
+func decodeJSONObjectForTest(t *testing.T, body string) map[string]json.RawMessage {
+	t.Helper()
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &object); err != nil {
+		t.Fatal(err)
+	}
+	return object
+}
+
+func encodeJSONObjectForTest(t *testing.T, object map[string]json.RawMessage) string {
+	t.Helper()
+	body, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
 }
 
 func TestDecodeAndValidateJSONRejectsUnregisteredRequestType(t *testing.T) {

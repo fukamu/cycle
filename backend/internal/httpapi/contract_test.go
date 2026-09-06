@@ -86,8 +86,12 @@ type contractWorkspaceStub struct {
 	saveReview     func(context.Context, string, string, string, string, int64) (workspace.DraftView, error)
 	saveFrame      func(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
 	refineGoal     func(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
+	adoptGoal      func(context.Context, string, string, string, string, int64, *int64) (workspace.DraftView, error)
+	continueReview func(context.Context, string, string, string, int64, int64) (workspace.ContinueReviewResult, error)
+	deleteGoal     func(context.Context, string, string, bool, int64, string) error
 	generateAction func(context.Context, workspace.ActionGenerateInput) (workspace.AIResponse, error)
 	refineAction   func(context.Context, workspace.ActionRefineInput) (workspace.AIResponse, error)
+	completeCycle  func(context.Context, workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error)
 	terminate      func(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error)
 }
 
@@ -154,6 +158,49 @@ func (stub *contractWorkspaceStub) RefineGoal(ctx context.Context, input workspa
 	return stub.refineGoal(ctx, input)
 }
 
+func (stub *contractWorkspaceStub) AdoptGoalSuggestion(
+	ctx context.Context,
+	userID string,
+	draftID string,
+	goalID string,
+	generationID string,
+	expectedDraftRevision int64,
+	expectedGoalRevision *int64,
+) (workspace.DraftView, error) {
+	if stub.adoptGoal == nil {
+		panic("unexpected AdoptGoalSuggestion call")
+	}
+	return stub.adoptGoal(ctx, userID, draftID, goalID, generationID, expectedDraftRevision, expectedGoalRevision)
+}
+
+func (stub *contractWorkspaceStub) ContinueReview(
+	ctx context.Context,
+	userID string,
+	goalID string,
+	operationID string,
+	expectedGoalRevision int64,
+	expectedDraftRevision int64,
+) (workspace.ContinueReviewResult, error) {
+	if stub.continueReview == nil {
+		panic("unexpected ContinueReview call")
+	}
+	return stub.continueReview(ctx, userID, goalID, operationID, expectedGoalRevision, expectedDraftRevision)
+}
+
+func (stub *contractWorkspaceStub) DeleteGoal(
+	ctx context.Context,
+	userID string,
+	goalID string,
+	confirmed bool,
+	expectedRevision int64,
+	idempotencyKey string,
+) error {
+	if stub.deleteGoal == nil {
+		panic("unexpected DeleteGoal call")
+	}
+	return stub.deleteGoal(ctx, userID, goalID, confirmed, expectedRevision, idempotencyKey)
+}
+
 func (stub *contractWorkspaceStub) GenerateAction(ctx context.Context, input workspace.ActionGenerateInput) (workspace.AIResponse, error) {
 	if stub.generateAction == nil {
 		panic("unexpected GenerateAction call")
@@ -166,6 +213,13 @@ func (stub *contractWorkspaceStub) RefineAction(ctx context.Context, input works
 		panic("unexpected RefineAction call")
 	}
 	return stub.refineAction(ctx, input)
+}
+
+func (stub *contractWorkspaceStub) CompleteCycle(ctx context.Context, input workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error) {
+	if stub.completeCycle == nil {
+		panic("unexpected CompleteCycle call")
+	}
+	return stub.completeCycle(ctx, input)
 }
 
 func (stub *contractWorkspaceStub) Terminate(ctx context.Context, input workspace.TerminateInput) (workspace.TerminateResult, error) {
@@ -200,6 +254,98 @@ func (stub *contractAccountStub) Delete(ctx context.Context, userID user.ID, con
 		panic("unexpected Delete call")
 	}
 	return stub.delete(ctx, userID, confirmed)
+}
+
+// requiredMemberWorkspaceProbe keeps the required-member tests black-box while
+// making any handler-to-application call observable without duplicating a stub
+// for every request shape.
+type requiredMemberWorkspaceProbe struct {
+	contractWorkspaceStub
+	calls int
+}
+
+func (probe *requiredMemberWorkspaceProbe) CreateDraft(context.Context, string, string) (workspace.DraftView, error) {
+	probe.calls++
+	return workspace.DraftView{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) SaveDraft(context.Context, string, string, string, int64) (workspace.DraftView, error) {
+	probe.calls++
+	return workspace.DraftView{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) StartGoal(context.Context, string, string, string, string, int64) (workspace.StartGoalResult, error) {
+	probe.calls++
+	return workspace.StartGoalResult{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) RefineGoal(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error) {
+	probe.calls++
+	return workspace.AIResponse{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) AdoptGoalSuggestion(context.Context, string, string, string, string, int64, *int64) (workspace.DraftView, error) {
+	probe.calls++
+	return workspace.DraftView{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) SaveReview(context.Context, string, string, string, string, int64) (workspace.DraftView, error) {
+	probe.calls++
+	return workspace.DraftView{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) ContinueReview(context.Context, string, string, string, int64, int64) (workspace.ContinueReviewResult, error) {
+	probe.calls++
+	return workspace.ContinueReviewResult{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) DeleteGoal(context.Context, string, string, bool, int64, string) error {
+	probe.calls++
+	return nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) SaveFrame(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error) {
+	probe.calls++
+	return workspace.SaveFrameResult{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) GenerateAction(context.Context, workspace.ActionGenerateInput) (workspace.AIResponse, error) {
+	probe.calls++
+	return workspace.AIResponse{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) RefineAction(context.Context, workspace.ActionRefineInput) (workspace.AIResponse, error) {
+	probe.calls++
+	return workspace.AIResponse{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) CompleteCycle(context.Context, workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error) {
+	probe.calls++
+	return workspace.CompleteCycleResult{}, nil
+}
+
+func (probe *requiredMemberWorkspaceProbe) Terminate(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error) {
+	probe.calls++
+	return workspace.TerminateResult{}, nil
+}
+
+type requiredMemberAccountProbe struct {
+	calls int
+}
+
+func (probe *requiredMemberAccountProbe) UpgradeGoogle(context.Context, user.ID, string, string) (account.View, error) {
+	probe.calls++
+	return account.View{}, nil
+}
+
+func (probe *requiredMemberAccountProbe) LoginGoogle(context.Context, string, string) (account.View, error) {
+	probe.calls++
+	return account.View{}, nil
+}
+
+func (probe *requiredMemberAccountProbe) Delete(context.Context, user.ID, bool) error {
+	probe.calls++
+	return nil
 }
 
 type contractRoute struct {
@@ -541,6 +687,34 @@ func TestAnonymousBootstrapHTTPBoundary(t *testing.T) {
 	})
 
 	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "root null", body: `null`},
+		{name: "missing bootstrap ID", body: `{"turnstileToken":"token"}`},
+		{name: "missing Turnstile token", body: `{"bootstrapId":"` + contractOperationID + `"}`},
+		{name: "unknown member", body: `{"bootstrapId":"` + contractOperationID + `","turnstileToken":"token","unknown":true}`},
+		{name: "oversized body", body: `{"bootstrapId":"` + contractOperationID + `","turnstileToken":"` + strings.Repeat("x", 70<<10) + `"}`},
+	} {
+		t.Run("existing cookie rejects invalid body "+test.name, func(t *testing.T) {
+			sessions := &contractSessionStub{
+				refresh: func(context.Context, string) (appsession.View, error) {
+					panic("Refresh ran before anonymous request validation")
+				},
+				createAnonymous: func(context.Context, appsession.CreateAnonymousInput) (appsession.View, error) {
+					panic("CreateAnonymous ran after invalid input")
+				},
+			}
+			router := contractRouter(sessions, &contractWorkspaceStub{}, nil, nil)
+			response := serveContract(router, http.MethodPost, "/api/v1/session/anonymous", test.body, func(request *http.Request) {
+				request.Header.Set("Origin", contractOrigin)
+				request.AddCookie(contractSessionCookie())
+			})
+			assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
+		})
+	}
+
+	for _, test := range []struct {
 		name       string
 		refreshErr error
 	}{
@@ -669,6 +843,359 @@ func TestUnknownJSONAndBodyLimitsFailBeforeUseCase(t *testing.T) {
 			assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
 		})
 	}
+}
+
+func TestJSONBodyEndpointMatrixRejectsRootNullBeforeUseCase(t *testing.T) {
+	tested := 0
+	for _, route := range unsafeContractRoutes {
+		if route.name == "abandon draft" {
+			continue
+		}
+		tested++
+		t.Run(route.name, func(t *testing.T) {
+			spaces := &requiredMemberWorkspaceProbe{}
+			accounts := &requiredMemberAccountProbe{}
+			response := serveContract(contractRouter(authenticatedContractSessions(), spaces, accounts, nil),
+				route.method, route.path, `null`, func(request *http.Request) {
+					addContractAuthentication(request)
+					request.Header.Set("Idempotency-Key", contractOperationID)
+				})
+			assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
+			if spaces.calls != 0 || accounts.calls != 0 {
+				t.Fatalf("use case calls = workspace %d/account %d, want 0/0", spaces.calls, accounts.calls)
+			}
+		})
+	}
+	if tested != 18 {
+		t.Fatalf("JSON body endpoint coverage = %d, want 18", tested)
+	}
+}
+
+func TestRequiredJSONMembersRejectOmissionBeforeUseCase(t *testing.T) {
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		body           string
+		idempotencyKey bool
+	}{
+		{
+			name: "creation draft body", method: http.MethodPatch, path: "/api/v1/goal-drafts/" + contractDraftID,
+			body: `{"expectedRevision":0}`,
+		},
+		{
+			name: "review draft body", method: http.MethodPatch, path: "/api/v1/goals/" + contractGoalID + "/review",
+			body: `{"expectedReviewDraftId":"` + contractReviewDraftID + `","expectedRevision":0}`,
+		},
+		{
+			name: "cycle frame content", method: http.MethodPatch,
+			path: "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/frames/plan",
+			body: `{"expectedFrameRevision":0}`,
+		},
+		{
+			name: "goal delete revision", method: http.MethodDelete, path: "/api/v1/goals/" + contractGoalID,
+			body: `{"confirmed":true}`, idempotencyKey: true,
+		},
+		{
+			name: "goal start revision", method: http.MethodPost, path: "/api/v1/goal-drafts/" + contractDraftID + "/start",
+			body: `{"operationId":"` + contractOperationID + `"}`,
+		},
+		{
+			name: "review continue draft revision", method: http.MethodPost, path: "/api/v1/goals/" + contractGoalID + "/review/continue",
+			body: `{"operationId":"` + contractOperationID + `","expectedGoalRevision":0}`,
+		},
+		{
+			name: "cycle completion content revision", method: http.MethodPost,
+			path: "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/complete",
+			body: `{"operationId":"` + contractOperationID + `","expectedGoalRevision":0}`,
+		},
+		{
+			name: "creation refinement revision", method: http.MethodPost,
+			path: "/api/v1/goal-drafts/" + contractDraftID + "/refinements", body: `{}`, idempotencyKey: true,
+		},
+		{
+			name: "review refinement requires goal revision", method: http.MethodPost,
+			path: "/api/v1/goals/" + contractGoalID + "/review/refinements",
+			body: `{"expectedDraftRevision":0}`, idempotencyKey: true,
+		},
+		{
+			name: "creation refinement forbids goal revision", method: http.MethodPost,
+			path: "/api/v1/goal-drafts/" + contractDraftID + "/refinements",
+			body: `{"expectedDraftRevision":0,"expectedGoalRevision":0}`, idempotencyKey: true,
+		},
+		{
+			name: "creation suggestion adoption revision", method: http.MethodPost,
+			path: "/api/v1/goal-drafts/" + contractDraftID + "/refinements/" + contractGenerationID + "/adopt", body: `{}`,
+		},
+		{
+			name: "review suggestion adoption requires goal revision", method: http.MethodPost,
+			path: "/api/v1/goals/" + contractGoalID + "/review/refinements/" + contractGenerationID + "/adopt",
+			body: `{"expectedDraftRevision":0}`,
+		},
+		{
+			name: "creation suggestion adoption forbids goal revision", method: http.MethodPost,
+			path: "/api/v1/goal-drafts/" + contractDraftID + "/refinements/" + contractGenerationID + "/adopt",
+			body: `{"expectedDraftRevision":0,"expectedGoalRevision":0}`,
+		},
+		{
+			name: "action generation revision", method: http.MethodPost,
+			path: "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/actions/generate",
+			body: `{"confirmReplace":false}`, idempotencyKey: true,
+		},
+		{
+			name: "action refinement revision", method: http.MethodPost,
+			path: "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/actions/refine",
+			body: `{}`, idempotencyKey: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			probe := &requiredMemberWorkspaceProbe{}
+			response := serveContract(contractRouter(authenticatedContractSessions(), probe, &contractAccountStub{}, nil),
+				test.method, test.path, test.body, func(request *http.Request) {
+					addContractAuthentication(request)
+					if test.idempotencyKey {
+						request.Header.Set("Idempotency-Key", contractOperationID)
+					}
+				})
+			assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
+			if probe.calls != 0 {
+				t.Fatalf("workspace use case calls = %d, want 0", probe.calls)
+			}
+		})
+	}
+}
+
+func TestRequiredJSONMembersPreserveExplicitZeroFalseAndEmptyValues(t *testing.T) {
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		body           string
+		idempotencyKey bool
+		wantStatus     int
+	}{
+		{
+			name: "optional creation draft body remains omitted", method: http.MethodPost,
+			path: "/api/v1/goal-drafts", body: `{}`, wantStatus: http.StatusCreated,
+		},
+		{
+			name: "creation draft empty body and zero revision", method: http.MethodPatch,
+			path: "/api/v1/goal-drafts/" + contractDraftID, body: `{"body":"","expectedRevision":0}`, wantStatus: http.StatusOK,
+		},
+		{
+			name: "review draft empty body and zero revision", method: http.MethodPatch,
+			path: "/api/v1/goals/" + contractGoalID + "/review",
+			body: `{"body":"","expectedReviewDraftId":"` + contractReviewDraftID + `","expectedRevision":0}`, wantStatus: http.StatusOK,
+		},
+		{
+			name: "cycle frame empty content and zero revision", method: http.MethodPatch,
+			path: "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/frames/plan",
+			body: `{"content":"","expectedFrameRevision":0}`, wantStatus: http.StatusOK,
+		},
+		{
+			name: "goal delete true confirmation and zero revision", method: http.MethodDelete,
+			path: "/api/v1/goals/" + contractGoalID, body: `{"confirmed":true,"expectedGoalRevision":0}`,
+			idempotencyKey: true, wantStatus: http.StatusNoContent,
+		},
+		{
+			name: "goal start zero revision", method: http.MethodPost,
+			path: "/api/v1/goal-drafts/" + contractDraftID + "/start",
+			body: `{"operationId":"` + contractOperationID + `","expectedDraftRevision":0}`, wantStatus: http.StatusOK,
+		},
+		{
+			name: "creation refinement zero revision and omitted goal revision", method: http.MethodPost,
+			path: "/api/v1/goal-drafts/" + contractDraftID + "/refinements",
+			body: `{"expectedDraftRevision":0}`, idempotencyKey: true, wantStatus: http.StatusOK,
+		},
+		{
+			name: "creation suggestion adoption zero revision and omitted goal revision", method: http.MethodPost,
+			path: "/api/v1/goal-drafts/" + contractDraftID + "/refinements/" + contractGenerationID + "/adopt",
+			body: `{"expectedDraftRevision":0}`, wantStatus: http.StatusOK,
+		},
+		{
+			name: "review continue zero revisions", method: http.MethodPost,
+			path: "/api/v1/goals/" + contractGoalID + "/review/continue",
+			body: `{"operationId":"` + contractOperationID + `","expectedGoalRevision":0,"expectedDraftRevision":0}`, wantStatus: http.StatusOK,
+		},
+		{
+			name: "action generation zero revision and false confirmation", method: http.MethodPost,
+			path: "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/actions/generate",
+			body: `{"expectedContentRevision":0,"confirmReplace":false}`, idempotencyKey: true, wantStatus: http.StatusOK,
+		},
+		{
+			name: "cycle completion zero revisions", method: http.MethodPost,
+			path: "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/complete",
+			body: `{"operationId":"` + contractOperationID + `","expectedGoalRevision":0,"expectedContentRevision":0}`, wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			probe := &requiredMemberWorkspaceProbe{}
+			response := serveContract(contractRouter(authenticatedContractSessions(), probe, &contractAccountStub{}, nil),
+				test.method, test.path, test.body, func(request *http.Request) {
+					addContractAuthentication(request)
+					if test.idempotencyKey {
+						request.Header.Set("Idempotency-Key", contractOperationID)
+					}
+				})
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", response.Code, test.wantStatus, response.Body.String())
+			}
+			if probe.calls != 1 {
+				t.Fatalf("workspace use case calls = %d, want 1", probe.calls)
+			}
+		})
+	}
+}
+
+func TestGoalTransitionJSONMembersMapExactly(t *testing.T) {
+	const remoteAddress = "203.0.113.9:4321"
+	configureAI := func(request *http.Request) {
+		addContractAuthentication(request)
+		request.Header.Set("Idempotency-Key", contractOperationID)
+		request.RemoteAddr = remoteAddress
+	}
+
+	t.Run("creation refinement keeps goal revision omitted", func(t *testing.T) {
+		want := workspace.GoalRefineInput{
+			UserID: contractUserID, DraftID: contractDraftID, ExpectedDraftRevision: 2,
+			IdempotencyKey: contractOperationID, SessionID: contractSessionID, RemoteAddress: remoteAddress,
+		}
+		spaces := &contractWorkspaceStub{refineGoal: func(_ context.Context, input workspace.GoalRefineInput) (workspace.AIResponse, error) {
+			if !reflect.DeepEqual(input, want) {
+				t.Fatalf("RefineGoal input = %#v, want %#v", input, want)
+			}
+			return workspace.AIResponse{}, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, "/api/v1/goal-drafts/"+contractDraftID+"/refinements",
+			`{"expectedDraftRevision":2}`, configureAI)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("review refinement keeps goal revision present", func(t *testing.T) {
+		goalRevision := int64(7)
+		want := workspace.GoalRefineInput{
+			UserID: contractUserID, GoalID: contractGoalID, ExpectedDraftRevision: 3,
+			ExpectedGoalRevision: &goalRevision, IdempotencyKey: contractOperationID,
+			SessionID: contractSessionID, RemoteAddress: remoteAddress,
+		}
+		spaces := &contractWorkspaceStub{refineGoal: func(_ context.Context, input workspace.GoalRefineInput) (workspace.AIResponse, error) {
+			if !reflect.DeepEqual(input, want) {
+				t.Fatalf("RefineGoal input = %#v, want %#v", input, want)
+			}
+			return workspace.AIResponse{}, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, "/api/v1/goals/"+contractGoalID+"/review/refinements",
+			`{"expectedDraftRevision":3,"expectedGoalRevision":7}`, configureAI)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("creation adoption keeps goal revision omitted", func(t *testing.T) {
+		spaces := &contractWorkspaceStub{adoptGoal: func(
+			_ context.Context, userID, draftID, goalID, generationID string,
+			expectedDraftRevision int64, expectedGoalRevision *int64,
+		) (workspace.DraftView, error) {
+			if userID != contractUserID || draftID != contractDraftID || goalID != "" ||
+				generationID != contractGenerationID || expectedDraftRevision != 4 || expectedGoalRevision != nil {
+				t.Fatalf("AdoptGoalSuggestion input = %q/%q/%q/%q/%d/%v",
+					userID, draftID, goalID, generationID, expectedDraftRevision, expectedGoalRevision)
+			}
+			return workspace.DraftView{}, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, "/api/v1/goal-drafts/"+contractDraftID+"/refinements/"+contractGenerationID+"/adopt",
+			`{"expectedDraftRevision":4}`, addContractAuthentication)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("review adoption keeps goal revision present", func(t *testing.T) {
+		spaces := &contractWorkspaceStub{adoptGoal: func(
+			_ context.Context, userID, draftID, goalID, generationID string,
+			expectedDraftRevision int64, expectedGoalRevision *int64,
+		) (workspace.DraftView, error) {
+			if userID != contractUserID || draftID != "" || goalID != contractGoalID ||
+				generationID != contractGenerationID || expectedDraftRevision != 5 ||
+				expectedGoalRevision == nil || *expectedGoalRevision != 11 {
+				t.Fatalf("AdoptGoalSuggestion input = %q/%q/%q/%q/%d/%v",
+					userID, draftID, goalID, generationID, expectedDraftRevision, expectedGoalRevision)
+			}
+			return workspace.DraftView{}, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, "/api/v1/goals/"+contractGoalID+"/review/refinements/"+contractGenerationID+"/adopt",
+			`{"expectedDraftRevision":5,"expectedGoalRevision":11}`, addContractAuthentication)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("continue review keeps both revisions", func(t *testing.T) {
+		spaces := &contractWorkspaceStub{continueReview: func(
+			_ context.Context, userID, goalID, operationID string, expectedGoalRevision, expectedDraftRevision int64,
+		) (workspace.ContinueReviewResult, error) {
+			if userID != contractUserID || goalID != contractGoalID || operationID != contractOperationID ||
+				expectedGoalRevision != 13 || expectedDraftRevision != 6 {
+				t.Fatalf("ContinueReview input = %q/%q/%q/%d/%d",
+					userID, goalID, operationID, expectedGoalRevision, expectedDraftRevision)
+			}
+			return workspace.ContinueReviewResult{}, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, "/api/v1/goals/"+contractGoalID+"/review/continue",
+			`{"operationId":"`+contractOperationID+`","expectedGoalRevision":13,"expectedDraftRevision":6}`,
+			addContractAuthentication)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("complete cycle keeps both revisions", func(t *testing.T) {
+		want := workspace.CompleteCycleInput{
+			UserID: contractUserID, GoalID: contractGoalID, CycleID: contractCycleID,
+			OperationID: contractOperationID, ExpectedGoalRevision: 17, ExpectedContentRevision: 8,
+		}
+		spaces := &contractWorkspaceStub{completeCycle: func(_ context.Context, input workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error) {
+			if !reflect.DeepEqual(input, want) {
+				t.Fatalf("CompleteCycle input = %#v, want %#v", input, want)
+			}
+			return workspace.CompleteCycleResult{}, nil
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, "/api/v1/goals/"+contractGoalID+"/cycles/"+contractCycleID+"/complete",
+			`{"operationId":"`+contractOperationID+`","expectedGoalRevision":17,"expectedContentRevision":8}`,
+			addContractAuthentication)
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("delete goal preserves false confirmation", func(t *testing.T) {
+		spaces := &contractWorkspaceStub{deleteGoal: func(
+			_ context.Context, userID, goalID string, confirmed bool, expectedRevision int64, idempotencyKey string,
+		) error {
+			if userID != contractUserID || goalID != contractGoalID || confirmed ||
+				expectedRevision != 19 || idempotencyKey != contractOperationID {
+				t.Fatalf("DeleteGoal input = %q/%q/%t/%d/%q",
+					userID, goalID, confirmed, expectedRevision, idempotencyKey)
+			}
+			return workspace.ErrDeleteConfirmation
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodDelete, "/api/v1/goals/"+contractGoalID,
+			`{"confirmed":false,"expectedGoalRevision":19}`, configureAI)
+		assertContractError(t, response, http.StatusBadRequest, "GOAL_DELETE_CONFIRMATION_REQUIRED", nil)
+	})
 }
 
 func TestRecoveryDetailsAndFailuresExposeNoSensitiveCause(t *testing.T) {
@@ -861,6 +1388,23 @@ func TestTypedActionAIHTTPContract(t *testing.T) {
 		if !reflect.DeepEqual(got, wantResponse) {
 			t.Fatalf("response = %#v, want %#v", got, wantResponse)
 		}
+	})
+
+	t.Run("generate preserves false replacement confirmation", func(t *testing.T) {
+		wantInput := workspace.ActionGenerateInput{
+			UserID: contractUserID, GoalID: contractGoalID, CycleID: contractCycleID,
+			ExpectedContentRevision: 9, ConfirmReplace: false, IdempotencyKey: contractOperationID,
+			SessionID: contractSessionID, RemoteAddress: remoteAddress,
+		}
+		spaces := &contractWorkspaceStub{generateAction: func(_ context.Context, input workspace.ActionGenerateInput) (workspace.AIResponse, error) {
+			if !reflect.DeepEqual(input, wantInput) {
+				t.Fatalf("GenerateAction input = %#v, want %#v", input, wantInput)
+			}
+			return workspace.AIResponse{}, workspace.ErrAIReplacementRequired
+		}}
+		response := serveContract(contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPost, generatePath, `{"expectedContentRevision":9,"confirmReplace":false}`, configure)
+		assertContractError(t, response, http.StatusConflict, "ACTION_REPLACEMENT_CONFIRMATION_REQUIRED", nil)
 	})
 
 	t.Run("refine uses only the typed refine method", func(t *testing.T) {
@@ -1111,6 +1655,28 @@ func TestSessionAndAccountCookieContract(t *testing.T) {
 		cookie := findContractCookie(t, response.Result())
 		if cookie.Value != "" || cookie.MaxAge >= 0 || cookie.Path != "/" || !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
 			t.Fatalf("clear cookie = %#v", cookie)
+		}
+	})
+
+	t.Run("account delete preserves false confirmation", func(t *testing.T) {
+		deleteCalls := 0
+		accounts := &contractAccountStub{delete: func(_ context.Context, userID user.ID, confirmed bool) error {
+			deleteCalls++
+			if string(userID) != contractUserID || confirmed {
+				t.Fatalf("delete input = %s/%t", userID, confirmed)
+			}
+			return account.ErrDeleteConfirmationRequired
+		}}
+		response := serveContract(
+			contractRouter(authenticatedContractSessions(), &contractWorkspaceStub{}, accounts, nil),
+			http.MethodDelete, "/api/v1/account", `{"confirmed":false}`, addContractAuthentication,
+		)
+		assertContractError(t, response, http.StatusBadRequest, "ACCOUNT_DELETE_CONFIRMATION_REQUIRED", nil)
+		if deleteCalls != 1 {
+			t.Fatalf("Delete calls = %d, want 1", deleteCalls)
+		}
+		if len(response.Result().Cookies()) != 0 {
+			t.Fatalf("failed delete set cookies: %#v", response.Result().Cookies())
 		}
 	})
 }
