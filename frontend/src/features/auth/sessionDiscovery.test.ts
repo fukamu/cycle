@@ -142,7 +142,9 @@ describe("anonymous session discovery", () => {
 
     await expect(discovery).resolves.toEqual(anonymousSession);
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(clearBootstrapIDMock).toHaveBeenCalledOnce();
+    expect(clearBootstrapIDMock).toHaveBeenCalledWith(
+      "00000000-0000-7000-8000-000000000001",
+    );
   });
 
   it("retains the bootstrap ID when ownership is lost while the bootstrap response is pending", async () => {
@@ -187,6 +189,9 @@ describe("anonymous session discovery", () => {
     let current = true;
     const discovery = createAnonymousSession(() => current);
     await vi.waitFor(() => expect(clearBootstrapIDMock).toHaveBeenCalledOnce());
+    expect(clearBootstrapIDMock).toHaveBeenCalledWith(
+      "00000000-0000-7000-8000-000000000001",
+    );
 
     current = false;
     resolveCleanup();
