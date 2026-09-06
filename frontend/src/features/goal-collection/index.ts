@@ -7,6 +7,7 @@ export {
   cacheReview,
   cacheReviewDraft,
   preferGoal,
+  preferGoalReview,
   removeGoalFromCache,
   userMutationKeys,
   userQueryKeys,

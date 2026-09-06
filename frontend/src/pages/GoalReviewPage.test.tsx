@@ -595,6 +595,104 @@ describe("GoalReviewPage", () => {
     );
   });
 
+  it("keeps autosave revision 2 when a captured revision 1 GET resolves late", async () => {
+    const revisionOneDraft: GoalDraft = {
+      ...reviewDraft,
+      body: "保存済みReview revision 1",
+      revision: 1,
+      updatedAt: "2026-08-20T00:02:00.000Z",
+    };
+    const revisionOneReview: GoalReview = {
+      ...review,
+      reviewDraft: revisionOneDraft,
+    };
+    const revisionTwoDraft: GoalDraft = {
+      ...revisionOneDraft,
+      body: "保存済みReview revision 2",
+      revision: 2,
+      updatedAt: "2026-08-20T00:03:00.000Z",
+    };
+    const revisionThreeDraft: GoalDraft = {
+      ...revisionTwoDraft,
+      body: "保存済みReview revision 3",
+      revision: 3,
+      updatedAt: "2026-08-20T00:04:00.000Z",
+    };
+    const lateGet = deferred<Awaited<ReturnType<typeof getReview>>>();
+    vi.mocked(getReview).mockReturnValueOnce(lateGet.promise);
+    vi.mocked(saveReview)
+      .mockResolvedValueOnce({ reviewDraft: revisionTwoDraft })
+      .mockResolvedValueOnce({ reviewDraft: revisionThreeDraft });
+    const cache = createCache();
+    const reviewKey = userQueryKeys.review(session.user.id, goal.id);
+    cache.setQueryData(reviewKey, revisionOneReview);
+    const firstMount = renderPage(cache);
+    const firstEditor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    expect(firstEditor).toHaveValue(revisionOneDraft.body);
+
+    let refetch!: Promise<void>;
+    act(() => {
+      refetch = cache.refetchQueries({ queryKey: reviewKey, exact: true });
+    });
+    await waitFor(() => expect(getReview).toHaveBeenCalledOnce());
+    expect(cache.getQueryState(reviewKey)?.fetchStatus).toBe("fetching");
+
+    fireEvent.change(firstEditor, { target: { value: revisionTwoDraft.body } });
+    fireEvent.blur(firstEditor);
+    await waitFor(() =>
+      expect(saveReview).toHaveBeenCalledWith(
+        sessionLease,
+        goal.id,
+        revisionOneDraft.id,
+        revisionTwoDraft.body,
+        revisionOneDraft.revision,
+        session.csrfToken,
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() =>
+      expect(cache.getQueryData<GoalReview>(reviewKey)?.reviewDraft).toEqual(
+        revisionTwoDraft,
+      ),
+    );
+    const cachedRevisionTwo = cache.getQueryData<GoalReview>(reviewKey);
+
+    await act(async () => {
+      lateGet.resolve(revisionOneReview);
+      await refetch;
+    });
+
+    expect(cache.getQueryData<GoalReview>(reviewKey)).toBe(cachedRevisionTwo);
+    expect(cachedRevisionTwo?.reviewDraft).toEqual(revisionTwoDraft);
+
+    firstMount.unmount();
+    renderPage(cache);
+    const remountedEditor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    expect(remountedEditor).toHaveValue(revisionTwoDraft.body);
+    expect(getReview).toHaveBeenCalledOnce();
+
+    fireEvent.change(remountedEditor, {
+      target: { value: revisionThreeDraft.body },
+    });
+    fireEvent.blur(remountedEditor);
+
+    await waitFor(() =>
+      expect(saveReview).toHaveBeenLastCalledWith(
+        sessionLease,
+        goal.id,
+        revisionTwoDraft.id,
+        revisionThreeDraft.body,
+        revisionTwoDraft.revision,
+        session.csrfToken,
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
   it("treats CRLF and lone CR as LF before exact review comparison", async () => {
     const currentBody = "一行目\n二行目";
     vi.mocked(getReview).mockResolvedValue({

@@ -1,6 +1,12 @@
 import { QueryClient } from "@tanstack/react-query";
 
-import type { Cycle, Goal, GoalDraft, Home } from "../../shared/api/schemas";
+import type {
+  Cycle,
+  Goal,
+  GoalDraft,
+  GoalReview,
+  Home,
+} from "../../shared/api/schemas";
 import {
   cacheCreationDraft,
   cacheCycle,
@@ -10,6 +16,7 @@ import {
   cacheReview,
   cacheReviewDraft,
   preferGoal,
+  preferGoalReview,
   removeGoalFromCache,
   userMutationKeys,
   userQueryKeys,
@@ -73,6 +80,12 @@ const reviewDraft: GoalDraft = {
   baseGoalVersionId: goal.currentVersion.id,
   reviewCycleId: cycle.id,
   body: "目標",
+};
+
+const goalReview: GoalReview = {
+  goal,
+  reviewDraft,
+  triggerCycle: cycle,
 };
 
 describe("goal cache", () => {
@@ -278,18 +291,192 @@ describe("goal cache", () => {
     });
   });
 
+  it.each([
+    { label: "older", revision: 1 },
+    { label: "equal", revision: 2 },
+  ])(
+    "keeps the exact current review for a $label same-draft payload",
+    ({ revision }) => {
+      const current: GoalReview = {
+        ...goalReview,
+        reviewDraft: {
+          ...reviewDraft,
+          body: "現在のReview",
+          revision: 2,
+        },
+      };
+      const incoming: GoalReview = {
+        goal: {
+          ...goal,
+          currentVersion: {
+            ...goal.currentVersion,
+            body: "遅延payloadのGoal",
+          },
+        },
+        reviewDraft: {
+          ...reviewDraft,
+          body: "遅延payloadのReview",
+          revision,
+        },
+        triggerCycle: { ...cycle, plan: "遅延payloadのCycle" },
+      };
+
+      expect(preferGoalReview(current, incoming)).toBe(current);
+    },
+  );
+
+  it("accepts the exact whole payload only when the same draft is strictly newer", () => {
+    const current: GoalReview = {
+      ...goalReview,
+      reviewDraft: {
+        ...reviewDraft,
+        body: "現在のReview",
+        revision: 2,
+      },
+    };
+    const incoming: GoalReview = {
+      goal: {
+        ...goal,
+        currentVersion: {
+          ...goal.currentVersion,
+          body: "incoming payloadのGoal",
+        },
+      },
+      reviewDraft: {
+        ...reviewDraft,
+        body: "incoming payloadのReview",
+        revision: 3,
+      },
+      triggerCycle: { ...cycle, plan: "incoming payloadのCycle" },
+    };
+
+    const preferred = preferGoalReview(current, incoming);
+
+    expect(preferred).toBe(incoming);
+    expect(preferred).toEqual(incoming);
+  });
+
+  it("accepts a replacement draft as a whole payload without comparing revisions", () => {
+    const current: GoalReview = {
+      ...goalReview,
+      reviewDraft: { ...reviewDraft, revision: 9 },
+    };
+    const incoming: GoalReview = {
+      ...goalReview,
+      reviewDraft: {
+        ...reviewDraft,
+        id: "10000000-0000-7000-8000-000000000003",
+        body: "新しいReview世代",
+        revision: 0,
+      },
+    };
+
+    expect(preferGoalReview(current, incoming)).toBe(incoming);
+  });
+
+  it("accepts a different Goal identity as a whole payload", () => {
+    const incomingGoalId = "20000000-0000-7000-8000-000000000002";
+    const incoming: GoalReview = {
+      ...goalReview,
+      goal: { ...goal, id: incomingGoalId },
+      reviewDraft: {
+        ...reviewDraft,
+        goalId: incomingGoalId,
+        revision: 0,
+      },
+    };
+
+    expect(preferGoalReview(goalReview, incoming)).toBe(incoming);
+  });
+
   it("keeps a saved review draft in the canonical review detail", () => {
     const cache = new QueryClient();
-    cacheReview(cache, userId, { goal, reviewDraft, triggerCycle: cycle });
+    cacheReview(cache, userId, goalReview);
     const saved = { ...reviewDraft, body: "保存後の目標", revision: 1 };
 
     cacheReviewDraft(cache, userId, goal.id, saved);
 
-    expect(cache.getQueryData(userQueryKeys.review(userId, goal.id))).toEqual({
-      goal,
-      reviewDraft: saved,
-      triggerCycle: cycle,
+    const cached = cache.getQueryData<GoalReview>(
+      userQueryKeys.review(userId, goal.id),
+    );
+    expect(cached).not.toBe(goalReview);
+    expect(cached?.reviewDraft).toEqual(saved);
+    expect(cached).toEqual({ goal, reviewDraft: saved, triggerCycle: cycle });
+  });
+
+  it.each([
+    { label: "older", revision: 1 },
+    { label: "equal", revision: 2 },
+  ])(
+    "keeps the exact cached review for a $label draft mutation result",
+    ({ revision }) => {
+      const cache = new QueryClient();
+      const current: GoalReview = {
+        ...goalReview,
+        reviewDraft: {
+          ...reviewDraft,
+          body: "現在のReview",
+          revision: 2,
+        },
+      };
+      cacheReview(cache, userId, current);
+
+      cacheReviewDraft(cache, userId, goal.id, {
+        ...reviewDraft,
+        body: "遅延した保存結果",
+        revision,
+      });
+
+      expect(cache.getQueryData(userQueryKeys.review(userId, goal.id))).toBe(
+        current,
+      );
+    },
+  );
+
+  it("rejects a mutation result for an old review draft generation", () => {
+    const cache = new QueryClient();
+    cacheReview(cache, userId, goalReview);
+
+    cacheReviewDraft(cache, userId, goal.id, {
+      ...reviewDraft,
+      id: "10000000-0000-7000-8000-000000000003",
+      body: "旧Review世代への保存結果",
+      revision: 99,
     });
+
+    expect(cache.getQueryData(userQueryKeys.review(userId, goal.id))).toBe(
+      goalReview,
+    );
+  });
+
+  it("does not create or cross-publish a review for mismatched Goal identity", () => {
+    const cache = new QueryClient();
+    const otherGoalId = "20000000-0000-7000-8000-000000000002";
+
+    cacheReviewDraft(cache, userId, goal.id, reviewDraft);
+    expect(
+      cache.getQueryData(userQueryKeys.review(userId, goal.id)),
+    ).toBeUndefined();
+
+    cacheReview(cache, userId, goalReview);
+    cacheReviewDraft(cache, userId, goal.id, {
+      ...reviewDraft,
+      goalId: otherGoalId,
+      revision: 1,
+    });
+    expect(cache.getQueryData(userQueryKeys.review(userId, goal.id))).toBe(
+      goalReview,
+    );
+
+    cache.setQueryData(userQueryKeys.review(userId, otherGoalId), goalReview);
+    cacheReviewDraft(cache, userId, otherGoalId, {
+      ...reviewDraft,
+      goalId: otherGoalId,
+      revision: 1,
+    });
+    expect(cache.getQueryData(userQueryKeys.review(userId, otherGoalId))).toBe(
+      goalReview,
+    );
   });
 
   it("invalidates only queries under the captured user root", async () => {
