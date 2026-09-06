@@ -19,6 +19,10 @@ import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
 import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import {
+  GoalDeletionAdvisoryContext,
+  type GoalDeletionAdvisoryRegistry,
+} from "../features/goal-deletion";
+import {
   AutoSaveScopeProvider,
   useAutoSaveScopeRegistry,
 } from "../shared/autosave/AutoSaveScopeProvider";
@@ -43,11 +47,11 @@ import {
 } from "../shared/api/workspace";
 import {
   type BrowserDraft,
-  clearGoalDrafts,
   deleteBrowserDraft,
   deleteBrowserDraftIfUnchanged,
   getBrowserDraft,
   putBrowserDraft,
+  tombstoneDeletedGoalAndClearDrafts,
 } from "../shared/drafts/browserDraftCache";
 import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBoundary";
 import { GoalWorkspacePage } from "./GoalWorkspacePage";
@@ -65,11 +69,11 @@ vi.mock("../shared/api/workspace", () => ({
 }));
 
 vi.mock("../shared/drafts/browserDraftCache", () => ({
-  clearGoalDrafts: vi.fn(),
   deleteBrowserDraft: vi.fn(),
   deleteBrowserDraftIfUnchanged: vi.fn(),
   getBrowserDraft: vi.fn(),
   putBrowserDraft: vi.fn(),
+  tombstoneDeletedGoalAndClearDrafts: vi.fn(),
 }));
 
 const goal: Goal = {
@@ -252,6 +256,15 @@ const session: Session = {
 
 const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
 
+type GoalDeletionAdvisoryHarness = {
+  readonly registry: GoalDeletionAdvisoryRegistry;
+  readonly publish: ReturnType<typeof vi.fn>;
+  readonly subscribe: ReturnType<typeof vi.fn>;
+  readonly dispatch: (deletedUserId: string, deletedGoalId: string) => void;
+};
+
+let goalDeletionAdvisoryHarness: GoalDeletionAdvisoryHarness;
+
 function IdentityQuiesceControl() {
   const registry = useAutoSaveScopeRegistry();
   const [quiesced, setQuiesced] = useState(false);
@@ -285,10 +298,11 @@ function deferred<T>() {
 describe("GoalReviewPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    goalDeletionAdvisoryHarness = createGoalDeletionAdvisoryHarness();
     vi.mocked(getReview).mockResolvedValue(review);
     vi.mocked(getBrowserDraft).mockResolvedValue(null);
     vi.mocked(putBrowserDraft).mockResolvedValue(undefined);
-    vi.mocked(clearGoalDrafts).mockResolvedValue(undefined);
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockResolvedValue(undefined);
     vi.mocked(deleteGoal).mockResolvedValue(undefined);
     vi.mocked(deleteBrowserDraft).mockResolvedValue(undefined);
     vi.mocked(deleteBrowserDraftIfUnchanged).mockResolvedValue(undefined);
@@ -1102,6 +1116,92 @@ describe("GoalReviewPage", () => {
     ).toEqual(expect.objectContaining({ body: reviewABody }));
   });
 
+  it("lets a matching deletion advisory clear a preserved latched Review", async () => {
+    const lateReviewASave = deferred<Awaited<ReturnType<typeof saveReview>>>();
+    const cleanup = deferred<void>();
+    const browserDrafts = new Map<string, BrowserDraft>();
+    vi.mocked(getBrowserDraft).mockImplementation(
+      async (_userId, subjectKey) => browserDrafts.get(subjectKey) ?? null,
+    );
+    vi.mocked(putBrowserDraft).mockImplementation(async (record) => {
+      browserDrafts.set(record.subjectKey, record);
+    });
+    vi.mocked(deleteBrowserDraft).mockImplementation(
+      async (_userId, subjectKey) => {
+        browserDrafts.delete(subjectKey);
+      },
+    );
+    vi.mocked(saveReview).mockReturnValueOnce(lateReviewASave.promise);
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockImplementationOnce(
+      async () => cleanup.promise,
+    );
+    const reviewSubjectKey = `goal-review:${goal.id}:${reviewDraft.id}`;
+    const reviewABody = "削除通知で破棄するReview Aの端末入力";
+    const cache = createCache();
+    renderPage(cache);
+    const editorA = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.change(editorA, { target: { value: reviewABody } });
+    fireEvent.blur(editorA);
+    await waitFor(() => expect(saveReview).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(browserDrafts.get(reviewSubjectKey)).toEqual(
+        expect.objectContaining({ body: reviewABody }),
+      ),
+    );
+    act(() => {
+      cache.setQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+        replacementReview,
+      );
+    });
+    await waitFor(() => expect(editorA).toHaveAttribute("readonly"));
+    vi.mocked(putBrowserDraft).mockClear();
+    vi.mocked(deleteBrowserDraft).mockClear();
+
+    act(() => {
+      goalDeletionAdvisoryHarness.dispatch(session.user.id, goal.id);
+    });
+
+    await waitFor(() =>
+      expect(deleteBrowserDraft).toHaveBeenCalledWith(
+        session.user.id,
+        reviewSubjectKey,
+      ),
+    );
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
+    expect(browserDrafts.has(reviewSubjectKey)).toBe(false);
+    expect(goalDeletionAdvisoryHarness.publish).not.toHaveBeenCalled();
+
+    await act(async () =>
+      lateReviewASave.resolve({
+        reviewDraft: {
+          ...reviewDraft,
+          body: reviewABody,
+          revision: reviewDraft.revision + 1,
+        },
+      }),
+    );
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+    expect(
+      cache.getQueryData<GoalReview>(
+        userQueryKeys.review(session.user.id, goal.id),
+      )?.reviewDraft,
+    ).toEqual(replacementReviewDraft);
+
+    await act(async () => cleanup.resolve());
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(
+      cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+    ).toBeUndefined();
+  });
+
   it("does not let a late Review A response mutate a published Review B editor or live cache", async () => {
     const lateReviewA = deferred<GoalReview>();
     const reviewBPublication = deferred<GoalReview>();
@@ -1613,7 +1713,7 @@ describe("GoalReviewPage", () => {
     );
     expect(await screen.findByText("切替準備完了")).toBeInTheDocument();
     vi.mocked(deleteBrowserDraft).mockClear();
-    vi.mocked(clearGoalDrafts).mockClear();
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockClear();
 
     await act(async () =>
       completion.resolve({
@@ -1634,7 +1734,7 @@ describe("GoalReviewPage", () => {
     ).toHaveValue(reviewDraft.body);
     expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
     expect(deleteBrowserDraft).not.toHaveBeenCalled();
-    expect(clearGoalDrafts).not.toHaveBeenCalled();
+    expect(tombstoneDeletedGoalAndClearDrafts).not.toHaveBeenCalled();
   });
 
   it("retries only browser cleanup after Continue succeeds", async () => {
@@ -1738,7 +1838,7 @@ describe("GoalReviewPage", () => {
   });
 
   it("retries goal-scoped browser cleanup after Goal Delete without resending DELETE", async () => {
-    vi.mocked(clearGoalDrafts)
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts)
       .mockRejectedValueOnce(new Error("indexeddb unavailable"))
       .mockResolvedValueOnce(undefined);
 
@@ -1755,7 +1855,10 @@ describe("GoalReviewPage", () => {
       "削除済みGoalのブラウザ下書きを削除できませんでした。",
     );
     expect(deleteGoal).toHaveBeenCalledOnce();
-    expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id);
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+      session.user.id,
+      goal.id,
+    );
     expect(deleteGoal).toHaveBeenCalledWith(
       sessionLease,
       goal.id,
@@ -1772,7 +1875,7 @@ describe("GoalReviewPage", () => {
     expect(getReview).toHaveBeenCalledOnce();
     expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
     expect(deleteGoal).toHaveBeenCalledOnce();
-    expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledTimes(2);
   });
 
   it("preserves the local review and links the current Goal when the draft identity moves", async () => {
@@ -2057,6 +2160,156 @@ describe("GoalReviewPage", () => {
     expect(cache.getQueryState(reviewKey)).toBe(cachedReviewState);
   });
 
+  it("publishes deletion before durable cleanup and confirms only after cache removal", async () => {
+    const cleanup = deferred<void>();
+    const events: string[] = [];
+    vi.mocked(deleteGoal).mockImplementationOnce(async () => {
+      events.push("server:deleted");
+    });
+    goalDeletionAdvisoryHarness.publish.mockImplementation(() => {
+      events.push("advisory");
+    });
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockImplementationOnce(
+      async () => {
+        events.push("tombstone:start");
+        await cleanup.promise;
+        events.push("tombstone:success");
+      },
+    );
+    const cache = createCache();
+    const removeQueries = cache.removeQueries.bind(cache);
+    vi.spyOn(cache, "removeQueries").mockImplementation((filters) => {
+      events.push("cache:removed");
+      return removeQueries(filters);
+    });
+    renderPage(cache);
+
+    await invokeReviewTerminalCommand("delete");
+
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
+    expect(events).toEqual(["server:deleted", "advisory", "tombstone:start"]);
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledWith(
+      session.user.id,
+      goal.id,
+    );
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledOnce();
+
+    await act(async () => cleanup.resolve());
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(events).toEqual([
+      "server:deleted",
+      "advisory",
+      "tombstone:start",
+      "tombstone:success",
+      "cache:removed",
+      "advisory",
+    ]);
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("synchronously fences and coalesces duplicate matching deletion advisories without echoing", async () => {
+    const cleanup = deferred<void>();
+    const lateSave = deferred<Awaited<ReturnType<typeof saveReview>>>();
+    vi.mocked(saveReview).mockReturnValueOnce(lateSave.promise);
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockImplementationOnce(
+      async () => cleanup.promise,
+    );
+    const cache = createCache();
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    vi.mocked(putBrowserDraft).mockClear();
+    vi.mocked(deleteBrowserDraft).mockClear();
+    fireEvent.change(editor, {
+      target: { value: "通知後に復活させないReview入力" },
+    });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(saveReview).toHaveBeenCalledOnce());
+    vi.mocked(putBrowserDraft).mockClear();
+
+    act(() => {
+      goalDeletionAdvisoryHarness.dispatch(session.user.id, goal.id);
+      goalDeletionAdvisoryHarness.dispatch(session.user.id, goal.id);
+    });
+
+    expect(editor).toHaveAttribute("readonly");
+    await waitFor(() => expect(deleteBrowserDraft).toHaveBeenCalledOnce());
+    expect(deleteBrowserDraft).toHaveBeenCalledWith(
+      session.user.id,
+      `goal-review:${goal.id}:${reviewDraft.id}`,
+    );
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+    expect(goalDeletionAdvisoryHarness.publish).not.toHaveBeenCalled();
+    expect(deleteGoal).not.toHaveBeenCalled();
+    expect(continueReview).not.toHaveBeenCalled();
+    expect(terminateGoal).not.toHaveBeenCalled();
+    expect(getGoal).not.toHaveBeenCalled();
+    expect(refineReview).not.toHaveBeenCalled();
+    expect(adoptReview).not.toHaveBeenCalled();
+
+    await act(async () => cleanup.resolve());
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    await act(async () =>
+      lateSave.resolve({
+        reviewDraft: {
+          ...reviewDraft,
+          body: "通知後に復活させないReview入力",
+          revision: reviewDraft.revision + 1,
+        },
+      }),
+    );
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+    expect(
+      cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+    ).toBeUndefined();
+    expect(goalDeletionAdvisoryHarness.publish).not.toHaveBeenCalled();
+  });
+
+  it("ignores deletion advisories for a different User or Goal", async () => {
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    vi.mocked(deleteBrowserDraft).mockClear();
+
+    act(() => {
+      goalDeletionAdvisoryHarness.dispatch(
+        "10000000-0000-7000-8000-000000000002",
+        goal.id,
+      );
+      goalDeletionAdvisoryHarness.dispatch(
+        session.user.id,
+        "20000000-0000-7000-8000-000000000002",
+      );
+    });
+
+    expect(goalDeletionAdvisoryHarness.subscribe).toHaveBeenCalledWith(
+      session.user.id,
+      goal.id,
+      expect.anything(),
+    );
+    expect(
+      typeof goalDeletionAdvisoryHarness.subscribe.mock.calls[0]?.[2],
+    ).toBe("function");
+    expect(editor).not.toHaveAttribute("readonly");
+    expect(tombstoneDeletedGoalAndClearDrafts).not.toHaveBeenCalled();
+    expect(deleteBrowserDraft).not.toHaveBeenCalled();
+    expect(goalDeletionAdvisoryHarness.publish).not.toHaveBeenCalled();
+    expect(deleteGoal).not.toHaveBeenCalled();
+    expect(continueReview).not.toHaveBeenCalled();
+    expect(terminateGoal).not.toHaveBeenCalled();
+  });
+
   it.each(["continue", "terminate", "delete"] as const)(
     "cleans a deleted Goal when a pending $command receives GOAL_NOT_FOUND after route leave",
     async (command) => {
@@ -2098,7 +2351,9 @@ describe("GoalReviewPage", () => {
         ),
       );
 
-      await waitFor(() => expect(clearGoalDrafts).toHaveBeenCalledOnce());
+      await waitFor(() =>
+        expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+      );
       await waitFor(() => expect(removeQueries).toHaveBeenCalled());
       expect(screen.getByText("外部route")).toBeInTheDocument();
       expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
@@ -2108,6 +2363,17 @@ describe("GoalReviewPage", () => {
       expect(
         cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
       ).toBeUndefined();
+      expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
+      expect(goalDeletionAdvisoryHarness.publish).toHaveBeenNthCalledWith(
+        1,
+        session.user.id,
+        goal.id,
+      );
+      expect(goalDeletionAdvisoryHarness.publish).toHaveBeenNthCalledWith(
+        2,
+        session.user.id,
+        goal.id,
+      );
       expect(getGoal).toHaveBeenCalledTimes(goalReadsBeforeFailure);
       if (command === "continue") expect(continueReview).toHaveBeenCalledOnce();
       else if (command === "terminate")
@@ -2141,7 +2407,10 @@ describe("GoalReviewPage", () => {
     await act(async () => deletion.resolve(undefined));
 
     await waitFor(() =>
-      expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id),
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+        session.user.id,
+        goal.id,
+      ),
     );
     await waitFor(() => expect(removeQueries).toHaveBeenCalled());
     expect(screen.getByText("外部route")).toBeInTheDocument();
@@ -2153,7 +2422,8 @@ describe("GoalReviewPage", () => {
       cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
     ).toBeUndefined();
     expect(deleteGoal).toHaveBeenCalledOnce();
-    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
   });
 
   it("cleans a deleted Goal when a canonical GET receives GOAL_NOT_FOUND after route leave", async () => {
@@ -2190,7 +2460,9 @@ describe("GoalReviewPage", () => {
       ),
     );
 
-    await waitFor(() => expect(clearGoalDrafts).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
     await waitFor(() => expect(removeQueries).toHaveBeenCalled());
     expect(screen.getByText("外部route")).toBeInTheDocument();
     expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
@@ -2202,6 +2474,7 @@ describe("GoalReviewPage", () => {
     ).toBeUndefined();
     expect(continueReview).toHaveBeenCalledOnce();
     expect(getGoal).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
   });
 
   it("retries only local cleanup after GOAL_NOT_FOUND and keeps Review fenced", async () => {
@@ -2214,7 +2487,7 @@ describe("GoalReviewPage", () => {
         "request-deleted-review-goal",
       ),
     );
-    vi.mocked(clearGoalDrafts)
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts)
       .mockRejectedValueOnce(new Error("indexedDB unavailable"))
       .mockResolvedValueOnce(undefined);
     const cache = createCache();
@@ -2232,8 +2505,16 @@ describe("GoalReviewPage", () => {
         "削除済みGoalのブラウザ下書きを削除できませんでした。",
       ),
     ).toBeInTheDocument();
-    expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id);
-    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+      session.user.id,
+      goal.id,
+    );
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledWith(
+      session.user.id,
+      goal.id,
+    );
     expect(deleteBrowserDraft).toHaveBeenCalledWith(
       session.user.id,
       `goal-review:${goal.id}:${reviewDraft.id}`,
@@ -2254,7 +2535,8 @@ describe("GoalReviewPage", () => {
     expect(await screen.findByText("ホーム")).toBeInTheDocument();
     expect(getReview).toHaveBeenCalledOnce();
     expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
-    expect(clearGoalDrafts).toHaveBeenCalledTimes(2);
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledTimes(2);
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
     expect(continueReview).toHaveBeenCalledOnce();
     expect(getGoal).not.toHaveBeenCalled();
     await waitFor(() => expect(removeQueries).toHaveBeenCalled());
@@ -2297,10 +2579,14 @@ describe("GoalReviewPage", () => {
     await act(async () => reviewDraftCleanup.resolve());
 
     await waitFor(() =>
-      expect(clearGoalDrafts).toHaveBeenCalledWith(session.user.id, goal.id),
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+        session.user.id,
+        goal.id,
+      ),
     );
     expect(await screen.findByText("外部route")).toBeInTheDocument();
-    expect(clearGoalDrafts).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
     expect(continueReview).toHaveBeenCalledOnce();
     expect(getGoal).not.toHaveBeenCalled();
     expect(deleteGoal).not.toHaveBeenCalled();
@@ -2378,6 +2664,39 @@ function CanonicalGoalRoundTrip() {
   );
 }
 
+function createGoalDeletionAdvisoryHarness(): GoalDeletionAdvisoryHarness {
+  const listeners = new Map<string, Set<() => void>>();
+  const keyOf = (userId: string, goalId: string) =>
+    JSON.stringify([userId, goalId]);
+  const publish = vi.fn(() => undefined);
+  const subscribe = vi.fn(
+    (userId: string, goalId: string, listener: () => void) => {
+      const key = keyOf(userId, goalId);
+      const exactListeners = listeners.get(key) ?? new Set<() => void>();
+      exactListeners.add(listener);
+      listeners.set(key, exactListeners);
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        exactListeners.delete(listener);
+        if (exactListeners.size === 0) listeners.delete(key);
+      };
+    },
+  );
+  return {
+    registry: { publish, subscribe },
+    publish,
+    subscribe,
+    dispatch: (deletedUserId, deletedGoalId) => {
+      for (const listener of [
+        ...(listeners.get(keyOf(deletedUserId, deletedGoalId)) ?? []),
+      ])
+        listener();
+    },
+  };
+}
+
 function renderPage(
   cache = createCache(),
   realCanonicalRoutes = false,
@@ -2389,46 +2708,50 @@ function renderPage(
     <QueryClientProvider client={cache}>
       <AutoSaveScopeProvider>
         {identityQuiesceControl ? <IdentityQuiesceControl /> : null}
-        <AuthenticatedSessionTestProvider
-          lease={sessionLease}
-          session={session}
+        <GoalDeletionAdvisoryContext.Provider
+          value={goalDeletionAdvisoryHarness.registry}
         >
-          <MemoryRouter initialEntries={[`/goals/${goal.id}/review`]}>
-            {cleanupRouteSwitch ? (
-              <Link to="/external">クリーンアップ中に別routeへ移動</Link>
-            ) : null}
-            <PostCommitCleanupBoundary
-              runSessionOperation={async (_expectedUserId, operation) =>
-                operation(() => true)
-              }
-            >
-              <Routes>
-                <Route path="/" element={<CacheInspectingHome />} />
-                <Route
-                  path="/goals/:goalId/review"
-                  element={<GoalReviewPage />}
-                />
-                <Route
-                  path="/goals/:goalId"
-                  element={
-                    realCanonicalRoutes ? (
-                      <GoalWorkspacePage />
-                    ) : canonicalGoalRoundTrip ? (
-                      <CanonicalGoalRoundTrip />
-                    ) : (
-                      <p>現在のワークスペース</p>
-                    )
-                  }
-                />
-                <Route
-                  path="/history/goals/:goalId"
-                  element={<p>canonical goal history</p>}
-                />
-                <Route path="/external" element={<p>外部route</p>} />
-              </Routes>
-            </PostCommitCleanupBoundary>
-          </MemoryRouter>
-        </AuthenticatedSessionTestProvider>
+          <AuthenticatedSessionTestProvider
+            lease={sessionLease}
+            session={session}
+          >
+            <MemoryRouter initialEntries={[`/goals/${goal.id}/review`]}>
+              {cleanupRouteSwitch ? (
+                <Link to="/external">クリーンアップ中に別routeへ移動</Link>
+              ) : null}
+              <PostCommitCleanupBoundary
+                runSessionOperation={async (_expectedUserId, operation) =>
+                  operation(() => true)
+                }
+              >
+                <Routes>
+                  <Route path="/" element={<CacheInspectingHome />} />
+                  <Route
+                    path="/goals/:goalId/review"
+                    element={<GoalReviewPage />}
+                  />
+                  <Route
+                    path="/goals/:goalId"
+                    element={
+                      realCanonicalRoutes ? (
+                        <GoalWorkspacePage />
+                      ) : canonicalGoalRoundTrip ? (
+                        <CanonicalGoalRoundTrip />
+                      ) : (
+                        <p>現在のワークスペース</p>
+                      )
+                    }
+                  />
+                  <Route
+                    path="/history/goals/:goalId"
+                    element={<p>canonical goal history</p>}
+                  />
+                  <Route path="/external" element={<p>外部route</p>} />
+                </Routes>
+              </PostCommitCleanupBoundary>
+            </MemoryRouter>
+          </AuthenticatedSessionTestProvider>
+        </GoalDeletionAdvisoryContext.Provider>
       </AutoSaveScopeProvider>
     </QueryClientProvider>,
   );

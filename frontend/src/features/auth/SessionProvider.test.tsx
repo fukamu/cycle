@@ -29,7 +29,14 @@ import {
 import {
   cleanupExpiredBrowserDrafts,
   clearUserDrafts,
+  tombstoneDeletedGoalAndClearDrafts,
 } from "../../shared/drafts/browserDraftCache";
+import {
+  type GoalDeletionAdvisoryChannelLike,
+  type GoalDeletionAdvisoryFactory,
+  usePublishGoalDeletionAdvisory,
+  useSubscribeGoalDeletionAdvisory,
+} from "../goal-deletion";
 import { SessionIdentityBoundary, SessionProvider } from "./SessionProvider";
 import type {
   AccountDeletionAdvisoryChannelLike,
@@ -49,10 +56,14 @@ import {
 vi.mock("../../shared/drafts/browserDraftCache", () => ({
   cleanupExpiredBrowserDrafts: vi.fn(),
   clearUserDrafts: vi.fn(),
+  tombstoneDeletedGoalAndClearDrafts: vi.fn(),
 }));
 
 const cleanupExpiredBrowserDraftsMock = vi.mocked(cleanupExpiredBrowserDrafts);
 const clearUserDraftsMock = vi.mocked(clearUserDrafts);
+const tombstoneDeletedGoalAndClearDraftsMock = vi.mocked(
+  tombstoneDeletedGoalAndClearDrafts,
+);
 
 const requestID = "00000000-0000-7000-8000-000000000001";
 const session: Session = {
@@ -86,6 +97,8 @@ beforeEach(() => {
   cleanupExpiredBrowserDraftsMock.mockResolvedValue(undefined);
   clearUserDraftsMock.mockReset();
   clearUserDraftsMock.mockResolvedValue(undefined);
+  tombstoneDeletedGoalAndClearDraftsMock.mockReset();
+  tombstoneDeletedGoalAndClearDraftsMock.mockResolvedValue(undefined);
 });
 
 describe("SessionProvider admission boundary", () => {
@@ -2327,6 +2340,214 @@ describe("SessionProvider runtime recovery", () => {
     expect(client.getQueryData<Session>(["session"])).toEqual(session);
   });
 
+  it("notifies an exact Goal deletion subscriber before purging that Goal cache", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000021";
+    const otherGoalId = "00000000-0000-7000-8000-000000000022";
+    const advisory = createAdvisoryChannelHarness();
+    const client = createClient();
+    const goalQueryKey = [
+      "user",
+      session.user.id,
+      "goal",
+      deletedGoalId,
+    ] as const;
+    const homeQueryKey = ["user", session.user.id, "home"] as const;
+    client.setQueryData(goalQueryKey, { goal: deletedGoalId });
+    client.setQueryData(homeQueryKey, { goals: [deletedGoalId] });
+    const cacheWasPresentWhenFenced: boolean[] = [];
+    const onDeleted = vi.fn(() => {
+      cacheWasPresentWhenFenced.push(
+        client.getQueryData(goalQueryKey) !== undefined,
+      );
+    });
+    stubSession(session);
+
+    renderProvider(
+      <GoalDeletionSubscriptionProbe
+        userId={session.user.id}
+        goalId={deletedGoalId}
+        onDeleted={onDeleted}
+      />,
+      client,
+      { goalDeletionAdvisoryFactory: () => advisory.channel },
+    );
+
+    await screen.findByText("goal deletion subscriber ready");
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId: otherGoalId,
+      });
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: switchedSession.user.id,
+        deletedGoalId,
+      });
+    });
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledWith(
+      session.user.id,
+      otherGoalId,
+    );
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce();
+    tombstoneDeletedGoalAndClearDraftsMock.mockClear();
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+
+    expect(onDeleted).toHaveBeenCalledOnce();
+    expect(cacheWasPresentWhenFenced).toEqual([true]);
+    expect(client.getQueryData(goalQueryKey)).toBeUndefined();
+    expect(client.getQueryData(homeQueryKey)).toBeUndefined();
+    expect(tombstoneDeletedGoalAndClearDraftsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not start fallback cleanup when confirmation arrives after the subscriber unmounts", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000026";
+    const advisory = createAdvisoryChannelHarness();
+    const onDeleted = vi.fn();
+    stubSession(session);
+
+    renderProvider(
+      <UnmountingGoalDeletionSubscriptionProbe
+        userId={session.user.id}
+        goalId={deletedGoalId}
+        onDeleted={onDeleted}
+      />,
+      createClient(),
+      { goalDeletionAdvisoryFactory: () => advisory.channel },
+    );
+    await screen.findByText("goal deletion subscriber ready");
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    expect(onDeleted).toHaveBeenCalledOnce();
+    expect(screen.getByText("goal deletion subscriber removed")).toBeVisible();
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    expect(tombstoneDeletedGoalAndClearDraftsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses durable Goal cleanup when an accepted advisory has no mounted subscriber", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000023";
+    const advisory = createAdvisoryChannelHarness();
+    const client = createClient();
+    const goalQueryKey = [
+      "user",
+      session.user.id,
+      "goal-review",
+      deletedGoalId,
+    ] as const;
+    client.setQueryData(goalQueryKey, { goal: deletedGoalId });
+    stubSession(session);
+
+    renderProvider(<p>fallback ready</p>, client, {
+      goalDeletionAdvisoryFactory: () => advisory.channel,
+    });
+    await screen.findByText("fallback ready");
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+
+    expect(client.getQueryData(goalQueryKey)).toBeUndefined();
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledWith(
+        session.user.id,
+        deletedGoalId,
+      ),
+    );
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce();
+  });
+
+  it("retries a failed subscriber-free Goal cleanup on sender confirmation", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000025";
+    tombstoneDeletedGoalAndClearDraftsMock
+      .mockRejectedValueOnce(new Error("private indexeddb failure"))
+      .mockResolvedValueOnce(undefined);
+    const advisory = createAdvisoryChannelHarness();
+    stubSession(session);
+
+    renderProvider(<p>fallback retry ready</p>, createClient(), {
+      goalDeletionAdvisoryFactory: () => advisory.channel,
+    });
+    await screen.findByText("fallback retry ready");
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce(),
+    );
+    const firstCleanup = tombstoneDeletedGoalAndClearDraftsMock.mock.results[0]
+      ?.value as Promise<void> | undefined;
+    if (firstCleanup === undefined) throw new Error("cleanup did not start");
+    await expect(firstCleanup).rejects.toThrow("private indexeddb failure");
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2),
+    );
+  });
+
+  it("publishes the exact current User and Goal deletion tuple", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000024";
+    const advisory = createAdvisoryChannelHarness();
+    stubSession(session);
+
+    renderProvider(
+      <GoalDeletionPublishProbe goalId={deletedGoalId} />,
+      createClient(),
+      { goalDeletionAdvisoryFactory: () => advisory.channel },
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "publish Goal deletion" }),
+    );
+    expect(advisory.postMessage).toHaveBeenCalledWith({
+      version: 1,
+      deletedUserId: session.user.id,
+      deletedGoalId,
+    });
+  });
+
   it("treats a same-user advisory as a weak CSRF refresh", async () => {
     const refreshedSession: Session = {
       ...session,
@@ -2567,7 +2788,8 @@ function createAdvisoryChannelHarness() {
   );
   const close = vi.fn();
   const channel: SessionIdentityAdvisoryChannelLike &
-    AccountDeletionAdvisoryChannelLike = {
+    AccountDeletionAdvisoryChannelLike &
+    GoalDeletionAdvisoryChannelLike = {
     postMessage,
     addEventListener,
     removeEventListener,
@@ -2583,6 +2805,59 @@ function createAdvisoryChannelHarness() {
       for (const listener of listeners) listener({ data });
     },
   };
+}
+
+function GoalDeletionSubscriptionProbe({
+  userId,
+  goalId,
+  onDeleted,
+}: {
+  readonly userId: string;
+  readonly goalId: string;
+  readonly onDeleted: () => void;
+}) {
+  const subscribe = useSubscribeGoalDeletionAdvisory();
+  useLayoutEffect(
+    () => subscribe(userId, goalId, onDeleted),
+    [goalId, onDeleted, subscribe, userId],
+  );
+  return <p>goal deletion subscriber ready</p>;
+}
+
+function UnmountingGoalDeletionSubscriptionProbe({
+  userId,
+  goalId,
+  onDeleted,
+}: {
+  readonly userId: string;
+  readonly goalId: string;
+  readonly onDeleted: () => void;
+}) {
+  const [subscribed, setSubscribed] = useState(true);
+  if (!subscribed) return <p>goal deletion subscriber removed</p>;
+  return (
+    <GoalDeletionSubscriptionProbe
+      userId={userId}
+      goalId={goalId}
+      onDeleted={() => {
+        onDeleted();
+        setSubscribed(false);
+      }}
+    />
+  );
+}
+
+function GoalDeletionPublishProbe({ goalId }: { readonly goalId: string }) {
+  const currentSession = useSession();
+  const publish = usePublishGoalDeletionAdvisory();
+  return (
+    <button
+      type="button"
+      onClick={() => publish(currentSession.user.id, goalId)}
+    >
+      publish Goal deletion
+    </button>
+  );
 }
 
 function RuntimeRecoveryProbe({
@@ -2778,6 +3053,7 @@ function renderProvider(
     readonly reloadApplication?: () => void;
     readonly advisoryFactory?: SessionIdentityAdvisoryFactory;
     readonly accountDeletionAdvisoryFactory?: AccountDeletionAdvisoryFactory;
+    readonly goalDeletionAdvisoryFactory?: GoalDeletionAdvisoryFactory;
   } = {},
 ) {
   render(
@@ -2794,6 +3070,11 @@ function renderProvider(
           : {
               accountDeletionAdvisoryFactory:
                 options.accountDeletionAdvisoryFactory,
+            })}
+        {...(options.goalDeletionAdvisoryFactory === undefined
+          ? {}
+          : {
+              goalDeletionAdvisoryFactory: options.goalDeletionAdvisoryFactory,
             })}
       >
         <SessionIdentityBoundary>{children}</SessionIdentityBoundary>

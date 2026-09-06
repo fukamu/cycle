@@ -1009,7 +1009,7 @@ Invariant:
 
 | Field | Type | Required | Rule |
 |---|---|---:|---|
-| id | GoalID(UUID) | Yes | immutable |
+| id | GoalID(UUID) | Yes | immutable、hard delete後も再利用しない |
 | userId | UserID | Yes | owner、immutable |
 | status | `active_cycle` / `goal_review` / `achieved` / `ended` | Yes | state machineに従う |
 | currentVersionNumber | int32 | Yes | >=1、Version作成時のみ+1 |
@@ -2004,6 +2004,7 @@ Guarantee:
 - User rolling quotaは復活しない。
 - 他Goalへ影響しない。
 - 途中失敗ならAggregateを削除済み扱いにしない。
+- Goal IDの再利用禁止は§15.4、FrontendのBrowser Draft削除とlate write fenceは§41.11に従う。
 
 Concurrent operation:
 
@@ -3838,9 +3839,9 @@ Rules:
 - Save successで該当record削除。
 - Goal Creation Draft abandon / Goal start successで該当Creation recordを削除する。
 - Goal Review Continue / Reviewからのachieved・ended成功で該当Review recordを削除する。後者は未保存のlocal変更も意図的に破棄する。
-- Goal Delete successで該当Goal records削除。
+- Goal Delete successまたはownerを秘匿した厳密な`GOAL_NOT_FOUND`確認後は、§41.11のdurable Goal tombstoneと同じtransactionで該当Goal recordsを削除する。
 - Account Delete successでは§41.10、§41.11に従いUser recordsを全削除し、late Browser writeによる復活をdurable tombstoneで防ぐ。
-- Browser Draftのputは常に同じUserのAccount Delete tombstoneを同一transaction内で確認し、存在すればwriteしない。
+- Browser Draftのputは§41.11に従い、同じUserのAccount Delete tombstoneと、Goalに紐づくrecordでは同じGoalのGoal Delete tombstoneを同一transaction内で確認し、存在すればwriteしない。
 - User切替時に切替前UserのDraftを切替後Userへ自動送信しない。
 - TTL 24h。起動時cleanup。
 - `localStorage`へGoal/P/D/C/A本文を保存しない。
@@ -5205,6 +5206,8 @@ Goal Aggregate DeleteはContent deletion Use Caseであり、次を同一Transac
 
 未確定中だけ保持するsettlement metadataは元reservationの月と上限額に限り、Goal/Cycle/Draft IDや本文を含めない。
 
+Frontendはserver `204`またはownerを秘匿した厳密な`GOAL_NOT_FOUND`だけをlocal deletion commitの根拠とし、Browser Draftとcross-tab cacheのfenceを§41.11の順序で完了する。
+
 ## 41.10 Account Delete
 
 User row hard deleteとFK cascadeで、Goal、Draft、Version、Cycle、AI content、AI Usage、AuthIdentity、Sessionを削除する。個人を特定しないaggregate monthly budget / metricsは保持可能。
@@ -5221,6 +5224,8 @@ Serverの`204`をcommit境界とし、Frontendは次の順序を守る。
 
 BroadcastChannelはbest-effortの早期停止手段で、durable tombstoneとAPI identity bindingが正本である。Raw User IDはsame-originの一時messageだけに使用し、advisoryやprivacy metadataとして永続化せず、log / telemetryへ出さない。
 
+Account tombstone作成transactionは、そのUserのBrowser Draft削除に加え、§41.11の`ownerDigest`が一致するGoal tombstoneも削除する。Account tombstoneを先に同じtransaction内で成立させるため、並行するGoal cleanupはper-Goal tombstoneを再作成しない。Account tombstone自体の保持は§41.11に従う。
+
 Backupは通常Retention経過で失効させ、削除済みUserを通常運用環境へ個別復元しない。Production前にrestore windowを運用ポリシーとして確定する。
 
 ## 41.11 Browser draft privacy
@@ -5231,9 +5236,13 @@ IndexedDBはXSSに対する暗号化境界ではない。
 - Draft TTLは§28.5のBrowser Draft Cache contractに従う。
 - Save成功・Draft resolve・Goal Delete・Account Delete成功時に削除する。
 - Account Deleteではoriginごとのcryptographically random 32-byte saltと`SHA-256(salt:userId)` digestだけをprivacy metadata / tombstoneへ保存し、raw User IDや本文を保存しない。
-- tombstone作成と対象User Draft削除を一つのread-write transaction、tombstone確認とDraft putを一つのread-write transactionにする。これによりclearより前後いずれのlate putも削除済みDraftを復活させない。
+- Goal Deleteでは同じorigin saltを再利用し、`fukamu-cycle-goal-deletion-v1`、saltのlowercase hex、User ID、Goal IDの各UTF-8 byte列を、この順に4-byte unsigned big-endian長prefixで連結して`SHA-256`を計算する。Goal tombstoneへ保存するのはこの`digest`と、既存Account Delete digestである`ownerDigest`だけとし、raw User ID、raw Goal ID、本文、timestampを保存しない。
+- Goal tombstone作成と対象Goal Draft削除を一つのread-write transactionにする。同じtransactionでAccount tombstoneを確認し、すでにAccount Delete済みならGoal tombstoneを作成しない。Goalに紐づくDraft putはAccount tombstoneとGoal tombstoneの両方を、Goal Creation Draft putはAccount tombstoneを、Draft writeと同じread-write transactionで確認する。これによりclearより前後いずれのlate putも削除済みcontentを復活させない。
+- Account DeleteはAccount tombstone作成、対象User Draft削除、その`ownerDigest`に属するGoal tombstone削除を一つのread-write transactionにする。Goal tombstoneはAccount存続中TTLなしで保持し、Account Delete時にだけこのtransactionで除去する。Account tombstoneはsite dataが利用者またはBrowserにより削除されるまで維持する。
+- Goal Deleteのserver `204`またはownerを秘匿した厳密な`GOAL_NOT_FOUND`確認後、senderはdurable cleanupより先に`version / deletedUserId / deletedGoalId`だけを持つversioned same-origin advisoryをpublishする。該当User / Goalを表示する受信tabはcallback内でeditorとleaseを同期的にfenceし、autosaveをquiesceしてから同じdurable cleanupを行う。別User / Goalは無視し、受信通知を再publishしない。senderはcleanup成功後に同じ通知を一度再送でき、受信側は重複をcoalesceする。BroadcastChannelはbest-effortであり、suspend / offline / delivery失敗時もdurable tombstoneを正本とする。
+- 通常のGoal達成・終了やReview ContinueによるDraft resolveはGoal Delete tombstoneを作成せず、対象Draftだけを削除する。
 - Salt、Web Crypto、metadata、transactionが利用不能または不正な場合はDraft write / deletion cleanupをfail-closedにする。
-- §28.5のTTLはDraft recordだけへ適用する。Account Delete tombstoneはsite dataが利用者またはBrowserにより削除されるまで維持する。
+- §28.5のTTLはDraft recordだけへ適用する。
 - User切替時に別Userへ自動送信しない。
 - `localStorage`へGoal/P/D/C/A本文を保存しない。
 
@@ -5849,6 +5858,8 @@ Exact test file名やcase IDはRepositoryのTest suiteをSourceとし、本書�
 7. 各永続化step失敗時のall-or-none rollback。
 8. Browser identity/route generation変更後に旧payloadを公開しないこと。
 9. 削除後にcontent、cache、late callbackがresourceを復元しないこと。
+
+Browser Draft privacy境界では、Goalに紐づくDraft putとdelete cleanupの両直列化順、Goal cleanupとAccount cleanupの両直列化順、別User / Goal isolation、旧schema writer、advisoryのsender / receiver / 重複 / 未達を決定的に検証する。
 
 Anonymous create rate limitでは、UTC hour境界の両端包含、23.5時間離れたbucketの24時間上限、guard待機後のcanonical time、future bucket除外、hour rollover並行request、guard / bucket expiryの単調性、sentinel更新失敗時のrollback、blocked attemptの永続化、limiterとcleanupの競合を実PostgreSQLで追加検証する。Frontendはrate-limit 429を自動再送しないこと、手動Retryと専用案内が残ることを検証する。
 
