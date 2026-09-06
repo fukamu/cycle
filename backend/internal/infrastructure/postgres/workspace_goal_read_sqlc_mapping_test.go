@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
@@ -104,3 +105,187 @@ func TestMapDraftViewRejectsInfiniteUpdatedTimestamp(t *testing.T) {
 	}
 
 }
+
+func TestValidateGoalReviewViewRejectsCrossFieldInconsistency(t *testing.T) {
+	t.Parallel()
+
+	const otherID = "19000000-0000-7000-8000-000000000001"
+	tests := map[string]struct {
+		requestedGoalID string
+		mutate          func(*workspace.ReviewView)
+	}{
+		"requested Goal differs": {
+			requestedGoalID: otherID,
+		},
+		"Goal status differs": {
+			mutate: func(view *workspace.ReviewView) { view.Goal.Status = goal.StatusActiveCycle },
+		},
+		"review Goal is terminal": {
+			mutate: func(view *workspace.ReviewView) {
+				terminalAt := view.ReviewDraft.UpdatedAt
+				view.Goal.TerminalAt = &terminalAt
+			},
+		},
+		"current work is missing": {
+			mutate: func(view *workspace.ReviewView) { view.Goal.CurrentWork = nil },
+		},
+		"current work kind differs": {
+			mutate: func(view *workspace.ReviewView) { view.Goal.CurrentWork.Kind = "active_cycle" },
+		},
+		"current work contains active Cycle fields": {
+			mutate: func(view *workspace.ReviewView) {
+				view.Goal.CurrentWork.CycleID = otherID
+				view.Goal.CurrentWork.CycleSequenceNumber = 1
+			},
+		},
+		"current work Draft differs": {
+			mutate: func(view *workspace.ReviewView) { view.Goal.CurrentWork.ReviewDraftID = otherID },
+		},
+		"current work Trigger Cycle differs": {
+			mutate: func(view *workspace.ReviewView) { view.Goal.CurrentWork.TriggerCycleID = otherID },
+		},
+		"current work Trigger sequence differs": {
+			mutate: func(view *workspace.ReviewView) { view.Goal.CurrentWork.TriggerCycleSequenceNumber++ },
+		},
+		"next Cycle sequence does not follow Trigger": {
+			mutate: func(view *workspace.ReviewView) { view.Goal.NextCycleSequenceNumber++ },
+		},
+		"Draft type differs": {
+			mutate: func(view *workspace.ReviewView) { view.ReviewDraft.DraftType = string(goal.DraftCreation) },
+		},
+		"Draft Goal is missing": {
+			mutate: func(view *workspace.ReviewView) { view.ReviewDraft.GoalID = nil },
+		},
+		"Draft Goal differs": {
+			mutate: func(view *workspace.ReviewView) { view.ReviewDraft.GoalID = goalReviewStringPointer(otherID) },
+		},
+		"Draft base Version is missing": {
+			mutate: func(view *workspace.ReviewView) { view.ReviewDraft.BaseGoalVersionID = nil },
+		},
+		"Draft base Version differs": {
+			mutate: func(view *workspace.ReviewView) {
+				view.ReviewDraft.BaseGoalVersionID = goalReviewStringPointer(otherID)
+			},
+		},
+		"Draft Review Cycle is missing": {
+			mutate: func(view *workspace.ReviewView) { view.ReviewDraft.ReviewCycleID = nil },
+		},
+		"Draft Review Cycle differs": {
+			mutate: func(view *workspace.ReviewView) { view.ReviewDraft.ReviewCycleID = goalReviewStringPointer(otherID) },
+		},
+		"Trigger Cycle Goal differs": {
+			mutate: func(view *workspace.ReviewView) { view.TriggerCycle.GoalID = otherID },
+		},
+		"Trigger Cycle is not completed": {
+			mutate: func(view *workspace.ReviewView) { view.TriggerCycle.Status = cycle.StatusActive },
+		},
+		"Trigger Cycle completion is missing": {
+			mutate: func(view *workspace.ReviewView) { view.TriggerCycle.CompletedAt = nil },
+		},
+		"Trigger Cycle has canceled timestamp": {
+			mutate: func(view *workspace.ReviewView) {
+				canceledAt := view.TriggerCycle.StartedAt
+				view.TriggerCycle.CanceledAt = &canceledAt
+			},
+		},
+		"Trigger Cycle has cancellation reason": {
+			mutate: func(view *workspace.ReviewView) {
+				reason := cycle.CancellationGoalEnded
+				view.TriggerCycle.CancellationReason = &reason
+			},
+		},
+		"Trigger Cycle Version differs": {
+			mutate: func(view *workspace.ReviewView) { view.TriggerCycle.GoalVersion.ID = otherID },
+		},
+	}
+	for name, test := range tests {
+		name, test := name, test
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			view := validGoalReviewView()
+			if test.mutate != nil {
+				test.mutate(&view)
+			}
+			requestedGoalID := test.requestedGoalID
+			if requestedGoalID == "" {
+				requestedGoalID = view.Goal.ID
+			}
+			if err := validateGoalReviewView(requestedGoalID, view); !errors.Is(err, workspace.ErrGoalReviewInvariant) {
+				t.Fatalf("error = %v, want %v", err, workspace.ErrGoalReviewInvariant)
+			}
+		})
+	}
+}
+
+func TestValidateGoalReviewViewAllowsEditedDraft(t *testing.T) {
+	t.Parallel()
+
+	view := validGoalReviewView()
+	if view.ReviewDraft.Body == view.Goal.CurrentVersion.Body || view.ReviewDraft.Revision == 0 ||
+		view.TriggerCycle.CompletedAt == nil || !view.ReviewDraft.UpdatedAt.After(*view.TriggerCycle.CompletedAt) {
+		t.Fatal("test fixture must exercise an edited Review Draft")
+	}
+	if err := validateGoalReviewView(view.Goal.ID, view); err != nil {
+		t.Fatalf("edited Review Draft validation error = %v", err)
+	}
+}
+
+func TestGoalReviewMaterializationErrorPreservesPersistenceCause(t *testing.T) {
+	t.Parallel()
+
+	for _, cause := range []error{
+		workspace.ErrGoalPersistenceInvariant,
+		workspace.ErrCyclePersistenceInvariant,
+	} {
+		mapped := goalReviewMaterializationError(cause)
+		if !errors.Is(mapped, workspace.ErrGoalReviewInvariant) || !errors.Is(mapped, cause) {
+			t.Errorf("mapped error = %v, want Review invariant and cause %v", mapped, cause)
+		}
+	}
+	databaseError := errors.New("database unavailable")
+	if mapped := goalReviewMaterializationError(databaseError); mapped != databaseError {
+		t.Fatalf("database error = %v, want original %v", mapped, databaseError)
+	}
+}
+
+func validGoalReviewView() workspace.ReviewView {
+	const (
+		goalID    = "12000000-0000-7000-8000-000000000001"
+		versionID = "13000000-0000-7000-8000-000000000001"
+		cycleID   = "14000000-0000-7000-8000-000000000001"
+		draftID   = "15000000-0000-7000-8000-000000000001"
+	)
+	startedAt := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Hour)
+	updatedAt := completedAt.Add(time.Hour)
+	return workspace.ReviewView{
+		Goal: workspace.GoalView{
+			ID: goalID, Status: goal.StatusGoalReview, Revision: 1,
+			CurrentVersion: workspace.GoalVersionView{
+				ID: versionID, VersionNumber: 1, Body: "current Goal", CreatedAt: startedAt,
+			},
+			CurrentWork: &workspace.CurrentWorkView{
+				Kind: "goal_review", ReviewDraftID: draftID,
+				TriggerCycleID: cycleID, TriggerCycleSequenceNumber: 1,
+			},
+			NextCycleSequenceNumber: 2,
+			CreatedAt:               startedAt,
+		},
+		ReviewDraft: workspace.DraftView{
+			ID: draftID, DraftType: string(goal.DraftReview), GoalID: goalReviewStringPointer(goalID),
+			BaseGoalVersionID: goalReviewStringPointer(versionID), ReviewCycleID: goalReviewStringPointer(cycleID),
+			Body: "edited Goal", Revision: 4, UpdatedAt: updatedAt,
+		},
+		TriggerCycle: workspace.CycleView{
+			ID: cycleID, GoalID: goalID, SequenceNumber: 1, Status: cycle.StatusCompleted,
+			GoalVersion: workspace.GoalVersionView{
+				ID: versionID, VersionNumber: 1, Body: "current Goal", CreatedAt: startedAt,
+			},
+			StartedAt: startedAt, CompletedAt: &completedAt,
+			Plan: "P", Do: "D", Check: "C", Action: "A", ContentRevision: 4,
+			FrameRevisions: workspace.FrameRevisions{Plan: 1, Do: 1, Check: 1, Action: 1},
+		},
+	}
+}
+
+func goalReviewStringPointer(value string) *string { return &value }

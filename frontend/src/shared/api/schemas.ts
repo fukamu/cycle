@@ -126,11 +126,64 @@ export const homeSchema = z.object({
 });
 export type Home = z.infer<typeof homeSchema>;
 
-export const reviewSchema = z.object({
-  goal: goalSchema,
-  reviewDraft: draftSchema,
-  triggerCycle: cycleSchema,
-});
+export const reviewSchema = z
+  .object({
+    goal: goalSchema,
+    reviewDraft: draftSchema,
+    triggerCycle: cycleSchema,
+  })
+  .superRefine(({ goal, reviewDraft, triggerCycle }, context) => {
+    const addInvariantIssue = (path: PropertyKey[]) =>
+      context.addIssue({
+        code: "custom",
+        message: "Goal Review response is inconsistent",
+        path,
+      });
+
+    if (goal.status !== "goal_review") addInvariantIssue(["goal", "status"]);
+    if (goal.terminalAt !== null) addInvariantIssue(["goal", "terminalAt"]);
+
+    const currentWork = goal.currentWork;
+    if (currentWork?.kind !== "goal_review") {
+      addInvariantIssue(["goal", "currentWork"]);
+    } else {
+      if (currentWork.reviewDraftId !== reviewDraft.id)
+        addInvariantIssue(["goal", "currentWork", "reviewDraftId"]);
+      if (currentWork.triggerCycleId !== triggerCycle.id)
+        addInvariantIssue(["goal", "currentWork", "triggerCycleId"]);
+      if (
+        currentWork.triggerCycleSequenceNumber !== triggerCycle.sequenceNumber
+      )
+        addInvariantIssue([
+          "goal",
+          "currentWork",
+          "triggerCycleSequenceNumber",
+        ]);
+    }
+
+    if (goal.nextCycleSequenceNumber !== triggerCycle.sequenceNumber + 1)
+      addInvariantIssue(["goal", "nextCycleSequenceNumber"]);
+    if (reviewDraft.draftType !== "review")
+      addInvariantIssue(["reviewDraft", "draftType"]);
+    if (reviewDraft.goalId !== goal.id)
+      addInvariantIssue(["reviewDraft", "goalId"]);
+    if (reviewDraft.baseGoalVersionId !== goal.currentVersion.id)
+      addInvariantIssue(["reviewDraft", "baseGoalVersionId"]);
+    if (reviewDraft.reviewCycleId !== triggerCycle.id)
+      addInvariantIssue(["reviewDraft", "reviewCycleId"]);
+    if (triggerCycle.goalId !== goal.id)
+      addInvariantIssue(["triggerCycle", "goalId"]);
+    if (triggerCycle.status !== "completed")
+      addInvariantIssue(["triggerCycle", "status"]);
+    if (triggerCycle.goalVersion.id !== goal.currentVersion.id)
+      addInvariantIssue(["triggerCycle", "goalVersion", "id"]);
+    if (triggerCycle.completedAt === null)
+      addInvariantIssue(["triggerCycle", "completedAt"]);
+    if (triggerCycle.canceledAt !== null)
+      addInvariantIssue(["triggerCycle", "canceledAt"]);
+    if (triggerCycle.cancellationReason !== null)
+      addInvariantIssue(["triggerCycle", "cancellationReason"]);
+  });
 export type GoalReview = z.infer<typeof reviewSchema>;
 export const goalPageSchema = z.object({
   items: z.array(goalSchema),

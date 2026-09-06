@@ -3,9 +3,12 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
@@ -19,6 +22,54 @@ type goalReadReviewFixture struct {
 	reviewDraftID     string
 	startOperationID  string
 	finishOperationID string
+}
+
+type goalReviewSnapshotContextKey struct{}
+
+type goalReviewSnapshotTracer struct{}
+
+type goalReviewSnapshotBarrier struct {
+	draftReadStarted chan struct{}
+	releaseDraftRead chan struct{}
+	startedOnce      sync.Once
+	releaseOnce      sync.Once
+}
+
+func newGoalReviewSnapshotBarrier() *goalReviewSnapshotBarrier {
+	return &goalReviewSnapshotBarrier{
+		draftReadStarted: make(chan struct{}),
+		releaseDraftRead: make(chan struct{}),
+	}
+}
+
+func (*goalReviewSnapshotTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	barrier, ok := ctx.Value(goalReviewSnapshotContextKey{}).(*goalReviewSnapshotBarrier)
+	if !ok || barrier == nil || !isGoalReviewSnapshotDraftRead(data.SQL) {
+		return ctx
+	}
+	barrier.startedOnce.Do(func() { close(barrier.draftReadStarted) })
+	select {
+	case <-barrier.releaseDraftRead:
+	case <-ctx.Done():
+	}
+	return ctx
+}
+
+func (*goalReviewSnapshotTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
+}
+
+func (barrier *goalReviewSnapshotBarrier) release() {
+	barrier.releaseOnce.Do(func() { close(barrier.releaseDraftRead) })
+}
+
+func isGoalReviewSnapshotDraftRead(sql string) bool {
+	normalized := normalizeObservedSQL(sql)
+	return strings.Contains(normalized, "from goal_drafts") &&
+		strings.Contains(normalized, "where goal_id=$1 and user_id=$2 and draft_type='review'")
 }
 
 func seedGoalReadReviewFixture(
@@ -160,6 +211,141 @@ VALUES($1,$2,'creation',$3,4,$4,$4),($5,$6,'creation','outsider draft',0,$4,$4)`
 	}
 }
 
+func TestWorkspaceStoreGetReviewUsesOneSnapshotAcrossNextReviewGeneration(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	now := integrationNow()
+	const (
+		userID                    = "10000000-0000-7000-8000-000000000001"
+		firstReviewDraftID        = "61000000-0000-7000-8000-000000000501"
+		firstCompleteOperationID  = "71000000-0000-7000-8000-000000000501"
+		continueOperationID       = "72000000-0000-7000-8000-000000000501"
+		secondCycleID             = "41000000-0000-7000-8000-000000000501"
+		secondCompleteOperationID = "71000000-0000-7000-8000-000000000502"
+		secondReviewDraftID       = "61000000-0000-7000-8000-000000000502"
+	)
+	insertAIConcurrencyUser(t, pool, userID, now)
+	baseStore := NewWorkspaceStore(pool)
+	fixture := progressingGoalFixtures()[0]
+	firstReview := prepareReviewTransitionReview(
+		t, baseStore, userID, fixture, 2, firstReviewDraftID, firstCompleteOperationID, now,
+	)
+
+	config := pool.Config()
+	config.ConnConfig.Tracer = &goalReviewSnapshotTracer{}
+	config.MinConns = 0
+	config.MaxConns = 1
+	tracedPool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tracedPool.Close)
+	tracedStore := NewWorkspaceStore(tracedPool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	barrier := newGoalReviewSnapshotBarrier()
+	defer func() {
+		barrier.release()
+		cancel()
+	}()
+	type reviewResult struct {
+		view workspace.ReviewView
+		err  error
+	}
+	results := make(chan reviewResult, 1)
+	go func() {
+		queryCtx := context.WithValue(ctx, goalReviewSnapshotContextKey{}, barrier)
+		view, queryErr := tracedStore.GetReview(queryCtx, userID, fixture.goalID)
+		results <- reviewResult{view: view, err: queryErr}
+	}()
+
+	select {
+	case <-barrier.draftReadStarted:
+	case <-ctx.Done():
+		t.Fatalf("GetReview did not reach its Review Draft read: %v", ctx.Err())
+	}
+
+	continued, err := executeContinueReviewUseCase(baseStore, ctx, workspace.ContinueReviewInput{
+		UserID: userID, GoalID: fixture.goalID, OperationID: continueOperationID,
+		ExpectedGoalRevision: firstReview.Goal.Revision, ExpectedDraftRevision: firstReview.ReviewDraft.Revision,
+		CycleID: secondCycleID, Now: now.Add(3 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continued.VersionCreated {
+		t.Fatal("unchanged Review unexpectedly created a Goal Version")
+	}
+	saveAllAutosaveFrames(t, baseStore, fixture.goalID, secondCycleID, now.Add(4*time.Minute))
+	secondReview, err := executeCycleCompleteUseCase(baseStore, ctx, workspace.CompleteCycleInput{
+		UserID: userID, GoalID: fixture.goalID, CycleID: secondCycleID,
+		OperationID: secondCompleteOperationID, ExpectedGoalRevision: continued.Goal.Revision,
+		ExpectedContentRevision: 4,
+	}, now.Add(5*time.Minute), secondReviewDraftID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	barrier.release()
+
+	select {
+	case result := <-results:
+		if result.err != nil {
+			t.Fatalf("in-flight Review A error = %v", result.err)
+		}
+		assertGoalReviewMatchesCompletion(t, result.view, firstReview)
+	case <-ctx.Done():
+		t.Fatalf("GetReview did not finish after releasing its Draft read: %v", ctx.Err())
+	}
+
+	fresh, err := baseStore.GetReview(ctx, userID, fixture.goalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGoalReviewMatchesCompletion(t, fresh, secondReview)
+	if fresh.ReviewDraft.ID == firstReview.ReviewDraft.ID || fresh.TriggerCycle.ID == firstReview.CompletedCycle.ID {
+		t.Fatalf("fresh Review did not advance generations: %#v", fresh)
+	}
+}
+
+func assertGoalReviewMatchesCompletion(
+	t *testing.T,
+	view workspace.ReviewView,
+	completed workspace.CompleteCycleResult,
+) {
+	t.Helper()
+	if view.Goal.ID != completed.Goal.ID || view.Goal.Status != completed.Goal.Status ||
+		view.Goal.Revision != completed.Goal.Revision ||
+		view.Goal.CurrentVersion.ID != completed.Goal.CurrentVersion.ID ||
+		view.Goal.NextCycleSequenceNumber != completed.Goal.NextCycleSequenceNumber ||
+		view.Goal.CurrentWork == nil || completed.Goal.CurrentWork == nil ||
+		*view.Goal.CurrentWork != *completed.Goal.CurrentWork {
+		t.Fatalf("Review Goal = %#v, want completion Goal %#v", view.Goal, completed.Goal)
+	}
+	if view.ReviewDraft.ID != completed.ReviewDraft.ID ||
+		view.ReviewDraft.DraftType != completed.ReviewDraft.DraftType ||
+		view.ReviewDraft.Body != completed.ReviewDraft.Body ||
+		view.ReviewDraft.Revision != completed.ReviewDraft.Revision ||
+		!sameOptionalString(view.ReviewDraft.GoalID, completed.ReviewDraft.GoalID) ||
+		!sameOptionalString(view.ReviewDraft.BaseGoalVersionID, completed.ReviewDraft.BaseGoalVersionID) ||
+		!sameOptionalString(view.ReviewDraft.ReviewCycleID, completed.ReviewDraft.ReviewCycleID) {
+		t.Fatalf("Review Draft = %#v, want completion Draft %#v", view.ReviewDraft, completed.ReviewDraft)
+	}
+	if view.TriggerCycle.ID != completed.CompletedCycle.ID ||
+		view.TriggerCycle.GoalID != completed.CompletedCycle.GoalID ||
+		view.TriggerCycle.GoalVersion.ID != completed.CompletedCycle.GoalVersion.ID ||
+		view.TriggerCycle.SequenceNumber != completed.CompletedCycle.SequenceNumber ||
+		view.TriggerCycle.Status != completed.CompletedCycle.Status {
+		t.Fatalf("Trigger Cycle = %#v, want completed Cycle %#v", view.TriggerCycle, completed.CompletedCycle)
+	}
+}
+
+func sameOptionalString(first, second *string) bool {
+	if first == nil || second == nil {
+		return first == nil && second == nil
+	}
+	return *first == *second
+}
+
 func TestGoalReadModelsFailClosedOnIncompleteLeftJoinState(t *testing.T) {
 	t.Run("active Goal without active Cycle", func(t *testing.T) {
 		pool := integrationPool(t)
@@ -213,8 +399,9 @@ VALUES($1,$2,$3,1,'review goal',$4,$5)`, versionID, userID, goalID, operation, n
 			t.Fatal(err)
 		}
 		store := NewWorkspaceStore(pool)
-		if _, err := store.GetReview(context.Background(), userID, goalID); !errors.Is(err, workspace.ErrGoalPersistenceInvariant) {
-			t.Fatalf("Review without Draft error = %v", err)
+		_, err := store.GetReview(context.Background(), userID, goalID)
+		if !errors.Is(err, workspace.ErrGoalReviewInvariant) || !errors.Is(err, workspace.ErrGoalPersistenceInvariant) {
+			t.Fatalf("Review without Draft error = %v, want Review and Goal persistence invariants", err)
 		}
 	})
 

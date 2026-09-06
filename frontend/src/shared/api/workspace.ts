@@ -66,6 +66,11 @@ const terminateEnvelope = z.object({
   canceledCycle: cycleSchema.nullable(),
   replayed: z.boolean().optional(),
 });
+const reviewSchemaForGoal = (goalId: string) =>
+  reviewSchema.refine(({ goal }) => goal.id === goalId, {
+    message: "Goal Review response does not match the requested Goal",
+    path: ["goal", "id"],
+  });
 
 type CommandRequestOptions = {
   readonly operationId: string;
@@ -212,7 +217,7 @@ export const getReview = (
   requestAuthenticatedJSON(
     lease,
     `/api/v1/goals/${goalId}/review`,
-    reviewSchema,
+    reviewSchemaForGoal(goalId),
     {
       signal,
     },
