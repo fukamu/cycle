@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedRequestLease } from "./client";
+import { reviewSchema } from "./schemas";
 import {
   completeCycle,
   continueReview,
@@ -41,6 +42,60 @@ const authenticatedJSON = (payload: unknown) =>
     headers: { "X-Fukamu-Authenticated-User-ID": goalId },
   });
 
+const reviewResponse = (responseGoalId = goalId) => {
+  const goalVersion = {
+    id: "00000000-0000-7000-8000-000000000005",
+    versionNumber: 2,
+    body: "現在の目標",
+    createdAt: "2026-08-19T00:00:00Z",
+  };
+  return {
+    goal: {
+      id: responseGoalId,
+      status: "goal_review",
+      revision: 4,
+      currentVersion: goalVersion,
+      currentWork: {
+        kind: "goal_review",
+        reviewDraftId,
+        triggerCycleId: cycleId,
+        triggerCycleSequenceNumber: 3,
+      },
+      nextCycleSequenceNumber: 4,
+      cycleCount: 3,
+      createdAt: "2026-08-18T00:00:00Z",
+      terminalAt: null,
+    },
+    reviewDraft: {
+      id: reviewDraftId,
+      draftType: "review",
+      goalId: responseGoalId,
+      baseGoalVersionId: goalVersion.id,
+      reviewCycleId: cycleId,
+      body: "次のCycleで試す目標",
+      revision: 2,
+      updatedAt: "2026-08-20T00:02:00Z",
+    },
+    triggerCycle: {
+      id: cycleId,
+      goalId: responseGoalId,
+      sequenceNumber: 3,
+      status: "completed",
+      goalVersion: { ...goalVersion },
+      startedAt: "2026-08-19T00:00:00Z",
+      completedAt: "2026-08-20T00:00:00Z",
+      canceledAt: null,
+      cancellationReason: null,
+      plan: "計画",
+      do: "実行",
+      check: "評価",
+      action: "改善",
+      contentRevision: 4,
+      frameRevisions: { plan: 1, do: 1, check: 1, action: 1 },
+    },
+  };
+};
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("goal-scoped workspace API", () => {
@@ -61,6 +116,34 @@ describe("goal-scoped workspace API", () => {
 
     await expect(getHome(lease)).resolves.toBeDefined();
     expect(fetchMock.mock.calls[0]?.[1]?.cache).toBe("no-store");
+  });
+
+  it("accepts a coherent Review response for the requested Goal", async () => {
+    const response = reviewResponse();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(authenticatedJSON(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getReview(lease, goalId)).resolves.toEqual(response);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/v1/goals/${goalId}/review`);
+  });
+
+  it("rejects an internally coherent Review for a different path Goal", async () => {
+    const otherGoalId = "10000000-0000-7000-8000-000000000001";
+    const response = reviewResponse(otherGoalId);
+    expect(reviewSchema.safeParse(response).success).toBe(true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(authenticatedJSON(response)),
+    );
+
+    await expect(getReview(lease, goalId)).rejects.toMatchObject({
+      name: "ZodError",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: ["goal", "id"] }),
+      ]),
+    });
   });
 
   it.each([

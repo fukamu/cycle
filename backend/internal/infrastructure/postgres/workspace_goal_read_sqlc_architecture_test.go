@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +44,40 @@ func TestGoalReadAdaptersDoNotEmbedRawSQL(t *testing.T) {
 	sort.Strings(violations)
 	t.Fatalf("Goal read SQL must live in queries/*.sql and be called through generated methods; raw SQL found:\n%s",
 		strings.Join(violations, "\n"))
+}
+
+func TestGetReviewKeepsReadOnlyRepeatableReadSnapshot(t *testing.T) {
+	t.Parallel()
+
+	contents, err := os.ReadFile("workspace_store.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const declaration = "func (store *WorkspaceStore) GetReview"
+	start := strings.Index(string(contents), declaration)
+	if start < 0 {
+		t.Fatal("WorkspaceStore.GetReview is missing")
+	}
+	end := strings.Index(string(contents[start:]), "\nfunc getCycleView")
+	if end < 0 {
+		t.Fatal("WorkspaceStore.GetReview end is missing")
+	}
+	source := string(contents[start : start+end])
+	for _, fragment := range []string{
+		"store.pool.BeginTx(ctx, pgx.TxOptions{",
+		"IsoLevel:   pgx.RepeatableRead",
+		"AccessMode: pgx.ReadOnly",
+		"defer rollback(ctx, tx)",
+		"queries := store.queries.WithTx(tx)",
+		"getGoalView(ctx, tx, userID, goalID)",
+		"queries.GetGoalReviewDraft(ctx",
+		"getCycleView(ctx, tx, userID, goalID",
+		"tx.Commit(ctx)",
+	} {
+		if !strings.Contains(source, fragment) {
+			t.Errorf("WorkspaceStore.GetReview is missing %q", fragment)
+		}
+	}
 }
 
 func goalReadRawSQLViolations(
