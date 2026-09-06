@@ -11,7 +11,8 @@ export function shouldRetryQuery(
     error instanceof APIError &&
     ((error.status === 401 &&
       (error.code === "SESSION_MISSING" || error.code === "SESSION_EXPIRED")) ||
-      (error.status === 403 && error.code === "CSRF_INVALID"))
+      (error.status === 403 && error.code === "CSRF_INVALID") ||
+      (error.status === 404 && error.code === "GOAL_NOT_FOUND"))
   ) {
     return false;
   }

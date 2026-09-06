@@ -31,6 +31,7 @@ import type { Cycle, Goal, Session } from "../shared/api/schemas";
 import {
   completeCycle,
   deleteGoal,
+  generateAction,
   getCycle,
   getGoal,
   refineAction,
@@ -187,6 +188,117 @@ describe("GoalWorkspacePage", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each(["Goal", "Cycle"] as const)(
+    "turns an initial %s GET GOAL_NOT_FOUND into one durable deletion fence",
+    async (resource) => {
+      const advisory = createGoalDeletionAdvisoryHarness();
+      const deleted = deletedGoalError(`request-initial-${resource}`);
+      if (resource === "Goal") vi.mocked(getGoal).mockRejectedValue(deleted);
+      else vi.mocked(getCycle).mockRejectedValue(deleted);
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+
+      renderPage(cache, { goalDeletionAdvisory: advisory });
+
+      expect(await screen.findByText("ホーム")).toBeInTheDocument();
+      expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+        session.user.id,
+        goal.id,
+      );
+      expect(advisory.publish).toHaveBeenCalledTimes(2);
+      expect(getGoal).toHaveBeenCalledOnce();
+      expect(getCycle).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("coalesces concurrent initial Goal and Cycle GOAL_NOT_FOUND responses", async () => {
+    const advisory = createGoalDeletionAdvisoryHarness();
+    vi.mocked(getGoal).mockRejectedValue(
+      deletedGoalError("request-initial-goal"),
+    );
+    vi.mocked(getCycle).mockRejectedValue(
+      deletedGoalError("request-initial-cycle"),
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+
+    renderPage(cache, { goalDeletionAdvisory: advisory });
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(advisory.publish).toHaveBeenCalledTimes(2);
+    expect(getGoal).toHaveBeenCalledOnce();
+    expect(getCycle).toHaveBeenCalledOnce();
+  });
+
+  it("cleans an initial late GOAL_NOT_FOUND without replacing the newer route", async () => {
+    const goalRequest = deferred<Awaited<ReturnType<typeof getGoal>>>();
+    vi.mocked(getGoal).mockReturnValue(goalRequest.promise);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+
+    renderPage(cache, { commandRouteSwitch: true });
+    fireEvent.click(
+      await screen.findByRole("link", {
+        name: "コマンド中に外部routeへ移動",
+      }),
+    );
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+
+    await act(async () => {
+      goalRequest.reject(deletedGoalError("request-late-initial-goal"));
+    });
+
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
+    expect(screen.getByText("外部route")).toBeInTheDocument();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+  });
+
+  it("keeps an invalidated autosave GOAL_NOT_FOUND as a deletion witness", async () => {
+    const saveRequest = deferred<Awaited<ReturnType<typeof saveCycleFrame>>>();
+    vi.mocked(saveCycleFrame).mockReset().mockReturnValue(saveRequest.promise);
+    const advisory = createGoalDeletionAdvisoryHarness();
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+
+    renderPage(cache, {
+      goalDeletionAdvisory: advisory,
+      identityQuiesceControl: true,
+    });
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    fireEvent.change(editor, { target: { value: "送信後に削除された計画" } });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledOnce());
+    const saveSignal = vi.mocked(saveCycleFrame).mock.calls[0]?.[7];
+    expect(saveSignal).toBeInstanceOf(AbortSignal);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "異なるUserへの切替を模擬" }),
+    );
+    expect(await screen.findByText("切替準備完了")).toBeInTheDocument();
+    expect(saveSignal?.aborted).toBe(true);
+
+    await act(async () => {
+      saveRequest.reject(deletedGoalError("request-late-autosave-goal"));
+    });
+
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    expect(advisory.publish).toHaveBeenCalledTimes(2);
   });
 
   it("keeps related commands gated until the current StrictMode hydration finishes", async () => {
@@ -2828,6 +2940,244 @@ describe("GoalWorkspacePage", () => {
     expect(getCycle).toHaveBeenCalledTimes(cycleReadsBeforeRetry);
   });
 
+  it("fences a frame PATCH deletion once and retries only local cleanup", async () => {
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockRejectedValueOnce(deletedGoalError("request-frame-deleted-goal"));
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts)
+      .mockRejectedValueOnce(new Error("indexedDB unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const advisory = createGoalDeletionAdvisoryHarness();
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache, { goalDeletionAdvisory: advisory });
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+
+    fireEvent.change(editor, { target: { value: "削除確認に失敗する計画" } });
+    fireEvent.blur(editor);
+
+    expect(
+      await screen.findByText(
+        "削除済みGoalのブラウザ下書きを削除できませんでした。",
+      ),
+    ).toBeInTheDocument();
+    expect(editor).toHaveAttribute("readonly");
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(advisory.publish).toHaveBeenCalledOnce();
+
+    act(() => advisory.dispatch(session.user.id, goal.id));
+    fireEvent.blur(editor);
+    window.dispatchEvent(new Event("online"));
+    await act(() => new Promise((resolve) => window.setTimeout(resolve, 20)));
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "ブラウザデータの削除を再試行",
+      }),
+    );
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledTimes(2);
+    expect(clearGoalDrafts).not.toHaveBeenCalled();
+    expect(advisory.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["goal", "cycle", "confirmation"] as const)(
+    "fences GOAL_NOT_FOUND from the revision-conflict $stage GET",
+    async (stage) => {
+      const cleanup = deferred<void>();
+      const terminalCycle: Cycle = {
+        ...cycle,
+        status: "completed",
+        completedAt: "2026-08-20T00:09:00.000Z",
+      };
+      vi.mocked(getGoal).mockReset().mockResolvedValueOnce({ goal });
+      vi.mocked(getCycle).mockReset().mockResolvedValueOnce({ cycle });
+      if (stage === "goal") {
+        vi.mocked(getGoal).mockRejectedValueOnce(
+          deletedGoalError("request-refresh-goal-deleted"),
+        );
+      } else {
+        vi.mocked(getGoal).mockResolvedValueOnce({ goal });
+        if (stage === "cycle") {
+          vi.mocked(getCycle).mockRejectedValueOnce(
+            deletedGoalError("request-refresh-cycle-deleted"),
+          );
+        } else {
+          vi.mocked(getCycle).mockResolvedValueOnce({ cycle: terminalCycle });
+          vi.mocked(getGoal).mockRejectedValueOnce(
+            deletedGoalError("request-refresh-confirmation-deleted"),
+          );
+        }
+      }
+      vi.mocked(saveCycleFrame)
+        .mockReset()
+        .mockRejectedValueOnce(cycleRevisionConflict());
+      vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockReturnValueOnce(
+        cleanup.promise,
+      );
+      const advisory = createGoalDeletionAdvisoryHarness();
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      renderPage(cache, { goalDeletionAdvisory: advisory });
+      const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+      expect(await screen.findByText("保存済み")).toBeInTheDocument();
+
+      fireEvent.change(editor, { target: { value: `削除された${stage}` } });
+      fireEvent.blur(editor);
+
+      await waitFor(() =>
+        expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+      );
+      expect(
+        screen.getByText("削除済みGoalのブラウザ下書きを削除しています…"),
+      ).toBeInTheDocument();
+      expect(editor).not.toBeInTheDocument();
+      expect(saveCycleFrame).toHaveBeenCalledOnce();
+      expect(getGoal).toHaveBeenCalledTimes(
+        stage === "goal" ? 2 : stage === "cycle" ? 2 : 3,
+      );
+      expect(getCycle).toHaveBeenCalledTimes(stage === "goal" ? 1 : 2);
+      expect(advisory.publish).toHaveBeenCalledOnce();
+
+      await act(async () => cleanup.resolve());
+
+      expect(await screen.findByText("ホーム")).toBeInTheDocument();
+      expect(saveCycleFrame).toHaveBeenCalledOnce();
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+      expect(advisory.publish).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["generate", "refine"] as const)(
+    "fences an Action $kind GOAL_NOT_FOUND and retries no AI transport",
+    async (kind) => {
+      const readyCycle: Cycle = {
+        ...completableCycle,
+        action: kind === "generate" ? "" : completableCycle.action,
+      };
+      vi.mocked(getCycle).mockResolvedValue({ cycle: readyCycle });
+      if (kind === "generate") {
+        vi.mocked(generateAction)
+          .mockReset()
+          .mockRejectedValueOnce(
+            deletedGoalError("request-generate-deleted-goal"),
+          );
+      } else {
+        vi.mocked(refineAction)
+          .mockReset()
+          .mockRejectedValueOnce(
+            deletedGoalError("request-refine-deleted-goal"),
+          );
+      }
+      vi.mocked(tombstoneDeletedGoalAndClearDrafts)
+        .mockRejectedValueOnce(new Error("indexedDB unavailable"))
+        .mockResolvedValueOnce(undefined);
+      const advisory = createGoalDeletionAdvisoryHarness();
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      renderPage(cache, { goalDeletionAdvisory: advisory });
+      fireEvent.click(await screen.findByRole("tab", { name: /A\s*Action/ }));
+      const editor = screen.getByRole("textbox", { name: "A — Action" });
+      const label = kind === "generate" ? "アクションを生成" : "AIで推敲";
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      expect(
+        await screen.findByText(
+          "削除済みGoalのブラウザ下書きを削除できませんでした。",
+        ),
+      ).toBeInTheDocument();
+      expect(editor).toHaveAttribute("readonly");
+      const transport =
+        kind === "generate"
+          ? vi.mocked(generateAction)
+          : vi.mocked(refineAction);
+      expect(transport).toHaveBeenCalledOnce();
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+      expect(advisory.publish).toHaveBeenCalledOnce();
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "ブラウザデータの削除を再試行",
+        }),
+      );
+
+      expect(await screen.findByText("ホーム")).toBeInTheDocument();
+      expect(transport).toHaveBeenCalledOnce();
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledTimes(2);
+      expect(advisory.publish).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    {
+      label: "CYCLE_NOT_FOUND",
+      error: () =>
+        new APIError(
+          404,
+          "CYCLE_NOT_FOUND",
+          "cycle missing",
+          "request-missing-cycle",
+        ),
+    },
+    {
+      label: "generic 404",
+      error: () =>
+        new APIError(
+          404,
+          "GOAL_DRAFT_NOT_FOUND",
+          "missing",
+          "request-generic-missing",
+        ),
+    },
+    {
+      label: "409 GOAL_NOT_FOUND",
+      error: () =>
+        new APIError(
+          409,
+          "GOAL_NOT_FOUND",
+          "wrong status",
+          "request-wrong-status",
+        ),
+    },
+    { label: "network failure", error: () => new TypeError("network") },
+  ])(
+    "keeps the existing Action failure behavior for $label",
+    async ({ error }) => {
+      vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+      vi.mocked(refineAction).mockReset().mockRejectedValueOnce(error());
+      const advisory = createGoalDeletionAdvisoryHarness();
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      renderPage(cache, { goalDeletionAdvisory: advisory });
+      fireEvent.click(await screen.findByRole("tab", { name: /A\s*Action/ }));
+      const editor = screen.getByRole("textbox", { name: "A — Action" });
+
+      fireEvent.click(screen.getByRole("button", { name: "AIで推敲" }));
+
+      expect(
+        await screen.findByText(
+          "AI処理を完了できませんでした。現在のAは保持されています。",
+        ),
+      ).toBeInTheDocument();
+      expect(editor).toHaveValue(completableCycle.action);
+      expect(editor).not.toHaveAttribute("readonly");
+      expect(refineAction).toHaveBeenCalledOnce();
+      expect(tombstoneDeletedGoalAndClearDrafts).not.toHaveBeenCalled();
+      expect(advisory.publish).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not publish a late AI result after a deleted-Goal fence", async () => {
     const refinement = deferred<Awaited<ReturnType<typeof refineAction>>>();
     vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
@@ -2993,11 +3343,17 @@ type GoalDeletionAdvisoryHarness = {
 
 function createGoalDeletionAdvisoryHarness(): GoalDeletionAdvisoryHarness {
   const listeners = new Map<string, Set<() => void>>();
+  const cleanups = new Map<
+    string,
+    { readonly completion: Promise<void>; readonly resolve: () => void }
+  >();
+  const keyOf = (userId: string, goalId: string) =>
+    JSON.stringify([userId, goalId]);
   const publish =
     vi.fn<(deletedUserId: string, deletedGoalId: string) => void>();
   const subscribe = vi.fn(
     (userId: string, goalId: string, listener: () => void) => {
-      const key = `${userId}:${goalId}`;
+      const key = keyOf(userId, goalId);
       const matching = listeners.get(key) ?? new Set();
       matching.add(listener);
       listeners.set(key, matching);
@@ -3007,12 +3363,35 @@ function createGoalDeletionAdvisoryHarness(): GoalDeletionAdvisoryHarness {
       };
     },
   );
+  const beginCleanup: GoalDeletionAdvisoryRegistry["beginCleanup"] = (
+    userId,
+    goalId,
+  ) => {
+    const key = keyOf(userId, goalId);
+    const current = cleanups.get(key);
+    if (current) return { kind: "joined", completion: current.completion };
+    let resolve: () => void = () => undefined;
+    const completion = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const cleanup = { completion, resolve };
+    cleanups.set(key, cleanup);
+    return {
+      kind: "owner",
+      completion,
+      complete: () => {
+        if (cleanups.get(key) !== cleanup) return;
+        cleanups.delete(key);
+        resolve();
+      },
+    };
+  };
   return {
-    registry: { publish, subscribe },
+    registry: { publish, subscribe, beginCleanup },
     publish,
     subscribe,
     dispatch: (deletedUserId, deletedGoalId) => {
-      const matching = listeners.get(`${deletedUserId}:${deletedGoalId}`);
+      const matching = listeners.get(keyOf(deletedUserId, deletedGoalId));
       for (const listener of [...(matching ?? [])]) listener();
     },
   };
@@ -3045,6 +3424,10 @@ function cycleRevisionConflict() {
     "cycle revision conflict",
     "60000000-0000-7000-8000-000000000001",
   );
+}
+
+function deletedGoalError(requestId: string) {
+  return new APIError(404, "GOAL_NOT_FOUND", "deleted", requestId);
 }
 
 function deferred<T>() {

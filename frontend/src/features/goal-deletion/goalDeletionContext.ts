@@ -11,9 +11,26 @@ export type SubscribeGoalDeletionAdvisory = (
   listener: () => void,
 ) => () => void;
 
+export type GoalDeletionCleanupClaim =
+  | {
+      readonly kind: "owner";
+      readonly completion: Promise<void>;
+      readonly complete: () => void;
+    }
+  | {
+      readonly kind: "joined";
+      readonly completion: Promise<void>;
+    };
+
+export type BeginGoalDeletionCleanup = (
+  userId: string,
+  goalId: string,
+) => GoalDeletionCleanupClaim;
+
 export type GoalDeletionAdvisoryRegistry = {
   readonly publish: PublishGoalDeletionAdvisory;
   readonly subscribe: SubscribeGoalDeletionAdvisory;
+  readonly beginCleanup: BeginGoalDeletionCleanup;
 };
 
 export const GoalDeletionAdvisoryContext =
@@ -29,4 +46,10 @@ export function useSubscribeGoalDeletionAdvisory(): SubscribeGoalDeletionAdvisor
   const value = useContext(GoalDeletionAdvisoryContext);
   if (value === null) throw new Error("goal deletion advisory unavailable");
   return value.subscribe;
+}
+
+export function useBeginGoalDeletionCleanup(): BeginGoalDeletionCleanup {
+  const value = useContext(GoalDeletionAdvisoryContext);
+  if (value === null) throw new Error("goal deletion advisory unavailable");
+  return value.beginCleanup;
 }

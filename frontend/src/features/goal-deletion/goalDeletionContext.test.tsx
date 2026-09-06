@@ -4,6 +4,7 @@ import type { PropsWithChildren } from "react";
 import {
   GoalDeletionAdvisoryContext,
   type GoalDeletionAdvisoryRegistry,
+  useBeginGoalDeletionCleanup,
   usePublishGoalDeletionAdvisory,
   useSubscribeGoalDeletionAdvisory,
 } from "./goalDeletionContext";
@@ -13,6 +14,10 @@ describe("goal deletion advisory context", () => {
     const registry: GoalDeletionAdvisoryRegistry = {
       publish: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      beginCleanup: vi.fn(() => ({
+        kind: "joined" as const,
+        completion: Promise.resolve(),
+      })),
     };
     const wrapper = ({ children }: PropsWithChildren) => (
       <GoalDeletionAdvisoryContext.Provider value={registry}>
@@ -26,9 +31,13 @@ describe("goal deletion advisory context", () => {
     const subscribe = renderHook(() => useSubscribeGoalDeletionAdvisory(), {
       wrapper,
     });
+    const beginCleanup = renderHook(() => useBeginGoalDeletionCleanup(), {
+      wrapper,
+    });
 
     expect(publish.result.current).toBe(registry.publish);
     expect(subscribe.result.current).toBe(registry.subscribe);
+    expect(beginCleanup.result.current).toBe(registry.beginCleanup);
   });
 
   it("rejects consumers outside the SessionProvider-owned boundary", () => {
@@ -36,6 +45,9 @@ describe("goal deletion advisory context", () => {
       "goal deletion advisory unavailable",
     );
     expect(() => renderHook(() => useSubscribeGoalDeletionAdvisory())).toThrow(
+      "goal deletion advisory unavailable",
+    );
+    expect(() => renderHook(() => useBeginGoalDeletionCleanup())).toThrow(
       "goal deletion advisory unavailable",
     );
   });

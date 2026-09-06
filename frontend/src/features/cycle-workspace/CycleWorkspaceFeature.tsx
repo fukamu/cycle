@@ -17,12 +17,13 @@ import {
   cacheGoal,
   cacheReview,
   preferGoal,
-  removeGoalFromCache,
   userQueryKeys,
 } from "../goal-collection";
 import {
-  usePublishGoalDeletionAdvisory,
-  useSubscribeGoalDeletionAdvisory,
+  GoalDeletionFenceBoundary,
+  useGoalDeletionEditorFence,
+  useRunGoalDeletionFencedRequest,
+  useStartGoalDeletionFence,
 } from "../goal-deletion";
 import { APIError } from "../../shared/api/client";
 import { AutoSaveCoordinator } from "../../shared/autosave/autoSaveCoordinator";
@@ -62,7 +63,6 @@ import {
   deleteBrowserDraftIfUnchanged,
   getBrowserDraft,
   putBrowserDraft,
-  tombstoneDeletedGoalAndClearDrafts,
 } from "../../shared/drafts/browserDraftCache";
 import {
   commandFingerprint,
@@ -99,7 +99,6 @@ type MovedWorkspace = {
 };
 
 type CycleTerminalCommand = "complete" | "terminate" | "delete";
-type GoalDeletionFenceSource = "local" | "advisory";
 
 function preferCycle(current: Cycle | undefined, incoming: Cycle): Cycle {
   if (!current) return incoming;
@@ -175,18 +174,39 @@ export function CycleWorkspaceFeature({
   readonly goalId: string;
   readonly cycleId: string;
 }) {
+  const userId = useSession().user.id;
+  return (
+    <GoalDeletionFenceBoundary userId={userId} goalId={goalId}>
+      <CycleWorkspaceRoute goalId={goalId} cycleId={cycleId} />
+    </GoalDeletionFenceBoundary>
+  );
+}
+
+function CycleWorkspaceRoute({
+  goalId,
+  cycleId,
+}: {
+  readonly goalId: string;
+  readonly cycleId: string;
+}) {
   const session = useSession();
   const sessionLease = useAuthenticatedRequestLease();
+  const runGoalDeletionFencedRequest = useRunGoalDeletionFencedRequest();
   const userId = session.user.id;
   const goalQuery = useQuery({
     queryKey: userQueryKeys.goal(userId, goalId ?? ""),
-    queryFn: ({ signal }) => getGoal(sessionLease, goalId ?? "", signal),
+    queryFn: ({ signal }) =>
+      runGoalDeletionFencedRequest(() =>
+        getGoal(sessionLease, goalId ?? "", signal),
+      ),
     enabled: Boolean(goalId),
   });
   const cycleQuery = useQuery({
     queryKey: userQueryKeys.cycle(userId, goalId ?? "", cycleId ?? ""),
     queryFn: ({ signal }) =>
-      getCycle(sessionLease, goalId ?? "", cycleId ?? "", signal),
+      runGoalDeletionFencedRequest(() =>
+        getCycle(sessionLease, goalId ?? "", cycleId ?? "", signal),
+      ),
     enabled: Boolean(goalId && cycleId),
   });
   if (goalQuery.isPending || (cycleId && cycleQuery.isPending))
@@ -235,8 +255,8 @@ function CycleWorkspace({
   const cache = useQueryClient();
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const runPostCommitCleanup = usePostCommitCleanup();
-  const publishGoalDeletionAdvisory = usePublishGoalDeletionAdvisory();
-  const subscribeGoalDeletionAdvisory = useSubscribeGoalDeletionAdvisory();
+  const markDeletedGoal = useStartGoalDeletionFence();
+  const runGoalDeletionFencedRequest = useRunGoalDeletionFencedRequest();
   const cycle = initial;
   const generateOperation = useCommandOperation();
   const refineOperation = useCommandOperation();
@@ -304,6 +324,9 @@ function CycleWorkspace({
       baseRevision: number,
     ) => Promise<void>
   >(async () => undefined);
+  const markDeletedGoalRef = useRef<
+    (routeOwnership: PostCommitRouteOwnershipToken) => void
+  >(() => undefined);
   const editable = cycle.status === "active";
   const isActivePage = useCallback(
     () => lease.isCurrent() && mountedRef.current,
@@ -400,15 +423,17 @@ function CycleWorkspace({
       save: (entry, signal) => {
         const baseRevision = revisions.current[entry.key];
         attemptRevisionsRef.current.set(signal, baseRevision);
-        return saveCycleFrame(
-          sessionLease,
-          goal.id,
-          cycle.id,
-          entry.key,
-          entry.value,
-          baseRevision,
-          csrfTokenRef.current,
-          signal,
+        return runGoalDeletionFencedRequest(() =>
+          saveCycleFrame(
+            sessionLease,
+            goal.id,
+            cycle.id,
+            entry.key,
+            entry.value,
+            baseRevision,
+            csrfTokenRef.current,
+            signal,
+          ),
         );
       },
       savedValue: (result) => result.content,
@@ -534,6 +559,7 @@ function CycleWorkspace({
         cycleRevisionRefreshInFlightRef.current.has(frame)
       )
         return;
+      const routeOwnership = captureRouteOwnership();
       const refreshToken = {};
       cycleRevisionRefreshInFlightRef.current.set(frame, refreshToken);
 
@@ -756,7 +782,11 @@ function CycleWorkspace({
           setRecoveryConflicts(new Map(nextConflicts));
           setError(undefined);
         }
-      } catch {
+      } catch (cause) {
+        if (isGoalNotFound(cause)) {
+          markDeletedGoalRef.current(routeOwnership);
+          return;
+        }
         if (!isCurrentRefresh()) return;
         await cacheFrameDraft(
           frame,
@@ -776,6 +806,7 @@ function CycleWorkspace({
     [
       cache,
       cacheFrameDraft,
+      captureRouteOwnership,
       coordinator,
       cycle.id,
       freezeCycleWorkspace,
@@ -1073,62 +1104,17 @@ function CycleWorkspace({
     }
   }
 
-  const markDeletedGoal = useCallback(
-    (
-      routeOwnership: PostCommitRouteOwnershipToken,
-      source: GoalDeletionFenceSource = "local",
-    ) => {
-      if (deletedFenceStartedRef.current) return;
-      deletedFenceStartedRef.current = true;
-      commandRecoveryEpochRef.current += 1;
-      freezeCycleWorkspace(
-        { currentWorkspace: null, href: "/", recovery: "deleted" },
-        { preserveUnsaved: false },
-      );
-      if (source === "local") publishGoalDeletionAdvisory(userId, goal.id);
-      void runPostCommitCleanup({
-        expectedUserId: userId,
-        routeOwnership,
-        // The boundary first quiesces every autosave scope and drains its browser
-        // operation tail. Retrying this task therefore repeats local cleanup only.
-        cleanup: async () => {
-          await tombstoneDeletedGoalAndClearDrafts(userId, goal.id);
-          removeGoalFromCache(cache, userId, goal.id);
-          if (source === "local") publishGoalDeletionAdvisory(userId, goal.id);
-        },
-        onSuccess: async (publicationIsCurrent) => {
-          if (!publicationIsCurrent()) return;
-          navigate("/", { replace: true, flushSync: true });
-        },
-        pendingMessage: "削除済みGoalのブラウザ下書きを削除しています…",
-        failureMessage: "削除済みGoalのブラウザ下書きを削除できませんでした。",
-        retryLabel: "ブラウザデータの削除を再試行",
-      });
-    },
-    [
-      cache,
-      freezeCycleWorkspace,
-      goal.id,
-      navigate,
-      publishGoalDeletionAdvisory,
-      runPostCommitCleanup,
-      userId,
-    ],
-  );
-
-  useLayoutEffect(
-    () =>
-      subscribeGoalDeletionAdvisory(userId, goal.id, () => {
-        markDeletedGoal(captureRouteOwnership(), "advisory");
-      }),
-    [
-      captureRouteOwnership,
-      goal.id,
-      markDeletedGoal,
-      subscribeGoalDeletionAdvisory,
-      userId,
-    ],
-  );
+  const fenceDeletedGoalEditor = useCallback(() => {
+    if (deletedFenceStartedRef.current) return;
+    deletedFenceStartedRef.current = true;
+    commandRecoveryEpochRef.current += 1;
+    freezeCycleWorkspace(
+      { currentWorkspace: null, href: "/", recovery: "deleted" },
+      { preserveUnsaved: false },
+    );
+  }, [freezeCycleWorkspace]);
+  useGoalDeletionEditorFence(fenceDeletedGoalEditor);
+  markDeletedGoalRef.current = markDeletedGoal;
 
   const refreshCanonicalWorkspace = useCallback(
     async (
@@ -1305,6 +1291,7 @@ function CycleWorkspace({
       valuesRef.current.do,
       valuesRef.current.check,
     ]);
+    const routeOwnership = captureRouteOwnership();
     setAIState(kind);
     setError(undefined);
     try {
@@ -1369,7 +1356,13 @@ function CycleWorkspace({
         setError(
           "AI処理中にP/D/Cが変更されています。必要に応じて再生成してください。",
         );
-    } catch {
+    } catch (cause) {
+      if (isGoalNotFound(cause)) {
+        if (kind === "generating") generateOperation.abandon();
+        else refineOperation.abandon();
+        markDeletedGoal(routeOwnership);
+        return;
+      }
       if (isActivePage() && !movedWorkspaceRef.current)
         setError("AI処理を完了できませんでした。現在のAは保持されています。");
     } finally {
