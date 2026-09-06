@@ -8,7 +8,9 @@ export {
   cacheReviewDraft,
   preferGoal,
   preferGoalReview,
+  publishGoalReview,
   removeGoalFromCache,
+  resolveGoalReviewPublication,
   userMutationKeys,
   userQueryKeys,
 } from "./goalCache";

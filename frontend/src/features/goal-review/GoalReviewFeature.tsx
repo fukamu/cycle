@@ -5,7 +5,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../auth";
@@ -14,11 +14,12 @@ import {
   cacheGoal,
   cacheReviewDraft,
   removeGoalFromCache,
+  resolveGoalReviewPublication,
   userQueryKeys,
 } from "../goal-collection";
 import { GoalRefinementPanel, useGoalRefinement } from "../goal-refine";
 import { APIError } from "../../shared/api/client";
-import type { GoalReview } from "../../shared/api/schemas";
+import type { Goal, GoalReview } from "../../shared/api/schemas";
 import {
   adoptReview,
   continueReview,
@@ -100,10 +101,98 @@ function isReviewCommandWorkspaceConflict(
 }
 
 export function GoalReviewFeature({ review }: { readonly review: GoalReview }) {
-  return <ReviewEditor key={review.reviewDraft.id} review={review} />;
+  const session = useSession();
+  const userId = session.user.id;
+  return (
+    <GoalReviewEntry
+      key={`${userId}:${review.goal.id}`}
+      review={review}
+      userId={userId}
+    />
+  );
 }
 
-function ReviewEditor({ review }: { readonly review: GoalReview }) {
+function isSameReviewWorkspace(left: GoalReview, right: GoalReview): boolean {
+  return (
+    left.goal.id === right.goal.id &&
+    left.goal.revision === right.goal.revision &&
+    left.reviewDraft.id === right.reviewDraft.id &&
+    left.triggerCycle.id === right.triggerCycle.id &&
+    left.triggerCycle.sequenceNumber === right.triggerCycle.sequenceNumber
+  );
+}
+
+function GoalReviewEntry({
+  review,
+  userId,
+}: {
+  readonly review: GoalReview;
+  readonly userId: string;
+}) {
+  const goalId = review.goal.id;
+  const canonicalGoal = useQuery<{ readonly goal: Goal }>({
+    queryKey: userQueryKeys.goal(userId, goalId),
+    queryFn: skipToken,
+  }).data?.goal;
+  const currentReview = useQuery<GoalReview>({
+    queryKey: userQueryKeys.review(userId, goalId),
+    queryFn: skipToken,
+  }).data;
+  const resolution = resolveGoalReviewPublication({
+    canonicalGoal,
+    currentReview,
+    incoming: review,
+  });
+  const resolvedReview =
+    resolution.kind === "accept" || resolution.kind === "preserve-current"
+      ? resolution.snapshot
+      : undefined;
+  const [committedReview, setCommittedReview] = useState<
+    GoalReview | undefined
+  >(undefined);
+  const recordCommittedReview = useCallback((candidate: GoalReview) => {
+    setCommittedReview((current) => current ?? candidate);
+  }, []);
+  const admittedReview = committedReview ?? resolvedReview;
+  const workspaceMoved =
+    committedReview !== undefined &&
+    (!resolvedReview ||
+      !isSameReviewWorkspace(committedReview, resolvedReview));
+
+  if (!admittedReview)
+    return <ReviewWorkspaceMoved goalId={canonicalGoal?.id ?? goalId} />;
+  return (
+    <ReviewEditor
+      key={admittedReview.reviewDraft.id}
+      review={admittedReview}
+      workspaceMoved={workspaceMoved}
+      onCommitted={recordCommittedReview}
+    />
+  );
+}
+
+function ReviewWorkspaceMoved({ goalId }: { readonly goalId: string }) {
+  return (
+    <main className="page review-page">
+      <section className="editor-card">
+        <div className="draft-notice" role="alert">
+          Reviewの作業場所は変わりました。
+          <Link to={`/goals/${goalId}`}>現在のGoalを開いてください</Link>。
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function ReviewEditor({
+  review,
+  workspaceMoved,
+  onCommitted,
+}: {
+  readonly review: GoalReview;
+  readonly workspaceMoved: boolean;
+  readonly onCommitted: (review: GoalReview) => void;
+}) {
   const { goal, reviewDraft, triggerCycle } = review;
   const session = useSession();
   const userId = session.user.id;
@@ -119,6 +208,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
       mountedGenerationRef.current = false;
     };
   }, []);
+  useLayoutEffect(() => onCommitted(review), [onCommitted, review]);
   const refinement = useGoalRefinement();
   const refineOperation = useCommandOperation();
   const continueOperation = useCommandOperation();
@@ -143,6 +233,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           signal,
         )
       ).reviewDraft;
+      signal.throwIfAborted();
       const current = cache.getQueryData<GoalReview>(
         userQueryKeys.review(userId, goal.id),
       )?.reviewDraft;
@@ -199,6 +290,24 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     acceptLatest,
     scopeMovedOnError,
   });
+  const editorHydrating = editor.hydrating;
+  const editorScopeMovedHref = editor.scopeMovedHref;
+  const markEditorScopeMoved = editor.markScopeMoved;
+  const workspaceMovedHref =
+    editorScopeMovedHref ?? (workspaceMoved ? `/goals/${goal.id}` : null);
+  const workspaceIsMoved = workspaceMovedHref !== null;
+  useLayoutEffect(() => {
+    if (!workspaceMoved || editorHydrating || editorScopeMovedHref) return;
+    setConfirmation(undefined);
+    setCommandRecovery({ kind: "ready" });
+    void markEditorScopeMoved(`/goals/${goal.id}`);
+  }, [
+    editorHydrating,
+    editorScopeMovedHref,
+    goal.id,
+    markEditorScopeMoved,
+    workspaceMoved,
+  ]);
   const count = codePointCount(editor.body);
   const changed = textDiffersAfterLineEndingNormalization(
     editor.body,
@@ -315,6 +424,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   }
 
   async function requestRefine() {
+    if (workspaceIsMoved) return;
     setError(undefined);
     const expectedDraftRevision = editor.revision;
     const expectedGoalRevision = goal.revision;
@@ -343,7 +453,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     );
   }
   async function adopt() {
-    if (refinement.state.kind !== "suggested") return;
+    if (workspaceIsMoved || refinement.state.kind !== "suggested") return;
     const completionIsCurrent = () =>
       mountedGenerationRef.current &&
       editor.isActiveScope() &&
@@ -385,6 +495,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     navigate(`/goals/${goal.id}`, { replace: true });
   }
   async function nextCycle() {
+    if (editor.hydrating || workspaceIsMoved) return;
     const routeOwnership = captureRouteOwnership();
     setPending(true);
     setError(undefined);
@@ -445,7 +556,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     }
   }
   async function terminate(outcome: "achieved" | "ended") {
-    if (editor.hydrating || editor.scopeMovedHref) return;
+    if (editor.hydrating || workspaceIsMoved) return;
     const routeOwnership = captureRouteOwnership();
     const label = outcome === "achieved" ? "達成として終了" : "終了";
     setPending(true);
@@ -503,7 +614,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
     }
   }
   async function remove() {
-    if (editor.hydrating || editor.scopeMovedHref) return;
+    if (editor.hydrating || workspaceIsMoved) return;
     const routeOwnership = captureRouteOwnership();
     setPending(true);
     setError(undefined);
@@ -540,10 +651,10 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
   const conflictRetryBlocked =
     editor.resolvingConflict ||
     Boolean(editor.recoveryConflict) ||
-    Boolean(editor.scopeMovedHref);
+    workspaceIsMoved;
   const terminalActionsBlocked =
     editor.hydrating ||
-    Boolean(editor.scopeMovedHref) ||
+    workspaceIsMoved ||
     refinement.state.kind === "running" ||
     pending;
   return (
@@ -587,7 +698,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
             </Link>
           </div>
         )}
-        {editor.scopeMovedHref && commandRecovery?.kind !== "deleted" && (
+        {workspaceMovedHref && commandRecovery?.kind !== "deleted" && (
           <div className="draft-notice" role="alert">
             Reviewの作業場所は変わりました。入力内容はこの端末に保持されています。
             {commandRecovery?.kind === "loading" ? (
@@ -604,7 +715,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
               <>
                 必要なら本文をコピーしてから、
                 <Link
-                  to={editor.scopeMovedHref}
+                  to={workspaceMovedHref}
                   onClick={(event) => void openCanonicalGoal(event)}
                 >
                   現在のGoalを開いてください
@@ -619,9 +730,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         <textarea
           id="review-goal"
           value={editor.body}
-          readOnly={
-            conflictPending || Boolean(editor.scopeMovedHref) || pending
-          }
+          readOnly={conflictPending || workspaceIsMoved || pending}
           onChange={(event) => {
             const body = normalizeBoundedTextInput(
               event.target.value,
@@ -632,7 +741,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
           onBlur={editor.flush}
         />
         <div className="editor-meta">
-          {editor.scopeMovedHref && commandRecovery ? (
+          {workspaceMovedHref && commandRecovery ? (
             <span className="read-only-badge">読み取り専用</span>
           ) : (
             <SaveBadge
@@ -652,6 +761,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
               !valid ||
               editor.state.kind !== "saved" ||
               refinement.state.kind === "running" ||
+              workspaceIsMoved ||
               pending
             }
             onClick={() => void requestRefine()}
@@ -667,6 +777,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
               !valid ||
               editor.state.kind !== "saved" ||
               refinement.state.kind === "running" ||
+              workspaceIsMoved ||
               pending
             }
             onClick={() => void nextCycle()}
@@ -685,7 +796,7 @@ function ReviewEditor({ review }: { readonly review: GoalReview }) {
         state={refinement.state}
         currentBody={editor.body}
         saveState={editor.state}
-        pending={pending}
+        pending={pending || workspaceIsMoved}
         failureMessage="AIから提案を取得できませんでした。"
         onDismiss={refinement.dismiss}
         onAdopt={() => void adopt()}
