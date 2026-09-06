@@ -36,14 +36,12 @@ export async function getBrowserDraft(
   subjectKey: string,
 ): Promise<BrowserDraft | null> {
   return withDatabase(async (db) => {
-    const stored = await read(db, keyOf({ userId, subjectKey }));
+    const stored = await readStoredAndDeleteIfExpired(
+      db,
+      keyOf({ userId, subjectKey }),
+      Date.now() - ttl,
+    );
     if (!stored) return null;
-    if (isExpired(stored.updatedAt, Date.now() - ttl)) {
-      await mutate(db, (store) => {
-        store.delete(stored.key);
-      });
-      return null;
-    }
     return {
       userId: stored.userId,
       goalId: stored.goalId,
@@ -278,11 +276,38 @@ function mutate(
     transaction.onabort = () => reject(transaction.error);
   });
 }
-function read(db: IDBDatabase, key: string): Promise<Stored | undefined> {
+function readStoredAndDeleteIfExpired(
+  db: IDBDatabase,
+  key: string,
+  expiresBefore: number,
+): Promise<Stored | undefined> {
   return new Promise((resolve, reject) => {
-    const request = db.transaction(storeName).objectStore(storeName).get(key);
-    request.onsuccess = () => resolve(request.result as Stored | undefined);
-    request.onerror = () => reject(request.error);
+    const transaction = db.transaction(storeName, "readwrite");
+    const store = transaction.objectStore(storeName);
+    const request = store.get(key);
+    let selected: Stored | undefined;
+    let requestError: DOMException | null = null;
+    request.onerror = () => {
+      requestError = request.error;
+    };
+    request.onsuccess = () => {
+      const stored = request.result as Stored | undefined;
+      if (stored && isExpired(stored.updatedAt, expiresBefore)) {
+        const deletion = store.delete(key);
+        deletion.onerror = () => {
+          requestError = deletion.error;
+        };
+        return;
+      }
+      selected = stored;
+    };
+    transaction.oncomplete = () => resolve(selected);
+    transaction.onabort = () =>
+      reject(
+        transaction.error ??
+          requestError ??
+          new Error("browser draft read transaction aborted"),
+      );
   });
 }
 function deleteStoredIf(

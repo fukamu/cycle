@@ -136,6 +136,150 @@ describe("browser draft cache", () => {
     ).toBeNull();
   });
 
+  it("preserves a fresh write queued after expired-record cleanup starts", async () => {
+    const now = Date.parse("2026-09-06T12:00:00.000Z");
+    const userId = "expired-cleanup-before-put-owner";
+    const subjectKey = "cycle:expired-cleanup-before-put-cycle:plan";
+    await putBrowserDraft({
+      userId,
+      goalId: "expired-cleanup-before-put-goal",
+      subjectKey,
+      body: "expired content",
+      baseRevision: 0,
+      updatedAt: new Date(now - 25 * 60 * 60 * 1000).toISOString(),
+    });
+    const freshDraft = {
+      userId,
+      goalId: "expired-cleanup-before-put-goal",
+      subjectKey,
+      body: "fresh concurrent content",
+      baseRevision: 1,
+      updatedAt: new Date(now).toISOString(),
+    } as const;
+    const interleaving = queueDraftWriteAfterNextDraftTransaction(freshDraft);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const [expiredResult] = await Promise.all([
+        getBrowserDraft(userId, subjectKey),
+        interleaving.writeCompleted,
+      ]);
+      expect(expiredResult).toBeNull();
+      expect(await getBrowserDraft(userId, subjectKey)).toEqual(freshDraft);
+    } finally {
+      nowSpy.mockRestore();
+      interleaving.restore();
+    }
+  });
+
+  it("reads a fresh write queued before expired-record cleanup starts", async () => {
+    const now = Date.parse("2026-09-06T13:00:00.000Z");
+    const userId = "put-before-expired-cleanup-owner";
+    const subjectKey = "cycle:put-before-expired-cleanup-cycle:plan";
+    await putBrowserDraft({
+      userId,
+      goalId: "put-before-expired-cleanup-goal",
+      subjectKey,
+      body: "expired content",
+      baseRevision: 0,
+      updatedAt: new Date(now - 25 * 60 * 60 * 1000).toISOString(),
+    });
+    const freshDraft = {
+      userId,
+      goalId: "put-before-expired-cleanup-goal",
+      subjectKey,
+      body: "fresh content queued first",
+      baseRevision: 1,
+      updatedAt: new Date(now).toISOString(),
+    } as const;
+    const interleaving = queueDraftWriteBeforeNextDraftTransaction(freshDraft);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const [draft] = await Promise.all([
+        getBrowserDraft(userId, subjectKey),
+        interleaving.writeCompleted,
+      ]);
+      expect(draft).toEqual(freshDraft);
+    } finally {
+      nowSpy.mockRestore();
+      interleaving.restore();
+    }
+  });
+
+  it("rolls back expired-record deletion on abort and closes the database", async () => {
+    const now = Date.parse("2026-09-06T14:00:00.000Z");
+    const userId = "expired-cleanup-abort-owner";
+    const subjectKey = "cycle:expired-cleanup-abort-cycle:plan";
+    const expiredDraft = {
+      userId,
+      goalId: "expired-cleanup-abort-goal",
+      subjectKey,
+      body: "content retained after abort",
+      baseRevision: 0,
+      updatedAt: new Date(now - 25 * 60 * 60 * 1000).toISOString(),
+    } as const;
+    await putBrowserDraft(expiredDraft);
+    const injected = abortNextExpiredDraftDeletion();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await expect(getBrowserDraft(userId, subjectKey)).rejects.toThrow(
+        "browser draft read transaction aborted",
+      );
+      expect(injected.abortTriggered).toBe(true);
+      expect(injected.closeSpy).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
+      injected.restore();
+    }
+
+    expect(await readStoredDraft(userId, subjectKey)).toEqual({
+      ...expiredDraft,
+      key: `${userId}:${subjectKey}`,
+    });
+  });
+
+  it("rejects an asynchronous delete error after rollback and closes the database", async () => {
+    const now = Date.parse("2026-09-06T14:30:00.000Z");
+    const userId = "expired-cleanup-request-error-owner";
+    const subjectKey = "cycle:expired-cleanup-request-error-cycle:plan";
+    const expiredDraft = {
+      userId,
+      goalId: "expired-cleanup-request-error-goal",
+      subjectKey,
+      body: "content retained after request error",
+      baseRevision: 0,
+      updatedAt: new Date(now - 25 * 60 * 60 * 1000).toISOString(),
+    } as const;
+    await putBrowserDraft(expiredDraft);
+    const injected = failNextExpiredDraftDeletion(expiredDraft);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await expect(getBrowserDraft(userId, subjectKey)).rejects.toMatchObject({
+        name: "ConstraintError",
+      });
+      expect(injected.closeSpy).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
+      injected.restore();
+    }
+
+    expect(await readStoredDraft(userId, subjectKey)).toEqual({
+      ...expiredDraft,
+      key: `${userId}:${subjectKey}`,
+    });
+  });
+
+  it("rejects transaction creation errors and closes the database", async () => {
+    const injected = failNextDraftTransaction();
+    try {
+      await expect(
+        getBrowserDraft("transaction-error-owner", "goal:transaction-error"),
+      ).rejects.toThrow("injected transaction failure");
+      expect(injected.closeSpy).toHaveBeenCalledOnce();
+    } finally {
+      injected.restore();
+    }
+  });
+
   it("clears only records owned by one goal", async () => {
     await putBrowserDraft({
       userId: "goal-owner",
@@ -389,6 +533,280 @@ function readAccountDeletionPrivacyRecords(): Promise<{
             unknown
           >[],
         });
+      };
+      transaction.onerror = closeAndReject;
+      transaction.onabort = closeAndReject;
+    };
+  });
+}
+
+const browserDraftDatabaseName = "fukamu-cycle-browser-drafts-v2";
+const browserDraftStoreName = "drafts";
+
+type DraftTransactionInterleaving = {
+  readonly writeCompleted: Promise<void>;
+  readonly restore: () => void;
+};
+
+function queueDraftWriteAfterNextDraftTransaction(
+  draft: BrowserDraftFixture,
+): DraftTransactionInterleaving {
+  return arrangeNextDraftTransaction((originalTransaction, args) => {
+    const requested = callTransaction(originalTransaction, args);
+    const write = originalTransaction(browserDraftStoreName, "readwrite");
+    write.objectStore(browserDraftStoreName).put(storedFixture(draft));
+    return { requested, write };
+  });
+}
+
+function queueDraftWriteBeforeNextDraftTransaction(
+  draft: BrowserDraftFixture,
+): DraftTransactionInterleaving {
+  return arrangeNextDraftTransaction((originalTransaction, args) => {
+    const write = originalTransaction(browserDraftStoreName, "readwrite");
+    write.objectStore(browserDraftStoreName).put(storedFixture(draft));
+    return {
+      requested: callTransaction(originalTransaction, args),
+      write,
+    };
+  });
+}
+
+type BrowserDraftFixture = {
+  readonly userId: string;
+  readonly goalId: string | null;
+  readonly subjectKey: string;
+  readonly body: string;
+  readonly baseRevision: number;
+  readonly updatedAt: string;
+};
+
+type TransactionArguments = Parameters<IDBDatabase["transaction"]>;
+type BoundTransaction = (
+  storeNames: string | Iterable<string>,
+  mode?: IDBTransactionMode,
+  options?: IDBTransactionOptions,
+) => IDBTransaction;
+
+function arrangeNextDraftTransaction(
+  arrange: (
+    originalTransaction: BoundTransaction,
+    args: TransactionArguments,
+  ) => { readonly requested: IDBTransaction; readonly write: IDBTransaction },
+): DraftTransactionInterleaving {
+  const originalOpen = indexedDB.open.bind(indexedDB);
+  const openSpy = vi
+    .spyOn(indexedDB, "open")
+    .mockImplementation((name, version) =>
+      version === undefined ? originalOpen(name) : originalOpen(name, version),
+    );
+  let resolveWrite!: () => void;
+  let rejectWrite!: (reason: unknown) => void;
+  const writeCompleted = new Promise<void>((resolve, reject) => {
+    resolveWrite = resolve;
+    rejectWrite = reject;
+  });
+  let transactionSpy: ReturnType<typeof vi.spyOn> | undefined;
+  let arranged = false;
+  openSpy.mockImplementation((name, version) => {
+    const request =
+      version === undefined ? originalOpen(name) : originalOpen(name, version);
+    if (name !== browserDraftDatabaseName) return request;
+    request.addEventListener("success", () => {
+      const database = request.result;
+      const originalTransaction = database.transaction.bind(database);
+      transactionSpy = vi.spyOn(database, "transaction");
+      transactionSpy.mockImplementation((...args: TransactionArguments) => {
+        if (arranged || !includesDraftStore(args[0])) {
+          return callTransaction(originalTransaction, args);
+        }
+        arranged = true;
+        const transactions = arrange(originalTransaction, args);
+        transactions.write.oncomplete = () => resolveWrite();
+        transactions.write.onerror = () =>
+          rejectWrite(transactions.write.error);
+        transactions.write.onabort = () =>
+          rejectWrite(transactions.write.error);
+        return transactions.requested;
+      });
+    });
+    return request;
+  });
+  return {
+    writeCompleted,
+    restore: () => {
+      transactionSpy?.mockRestore();
+      openSpy.mockRestore();
+    },
+  };
+}
+
+function abortNextExpiredDraftDeletion(): {
+  readonly closeSpy: ReturnType<typeof vi.spyOn>;
+  readonly abortTriggered: boolean;
+  readonly restore: () => void;
+} {
+  let abortTriggered = false;
+  const injection = interceptNextDraftDatabase((database) => {
+    const originalTransaction = database.transaction.bind(database);
+    const transactionSpy = vi.spyOn(database, "transaction");
+    let intercepted = false;
+    transactionSpy.mockImplementation((...args: TransactionArguments) => {
+      const transaction = callTransaction(originalTransaction, args);
+      if (intercepted || !includesDraftStore(args[0])) return transaction;
+      intercepted = true;
+      const originalObjectStore = transaction.objectStore.bind(transaction);
+      vi.spyOn(transaction, "objectStore").mockImplementation((name) => {
+        const store = originalObjectStore(name);
+        const originalDelete = store.delete.bind(store);
+        vi.spyOn(store, "delete").mockImplementation((query) => {
+          const request = originalDelete(query);
+          request.addEventListener(
+            "success",
+            () => {
+              abortTriggered = true;
+              transaction.abort();
+            },
+            { once: true },
+          );
+          return request;
+        });
+        return store;
+      });
+      return transaction;
+    });
+    return transactionSpy;
+  });
+  return {
+    get closeSpy() {
+      return injection.closeSpy;
+    },
+    get abortTriggered() {
+      return abortTriggered;
+    },
+    restore: injection.restore,
+  };
+}
+
+function failNextExpiredDraftDeletion(draft: BrowserDraftFixture): {
+  readonly closeSpy: ReturnType<typeof vi.spyOn>;
+  readonly restore: () => void;
+} {
+  return interceptNextDraftDatabase((database) => {
+    const originalTransaction = database.transaction.bind(database);
+    const transactionSpy = vi.spyOn(database, "transaction");
+    let intercepted = false;
+    transactionSpy.mockImplementation((...args: TransactionArguments) => {
+      const transaction = callTransaction(originalTransaction, args);
+      if (intercepted || !includesDraftStore(args[0])) return transaction;
+      intercepted = true;
+      const originalObjectStore = transaction.objectStore.bind(transaction);
+      vi.spyOn(transaction, "objectStore").mockImplementation((name) => {
+        const store = originalObjectStore(name);
+        const originalAdd = store.add.bind(store);
+        vi.spyOn(store, "delete").mockImplementation(
+          () =>
+            originalAdd(
+              storedFixture(draft),
+            ) as unknown as IDBRequest<undefined>,
+        );
+        return store;
+      });
+      return transaction;
+    });
+    return transactionSpy;
+  });
+}
+
+function failNextDraftTransaction(): {
+  readonly closeSpy: ReturnType<typeof vi.spyOn>;
+  readonly restore: () => void;
+} {
+  return interceptNextDraftDatabase((database) =>
+    vi.spyOn(database, "transaction").mockImplementation(() => {
+      throw new Error("injected transaction failure");
+    }),
+  );
+}
+
+function interceptNextDraftDatabase(
+  intercept: (database: IDBDatabase) => { mockRestore: () => void },
+): {
+  readonly closeSpy: ReturnType<typeof vi.spyOn>;
+  readonly restore: () => void;
+} {
+  const originalOpen = indexedDB.open.bind(indexedDB);
+  const openSpy = vi.spyOn(indexedDB, "open");
+  let operationSpy: { mockRestore: () => void } | undefined;
+  let closeSpy: ReturnType<typeof vi.spyOn> | undefined;
+  let openedDatabase: IDBDatabase | undefined;
+  openSpy.mockImplementation((name, version) => {
+    const request =
+      version === undefined ? originalOpen(name) : originalOpen(name, version);
+    if (name !== browserDraftDatabaseName) return request;
+    request.addEventListener("success", () => {
+      openedDatabase = request.result;
+      closeSpy = vi.spyOn(request.result, "close");
+      operationSpy = intercept(request.result);
+    });
+    return request;
+  });
+  return {
+    get closeSpy() {
+      if (closeSpy === undefined) throw new Error("database did not open");
+      return closeSpy;
+    },
+    restore: () => {
+      operationSpy?.mockRestore();
+      closeSpy?.mockRestore();
+      openedDatabase?.close();
+      openSpy.mockRestore();
+    },
+  };
+}
+
+function callTransaction(
+  transaction: BoundTransaction,
+  args: TransactionArguments,
+): IDBTransaction {
+  const [storeNames, mode, options] = args;
+  if (options !== undefined) return transaction(storeNames, mode, options);
+  if (mode !== undefined) return transaction(storeNames, mode);
+  return transaction(storeNames);
+}
+
+function includesDraftStore(storeNames: string | Iterable<string>): boolean {
+  return typeof storeNames === "string"
+    ? storeNames === browserDraftStoreName
+    : [...storeNames].includes(browserDraftStoreName);
+}
+
+function storedFixture(draft: BrowserDraftFixture): BrowserDraftFixture & {
+  readonly key: string;
+} {
+  return { ...draft, key: `${draft.userId}:${draft.subjectKey}` };
+}
+
+function readStoredDraft(
+  userId: string,
+  subjectKey: string,
+): Promise<Record<string, unknown> | undefined> {
+  return new Promise((resolve, reject) => {
+    const openRequest = indexedDB.open(browserDraftDatabaseName, 2);
+    openRequest.onerror = () => reject(openRequest.error);
+    openRequest.onsuccess = () => {
+      const database = openRequest.result;
+      const transaction = database.transaction(browserDraftStoreName);
+      const request = transaction
+        .objectStore(browserDraftStoreName)
+        .get(`${userId}:${subjectKey}`);
+      transaction.oncomplete = () => {
+        database.close();
+        resolve(request.result as Record<string, unknown> | undefined);
+      };
+      const closeAndReject = () => {
+        database.close();
+        reject(transaction.error);
       };
       transaction.onerror = closeAndReject;
       transaction.onabort = closeAndReject;
