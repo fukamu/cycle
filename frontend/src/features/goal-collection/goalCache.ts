@@ -59,6 +59,20 @@ export function preferGoal(current: Goal | undefined, incoming: Goal): Goal {
   return current && current.revision >= incoming.revision ? current : incoming;
 }
 
+export function preferGoalReview(
+  current: GoalReview | undefined,
+  incoming: GoalReview,
+): GoalReview {
+  if (
+    !current ||
+    current.goal.id !== incoming.goal.id ||
+    current.reviewDraft.id !== incoming.reviewDraft.id ||
+    current.reviewDraft.revision < incoming.reviewDraft.revision
+  )
+    return incoming;
+  return current;
+}
+
 export function cacheGoal(
   cache: QueryClient,
   userId: string,
@@ -149,7 +163,16 @@ export function cacheReviewDraft(
 ): void {
   cache.setQueryData<GoalReview>(
     userQueryKeys.review(userId, goalId),
-    (review) => (review ? { ...review, reviewDraft } : review),
+    (current) => {
+      if (
+        !current ||
+        current.goal.id !== goalId ||
+        reviewDraft.goalId !== goalId ||
+        current.reviewDraft.id !== reviewDraft.id
+      )
+        return current;
+      return preferGoalReview(current, { ...current, reviewDraft });
+    },
   );
 }
 

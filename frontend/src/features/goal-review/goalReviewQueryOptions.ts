@@ -1,7 +1,8 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { userQueryKeys } from "../goal-collection";
+import { preferGoalReview, userQueryKeys } from "../goal-collection";
 import type { AuthenticatedRequestLease } from "../../shared/api/client";
+import type { GoalReview } from "../../shared/api/schemas";
 import { getReview } from "../../shared/api/workspace";
 
 export function goalReviewQueryOptions(
@@ -12,5 +13,10 @@ export function goalReviewQueryOptions(
   return queryOptions({
     queryKey: userQueryKeys.review(userId, goalId),
     queryFn: ({ signal }) => getReview(sessionLease, goalId, signal),
+    structuralSharing: (current, incoming) =>
+      preferGoalReview(
+        current as GoalReview | undefined,
+        incoming as GoalReview,
+      ),
   });
 }
