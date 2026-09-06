@@ -42,7 +42,7 @@ export async function createAnonymousSession(
       }),
   );
   if (session === null || !isCurrent()) return null;
-  await clearBootstrapID();
+  await clearBootstrapID(bootstrapId);
   if (!isCurrent()) return null;
   return session;
 }
