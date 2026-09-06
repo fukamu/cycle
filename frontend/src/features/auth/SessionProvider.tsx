@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PropsWithChildren,
@@ -21,6 +22,7 @@ import { removeGoalFromCache } from "../goal-collection";
 import {
   type AcceptedGoalDeletionAdvisory,
   GoalDeletionAdvisoryContext,
+  type GoalDeletionAdvisoryRegistry,
   type GoalDeletionAdvisoryFactory,
   useGoalDeletionAdvisory,
 } from "../goal-deletion";
@@ -107,6 +109,8 @@ function SessionBoundary({
     new Map<string, GoalDeletionFallback>(),
   );
   const goalDeletionsHandledBySubscriberRef = useRef(new Set<string>());
+  const goalDeletionAdvisoryRegistryRef =
+    useRef<GoalDeletionAdvisoryRegistry | null>(null);
   const recoverySubscriptionRef = useRef<SessionRecoverySubscription | null>(
     null,
   );
@@ -172,34 +176,36 @@ function SessionBoundary({
       deletedGoalId: string,
       fallbackKey: string,
     ) {
+      const registry = goalDeletionAdvisoryRegistryRef.current;
+      if (registry === null) return;
+      const claim = registry.beginCleanup(deletedUserId, deletedGoalId);
       const entry: GoalDeletionFallback = {
         status: "pending",
         retryRequested: false,
       };
       goalDeletionFallbacksRef.current.set(fallbackKey, entry);
-      const fallback = (async () => {
-        await tombstoneDeletedGoalAndClearDrafts(deletedUserId, deletedGoalId);
-        removeGoalFromCache(queryClient, deletedUserId, deletedGoalId);
-      })();
-      void fallback.then(
-        () => {
-          if (goalDeletionFallbacksRef.current.get(fallbackKey) === entry) {
-            entry.status = "completed";
-          }
-        },
-        () => {
-          if (goalDeletionFallbacksRef.current.get(fallbackKey) !== entry)
-            return;
-          goalDeletionFallbacksRef.current.delete(fallbackKey);
-          if (entry.retryRequested) {
-            startGoalDeletionFallback(
-              deletedUserId,
-              deletedGoalId,
-              fallbackKey,
-            );
-          }
-        },
-      );
+      if (claim.kind === "owner") {
+        const fallback = (async () => {
+          await tombstoneDeletedGoalAndClearDrafts(
+            deletedUserId,
+            deletedGoalId,
+          );
+          removeGoalFromCache(queryClient, deletedUserId, deletedGoalId);
+        })();
+        void fallback.then(claim.complete, claim.fail);
+      }
+      void claim.completion.then((outcome) => {
+        if (goalDeletionFallbacksRef.current.get(fallbackKey) !== entry) return;
+        if (outcome === "completed") {
+          removeGoalFromCache(queryClient, deletedUserId, deletedGoalId);
+          entry.status = "completed";
+          return;
+        }
+        goalDeletionFallbacksRef.current.delete(fallbackKey);
+        if (entry.retryRequested) {
+          startGoalDeletionFallback(deletedUserId, deletedGoalId, fallbackKey);
+        }
+      });
     },
     [queryClient],
   );
@@ -221,18 +227,30 @@ function SessionBoundary({
       if (goalDeletionsHandledBySubscriberRef.current.has(fallbackKey)) return;
       const fallback = goalDeletionFallbacksRef.current.get(fallbackKey);
       if (fallback !== undefined) {
-        if (fallback.status === "pending") fallback.retryRequested = true;
+        if (fallback.status === "pending") {
+          fallback.retryRequested = true;
+        } else {
+          removeGoalFromCache(queryClient, deletedUserId, deletedGoalId);
+        }
         return;
       }
       startGoalDeletionFallback(deletedUserId, deletedGoalId, fallbackKey);
     },
-    [startGoalDeletionFallback],
+    [queryClient, startGoalDeletionFallback],
   );
   const goalDeletionAdvisory = useGoalDeletionAdvisory({
     getCurrentUserId: getCurrentGoalDeletionUserId,
     onAcceptedGoalDeletionAdvisory: handleAcceptedGoalDeletionAdvisory,
     factory: goalDeletionAdvisoryFactory,
   });
+  useLayoutEffect(() => {
+    goalDeletionAdvisoryRegistryRef.current = goalDeletionAdvisory;
+    return () => {
+      if (goalDeletionAdvisoryRegistryRef.current === goalDeletionAdvisory) {
+        goalDeletionAdvisoryRegistryRef.current = null;
+      }
+    };
+  }, [goalDeletionAdvisory]);
   const recovery = useSessionRecoveryController({
     queryClient,
     sessionQueryKey,

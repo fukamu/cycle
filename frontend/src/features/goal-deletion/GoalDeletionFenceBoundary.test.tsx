@@ -6,15 +6,21 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useCallback, useLayoutEffect, useMemo, type ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { APIError } from "../../shared/api/client";
+import {
+  AutoSaveScopeProvider,
+  useAutoSaveScopeRegistry,
+} from "../../shared/autosave/AutoSaveScopeProvider";
+import { PostCommitCleanupBoundary } from "../../shared/cleanup/PostCommitCleanupBoundary";
 import {
   PostCommitCleanupContext,
   PostCommitRouteOwnershipContext,
   type PostCommitCleanupTask,
   type PostCommitRouteOwnershipToken,
+  type PostCommitSessionOperationRunner,
   type RunPostCommitCleanup,
 } from "../../shared/cleanup/postCommitCleanupContext";
 import { tombstoneDeletedGoalAndClearDrafts } from "../../shared/drafts/browserDraftCache";
@@ -23,6 +29,7 @@ import {
   GoalDeletionAdvisoryContext,
   type GoalDeletionAdvisoryRegistry,
   type GoalDeletionCleanupClaim,
+  type GoalDeletionCleanupOutcome,
 } from "./goalDeletionContext";
 import {
   GoalDeletionFenceBoundary,
@@ -221,8 +228,84 @@ describe("GoalDeletionFenceBoundary", () => {
     expect(advisory.publish).not.toHaveBeenCalled();
   });
 
+  it("keeps a live editor mounted until the outer cleanup boundary snapshots its quiesce callback", async () => {
+    const quiesceGate = deferred<void>();
+    const sequence: string[] = [];
+    const advisory = createAdvisoryHarness({ sequence });
+    const runSessionOperation: PostCommitSessionOperationRunner = async (
+      _expectedUserId,
+      operation,
+    ) => {
+      sequence.push("session-ownership");
+      return operation(() => true);
+    };
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockImplementation(
+      async () => {
+        sequence.push("tombstone");
+      },
+    );
+
+    render(
+      <QueryClientProvider client={createCache()}>
+        <AutoSaveScopeProvider>
+          <GoalDeletionAdvisoryContext.Provider value={advisory.registry}>
+            <MemoryRouter initialEntries={["/goal"]}>
+              <PostCommitCleanupBoundary
+                runSessionOperation={runSessionOperation}
+              >
+                <Routes>
+                  <Route
+                    path="/goal"
+                    element={
+                      <GoalDeletionFenceBoundary
+                        userId={userId}
+                        goalId={goalId}
+                      >
+                        <LiveQuiesceEditor
+                          quiesceGate={quiesceGate.promise}
+                          sequence={sequence}
+                        />
+                      </GoalDeletionFenceBoundary>
+                    }
+                  />
+                  <Route path="/" element={<p>Home after cleanup</p>} />
+                </Routes>
+              </PostCommitCleanupBoundary>
+            </MemoryRouter>
+          </GoalDeletionAdvisoryContext.Provider>
+        </AutoSaveScopeProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("live Goal editor")).toBeInTheDocument();
+
+    act(() => advisory.dispatch());
+
+    await waitFor(() => expect(sequence).toContain("quiesce-snapshot"));
+    expect(sequence).toContain("editor-fence");
+    expect(sequence).toContain("session-ownership");
+    expect(sequence).not.toContain("editor-unmount");
+    expect(sequence).not.toContain("tombstone");
+    expect(
+      screen.getByText("live Goal editor").closest("div[hidden][inert]"),
+    ).not.toBeNull();
+
+    quiesceGate.resolve();
+
+    expect(await screen.findByText("Home after cleanup")).toBeInTheDocument();
+    expect(sequence.indexOf("editor-fence")).toBeLessThan(
+      sequence.indexOf("quiesce-snapshot"),
+    );
+    expect(sequence.indexOf("quiesce-snapshot")).toBeLessThan(
+      sequence.indexOf("editor-unmount"),
+    );
+    expect(sequence.indexOf("editor-unmount")).toBeLessThan(
+      sequence.indexOf("tombstone"),
+    );
+    expect(advisory.publish).not.toHaveBeenCalled();
+  });
+
   it("joins tuple cleanup and navigates only after the shared completion", async () => {
-    const joined = deferred<void>();
+    const joined = deferred<GoalDeletionCleanupOutcome>();
     const advisory = createAdvisoryHarness({
       claim: { kind: "joined", completion: joined.promise },
     });
@@ -234,8 +317,11 @@ describe("GoalDeletionFenceBoundary", () => {
       "request-joined-goal",
     );
     const onRejected = vi.fn();
+    const cache = createCache();
+    cache.setQueryData(userQueryKeys.goal(userId, goalId), { secret: true });
     renderBoundary({
       advisory,
+      cache,
       cleanup,
       children: (
         <RequestProbe
@@ -253,15 +339,80 @@ describe("GoalDeletionFenceBoundary", () => {
     expect(advisory.publish).not.toHaveBeenCalled();
 
     await act(async () => {
-      joined.resolve();
+      joined.resolve("completed");
       await joined.promise;
     });
     expect(await screen.findByText("Home")).toBeInTheDocument();
+    expect(
+      cache.getQueryData(userQueryKeys.goal(userId, goalId)),
+    ).toBeUndefined();
+    expect(tombstoneDeletedGoalAndClearDrafts).not.toHaveBeenCalled();
+  });
+
+  it("omits a latched deleted Goal from the first committed route paint", async () => {
+    const cleanup = createCleanupRunner();
+    const advisory = createAdvisoryHarness({ known: true });
+
+    renderBoundary({
+      advisory,
+      cleanup,
+      children: <p>private cached Goal body</p>,
+    });
+
+    expect(
+      screen.queryByText("private cached Goal body"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Goal route")).not.toBeInTheDocument();
+    await waitFor(() => expect(cleanup.run).toHaveBeenCalledOnce());
+    expect(advisory.beginCleanup).toHaveBeenCalledOnce();
+    expect(advisory.publish).not.toHaveBeenCalled();
+  });
+
+  it("takes ownership after a joined subscriber-free fallback fails without echoing", async () => {
+    const failedFallback = deferred<GoalDeletionCleanupOutcome>();
+    const routeCompletion = deferred<GoalDeletionCleanupOutcome>();
+    const complete = vi.fn(() => routeCompletion.resolve("completed"));
+    const fail = vi.fn(() => routeCompletion.resolve("failed"));
+    const cleanup = createCleanupRunner();
+    const advisory = createAdvisoryHarness();
+    advisory.beginCleanup
+      .mockReturnValueOnce({
+        kind: "joined",
+        completion: failedFallback.promise,
+      })
+      .mockReturnValue({
+        kind: "owner",
+        completion: routeCompletion.promise,
+        complete,
+        fail,
+      });
+
+    renderBoundary({
+      advisory,
+      cleanup,
+      children: <EditorFences broken={vi.fn()} healthy={vi.fn()} />,
+    });
+    act(() => advisory.dispatch());
+    expect(cleanup.run).not.toHaveBeenCalled();
+
+    await act(async () => {
+      failedFallback.resolve("failed");
+      await failedFallback.promise;
+    });
+    await waitFor(() => expect(cleanup.run).toHaveBeenCalledOnce());
+
+    expect(advisory.beginCleanup).toHaveBeenCalledTimes(2);
+    expect(advisory.publish).not.toHaveBeenCalled();
+    await cleanup.task.cleanup();
+    cleanup.completion.resolve();
+    await cleanup.completion.promise;
+    await waitFor(() => expect(complete).toHaveBeenCalledOnce());
+    expect(fail).not.toHaveBeenCalled();
   });
 
   it("keeps the request-start route token and cannot steal a newer route after a late 404", async () => {
     const transport = deferred<void>();
-    const joined = deferred<void>();
+    const joined = deferred<GoalDeletionCleanupOutcome>();
     const route = createRouteOwnership();
     const advisory = createAdvisoryHarness({
       claim: { kind: "joined", completion: joined.promise },
@@ -297,7 +448,7 @@ describe("GoalDeletionFenceBoundary", () => {
     expect(advisory.beginCleanup).toHaveBeenCalledOnce();
 
     await act(async () => {
-      joined.resolve();
+      joined.resolve("completed");
       await joined.promise;
     });
     expect(screen.getByText("Goal route")).toBeInTheDocument();
@@ -387,6 +538,34 @@ function EditorFences({
   return <p>editors</p>;
 }
 
+function LiveQuiesceEditor({
+  quiesceGate,
+  sequence,
+}: {
+  readonly quiesceGate: Promise<void>;
+  readonly sequence: string[];
+}) {
+  const registry = useAutoSaveScopeRegistry();
+  const lease = useMemo(() => registry.prepare("live-goal-editor"), [registry]);
+  const fence = useCallback(() => {
+    sequence.push("editor-fence");
+  }, [sequence]);
+  useGoalDeletionEditorFence(fence);
+  useLayoutEffect(() => {
+    lease.activate();
+    const unregister = lease.onQuiesce(async () => {
+      sequence.push("quiesce-snapshot");
+      await quiesceGate;
+      sequence.push("quiesce-complete");
+    });
+    return () => {
+      unregister();
+      sequence.push("editor-unmount");
+    };
+  }, [lease, quiesceGate, sequence]);
+  return <p>live Goal editor</p>;
+}
+
 type CleanupHarness = {
   readonly run: ReturnType<typeof vi.fn<RunPostCommitCleanup>>;
   readonly completion: Deferred<void>;
@@ -417,6 +596,7 @@ type AdvisoryHarness = {
     typeof vi.fn<GoalDeletionAdvisoryRegistry["beginCleanup"]>
   >;
   readonly complete: ReturnType<typeof vi.fn<() => void>>;
+  readonly fail: ReturnType<typeof vi.fn<() => void>>;
   readonly publish: ReturnType<
     typeof vi.fn<GoalDeletionAdvisoryRegistry["publish"]>
   >;
@@ -427,16 +607,19 @@ type AdvisoryHarness = {
 function createAdvisoryHarness(
   options: {
     readonly claim?: GoalDeletionCleanupClaim;
+    readonly known?: boolean;
     readonly sequence?: string[];
   } = {},
 ): AdvisoryHarness {
   const listeners = new Set<() => void>();
-  const ownerCompletion = deferred<void>();
-  const complete = vi.fn(() => ownerCompletion.resolve());
+  const ownerCompletion = deferred<GoalDeletionCleanupOutcome>();
+  const complete = vi.fn(() => ownerCompletion.resolve("completed"));
+  const fail = vi.fn(() => ownerCompletion.resolve("failed"));
   const claim: GoalDeletionCleanupClaim = options.claim ?? {
     kind: "owner",
     completion: ownerCompletion.promise,
     complete,
+    fail,
   };
   const publish = vi.fn<GoalDeletionAdvisoryRegistry["publish"]>(() => {
     options.sequence?.push("publish");
@@ -444,6 +627,7 @@ function createAdvisoryHarness(
   const subscribe = vi.fn<GoalDeletionAdvisoryRegistry["subscribe"]>(
     (_userId, _goalId, listener) => {
       listeners.add(listener);
+      if (options.known) listener();
       let active = true;
       return () => {
         if (!active) return;
@@ -459,9 +643,15 @@ function createAdvisoryHarness(
     },
   );
   return {
-    registry: { beginCleanup, publish, subscribe },
+    registry: {
+      beginCleanup,
+      publish,
+      subscribe,
+      isKnown: () => options.known ?? false,
+    },
     beginCleanup,
     complete,
+    fail,
     publish,
     activeSubscriberCount: () => listeners.size,
     dispatch: () => {

@@ -60,4 +60,19 @@ describe("query retry policy", () => {
     expect(shouldRetryQuery(1, error)).toBe(true);
     expect(shouldRetryQuery(2, error)).toBe(false);
   });
+
+  it.each([
+    [404, "CYCLE_NOT_FOUND"],
+    [404, "INVALID_ERROR_RESPONSE"],
+    [400, "INVALID_CURSOR"],
+  ] as const)(
+    "retains ordinary retries for non-deletion boundary %i %s",
+    (status, code) => {
+      const error = new APIError(status, code, "private", requestId);
+
+      expect(shouldRetryQuery(0, error)).toBe(true);
+      expect(shouldRetryQuery(1, error)).toBe(true);
+      expect(shouldRetryQuery(2, error)).toBe(false);
+    },
+  );
 });

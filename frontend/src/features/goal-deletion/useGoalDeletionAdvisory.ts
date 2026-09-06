@@ -14,6 +14,7 @@ import {
 } from "./goalDeletionAdvisory";
 import type {
   BeginGoalDeletionCleanup,
+  GoalDeletionCleanupOutcome,
   GoalDeletionAdvisoryRegistry,
   SubscribeGoalDeletionAdvisory,
 } from "./goalDeletionContext";
@@ -33,10 +34,11 @@ export type GoalDeletionAdvisoryOptions = {
 };
 
 type GoalListeners = Map<string, Set<() => void>>;
+type KnownGoalDeletions = Map<string, Set<string>>;
 
 type GoalDeletionCleanup = {
-  readonly completion: Promise<void>;
-  readonly resolve: () => void;
+  readonly completion: Promise<GoalDeletionCleanupOutcome>;
+  readonly resolve: (outcome: GoalDeletionCleanupOutcome) => void;
 };
 
 type GoalDeletionCleanups = Map<string, GoalDeletionCleanup>;
@@ -48,6 +50,7 @@ export function useGoalDeletionAdvisory({
 }: GoalDeletionAdvisoryOptions): GoalDeletionAdvisoryRegistry {
   const advisoryRef = useRef<GoalDeletionAdvisory | null>(null);
   const listenersByUserRef = useRef(new Map<string, GoalListeners>());
+  const knownDeletionsByUserRef = useRef<KnownGoalDeletions>(new Map());
   const cleanupsByUserRef = useRef(new Map<string, GoalDeletionCleanups>());
   const getCurrentUserIdRef = useRef(getCurrentUserId);
   const onAcceptedGoalDeletionAdvisoryRef = useRef(
@@ -57,6 +60,24 @@ export function useGoalDeletionAdvisory({
     getCurrentUserIdRef.current = getCurrentUserId;
     onAcceptedGoalDeletionAdvisoryRef.current = onAcceptedGoalDeletionAdvisory;
   }, [getCurrentUserId, onAcceptedGoalDeletionAdvisory]);
+
+  const rememberDeletion = useCallback(
+    (deletedUserId: string, deletedGoalId: string) => {
+      let knownGoals = knownDeletionsByUserRef.current.get(deletedUserId);
+      if (knownGoals === undefined) {
+        knownGoals = new Set();
+        knownDeletionsByUserRef.current.set(deletedUserId, knownGoals);
+      }
+      knownGoals.add(deletedGoalId);
+    },
+    [],
+  );
+
+  const isKnown = useCallback(
+    (userId: string, goalId: string) =>
+      knownDeletionsByUserRef.current.get(userId)?.has(goalId) ?? false,
+    [],
+  );
 
   const notifyMatchingSubscribers = useCallback(
     (
@@ -71,6 +92,8 @@ export function useGoalDeletionAdvisory({
       }
       if (currentUserId !== deletedUserId)
         return { accepted: false, subscriberNotified: false };
+
+      rememberDeletion(deletedUserId, deletedGoalId);
 
       const listeners = listenersByUserRef.current
         .get(deletedUserId)
@@ -88,7 +111,7 @@ export function useGoalDeletionAdvisory({
       }
       return { accepted: true, subscriberNotified };
     },
-    [],
+    [rememberDeletion],
   );
 
   useEffect(() => {
@@ -122,6 +145,7 @@ export function useGoalDeletionAdvisory({
   const publish = useCallback(
     (deletedUserId: string, deletedGoalId: string) => {
       if (isUUIDv7(deletedUserId) && isUUIDv7(deletedGoalId)) {
+        rememberDeletion(deletedUserId, deletedGoalId);
         // BroadcastChannel does not deliver a sender's own message. Notify
         // another active route generation in this document before sending the
         // cross-context advisory so every matching editor is fenced promptly.
@@ -129,7 +153,7 @@ export function useGoalDeletionAdvisory({
       }
       advisoryRef.current?.publish(deletedUserId, deletedGoalId);
     },
-    [notifyMatchingSubscribers],
+    [notifyMatchingSubscribers, rememberDeletion],
   );
 
   const subscribe = useCallback<SubscribeGoalDeletionAdvisory>(
@@ -149,6 +173,21 @@ export function useGoalDeletionAdvisory({
       const registeredListener = () => listener();
       listeners.add(registeredListener);
 
+      let currentUserId: string | undefined;
+      try {
+        currentUserId = getCurrentUserIdRef.current();
+      } catch {
+        currentUserId = undefined;
+      }
+      if (currentUserId === userId && isKnown(userId, goalId)) {
+        try {
+          registeredListener();
+        } catch {
+          // An earlier subscriber-free fallback still owns durable cleanup.
+          // A broken late subscriber must not make registration itself fail.
+        }
+      }
+
       let active = true;
       return () => {
         if (!active) return;
@@ -160,7 +199,7 @@ export function useGoalDeletionAdvisory({
           listenersByUserRef.current.delete(userId);
       };
     },
-    [],
+    [isKnown],
   );
 
   const beginCleanup = useCallback<BeginGoalDeletionCleanup>(
@@ -174,8 +213,10 @@ export function useGoalDeletionAdvisory({
         };
       }
 
-      let resolveCompletion: () => void = () => undefined;
-      const completion = new Promise<void>((resolve) => {
+      let resolveCompletion: (
+        outcome: GoalDeletionCleanupOutcome,
+      ) => void = () => undefined;
+      const completion = new Promise<GoalDeletionCleanupOutcome>((resolve) => {
         resolveCompletion = resolve;
       });
       const cleanup: GoalDeletionCleanup = {
@@ -188,14 +229,12 @@ export function useGoalDeletionAdvisory({
       }
       cleanupsByGoal.set(goalId, cleanup);
 
-      let completed = false;
-      return {
-        kind: "owner",
-        completion,
-        complete: () => {
-          if (completed) return;
-          completed = true;
+      let settled = false;
+      const settle = (outcome: GoalDeletionCleanupOutcome) => {
+        if (settled) return;
+        settled = true;
 
+        if (outcome === "failed") {
           const currentCleanupsByGoal = cleanupsByUserRef.current.get(userId);
           if (currentCleanupsByGoal?.get(goalId) === cleanup) {
             currentCleanupsByGoal.delete(goalId);
@@ -203,15 +242,21 @@ export function useGoalDeletionAdvisory({
               cleanupsByUserRef.current.delete(userId);
             }
           }
-          cleanup.resolve();
-        },
+        }
+        cleanup.resolve(outcome);
+      };
+      return {
+        kind: "owner",
+        completion,
+        complete: () => settle("completed"),
+        fail: () => settle("failed"),
       };
     },
     [],
   );
 
   return useMemo(
-    () => ({ publish, subscribe, beginCleanup }),
-    [beginCleanup, publish, subscribe],
+    () => ({ publish, subscribe, beginCleanup, isKnown }),
+    [beginCleanup, isKnown, publish, subscribe],
   );
 }

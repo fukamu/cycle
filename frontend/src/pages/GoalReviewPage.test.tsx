@@ -21,6 +21,7 @@ import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedReq
 import {
   GoalDeletionAdvisoryContext,
   type GoalDeletionAdvisoryRegistry,
+  type GoalDeletionCleanupOutcome,
 } from "../features/goal-deletion";
 import {
   AutoSaveScopeProvider,
@@ -3092,7 +3093,10 @@ function createGoalDeletionAdvisoryHarness(): GoalDeletionAdvisoryHarness {
   const listeners = new Map<string, Set<() => void>>();
   const cleanups = new Map<
     string,
-    { readonly completion: Promise<void>; readonly resolve: () => void }
+    {
+      readonly completion: Promise<GoalDeletionCleanupOutcome>;
+      readonly resolve: (outcome: GoalDeletionCleanupOutcome) => void;
+    }
   >();
   const keyOf = (userId: string, goalId: string) =>
     JSON.stringify([userId, goalId]);
@@ -3119,8 +3123,9 @@ function createGoalDeletionAdvisoryHarness(): GoalDeletionAdvisoryHarness {
     const key = keyOf(userId, goalId);
     const current = cleanups.get(key);
     if (current) return { kind: "joined", completion: current.completion };
-    let resolve: () => void = () => undefined;
-    const completion = new Promise<void>((done) => {
+    let resolve: (outcome: GoalDeletionCleanupOutcome) => void = () =>
+      undefined;
+    const completion = new Promise<GoalDeletionCleanupOutcome>((done) => {
       resolve = done;
     });
     const cleanup = { completion, resolve };
@@ -3131,12 +3136,22 @@ function createGoalDeletionAdvisoryHarness(): GoalDeletionAdvisoryHarness {
       complete: () => {
         if (cleanups.get(key) !== cleanup) return;
         cleanups.delete(key);
-        resolve();
+        resolve("completed");
+      },
+      fail: () => {
+        if (cleanups.get(key) !== cleanup) return;
+        cleanups.delete(key);
+        resolve("failed");
       },
     };
   };
   return {
-    registry: { publish, subscribe, beginCleanup },
+    registry: {
+      publish,
+      subscribe,
+      beginCleanup,
+      isKnown: () => false,
+    },
     publish,
     subscribe,
     dispatch: (deletedUserId, deletedGoalId) => {

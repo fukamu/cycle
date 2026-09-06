@@ -609,6 +609,30 @@ it("owns infinite-scroll observer policy once inside goal-history", () => {
   expect(owners).toEqual(["features/goal-history/useInfiniteScrollTrigger.ts"]);
 });
 
+it("keeps the common Goal deletion fence owned by GoalTimelineFeature", () => {
+  const timeline = sourceFile("features/goal-history/GoalTimelineFeature.tsx");
+  const route = sourceFile("pages/GoalTimelinePage.tsx");
+  const boundaries = jsxOpenings(timeline, "GoalDeletionFenceBoundary");
+  const fencedQueries = jsxOpenings(timeline, "GoalTimelineDeletionFence");
+
+  expect(jsxOpenings(route, "GoalDeletionFenceBoundary")).toHaveLength(0);
+  expect(boundaries).toHaveLength(1);
+  expect(fencedQueries).toHaveLength(1);
+  const boundary = boundaries[0];
+  const fencedQuery = fencedQueries[0];
+  expect(boundary).toBeDefined();
+  expect(fencedQuery).toBeDefined();
+  if (!boundary || !fencedQuery) return;
+  expect(jsxPropSignatures(timeline, boundary)).toEqual([
+    "goalId=goalId",
+    "userId=userId",
+  ]);
+  expect(jsxPropSignatures(timeline, fencedQuery)).toEqual([
+    "goalId=goalId",
+    "userId=userId",
+  ]);
+});
+
 it("fences every route-owned post-commit publication by route generation", () => {
   const routeOwnedFeatures = [
     "features/goal-creation/GoalCreationFeature.tsx",

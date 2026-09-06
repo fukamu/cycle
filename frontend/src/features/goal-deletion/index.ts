@@ -8,10 +8,12 @@ export {
   GoalDeletionAdvisoryContext,
   type BeginGoalDeletionCleanup,
   type GoalDeletionCleanupClaim,
+  type GoalDeletionCleanupOutcome,
   type GoalDeletionAdvisoryRegistry,
   type PublishGoalDeletionAdvisory,
   type SubscribeGoalDeletionAdvisory,
   useBeginGoalDeletionCleanup,
+  useGoalDeletionAdvisoryRegistry,
   usePublishGoalDeletionAdvisory,
   useSubscribeGoalDeletionAdvisory,
 } from "./goalDeletionContext";

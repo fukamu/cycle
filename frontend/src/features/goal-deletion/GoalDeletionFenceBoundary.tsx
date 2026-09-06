@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useSyncExternalStore,
   type PropsWithChildren,
 } from "react";
 import { useNavigate } from "react-router-dom";
@@ -18,11 +19,7 @@ import {
 } from "../../shared/cleanup/postCommitCleanupContext";
 import { tombstoneDeletedGoalAndClearDrafts } from "../../shared/drafts/browserDraftCache";
 import { removeGoalFromCache } from "../goal-collection";
-import {
-  useBeginGoalDeletionCleanup,
-  usePublishGoalDeletionAdvisory,
-  useSubscribeGoalDeletionAdvisory,
-} from "./goalDeletionContext";
+import { useGoalDeletionAdvisoryRegistry } from "./goalDeletionContext";
 
 export type StartGoalDeletionFence = (
   routeOwnership: PostCommitRouteOwnershipToken,
@@ -77,11 +74,69 @@ function GoalDeletionFenceControllerBoundary({
   const navigate = useNavigate();
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const runPostCommitCleanup = usePostCommitCleanup();
-  const beginCleanup = useBeginGoalDeletionCleanup();
-  const publishGoalDeletionAdvisory = usePublishGoalDeletionAdvisory();
-  const subscribeGoalDeletionAdvisory = useSubscribeGoalDeletionAdvisory();
+  const deletionRegistry = useGoalDeletionAdvisoryRegistry();
   const listenersRef = useRef(new Set<GoalDeletionFenceListener>());
   const startedRef = useRef(false);
+  const committedRef = useRef(false);
+  const hiddenFromFirstPaintRef = useRef(false);
+
+  const acquireCleanup = useCallback(
+    function acquireCleanup(
+      routeOwnership: PostCommitRouteOwnershipToken,
+      source: GoalDeletionFenceSource,
+    ) {
+      const claim = deletionRegistry.beginCleanup(userId, goalId);
+      if (claim.kind === "joined") {
+        void claim.completion.then((outcome) => {
+          if (outcome === "failed") {
+            acquireCleanup(routeOwnership, "advisory");
+            return;
+          }
+          // A completed durable tombstone remains canonical for this Session.
+          // Purge any cache that arrived after its original cleanup without
+          // repeating the IndexedDB transaction.
+          removeGoalFromCache(cache, userId, goalId);
+          if (!routeOwnership.isCurrent()) return;
+          navigate("/", { replace: true, flushSync: true });
+        });
+        return;
+      }
+
+      if (source === "local") {
+        try {
+          deletionRegistry.publish(userId, goalId);
+        } catch {
+          // Cross-context notification is advisory; local durable cleanup is
+          // the canonical privacy operation and must still run.
+        }
+      }
+
+      const completion = runPostCommitCleanup({
+        expectedUserId: userId,
+        routeOwnership,
+        cleanup: async () => {
+          await tombstoneDeletedGoalAndClearDrafts(userId, goalId);
+          removeGoalFromCache(cache, userId, goalId);
+          if (source === "local") {
+            try {
+              deletionRegistry.publish(userId, goalId);
+            } catch {
+              // The confirmation is best-effort after the durable tombstone.
+            }
+          }
+        },
+        onSuccess: (publicationIsCurrent) => {
+          if (!publicationIsCurrent()) return;
+          navigate("/", { replace: true, flushSync: true });
+        },
+        pendingMessage: "削除済みGoalのブラウザ下書きを削除しています…",
+        failureMessage: "削除済みGoalのブラウザ下書きを削除できませんでした。",
+        retryLabel: "ブラウザデータの削除を再試行",
+      });
+      void completion.then(claim.complete, claim.fail);
+    },
+    [cache, deletionRegistry, goalId, navigate, runPostCommitCleanup, userId],
+  );
 
   const start = useCallback(
     (
@@ -99,62 +154,9 @@ function GoalDeletionFenceControllerBoundary({
 
       if (startedRef.current) return;
       startedRef.current = true;
-
-      const claim = beginCleanup(userId, goalId);
-      if (claim.kind === "joined") {
-        void claim.completion.then(() => {
-          if (!routeOwnership.isCurrent()) return;
-          navigate("/", { replace: true, flushSync: true });
-        });
-        return;
-      }
-
-      if (source === "local") {
-        try {
-          publishGoalDeletionAdvisory(userId, goalId);
-        } catch {
-          // Cross-context notification is advisory; local durable cleanup is
-          // the canonical privacy operation and must still run.
-        }
-      }
-
-      const completion = runPostCommitCleanup({
-        expectedUserId: userId,
-        routeOwnership,
-        cleanup: async () => {
-          await tombstoneDeletedGoalAndClearDrafts(userId, goalId);
-          removeGoalFromCache(cache, userId, goalId);
-          if (source === "local") {
-            try {
-              publishGoalDeletionAdvisory(userId, goalId);
-            } catch {
-              // The confirmation is best-effort after the durable tombstone.
-            }
-          }
-        },
-        onSuccess: (publicationIsCurrent) => {
-          if (!publicationIsCurrent()) return;
-          navigate("/", { replace: true, flushSync: true });
-        },
-        pendingMessage: "削除済みGoalのブラウザ下書きを削除しています…",
-        failureMessage: "削除済みGoalのブラウザ下書きを削除できませんでした。",
-        retryLabel: "ブラウザデータの削除を再試行",
-      });
-      void completion.then(claim.complete, () => {
-        // Keep the tuple claim when its owner cannot finish cleanup. A later
-        // route must join the same privacy operation rather than repeat the
-        // transport that witnessed deletion.
-      });
+      acquireCleanup(routeOwnership, source);
     },
-    [
-      beginCleanup,
-      cache,
-      goalId,
-      navigate,
-      publishGoalDeletionAdvisory,
-      runPostCommitCleanup,
-      userId,
-    ],
+    [acquireCleanup],
   );
 
   const startLocal = useCallback<StartGoalDeletionFence>(
@@ -195,19 +197,40 @@ function GoalDeletionFenceControllerBoundary({
     [captureRouteOwnership, startLocal],
   );
 
-  useLayoutEffect(
-    () =>
-      subscribeGoalDeletionAdvisory(userId, goalId, () => {
-        start(captureRouteOwnership(), "advisory");
+  const subscribeDeletionSnapshot = useCallback(
+    (onStoreChange: () => void) =>
+      deletionRegistry.subscribe(userId, goalId, () => {
+        if (committedRef.current) {
+          start(captureRouteOwnership(), "advisory");
+        }
+        onStoreChange();
       }),
-    [
-      captureRouteOwnership,
-      goalId,
-      start,
-      subscribeGoalDeletionAdvisory,
-      userId,
-    ],
+    [captureRouteOwnership, deletionRegistry, goalId, start, userId],
   );
+  const readDeletionSnapshot = useCallback(
+    () => deletionRegistry.isKnown(userId, goalId),
+    [deletionRegistry, goalId, userId],
+  );
+  const deletionKnown = useSyncExternalStore(
+    subscribeDeletionSnapshot,
+    readDeletionSnapshot,
+    readDeletionSnapshot,
+  );
+  if (!committedRef.current && deletionKnown) {
+    hiddenFromFirstPaintRef.current = true;
+  }
+  useLayoutEffect(() => {
+    committedRef.current = true;
+    if (!deletionKnown) return;
+
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) start(captureRouteOwnership(), "advisory");
+    });
+    return () => {
+      active = false;
+    };
+  }, [captureRouteOwnership, deletionKnown, start]);
 
   const value = useMemo<GoalDeletionFenceController>(
     () => ({
@@ -220,7 +243,7 @@ function GoalDeletionFenceControllerBoundary({
 
   return (
     <GoalDeletionFenceContext.Provider value={value}>
-      {children}
+      {hiddenFromFirstPaintRef.current ? null : children}
     </GoalDeletionFenceContext.Provider>
   );
 }

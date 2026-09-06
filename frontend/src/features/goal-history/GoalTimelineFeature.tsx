@@ -1,9 +1,19 @@
-import { Fragment, useMemo } from "react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Link } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../auth";
 import { userQueryKeys } from "../goal-collection";
+import {
+  GoalDeletionFenceBoundary,
+  useGoalDeletionEditorFence,
+  useRunGoalDeletionFencedRequest,
+} from "../goal-deletion";
 import { getGoal, listCycles } from "../../shared/api/workspace";
 import {
   LoadMoreError,
@@ -19,17 +29,76 @@ import { buildTimelineGroups } from "./goalTimelineModel";
 import { useInfiniteScrollTrigger } from "./useInfiniteScrollTrigger";
 
 export function GoalTimelineFeature({ goalId }: { readonly goalId: string }) {
-  const session = useSession();
+  const userId = useSession().user.id;
+  return (
+    <GoalDeletionFenceBoundary userId={userId} goalId={goalId}>
+      <GoalTimelineDeletionFence userId={userId} goalId={goalId} />
+    </GoalDeletionFenceBoundary>
+  );
+}
+
+function GoalTimelineDeletionFence({
+  userId,
+  goalId,
+}: {
+  readonly userId: string;
+  readonly goalId: string;
+}) {
+  const cache = useQueryClient();
+  const fencedRef = useRef(false);
+  const [fenced, setFenced] = useState(false);
+  const fenceTimeline = useCallback(() => {
+    if (fencedRef.current) return;
+    fencedRef.current = true;
+
+    // Cancellation is part of the synchronous visibility fence. It prevents
+    // an already-started initial, refetch, or pagination response from
+    // publishing deleted content while durable cleanup is still pending.
+    void cache.cancelQueries({
+      queryKey: userQueryKeys.goal(userId, goalId),
+      exact: true,
+    });
+    void cache.cancelQueries({
+      queryKey: userQueryKeys.goalCycles(userId, goalId),
+      exact: true,
+    });
+    flushSync(() => setFenced(true));
+  }, [cache, goalId, userId]);
+  useGoalDeletionEditorFence(fenceTimeline);
+
+  return fenced ? null : (
+    <GoalTimelineQueries userId={userId} goalId={goalId} />
+  );
+}
+
+function GoalTimelineQueries({
+  userId,
+  goalId,
+}: {
+  readonly userId: string;
+  readonly goalId: string;
+}) {
   const sessionLease = useAuthenticatedRequestLease();
-  const userId = session.user.id;
+  const runGoalDeletionFencedRequest = useRunGoalDeletionFencedRequest();
   const goal = useQuery({
     queryKey: userQueryKeys.goal(userId, goalId),
-    queryFn: ({ signal }) => getGoal(sessionLease, goalId, signal),
+    queryFn: async ({ signal }) => {
+      const response = await runGoalDeletionFencedRequest(() =>
+        getGoal(sessionLease, goalId, signal),
+      );
+      signal.throwIfAborted();
+      return response;
+    },
   });
   const cycles = useInfiniteQuery({
     queryKey: userQueryKeys.goalCycles(userId, goalId),
-    queryFn: ({ pageParam, signal }) =>
-      listCycles(sessionLease, goalId, pageParam, signal),
+    queryFn: async ({ pageParam, signal }) => {
+      const response = await runGoalDeletionFencedRequest(() =>
+        listCycles(sessionLease, goalId, pageParam, signal),
+      );
+      signal.throwIfAborted();
+      return response;
+    },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
