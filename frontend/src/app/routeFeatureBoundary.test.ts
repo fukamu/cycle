@@ -52,35 +52,18 @@ const boundaries: readonly RouteBoundary[] = [
       "useSession",
     ],
   },
+] as const;
+
+const compositionBoundaries: readonly CompositionBoundary[] = [
   {
     page: "GoalReviewPage",
     pageExport: "GoalReviewPage",
     feature: "goal-review",
     featureExport: "GoalReviewFeature",
-    queryExport: "goalReviewQueryOptions",
-    featureProp: "review",
-    allowedJsx: ["GoalReviewFeature", "PageError", "PageLoading"],
-    localDeclarations: [
-      "session=useSession()",
-      "sessionLease=useAuthenticatedRequestLease()",
-      "userId=session.user.id",
-      '{goalId=""}=useParams()',
-      "entryId=useId()",
-      "query=useQuery(goalReviewQueryOptions(userId,goalId,entryId,sessionLease))",
-    ],
-    allowedCalls: [
-      "goalReviewQueryOptions",
-      "query.refetch",
-      "useAuthenticatedRequestLease",
-      "useId",
-      "useParams",
-      "useQuery",
-      "useSession",
-    ],
+    localDeclarations: ['{goalId=""}=useParams()'],
+    allowedCalls: ["useParams"],
+    featureProps: ["goalId=goalId"],
   },
-] as const;
-
-const compositionBoundaries: readonly CompositionBoundary[] = [
   {
     page: "GoalWorkspacePage",
     pageExport: "GoalWorkspacePage",
@@ -114,6 +97,10 @@ const compositionFeatureContracts = [
   {
     feature: "cycle-workspace",
     exports: ["CycleWorkspaceFeature"],
+  },
+  {
+    feature: "goal-review",
+    exports: ["GoalReviewFeature", "goalReviewQueryOptions"],
   },
   {
     feature: "goal-history",
@@ -579,7 +566,7 @@ describe.each(compositionBoundaries)(
 describe.each(compositionFeatureContracts)(
   "$feature public composition contract",
   ({ feature, exports }) => {
-    it("publishes only route-composable feature components", () => {
+    it("publishes only the declared route feature contracts", () => {
       const featureIndex = sourceFile(`features/${feature}/index.ts`);
       const contract = publicIndexContract(featureIndex);
       expect(contract.invalidStatements).toEqual([]);

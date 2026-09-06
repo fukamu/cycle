@@ -16,6 +16,7 @@ describe("query retry policy", () => {
     [401, "SESSION_MISSING"],
     [401, "SESSION_EXPIRED"],
     [403, "CSRF_INVALID"],
+    [404, "GOAL_NOT_FOUND"],
   ] as const)(
     "does not retry the exact %i %s boundary error",
     (status, code) => {
@@ -36,6 +37,18 @@ describe("query retry policy", () => {
       shouldRetryQuery(
         0,
         new APIError(401, "CSRF_INVALID", "private", requestId),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryQuery(
+        0,
+        new APIError(409, "GOAL_NOT_FOUND", "private", requestId),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryQuery(
+        0,
+        new APIError(404, "CYCLE_NOT_FOUND", "private", requestId),
       ),
     ).toBe(true);
   });

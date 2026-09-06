@@ -51,6 +51,11 @@ type SessionProviderProps = PropsWithChildren<{
   readonly goalDeletionAdvisoryFactory?: GoalDeletionAdvisoryFactory;
 }>;
 
+type GoalDeletionFallback = {
+  status: "pending" | "completed";
+  retryRequested: boolean;
+};
+
 export function SessionProvider({
   children,
   reloadApplication = reloadFromServer,
@@ -98,7 +103,9 @@ function SessionBoundary({
   const leaseOwner = useAuthenticatedRequestLeaseOwner();
   const autoSaveScopes = useAutoSaveScopeRegistry();
   const transitionRef = useRef<Promise<void>>(Promise.resolve());
-  const goalDeletionFallbacksRef = useRef(new Map<string, Promise<void>>());
+  const goalDeletionFallbacksRef = useRef(
+    new Map<string, GoalDeletionFallback>(),
+  );
   const goalDeletionsHandledBySubscriberRef = useRef(new Set<string>());
   const recoverySubscriptionRef = useRef<SessionRecoverySubscription | null>(
     null,
@@ -159,40 +166,67 @@ function SessionBoundary({
     () => queryClient.getQueryData<Session>(sessionQueryKey)?.user.id,
     [queryClient],
   );
+  const startGoalDeletionFallback = useCallback(
+    function startGoalDeletionFallback(
+      deletedUserId: string,
+      deletedGoalId: string,
+      fallbackKey: string,
+    ) {
+      const entry: GoalDeletionFallback = {
+        status: "pending",
+        retryRequested: false,
+      };
+      goalDeletionFallbacksRef.current.set(fallbackKey, entry);
+      const fallback = (async () => {
+        await tombstoneDeletedGoalAndClearDrafts(deletedUserId, deletedGoalId);
+        removeGoalFromCache(queryClient, deletedUserId, deletedGoalId);
+      })();
+      void fallback.then(
+        () => {
+          if (goalDeletionFallbacksRef.current.get(fallbackKey) === entry) {
+            entry.status = "completed";
+          }
+        },
+        () => {
+          if (goalDeletionFallbacksRef.current.get(fallbackKey) !== entry)
+            return;
+          goalDeletionFallbacksRef.current.delete(fallbackKey);
+          if (entry.retryRequested) {
+            startGoalDeletionFallback(
+              deletedUserId,
+              deletedGoalId,
+              fallbackKey,
+            );
+          }
+        },
+      );
+    },
+    [queryClient],
+  );
   const handleAcceptedGoalDeletionAdvisory = useCallback(
     ({
       deletedUserId,
       deletedGoalId,
       subscriberNotified,
     }: AcceptedGoalDeletionAdvisory) => {
-      const fallbackKey = `${deletedUserId}:${deletedGoalId}`;
-      try {
-        removeGoalFromCache(queryClient, deletedUserId, deletedGoalId);
-      } catch {
-        // A matching editor has already been synchronously fenced. Durable
-        // cleanup remains authoritative if an in-memory cache is unavailable.
-      }
+      const fallbackKey = JSON.stringify([deletedUserId, deletedGoalId]);
       if (subscriberNotified) {
-        // The matching workspace owns durable cleanup. Remember that ownership
-        // after it navigates away so the sender's confirmation cannot start a
-        // second, subscriber-free cleanup for the same deletion.
+        // The matching workspace owns the whole deletion sequence, including
+        // durable cleanup and cache eviction. Remember that ownership after it
+        // navigates away so the sender's confirmation cannot start a second,
+        // subscriber-free cleanup for the same deletion.
         goalDeletionsHandledBySubscriberRef.current.add(fallbackKey);
         return;
       }
       if (goalDeletionsHandledBySubscriberRef.current.has(fallbackKey)) return;
-      if (goalDeletionFallbacksRef.current.has(fallbackKey)) return;
-      const fallback = tombstoneDeletedGoalAndClearDrafts(
-        deletedUserId,
-        deletedGoalId,
-      );
-      goalDeletionFallbacksRef.current.set(fallbackKey, fallback);
-      void fallback.catch(() => {
-        if (goalDeletionFallbacksRef.current.get(fallbackKey) === fallback) {
-          goalDeletionFallbacksRef.current.delete(fallbackKey);
-        }
-      });
+      const fallback = goalDeletionFallbacksRef.current.get(fallbackKey);
+      if (fallback !== undefined) {
+        if (fallback.status === "pending") fallback.retryRequested = true;
+        return;
+      }
+      startGoalDeletionFallback(deletedUserId, deletedGoalId, fallbackKey);
     },
-    [queryClient],
+    [startGoalDeletionFallback],
   );
   const goalDeletionAdvisory = useGoalDeletionAdvisory({
     getCurrentUserId: getCurrentGoalDeletionUserId,

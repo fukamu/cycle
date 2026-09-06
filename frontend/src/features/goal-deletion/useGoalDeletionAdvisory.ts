@@ -13,6 +13,7 @@ import {
   type GoalDeletionAdvisoryFactory,
 } from "./goalDeletionAdvisory";
 import type {
+  BeginGoalDeletionCleanup,
   GoalDeletionAdvisoryRegistry,
   SubscribeGoalDeletionAdvisory,
 } from "./goalDeletionContext";
@@ -33,6 +34,13 @@ export type GoalDeletionAdvisoryOptions = {
 
 type GoalListeners = Map<string, Set<() => void>>;
 
+type GoalDeletionCleanup = {
+  readonly completion: Promise<void>;
+  readonly resolve: () => void;
+};
+
+type GoalDeletionCleanups = Map<string, GoalDeletionCleanup>;
+
 export function useGoalDeletionAdvisory({
   getCurrentUserId,
   onAcceptedGoalDeletionAdvisory,
@@ -40,6 +48,7 @@ export function useGoalDeletionAdvisory({
 }: GoalDeletionAdvisoryOptions): GoalDeletionAdvisoryRegistry {
   const advisoryRef = useRef<GoalDeletionAdvisory | null>(null);
   const listenersByUserRef = useRef(new Map<string, GoalListeners>());
+  const cleanupsByUserRef = useRef(new Map<string, GoalDeletionCleanups>());
   const getCurrentUserIdRef = useRef(getCurrentUserId);
   const onAcceptedGoalDeletionAdvisoryRef = useRef(
     onAcceptedGoalDeletionAdvisory,
@@ -49,37 +58,53 @@ export function useGoalDeletionAdvisory({
     onAcceptedGoalDeletionAdvisoryRef.current = onAcceptedGoalDeletionAdvisory;
   }, [getCurrentUserId, onAcceptedGoalDeletionAdvisory]);
 
+  const notifyMatchingSubscribers = useCallback(
+    (
+      deletedUserId: string,
+      deletedGoalId: string,
+    ): { readonly accepted: boolean; readonly subscriberNotified: boolean } => {
+      let currentUserId: string | undefined;
+      try {
+        currentUserId = getCurrentUserIdRef.current();
+      } catch {
+        return { accepted: false, subscriberNotified: false };
+      }
+      if (currentUserId !== deletedUserId)
+        return { accepted: false, subscriberNotified: false };
+
+      const listeners = listenersByUserRef.current
+        .get(deletedUserId)
+        ?.get(deletedGoalId);
+      let subscriberNotified = false;
+      if (listeners !== undefined) {
+        for (const listener of [...listeners]) {
+          try {
+            listener();
+            subscriberNotified = true;
+          } catch {
+            // One broken subscriber must not suppress other local fences.
+          }
+        }
+      }
+      return { accepted: true, subscriberNotified };
+    },
+    [],
+  );
+
   useEffect(() => {
     const advisory = createGoalDeletionAdvisory(
       (deletedUserId, deletedGoalId) => {
-        let currentUserId: string | undefined;
-        try {
-          currentUserId = getCurrentUserIdRef.current();
-        } catch {
-          return;
-        }
-        if (currentUserId !== deletedUserId) return;
-
-        const listeners = listenersByUserRef.current
-          .get(deletedUserId)
-          ?.get(deletedGoalId);
-        let subscriberNotified = false;
-        if (listeners !== undefined) {
-          for (const listener of [...listeners]) {
-            try {
-              listener();
-              subscriberNotified = true;
-            } catch {
-              // One broken subscriber must not suppress other local fences.
-            }
-          }
-        }
+        const notification = notifyMatchingSubscribers(
+          deletedUserId,
+          deletedGoalId,
+        );
+        if (!notification.accepted) return;
 
         try {
           onAcceptedGoalDeletionAdvisoryRef.current({
             deletedUserId,
             deletedGoalId,
-            subscriberNotified,
+            subscriberNotified: notification.subscriberNotified,
           });
         } catch {
           // The provider callback is advisory; durable deletion remains canonical.
@@ -92,13 +117,19 @@ export function useGoalDeletionAdvisory({
       advisory?.close();
       if (advisoryRef.current === advisory) advisoryRef.current = null;
     };
-  }, [factory]);
+  }, [factory, notifyMatchingSubscribers]);
 
   const publish = useCallback(
     (deletedUserId: string, deletedGoalId: string) => {
+      if (isUUIDv7(deletedUserId) && isUUIDv7(deletedGoalId)) {
+        // BroadcastChannel does not deliver a sender's own message. Notify
+        // another active route generation in this document before sending the
+        // cross-context advisory so every matching editor is fenced promptly.
+        notifyMatchingSubscribers(deletedUserId, deletedGoalId);
+      }
       advisoryRef.current?.publish(deletedUserId, deletedGoalId);
     },
-    [],
+    [notifyMatchingSubscribers],
   );
 
   const subscribe = useCallback<SubscribeGoalDeletionAdvisory>(
@@ -132,5 +163,55 @@ export function useGoalDeletionAdvisory({
     [],
   );
 
-  return useMemo(() => ({ publish, subscribe }), [publish, subscribe]);
+  const beginCleanup = useCallback<BeginGoalDeletionCleanup>(
+    (userId, goalId) => {
+      let cleanupsByGoal = cleanupsByUserRef.current.get(userId);
+      const existingCleanup = cleanupsByGoal?.get(goalId);
+      if (existingCleanup !== undefined) {
+        return {
+          kind: "joined",
+          completion: existingCleanup.completion,
+        };
+      }
+
+      let resolveCompletion: () => void = () => undefined;
+      const completion = new Promise<void>((resolve) => {
+        resolveCompletion = resolve;
+      });
+      const cleanup: GoalDeletionCleanup = {
+        completion,
+        resolve: resolveCompletion,
+      };
+      if (cleanupsByGoal === undefined) {
+        cleanupsByGoal = new Map();
+        cleanupsByUserRef.current.set(userId, cleanupsByGoal);
+      }
+      cleanupsByGoal.set(goalId, cleanup);
+
+      let completed = false;
+      return {
+        kind: "owner",
+        completion,
+        complete: () => {
+          if (completed) return;
+          completed = true;
+
+          const currentCleanupsByGoal = cleanupsByUserRef.current.get(userId);
+          if (currentCleanupsByGoal?.get(goalId) === cleanup) {
+            currentCleanupsByGoal.delete(goalId);
+            if (currentCleanupsByGoal.size === 0) {
+              cleanupsByUserRef.current.delete(userId);
+            }
+          }
+          cleanup.resolve();
+        },
+      };
+    },
+    [],
+  );
+
+  return useMemo(
+    () => ({ publish, subscribe, beginCleanup }),
+    [beginCleanup, publish, subscribe],
+  );
 }

@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -13,13 +14,14 @@ import {
   cacheCycle,
   cacheGoal,
   cacheReviewDraft,
-  removeGoalFromCache,
   resolveGoalReviewPublication,
   userQueryKeys,
 } from "../goal-collection";
 import {
-  usePublishGoalDeletionAdvisory,
-  useSubscribeGoalDeletionAdvisory,
+  GoalDeletionFenceBoundary,
+  useGoalDeletionEditorFence,
+  useRunGoalDeletionFencedRequest,
+  useStartGoalDeletionFence,
 } from "../goal-deletion";
 import { GoalRefinementPanel, useGoalRefinement } from "../goal-refine";
 import { APIError } from "../../shared/api/client";
@@ -37,6 +39,8 @@ import {
 import {
   DraftCacheWarning,
   DraftRecoveryNotice,
+  PageError,
+  PageLoading,
   SaveBadge,
 } from "../../shared/components/AsyncState";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
@@ -46,10 +50,7 @@ import {
   useCapturePostCommitRouteOwnership,
   usePostCommitCleanup,
 } from "../../shared/cleanup/postCommitCleanupContext";
-import {
-  deleteBrowserDraft,
-  tombstoneDeletedGoalAndClearDrafts,
-} from "../../shared/drafts/browserDraftCache";
+import { deleteBrowserDraft } from "../../shared/drafts/browserDraftCache";
 import {
   commandFingerprint,
   useCommandOperation,
@@ -65,13 +66,13 @@ import {
   normalizeBoundedTextInput,
   textDiffersAfterLineEndingNormalization,
 } from "../../shared/text/semantics";
+import { goalReviewQueryOptions } from "./goalReviewQueryOptions";
 
 type ReviewConfirmation =
   | { readonly kind: "terminate"; readonly outcome: "achieved" | "ended" }
   | { readonly kind: "delete" };
 
 type ReviewTerminalCommand = "continue" | "terminate" | "delete";
-type GoalDeletionFenceSource = "local" | "advisory";
 type ReviewCommandRecovery =
   | { readonly kind: "loading" }
   | { readonly kind: "ready" }
@@ -105,13 +106,37 @@ function isReviewCommandWorkspaceConflict(
   return error.code === "GOAL_DELETE_CONFLICT";
 }
 
-export function GoalReviewFeature({ review }: { readonly review: GoalReview }) {
+export function GoalReviewFeature({ goalId }: { readonly goalId: string }) {
   const session = useSession();
   const userId = session.user.id;
   return (
+    <GoalDeletionFenceBoundary userId={userId} goalId={goalId}>
+      <GoalReviewRoute goalId={goalId} />
+    </GoalDeletionFenceBoundary>
+  );
+}
+
+function GoalReviewRoute({ goalId }: { readonly goalId: string }) {
+  const session = useSession();
+  const sessionLease = useAuthenticatedRequestLease();
+  const runGoalDeletionFencedRequest = useRunGoalDeletionFencedRequest();
+  const userId = session.user.id;
+  const entryId = useId();
+  const query = useQuery(
+    goalReviewQueryOptions(
+      userId,
+      goalId,
+      entryId,
+      sessionLease,
+      runGoalDeletionFencedRequest,
+    ),
+  );
+  if (query.isPending) return <PageLoading />;
+  if (query.isError) return <PageError retry={() => void query.refetch()} />;
+  return (
     <GoalReviewEntry
-      key={`${userId}:${review.goal.id}`}
-      review={review}
+      key={`${userId}:${query.data.goal.id}`}
+      review={query.data}
       userId={userId}
     />
   );
@@ -206,8 +231,7 @@ function ReviewEditor({
   const cache = useQueryClient();
   const runPostCommitCleanup = usePostCommitCleanup();
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
-  const publishGoalDeletionAdvisory = usePublishGoalDeletionAdvisory();
-  const subscribeGoalDeletionAdvisory = useSubscribeGoalDeletionAdvisory();
+  const markDeletedGoal = useStartGoalDeletionFence();
   const mountedGenerationRef = useRef(true);
   const deletedFenceStartedRef = useRef(false);
   useLayoutEffect(() => {
@@ -228,34 +252,66 @@ function ReviewEditor({
   const [commandRecovery, setCommandRecovery] =
     useState<ReviewCommandRecovery>();
   const commandRecoveryEpochRef = useRef(0);
+  const fenceStrictGoalNotFound = useCallback(
+    (
+      cause: unknown,
+      routeOwnership: PostCommitRouteOwnershipToken,
+    ): boolean => {
+      if (!isGoalNotFound(cause)) return false;
+      markDeletedGoal(routeOwnership);
+      return true;
+    },
+    [markDeletedGoal],
+  );
   const save = useCallback(
     async (body: string, revision: number, signal: AbortSignal) => {
-      const saved = (
-        await saveReview(
-          sessionLease,
-          goal.id,
-          reviewDraft.id,
-          body,
-          revision,
-          session.csrfToken,
-          signal,
-        )
-      ).reviewDraft;
-      signal.throwIfAborted();
-      const current = cache.getQueryData<GoalReview>(
-        userQueryKeys.review(userId, goal.id),
-      )?.reviewDraft;
-      if (current?.id === saved.id && current.revision <= saved.revision)
-        cacheReviewDraft(cache, userId, goal.id, saved);
-      return saved;
+      const routeOwnership = captureRouteOwnership();
+      try {
+        const saved = (
+          await saveReview(
+            sessionLease,
+            goal.id,
+            reviewDraft.id,
+            body,
+            revision,
+            session.csrfToken,
+            signal,
+          )
+        ).reviewDraft;
+        signal.throwIfAborted();
+        const current = cache.getQueryData<GoalReview>(
+          userQueryKeys.review(userId, goal.id),
+        )?.reviewDraft;
+        if (current?.id === saved.id && current.revision <= saved.revision)
+          cacheReviewDraft(cache, userId, goal.id, saved);
+        return saved;
+      } catch (cause) {
+        fenceStrictGoalNotFound(cause, routeOwnership);
+        throw cause;
+      }
     },
-    [cache, goal.id, reviewDraft.id, session.csrfToken, sessionLease, userId],
+    [
+      cache,
+      captureRouteOwnership,
+      fenceStrictGoalNotFound,
+      goal.id,
+      reviewDraft.id,
+      session.csrfToken,
+      sessionLease,
+      userId,
+    ],
   );
   const loadLatest = useCallback(
     async (signal: AbortSignal) => {
-      return (await getReview(sessionLease, goal.id, signal)).reviewDraft;
+      const routeOwnership = captureRouteOwnership();
+      try {
+        return (await getReview(sessionLease, goal.id, signal)).reviewDraft;
+      } catch (cause) {
+        fenceStrictGoalNotFound(cause, routeOwnership);
+        throw cause;
+      }
     },
-    [goal.id, sessionLease],
+    [captureRouteOwnership, fenceStrictGoalNotFound, goal.id, sessionLease],
   );
   const acceptLatest = useCallback(
     (
@@ -322,63 +378,18 @@ function ReviewEditor({
     goal.currentVersion.body,
   );
 
-  const markDeletedGoal = useCallback(
-    (
-      routeOwnership: PostCommitRouteOwnershipToken,
-      source: GoalDeletionFenceSource = "local",
-    ) => {
-      if (deletedFenceStartedRef.current) return;
-      deletedFenceStartedRef.current = true;
-      void markEditorScopeMoved("/", { preserveUnsaved: false });
-      commandRecoveryEpochRef.current += 1;
-      if (mountedGenerationRef.current) {
-        setCommandRecovery({ kind: "deleted" });
-        setPending(false);
-        setError(undefined);
-      }
-      if (source === "local") publishGoalDeletionAdvisory(userId, goal.id);
-      void runPostCommitCleanup({
-        expectedUserId: userId,
-        routeOwnership,
-        // Quiescence drains the Review scope's browser-operation queue before
-        // this Goal-wide delete. Retry never re-enters the failed API command.
-        cleanup: async () => {
-          await tombstoneDeletedGoalAndClearDrafts(userId, goal.id);
-          removeGoalFromCache(cache, userId, goal.id);
-          if (source === "local") publishGoalDeletionAdvisory(userId, goal.id);
-        },
-        onSuccess: async (publicationIsCurrent) => {
-          if (!publicationIsCurrent()) return;
-          navigate("/", { replace: true, flushSync: true });
-        },
-        pendingMessage: "削除済みGoalのブラウザ下書きを削除しています…",
-        failureMessage: "削除済みGoalのブラウザ下書きを削除できませんでした。",
-        retryLabel: "ブラウザデータの削除を再試行",
-      });
-    },
-    [
-      cache,
-      goal.id,
-      markEditorScopeMoved,
-      navigate,
-      publishGoalDeletionAdvisory,
-      runPostCommitCleanup,
-      userId,
-    ],
-  );
-  useLayoutEffect(
-    () =>
-      subscribeGoalDeletionAdvisory(userId, goal.id, () => {
-        markDeletedGoal(captureRouteOwnership(), "advisory");
-      }),
-    [
-      captureRouteOwnership,
-      goal.id,
-      markDeletedGoal,
-      subscribeGoalDeletionAdvisory,
-      userId,
-    ],
-  );
+  const fenceDeletedGoalEditor = useCallback(() => {
+    if (deletedFenceStartedRef.current) return;
+    deletedFenceStartedRef.current = true;
+    void markEditorScopeMoved("/", { preserveUnsaved: false });
+    commandRecoveryEpochRef.current += 1;
+    if (mountedGenerationRef.current) {
+      setCommandRecovery({ kind: "deleted" });
+      setPending(false);
+      setError(undefined);
+    }
+  }, [markEditorScopeMoved]);
+  useGoalDeletionEditorFence(fenceDeletedGoalEditor);
 
   const refreshCanonicalGoal = useCallback(
     async (
@@ -461,35 +472,43 @@ function ReviewEditor({
 
   async function requestRefine() {
     if (workspaceIsMoved) return;
+    const routeOwnership = captureRouteOwnership();
     setError(undefined);
     const expectedDraftRevision = editor.revision;
     const expectedGoalRevision = goal.revision;
     await refinement.request(
       editor.body,
-      () =>
-        refineOperation.invoke(
-          commandFingerprint("goal_review_refine", {
-            goalId: goal.id,
-            expectedDraftRevision,
-            expectedGoalRevision,
-          }),
-          (operationId) =>
-            refineReview(
-              sessionLease,
-              goal.id,
+      async () => {
+        try {
+          return await refineOperation.invoke(
+            commandFingerprint("goal_review_refine", {
+              goalId: goal.id,
               expectedDraftRevision,
               expectedGoalRevision,
-              {
-                operationId,
-                csrfToken: session.csrfToken,
-              },
-            ),
-        ),
+            }),
+            (operationId) =>
+              refineReview(
+                sessionLease,
+                goal.id,
+                expectedDraftRevision,
+                expectedGoalRevision,
+                {
+                  operationId,
+                  csrfToken: session.csrfToken,
+                },
+              ),
+          );
+        } catch (cause) {
+          fenceStrictGoalNotFound(cause, routeOwnership);
+          throw cause;
+        }
+      },
       editor.isActiveScope,
     );
   }
   async function adopt() {
     if (workspaceIsMoved || refinement.state.kind !== "suggested") return;
+    const routeOwnership = captureRouteOwnership();
     const completionIsCurrent = () =>
       mountedGenerationRef.current &&
       editor.isActiveScope() &&
@@ -511,7 +530,8 @@ function ReviewEditor({
       editor.synchronize(result.reviewDraft.body, result.reviewDraft.revision);
       cacheReviewDraft(cache, userId, goal.id, result.reviewDraft);
       refinement.dismiss();
-    } catch {
+    } catch (cause) {
+      if (fenceStrictGoalNotFound(cause, routeOwnership)) return;
       if (!completionIsCurrent()) return;
       setError("提案を採用できませんでした。現在の下書きを確認してください。");
     } finally {

@@ -191,7 +191,7 @@ describe("useGoalDeletionAdvisory", () => {
     });
   });
 
-  it("publishes through the owner channel without receiving its own message", () => {
+  it("publishes cross-context while synchronously fencing the exact local subscriber", () => {
     const onAcceptedGoalDeletionAdvisory = vi.fn();
     const channel = createChannelHarness();
     const rendered = renderHook(() =>
@@ -201,6 +201,10 @@ describe("useGoalDeletionAdvisory", () => {
         factory: () => channel.channel,
       }),
     );
+    const exactSubscriber = vi.fn();
+    const otherSubscriber = vi.fn();
+    rendered.result.current.subscribe(userId, goalId, exactSubscriber);
+    rendered.result.current.subscribe(userId, otherGoalId, otherSubscriber);
 
     act(() => {
       rendered.result.current.publish(userId, goalId);
@@ -209,7 +213,105 @@ describe("useGoalDeletionAdvisory", () => {
     });
 
     expect(channel.posted).toEqual([deletionMessage(userId, goalId)]);
+    expect(exactSubscriber).toHaveBeenCalledOnce();
+    expect(otherSubscriber).not.toHaveBeenCalled();
     expect(onAcceptedGoalDeletionAdvisory).not.toHaveBeenCalled();
+  });
+
+  it("coalesces cleanup ownership by the exact user and goal tuple", async () => {
+    const channel = createChannelHarness();
+    const rendered = renderHook(() =>
+      useGoalDeletionAdvisory({
+        getCurrentUserId: () => userId,
+        onAcceptedGoalDeletionAdvisory: vi.fn(),
+        factory: () => channel.channel,
+      }),
+    );
+
+    const owner = rendered.result.current.beginCleanup(userId, goalId);
+    const joined = rendered.result.current.beginCleanup(userId, goalId);
+    const otherUserOwner = rendered.result.current.beginCleanup(
+      otherUserId,
+      goalId,
+    );
+    const otherGoalOwner = rendered.result.current.beginCleanup(
+      userId,
+      otherGoalId,
+    );
+
+    expect(owner.kind).toBe("owner");
+    expect(joined.kind).toBe("joined");
+    expect(joined.completion).toBe(owner.completion);
+    expect(otherUserOwner.kind).toBe("owner");
+    expect(otherGoalOwner.kind).toBe("owner");
+
+    let ownerCompleted = false;
+    void owner.completion.then(() => {
+      ownerCompleted = true;
+    });
+    if (owner.kind === "owner") owner.complete();
+    await owner.completion;
+    expect(ownerCompleted).toBe(true);
+
+    if (otherUserOwner.kind === "owner") otherUserOwner.complete();
+    if (otherGoalOwner.kind === "owner") otherGoalOwner.complete();
+  });
+
+  it("releases a completed claim idempotently and allows a fresh owner", async () => {
+    const channel = createChannelHarness();
+    const rendered = renderHook(() =>
+      useGoalDeletionAdvisory({
+        getCurrentUserId: () => userId,
+        onAcceptedGoalDeletionAdvisory: vi.fn(),
+        factory: () => channel.channel,
+      }),
+    );
+
+    const firstOwner = rendered.result.current.beginCleanup(userId, goalId);
+    expect(firstOwner.kind).toBe("owner");
+    if (firstOwner.kind !== "owner") throw new Error("expected owner");
+    firstOwner.complete();
+    firstOwner.complete();
+    await firstOwner.completion;
+
+    const secondOwner = rendered.result.current.beginCleanup(userId, goalId);
+    const secondJoined = rendered.result.current.beginCleanup(userId, goalId);
+    expect(secondOwner.kind).toBe("owner");
+    expect(secondOwner.completion).not.toBe(firstOwner.completion);
+    expect(secondJoined.kind).toBe("joined");
+    expect(secondJoined.completion).toBe(secondOwner.completion);
+
+    firstOwner.complete();
+    const stillJoined = rendered.result.current.beginCleanup(userId, goalId);
+    expect(stillJoined.kind).toBe("joined");
+    expect(stillJoined.completion).toBe(secondOwner.completion);
+    if (secondOwner.kind === "owner") secondOwner.complete();
+    await secondOwner.completion;
+  });
+
+  it("uses collision-free tuple identity without validating cleanup inputs", async () => {
+    const channel = createChannelHarness();
+    const rendered = renderHook(() =>
+      useGoalDeletionAdvisory({
+        getCurrentUserId: () => userId,
+        onAcceptedGoalDeletionAdvisory: vi.fn(),
+        factory: () => channel.channel,
+      }),
+    );
+
+    const first = rendered.result.current.beginCleanup("a", "b\u0000c");
+    const second = rendered.result.current.beginCleanup("a\u0000b", "c");
+    const firstJoined = rendered.result.current.beginCleanup("a", "b\u0000c");
+
+    expect(first.kind).toBe("owner");
+    expect(second.kind).toBe("owner");
+    expect(firstJoined.kind).toBe("joined");
+    expect(firstJoined.completion).toBe(first.completion);
+    expect(second.completion).not.toBe(first.completion);
+
+    if (first.kind === "owner") first.complete();
+    if (second.kind === "owner") second.complete();
+    await Promise.all([first.completion, second.completion]);
   });
 
   it("uses the latest owner callbacks without replacing the channel", () => {
@@ -290,6 +392,29 @@ describe("useGoalDeletionAdvisory", () => {
       expect(channel.removeEventListener).toHaveBeenCalledOnce();
       expect(channel.close).toHaveBeenCalledOnce();
     }
+  });
+
+  it("keeps every registry callback stable across rerenders and StrictMode", () => {
+    const channel = createChannelHarness();
+    const rendered = renderHook(
+      () =>
+        useGoalDeletionAdvisory({
+          getCurrentUserId: () => userId,
+          onAcceptedGoalDeletionAdvisory: vi.fn(),
+          factory: () => channel.channel,
+        }),
+      { wrapper: StrictModeWrapper },
+    );
+    const firstRegistry = rendered.result.current;
+
+    rendered.rerender();
+
+    expect(rendered.result.current).toBe(firstRegistry);
+    expect(rendered.result.current.publish).toBe(firstRegistry.publish);
+    expect(rendered.result.current.subscribe).toBe(firstRegistry.subscribe);
+    expect(rendered.result.current.beginCleanup).toBe(
+      firstRegistry.beginCleanup,
+    );
   });
 });
 

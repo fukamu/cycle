@@ -295,6 +295,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function deletedGoalError(requestId: string) {
+  return new APIError(404, "GOAL_NOT_FOUND", "deleted", requestId);
+}
+
 describe("GoalReviewPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -338,6 +342,78 @@ describe("GoalReviewPage", () => {
       },
       canceledCycle: null,
     });
+  });
+
+  it("turns the initial Review GET GOAL_NOT_FOUND into durable deletion cleanup", async () => {
+    vi.mocked(getReview).mockRejectedValue(
+      deletedGoalError("request-initial-review"),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(screen.getByText("Goal cache削除済み")).toBeInTheDocument();
+    expect(getReview).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+      session.user.id,
+      goal.id,
+    );
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only initial Review deletion cleanup without resending its GET", async () => {
+    vi.mocked(getReview).mockRejectedValue(
+      deletedGoalError("request-initial-review-retry"),
+    );
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts)
+      .mockRejectedValueOnce(new Error("private IndexedDB failure"))
+      .mockResolvedValueOnce(undefined);
+
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        "削除済みGoalのブラウザ下書きを削除できませんでした。",
+      ),
+    ).toBeInTheDocument();
+    expect(getReview).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledOnce();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "ブラウザデータの削除を再試行",
+      }),
+    );
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(getReview).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledTimes(2);
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("cleans an initial late Review GOAL_NOT_FOUND without replacing the newer route", async () => {
+    const reviewRequest = deferred<GoalReview>();
+    vi.mocked(getReview).mockReturnValue(reviewRequest.promise);
+
+    renderPage(createCache(), false, false, true);
+    fireEvent.click(
+      await screen.findByRole("link", {
+        name: "クリーンアップ中に別routeへ移動",
+      }),
+    );
+    expect(await screen.findByText("外部route")).toBeInTheDocument();
+
+    await act(async () => {
+      reviewRequest.reject(deletedGoalError("request-late-initial-review"));
+    });
+
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
+    expect(screen.getByText("外部route")).toBeInTheDocument();
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
   });
 
   it("accepts 80 non-BMP review code points and rejects the 81st", async () => {
@@ -2599,6 +2675,354 @@ describe("GoalReviewPage", () => {
     ).toBeUndefined();
     expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
   });
+
+  it("fences a deleted Goal when the mounted Review autosave PATCH returns exact GOAL_NOT_FOUND", async () => {
+    const cleanup = deferred<void>();
+    vi.mocked(saveReview).mockRejectedValueOnce(
+      new APIError(
+        404,
+        "GOAL_NOT_FOUND",
+        "deleted",
+        "request-review-autosave-deleted-goal",
+      ),
+    );
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockReturnValueOnce(
+      cleanup.promise,
+    );
+    const cache = createCache();
+    const removeQueries = vi.spyOn(cache, "removeQueries");
+    renderPage(cache);
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    vi.mocked(putBrowserDraft).mockClear();
+
+    fireEvent.change(editor, {
+      target: { value: "削除後に保存しないReview入力" },
+    });
+    fireEvent.blur(editor);
+
+    await waitFor(() => expect(saveReview).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+        session.user.id,
+        goal.id,
+      ),
+    );
+    expect(editor).toHaveAttribute("readonly");
+    expect(
+      screen.getByText("削除済みGoalのブラウザ下書きを削除しています…"),
+    ).toBeInTheDocument();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledOnce();
+    expect(getReview).toHaveBeenCalledOnce();
+    vi.mocked(putBrowserDraft).mockClear();
+    await act(() => new Promise((resolve) => window.setTimeout(resolve, 350)));
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+
+    await act(async () => cleanup.resolve());
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
+    expect(removeQueries).toHaveBeenCalled();
+    expect(
+      cache.getQueryData(userQueryKeys.review(session.user.id, goal.id)),
+    ).toBeUndefined();
+  });
+
+  it("fences a deleted Goal when Review revision-conflict recovery GET returns exact GOAL_NOT_FOUND", async () => {
+    const cleanup = deferred<void>();
+    vi.mocked(saveReview).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+        "conflict",
+        "request-review-conflict-before-delete",
+      ),
+    );
+    vi.mocked(getReview)
+      .mockResolvedValueOnce(review)
+      .mockRejectedValueOnce(
+        new APIError(
+          404,
+          "GOAL_NOT_FOUND",
+          "deleted",
+          "request-review-recovery-deleted-goal",
+        ),
+      );
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockReturnValueOnce(
+      cleanup.promise,
+    );
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.change(editor, {
+      target: { value: "競合確認中に削除されたReview入力" },
+    });
+    fireEvent.blur(editor);
+
+    await waitFor(() => expect(getReview).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
+    expect(editor).toHaveAttribute("readonly");
+    expect(
+      screen.getByText("削除済みGoalのブラウザ下書きを削除しています…"),
+    ).toBeInTheDocument();
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByText("別の更新が見つかりました"),
+    ).not.toBeInTheDocument();
+
+    await act(async () => cleanup.resolve());
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(getReview).toHaveBeenCalledTimes(2);
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["refine", "adopt"] as const)(
+    "fences a deleted Goal when Review %s returns exact GOAL_NOT_FOUND",
+    async (operation) => {
+      const cleanup = deferred<void>();
+      const notFound = new APIError(
+        404,
+        "GOAL_NOT_FOUND",
+        "deleted",
+        `request-review-${operation}-deleted-goal`,
+      );
+      if (operation === "refine")
+        vi.mocked(refineReview).mockRejectedValueOnce(notFound);
+      else vi.mocked(adoptReview).mockRejectedValueOnce(notFound);
+      vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockReturnValueOnce(
+        cleanup.promise,
+      );
+      renderPage();
+      const editor = await screen.findByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
+      if (operation === "adopt") {
+        expect(
+          await screen.findByText("整理されたレビュー目標"),
+        ).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+      }
+
+      await waitFor(() =>
+        expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+      );
+      expect(editor).toHaveAttribute("readonly");
+      expect(
+        screen.getByText("削除済みGoalのブラウザ下書きを削除しています…"),
+      ).toBeInTheDocument();
+      expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledOnce();
+      expect(refineReview).toHaveBeenCalledOnce();
+      expect(adoptReview).toHaveBeenCalledTimes(operation === "adopt" ? 1 : 0);
+      expect(
+        screen.queryByText("AIから提案を取得できませんでした。"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          "提案を採用できませんでした。現在の下書きを確認してください。",
+        ),
+      ).not.toBeInTheDocument();
+
+      await act(async () => cleanup.resolve());
+
+      expect(await screen.findByText("ホーム")).toBeInTheDocument();
+      expect(refineReview).toHaveBeenCalledOnce();
+      expect(adoptReview).toHaveBeenCalledTimes(operation === "adopt" ? 1 : 0);
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+      expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["autosave", "recovery", "refine", "adopt"] as const)(
+    "does not delete-fence Review on a non-exact 404 from %s",
+    async (operation) => {
+      const genericNotFound = new APIError(
+        404,
+        "INVALID_ERROR_RESPONSE",
+        "not the deleted Goal contract",
+        `request-review-${operation}-generic-not-found`,
+      );
+      if (operation === "autosave") {
+        vi.mocked(saveReview).mockRejectedValueOnce(genericNotFound);
+      } else if (operation === "recovery") {
+        vi.mocked(saveReview).mockRejectedValueOnce(
+          new APIError(
+            409,
+            "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+            "conflict",
+            "request-review-generic-recovery-conflict",
+          ),
+        );
+        vi.mocked(getReview)
+          .mockResolvedValueOnce(review)
+          .mockRejectedValueOnce(genericNotFound);
+      } else if (operation === "refine") {
+        vi.mocked(refineReview).mockRejectedValueOnce(genericNotFound);
+      } else {
+        vi.mocked(adoptReview).mockRejectedValueOnce(genericNotFound);
+      }
+      renderPage();
+      const editor = await screen.findByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      });
+
+      if (operation === "autosave" || operation === "recovery") {
+        fireEvent.change(editor, {
+          target: { value: `generic 404を保持する${operation}入力` },
+        });
+        fireEvent.blur(editor);
+        await waitFor(() => expect(saveReview).toHaveBeenCalledOnce());
+        if (operation === "recovery")
+          await waitFor(() => expect(getReview).toHaveBeenCalledTimes(2));
+        else await screen.findByText("保存失敗");
+      } else {
+        fireEvent.click(
+          screen.getByRole("button", { name: "AIで目標を整える" }),
+        );
+        if (operation === "adopt") {
+          expect(
+            await screen.findByText("整理されたレビュー目標"),
+          ).toBeInTheDocument();
+          fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+          expect(
+            await screen.findByText(
+              "提案を採用できませんでした。現在の下書きを確認してください。",
+            ),
+          ).toBeInTheDocument();
+        } else {
+          expect(
+            await screen.findByText("AIから提案を取得できませんでした。"),
+          ).toBeInTheDocument();
+        }
+      }
+
+      expect(tombstoneDeletedGoalAndClearDrafts).not.toHaveBeenCalled();
+      expect(goalDeletionAdvisoryHarness.publish).not.toHaveBeenCalled();
+      expect(
+        screen.queryByText("このGoalはすでに削除されています。"),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+    },
+  );
+
+  it("coalesces concurrent Review autosave and Refine GOAL_NOT_FOUND fences", async () => {
+    const cleanup = deferred<void>();
+    const refineFailure = deferred<never>();
+    const saveFailure = deferred<never>();
+    vi.mocked(refineReview).mockReturnValueOnce(refineFailure.promise);
+    vi.mocked(saveReview).mockReturnValueOnce(saveFailure.promise);
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockReturnValueOnce(
+      cleanup.promise,
+    );
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
+    await waitFor(() => expect(refineReview).toHaveBeenCalledOnce());
+    fireEvent.change(editor, {
+      target: { value: "並行404で復活させないReview入力" },
+    });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(saveReview).toHaveBeenCalledOnce());
+
+    await act(async () =>
+      refineFailure.reject(
+        new APIError(
+          404,
+          "GOAL_NOT_FOUND",
+          "deleted",
+          "request-review-concurrent-refine-deleted-goal",
+        ),
+      ),
+    );
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce(),
+    );
+    await act(async () =>
+      saveFailure.reject(
+        new APIError(
+          404,
+          "GOAL_NOT_FOUND",
+          "deleted",
+          "request-review-concurrent-save-deleted-goal",
+        ),
+      ),
+    );
+
+    expect(editor).toHaveAttribute("readonly");
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledOnce();
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(refineReview).toHaveBeenCalledOnce();
+
+    await act(async () => cleanup.resolve());
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only deleted-Goal cleanup after autosave GOAL_NOT_FOUND without resending PATCH", async () => {
+    vi.mocked(saveReview).mockRejectedValueOnce(
+      new APIError(
+        404,
+        "GOAL_NOT_FOUND",
+        "deleted",
+        "request-review-autosave-cleanup-retry",
+      ),
+    );
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts)
+      .mockRejectedValueOnce(new Error("indexedDB unavailable"))
+      .mockResolvedValueOnce(undefined);
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+
+    fireEvent.change(editor, {
+      target: { value: "cleanup retryでも再送しないReview入力" },
+    });
+    fireEvent.blur(editor);
+
+    expect(
+      await screen.findByText(
+        "削除済みGoalのブラウザ下書きを削除できませんでした。",
+      ),
+    ).toBeInTheDocument();
+    expect(editor).toHaveAttribute("readonly");
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(getReview).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledOnce();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "ブラウザデータの削除を再試行",
+      }),
+    );
+
+    expect(await screen.findByText("ホーム")).toBeInTheDocument();
+    expect(saveReview).toHaveBeenCalledOnce();
+    expect(getReview).toHaveBeenCalledOnce();
+    expect(refineReview).not.toHaveBeenCalled();
+    expect(adoptReview).not.toHaveBeenCalled();
+    expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledTimes(2);
+    expect(goalDeletionAdvisoryHarness.publish).toHaveBeenCalledTimes(2);
+  });
 });
 
 function createCache() {
@@ -2666,6 +3090,10 @@ function CanonicalGoalRoundTrip() {
 
 function createGoalDeletionAdvisoryHarness(): GoalDeletionAdvisoryHarness {
   const listeners = new Map<string, Set<() => void>>();
+  const cleanups = new Map<
+    string,
+    { readonly completion: Promise<void>; readonly resolve: () => void }
+  >();
   const keyOf = (userId: string, goalId: string) =>
     JSON.stringify([userId, goalId]);
   const publish = vi.fn(() => undefined);
@@ -2684,8 +3112,31 @@ function createGoalDeletionAdvisoryHarness(): GoalDeletionAdvisoryHarness {
       };
     },
   );
+  const beginCleanup: GoalDeletionAdvisoryRegistry["beginCleanup"] = (
+    userId,
+    goalId,
+  ) => {
+    const key = keyOf(userId, goalId);
+    const current = cleanups.get(key);
+    if (current) return { kind: "joined", completion: current.completion };
+    let resolve: () => void = () => undefined;
+    const completion = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const cleanup = { completion, resolve };
+    cleanups.set(key, cleanup);
+    return {
+      kind: "owner",
+      completion,
+      complete: () => {
+        if (cleanups.get(key) !== cleanup) return;
+        cleanups.delete(key);
+        resolve();
+      },
+    };
+  };
   return {
-    registry: { publish, subscribe },
+    registry: { publish, subscribe, beginCleanup },
     publish,
     subscribe,
     dispatch: (deletedUserId, deletedGoalId) => {

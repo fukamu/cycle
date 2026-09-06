@@ -121,6 +121,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+const runRequest = <Result>(request: () => Promise<Result>) => request();
+
 describe("goalReviewQueryOptions", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -128,10 +130,12 @@ describe("goalReviewQueryOptions", () => {
     const lease = currentLease();
 
     expect(
-      goalReviewQueryOptions(userId, goalId, "entry-a", lease).queryKey,
+      goalReviewQueryOptions(userId, goalId, "entry-a", lease, runRequest)
+        .queryKey,
     ).toEqual(userQueryKeys.reviewTransport(userId, goalId, "entry-a"));
     expect(
-      goalReviewQueryOptions(userId, goalId, "entry-b", lease).queryKey,
+      goalReviewQueryOptions(userId, goalId, "entry-b", lease, runRequest)
+        .queryKey,
     ).toEqual(userQueryKeys.reviewTransport(userId, goalId, "entry-b"));
   });
 
@@ -143,6 +147,7 @@ describe("goalReviewQueryOptions", () => {
       goalId,
       "entry-accept",
       currentLease(),
+      runRequest,
     );
 
     await expect(cache.fetchQuery(options)).resolves.toBe(reviewA);
@@ -168,6 +173,7 @@ describe("goalReviewQueryOptions", () => {
       goalId,
       "entry-preserve",
       currentLease(),
+      runRequest,
     );
 
     await expect(cache.fetchQuery(options)).resolves.toBe(reviewB);
@@ -204,6 +210,7 @@ describe("goalReviewQueryOptions", () => {
       goalId,
       "entry-moved",
       currentLease(),
+      runRequest,
     );
 
     await expect(cache.fetchQuery(options)).resolves.toBe(reviewA);
@@ -235,6 +242,7 @@ describe("goalReviewQueryOptions", () => {
       goalId,
       "entry-invariant",
       currentLease(),
+      runRequest,
     );
 
     await expect(cache.fetchQuery(options)).resolves.toBe(conflicting);
@@ -256,7 +264,7 @@ describe("goalReviewQueryOptions", () => {
     vi.mocked(getReview).mockReturnValueOnce(response.promise);
     const cache = createCache();
     const request = cache.fetchQuery(
-      goalReviewQueryOptions(userId, goalId, "entry-stale", lease),
+      goalReviewQueryOptions(userId, goalId, "entry-stale", lease, runRequest),
     );
 
     current = false;
@@ -280,6 +288,7 @@ describe("goalReviewQueryOptions", () => {
       goalId,
       "entry-aborted",
       currentLease(),
+      runRequest,
     );
     const request = cache.fetchQuery(options);
 

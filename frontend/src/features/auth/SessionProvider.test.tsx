@@ -2340,9 +2340,8 @@ describe("SessionProvider runtime recovery", () => {
     expect(client.getQueryData<Session>(["session"])).toEqual(session);
   });
 
-  it("notifies an exact Goal deletion subscriber before purging that Goal cache", async () => {
+  it("fully delegates an exact Goal deletion advisory to its subscriber", async () => {
     const deletedGoalId = "00000000-0000-7000-8000-000000000021";
-    const otherGoalId = "00000000-0000-7000-8000-000000000022";
     const advisory = createAdvisoryChannelHarness();
     const client = createClient();
     const goalQueryKey = [
@@ -2376,23 +2375,13 @@ describe("SessionProvider runtime recovery", () => {
     act(() => {
       advisory.dispatch({
         version: 1,
-        deletedUserId: session.user.id,
-        deletedGoalId: otherGoalId,
-      });
-      advisory.dispatch({
-        version: 1,
         deletedUserId: switchedSession.user.id,
         deletedGoalId,
       });
     });
     expect(onDeleted).not.toHaveBeenCalled();
     expect(client.getQueryData(goalQueryKey)).toBeDefined();
-    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledWith(
-      session.user.id,
-      otherGoalId,
-    );
-    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce();
-    tombstoneDeletedGoalAndClearDraftsMock.mockClear();
+    expect(client.getQueryData(homeQueryKey)).toBeDefined();
 
     act(() => {
       advisory.dispatch({
@@ -2404,8 +2393,8 @@ describe("SessionProvider runtime recovery", () => {
 
     expect(onDeleted).toHaveBeenCalledOnce();
     expect(cacheWasPresentWhenFenced).toEqual([true]);
-    expect(client.getQueryData(goalQueryKey)).toBeUndefined();
-    expect(client.getQueryData(homeQueryKey)).toBeUndefined();
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
+    expect(client.getQueryData(homeQueryKey)).toBeDefined();
     expect(tombstoneDeletedGoalAndClearDraftsMock).not.toHaveBeenCalled();
   });
 
@@ -2413,6 +2402,14 @@ describe("SessionProvider runtime recovery", () => {
     const deletedGoalId = "00000000-0000-7000-8000-000000000026";
     const advisory = createAdvisoryChannelHarness();
     const onDeleted = vi.fn();
+    const client = createClient();
+    const goalQueryKey = [
+      "user",
+      session.user.id,
+      "goal",
+      deletedGoalId,
+    ] as const;
+    client.setQueryData(goalQueryKey, { goal: deletedGoalId });
     stubSession(session);
 
     renderProvider(
@@ -2421,7 +2418,7 @@ describe("SessionProvider runtime recovery", () => {
         goalId={deletedGoalId}
         onDeleted={onDeleted}
       />,
-      createClient(),
+      client,
       { goalDeletionAdvisoryFactory: () => advisory.channel },
     );
     await screen.findByText("goal deletion subscriber ready");
@@ -2435,6 +2432,7 @@ describe("SessionProvider runtime recovery", () => {
     });
     expect(onDeleted).toHaveBeenCalledOnce();
     expect(screen.getByText("goal deletion subscriber removed")).toBeVisible();
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
 
     act(() => {
       advisory.dispatch({
@@ -2444,10 +2442,21 @@ describe("SessionProvider runtime recovery", () => {
       });
     });
     expect(tombstoneDeletedGoalAndClearDraftsMock).not.toHaveBeenCalled();
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
   });
 
-  it("uses durable Goal cleanup when an accepted advisory has no mounted subscriber", async () => {
+  it("coalesces subscriber-free cleanup per Goal and purges each cache only after its tombstone", async () => {
     const deletedGoalId = "00000000-0000-7000-8000-000000000023";
+    const otherGoalId = "00000000-0000-7000-8000-000000000027";
+    const deletedCleanup = deferredVoid();
+    const otherCleanup = deferredVoid();
+    tombstoneDeletedGoalAndClearDraftsMock.mockImplementation(
+      (_deletedUserId, candidateGoalId) => {
+        if (candidateGoalId === deletedGoalId) return deletedCleanup.promise;
+        if (candidateGoalId === otherGoalId) return otherCleanup.promise;
+        throw new Error(`unexpected Goal cleanup: ${candidateGoalId}`);
+      },
+    );
     const advisory = createAdvisoryChannelHarness();
     const client = createClient();
     const goalQueryKey = [
@@ -2456,7 +2465,14 @@ describe("SessionProvider runtime recovery", () => {
       "goal-review",
       deletedGoalId,
     ] as const;
+    const otherGoalQueryKey = [
+      "user",
+      session.user.id,
+      "goal",
+      otherGoalId,
+    ] as const;
     client.setQueryData(goalQueryKey, { goal: deletedGoalId });
+    client.setQueryData(otherGoalQueryKey, { goal: otherGoalId });
     stubSession(session);
 
     renderProvider(<p>fallback ready</p>, client, {
@@ -2475,27 +2491,65 @@ describe("SessionProvider runtime recovery", () => {
         deletedUserId: session.user.id,
         deletedGoalId,
       });
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId: otherGoalId,
+      });
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId: otherGoalId,
+      });
     });
 
-    expect(client.getQueryData(goalQueryKey)).toBeUndefined();
-    await waitFor(() =>
-      expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledWith(
-        session.user.id,
-        deletedGoalId,
-      ),
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2);
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenNthCalledWith(
+      1,
+      session.user.id,
+      deletedGoalId,
     );
-    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce();
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenNthCalledWith(
+      2,
+      session.user.id,
+      otherGoalId,
+    );
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
+    expect(client.getQueryData(otherGoalQueryKey)).toBeDefined();
+
+    act(() => deletedCleanup.resolve());
+    await waitFor(() =>
+      expect(client.getQueryData(goalQueryKey)).toBeUndefined(),
+    );
+    expect(client.getQueryData(otherGoalQueryKey)).toBeDefined();
+
+    act(() => otherCleanup.resolve());
+    await waitFor(() =>
+      expect(client.getQueryData(otherGoalQueryKey)).toBeUndefined(),
+    );
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2);
   });
 
-  it("retries a failed subscriber-free Goal cleanup on sender confirmation", async () => {
+  it("keeps cache after failed fallback and retries it once on sender confirmation", async () => {
     const deletedGoalId = "00000000-0000-7000-8000-000000000025";
+    const firstCleanup = deferredVoid();
+    const retryCleanup = deferredVoid();
     tombstoneDeletedGoalAndClearDraftsMock
-      .mockRejectedValueOnce(new Error("private indexeddb failure"))
-      .mockResolvedValueOnce(undefined);
+      .mockReturnValueOnce(firstCleanup.promise)
+      .mockReturnValueOnce(retryCleanup.promise);
     const advisory = createAdvisoryChannelHarness();
+    const client = createClient();
+    const goalQueryKey = [
+      "user",
+      session.user.id,
+      "cycle",
+      deletedGoalId,
+      "00000000-0000-7000-8000-000000000028",
+    ] as const;
+    client.setQueryData(goalQueryKey, { goal: deletedGoalId });
     stubSession(session);
 
-    renderProvider(<p>fallback retry ready</p>, createClient(), {
+    renderProvider(<p>fallback retry ready</p>, client, {
       goalDeletionAdvisoryFactory: () => advisory.channel,
     });
     await screen.findByText("fallback retry ready");
@@ -2510,10 +2564,17 @@ describe("SessionProvider runtime recovery", () => {
     await waitFor(() =>
       expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce(),
     );
-    const firstCleanup = tombstoneDeletedGoalAndClearDraftsMock.mock.results[0]
-      ?.value as Promise<void> | undefined;
-    if (firstCleanup === undefined) throw new Error("cleanup did not start");
-    await expect(firstCleanup).rejects.toThrow("private indexeddb failure");
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
+
+    const firstFailure = expect(firstCleanup.promise).rejects.toThrow(
+      "private indexeddb failure",
+    );
+    act(() => firstCleanup.reject(new Error("private indexeddb failure")));
+    await firstFailure;
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
 
     act(() => {
       advisory.dispatch({
@@ -2525,6 +2586,99 @@ describe("SessionProvider runtime recovery", () => {
     await waitFor(() =>
       expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2),
     );
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2);
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
+
+    act(() => retryCleanup.resolve());
+    await waitFor(() =>
+      expect(client.getQueryData(goalQueryKey)).toBeUndefined(),
+    );
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("remembers a confirmation that arrives before subscriber-free cleanup fails", async () => {
+    const deletedGoalId = "00000000-0000-7000-8000-000000000029";
+    const firstCleanup = deferredVoid();
+    const retryCleanup = deferredVoid();
+    tombstoneDeletedGoalAndClearDraftsMock
+      .mockReturnValueOnce(firstCleanup.promise)
+      .mockReturnValueOnce(retryCleanup.promise);
+    const advisory = createAdvisoryChannelHarness();
+    const client = createClient();
+    const goalQueryKey = [
+      "user",
+      session.user.id,
+      "goal",
+      deletedGoalId,
+    ] as const;
+    client.setQueryData(goalQueryKey, { goal: deletedGoalId });
+    stubSession(session);
+
+    renderProvider(<p>fallback early confirmation ready</p>, client, {
+      goalDeletionAdvisoryFactory: () => advisory.channel,
+    });
+    await screen.findByText("fallback early confirmation ready");
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce(),
+    );
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledOnce();
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
+
+    const firstFailure = expect(firstCleanup.promise).rejects.toThrow(
+      "private indexeddb failure",
+    );
+    act(() => firstCleanup.reject(new Error("private indexeddb failure")));
+    await firstFailure;
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2),
+    );
+    expect(client.getQueryData(goalQueryKey)).toBeDefined();
+
+    act(() => retryCleanup.resolve());
+    await waitFor(() =>
+      expect(client.getQueryData(goalQueryKey)).toBeUndefined(),
+    );
+
+    act(() => {
+      advisory.dispatch({
+        version: 1,
+        deletedUserId: session.user.id,
+        deletedGoalId,
+      });
+    });
+    expect(tombstoneDeletedGoalAndClearDraftsMock).toHaveBeenCalledTimes(2);
   });
 
   it("publishes the exact current User and Goal deletion tuple", async () => {
@@ -3112,10 +3266,12 @@ function userHomeQueryKey(userId: string) {
 
 function deferredVoid() {
   let resolve!: () => void;
-  const promise = new Promise<void>((promiseResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<void>((promiseResolve, promiseReject) => {
     resolve = () => promiseResolve(undefined);
+    reject = promiseReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function SessionTransitionProbe({

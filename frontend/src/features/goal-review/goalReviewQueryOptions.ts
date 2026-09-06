@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { publishGoalReview, userQueryKeys } from "../goal-collection";
+import type { RunGoalDeletionFencedRequest } from "../goal-deletion";
 import {
   SessionIdentityError,
   type AuthenticatedRequestLease,
@@ -12,11 +13,14 @@ export function goalReviewQueryOptions(
   goalId: string,
   entryId: string,
   sessionLease: AuthenticatedRequestLease,
+  runGoalDeletionFencedRequest: RunGoalDeletionFencedRequest,
 ) {
   return queryOptions({
     queryKey: userQueryKeys.reviewTransport(userId, goalId, entryId),
     queryFn: async ({ client, signal }) => {
-      const incoming = await getReview(sessionLease, goalId, signal);
+      const incoming = await runGoalDeletionFencedRequest(() =>
+        getReview(sessionLease, goalId, signal),
+      );
       signal.throwIfAborted();
       if (
         sessionLease.expectedUserId !== userId ||
