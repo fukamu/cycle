@@ -782,7 +782,10 @@ function CycleWorkspace({
   useLayoutEffect(() => {
     lease.activate();
     coordinator.attach();
-    const unregister = lease.onQuiesce(
+    const unregisterPreserve = lease.onPreserve(() =>
+      coordinator.preserveDrafts(),
+    );
+    const unregisterQuiesce = lease.onQuiesce(
       async ({ preserveDrafts, queueBrowserOperation }) => {
         const previousQueue = browserOperationQueueRef.current;
         browserOperationQueueRef.current = queueBrowserOperation;
@@ -794,7 +797,8 @@ function CycleWorkspace({
       },
     );
     return () => {
-      unregister();
+      unregisterPreserve();
+      unregisterQuiesce();
       coordinator.detach();
     };
   }, [coordinator, lease]);

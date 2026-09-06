@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { newUUIDv7 } from "../src/shared/id/uuid";
 import { expectAPIError, getSession, requestFromPage } from "./support/api";
@@ -9,6 +9,55 @@ import {
   saveFrame,
   saveText,
 } from "./support/workspace";
+
+type StoredBrowserDraft = {
+  readonly key: string;
+  readonly userId: string;
+  readonly goalId: string | null;
+  readonly subjectKey: string;
+  readonly body: string;
+  readonly baseRevision: number;
+  readonly updatedAt: string;
+};
+
+function readBrowserDrafts(page: Page): Promise<StoredBrowserDraft[]> {
+  return page.evaluate(
+    () =>
+      new Promise<StoredBrowserDraft[]>((resolve, reject) => {
+        const open = indexedDB.open("fukamu-cycle-browser-drafts-v2");
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const database = open.result;
+          const read = database
+            .transaction("drafts")
+            .objectStore("drafts")
+            .getAll();
+          read.onerror = () => {
+            database.close();
+            reject(read.error);
+          };
+          read.onsuccess = () => {
+            const drafts = read.result as StoredBrowserDraft[];
+            database.close();
+            resolve(drafts);
+          };
+        };
+      }),
+  );
+}
+
+async function readBrowserDraftBodies(page: Page): Promise<string[]> {
+  return (await readBrowserDrafts(page)).map((draft) => draft.body);
+}
+
+async function readBrowserDraft(
+  page: Page,
+  key: string,
+): Promise<StoredBrowserDraft | null> {
+  return (
+    (await readBrowserDrafts(page)).find((draft) => draft.key === key) ?? null
+  );
+}
 
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
@@ -615,37 +664,156 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   await expect(page.getByRole("alert")).toContainText("保存失敗", {
     timeout: 45_000,
   });
-  const browserDraftBodies = await page.evaluate(
-    () =>
-      new Promise<string[]>((resolve, reject) => {
-        const open = indexedDB.open("fukamu-cycle-browser-drafts-v2");
-        open.onerror = () => reject(open.error);
-        open.onsuccess = () => {
-          const database = open.result;
-          const read = database
-            .transaction("drafts")
-            .objectStore("drafts")
-            .getAll();
-          read.onerror = () => {
-            database.close();
-            reject(read.error);
-          };
-          read.onsuccess = () => {
-            const bodies = (read.result as { body: string }[]).map(
-              (draft) => draft.body,
-            );
-            database.close();
-            resolve(bodies);
-          };
-        };
-      }),
-  );
+  const browserDraftBodies = await readBrowserDraftBodies(page);
   expect(browserDraftBodies).toContain("失敗しても保持する目標");
   fail = false;
   await page.getByRole("button", { name: "再試行" }).click();
   await expect(page.getByText("保存済み")).toBeVisible();
   await page.reload();
   await expect(editor).toHaveValue("失敗しても保持する目標");
+});
+
+test("a hidden lifecycle checkpoint preserves an edit before either debounce", async ({
+  context,
+  page,
+}) => {
+  await page.goto("/");
+  const createButton = page.getByRole("button", {
+    name: "新しい目標を設定",
+  });
+  await expect(createButton).toBeVisible();
+  const creation = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "POST" &&
+      new URL(candidate.url()).pathname === "/api/v1/goal-drafts" &&
+      candidate.status() === 201,
+  );
+  await createButton.click();
+  const created = (await (await creation).json()) as {
+    readonly draft: { readonly id: string; readonly revision: number };
+  };
+  const session = await getSession(page);
+  await expect(page.getByText("保存済み")).toBeVisible();
+
+  const clockStart = Date.parse("2026-09-06T00:00:00.000Z");
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(clockStart + 60_000);
+  let patchAttempts = 0;
+  await page.route("**/api/v1/goal-drafts/*", async (route) => {
+    if (route.request().method() === "PATCH") {
+      patchAttempts += 1;
+      await route.abort("connectionfailed");
+      return;
+    }
+    await route.continue();
+  });
+
+  const body = "バックグラウンド移行時に保持する目標 " + newUUIDv7();
+  const subjectKey = `goal-draft:${created.draft.id}`;
+  const recordKey = `${session.user.id}:${subjectKey}`;
+  const editor = page.getByRole("textbox", { name: "あなたの目標" });
+  await editor.fill(body);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, body);
+
+  await expect
+    .poll(() => readBrowserDraft(page, recordKey), { timeout: 5_000 })
+    .toEqual({
+      key: recordKey,
+      userId: session.user.id,
+      goalId: null,
+      subjectKey,
+      body,
+      baseRevision: created.draft.revision,
+      updatedAt: new Date(clockStart + 60_000).toISOString(),
+    });
+  expect(patchAttempts).toBe(0);
+
+  await page.close({ runBeforeUnload: false });
+  const restored = await context.newPage();
+  let restoredPatchAttempts = 0;
+  let restoredHomeRequested = false;
+  restored.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === "GET" && pathname === "/api/v1/home") {
+      restoredHomeRequested = true;
+    }
+    if (
+      request.method() === "PATCH" &&
+      pathname === `/api/v1/goal-drafts/${created.draft.id}`
+    ) {
+      restoredPatchAttempts += 1;
+    }
+  });
+  const restoredSession = restored.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "GET" &&
+      new URL(candidate.url()).pathname === "/api/v1/session" &&
+      candidate.status() === 200,
+  );
+  const restoredHome = restored.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "GET" &&
+      new URL(candidate.url()).pathname === "/api/v1/home" &&
+      candidate.status() === 200,
+  );
+  await restored.goto("/goals/new");
+  await restoredSession;
+  const bootstrapClockStepMs = 10;
+  const maxBootstrapClockSteps = 50;
+  for (
+    let attempt = 0;
+    attempt < maxBootstrapClockSteps && !restoredHomeRequested;
+    attempt += 1
+  ) {
+    await context.clock.runFor(bootstrapClockStepMs);
+  }
+  expect(restoredHomeRequested).toBe(true);
+  await restoredHome;
+  const restoredEditor = restored.getByRole("textbox", {
+    name: "あなたの目標",
+  });
+  let recovered = false;
+  const maxRecoveryClockSteps = 10;
+  for (
+    let attempt = 0;
+    attempt < maxRecoveryClockSteps && !recovered;
+    attempt += 1
+  ) {
+    // At most 100ms passes after the editor can mount, below both debounces.
+    await context.clock.runFor(bootstrapClockStepMs);
+    recovered =
+      (await restoredEditor.count()) === 1 &&
+      (await restoredEditor.inputValue()) === body;
+  }
+  expect(recovered).toBe(true);
+  await expect(restoredEditor).toHaveValue(body);
+  await expect(restored.getByText("未保存")).toBeVisible();
+  expect(restoredPatchAttempts).toBe(0);
+
+  const recoveredSave = restored.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "PATCH" &&
+      new URL(candidate.url()).pathname ===
+        `/api/v1/goal-drafts/${created.draft.id}` &&
+      candidate.status() === 200,
+  );
+  await context.clock.runFor(800);
+  const saved = await recoveredSave;
+  expect(saved.request().postDataJSON()).toEqual({
+    body,
+    expectedRevision: created.draft.revision,
+  });
+  expect(saved.status()).toBe(200);
+  await expect(restored.getByText("保存済み")).toBeVisible();
+  await expect
+    .poll(() => readBrowserDraft(restored, recordKey), { timeout: 5_000 })
+    .toBeNull();
 });
 
 test("timeline distinguishes V1, V2, and V3 goal segments", async ({

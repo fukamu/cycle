@@ -251,6 +251,103 @@ describe("AutoSaveCoordinator", () => {
     expect(clearPersisted).not.toHaveBeenCalledWith("plan");
   });
 
+  it("preserves a dirty draft before the browser debounce without starting an API save", async () => {
+    const save = vi.fn().mockResolvedValue({ value: "B" });
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const core = coordinator(save, { persist });
+
+    core.edit("plan", "B");
+    await core.preserveDrafts();
+
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledWith("plan", "B");
+    expect(save).not.toHaveBeenCalled();
+
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    expect(persist).toHaveBeenCalledOnce();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("does not clear untouched drafts while hydration is unresolved", async () => {
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const clearPersisted = vi.fn().mockResolvedValue(undefined);
+    const core = coordinator(vi.fn(), {
+      initiallyHydrating: true,
+      persist,
+      clearPersisted,
+    });
+
+    await core.preserveDrafts();
+
+    expect(persist).not.toHaveBeenCalled();
+    expect(clearPersisted).not.toHaveBeenCalled();
+  });
+
+  it("preserves newer lifecycle snapshots in edit order", async () => {
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const core = coordinator(vi.fn(), { persist });
+
+    core.edit("plan", "B");
+    await core.preserveDrafts();
+    core.edit("plan", "C");
+    await core.preserveDrafts();
+
+    expect(persist).toHaveBeenNthCalledWith(1, "plan", "B");
+    expect(persist).toHaveBeenNthCalledWith(2, "plan", "C");
+    expect(persist).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves an in-flight value and does not repeat cleanup after save success", async () => {
+    const request = deferred<Result>();
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const clearPersisted = vi.fn().mockResolvedValue(undefined);
+    const core = coordinator(() => request.promise, {
+      persist,
+      clearPersisted,
+    });
+
+    core.edit("plan", "B");
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    persist.mockClear();
+    clearPersisted.mockClear();
+
+    await core.preserveDrafts();
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledWith("plan", "B");
+
+    request.resolve({ value: "B" });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(clearPersisted).toHaveBeenCalledOnce();
+    expect(clearPersisted).toHaveBeenCalledWith("plan", "B");
+
+    await core.preserveDrafts();
+    expect(clearPersisted).toHaveBeenCalledOnce();
+  });
+
+  it("preserves blocked drafts immediately", async () => {
+    const save = vi.fn();
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const core = coordinator(save, { persist });
+
+    core.block("plan", "invalid", "VALIDATION_ERROR");
+    await core.preserveDrafts();
+
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledWith("plan", "invalid");
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("runs scheduled cleanup for a settled key immediately", async () => {
+    const clearPersisted = vi.fn().mockResolvedValue(undefined);
+    const core = coordinator(vi.fn(), { clearPersisted });
+
+    core.synchronize("plan", "server value");
+    await core.preserveDrafts();
+
+    expect(clearPersisted).toHaveBeenCalledOnce();
+    expect(clearPersisted).toHaveBeenCalledWith("plan", "server value");
+  });
+
   it("aborts an in-flight request and fences its late success", async () => {
     const request = deferred<Result>();
     let signal: AbortSignal | undefined;

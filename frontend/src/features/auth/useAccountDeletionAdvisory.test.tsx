@@ -263,6 +263,7 @@ function createAutoSaveScopes(
     prepare: () => {
       throw new Error("not used by advisory tests");
     },
+    preserve: vi.fn(async () => undefined),
     quiesce,
   };
 }

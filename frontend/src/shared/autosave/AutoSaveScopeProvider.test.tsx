@@ -1,4 +1,4 @@
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
 
 import { AutoSaveCoordinator } from "./autoSaveCoordinator";
@@ -29,11 +29,197 @@ function activateScope(registry: AutoSaveScopeRegistry, scopeKey: string) {
 }
 
 describe("AutoSaveScopeProvider", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("owns an isolated registry per provider", () => {
     const first = renderHook(() => useAutoSaveScopeRegistry(), { wrapper });
     const second = renderHook(() => useAutoSaveScopeRegistry(), { wrapper });
 
     expect(first.result.current).not.toBe(second.result.current);
+  });
+
+  it("does not preserve scopes while the document remains visible", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const { result } = renderHook(() => useAutoSaveScopeRegistry(), {
+      wrapper,
+    });
+    const lease = activateScope(result.current, "user-1:goal-draft-1");
+    const preserve = vi.fn();
+    lease.onPreserve(preserve);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+
+    expect(preserve).not.toHaveBeenCalled();
+    expect(lease.signal.aborted).toBe(false);
+    expect(lease.isCurrent()).toBe(true);
+  });
+
+  it("preserves every current scope on hidden and pagehide without closing leases", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const { result } = renderHook(() => useAutoSaveScopeRegistry(), {
+      wrapper,
+    });
+    const first = activateScope(result.current, "user-1:goal-draft-1");
+    const second = activateScope(result.current, "user-1:goal-review-1");
+    const preserveFirst = vi.fn().mockResolvedValue(undefined);
+    const preserveSecond = vi.fn().mockResolvedValue(undefined);
+    first.onPreserve(preserveFirst);
+    second.onPreserve(preserveSecond);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+
+    expect(preserveFirst).toHaveBeenCalledOnce();
+    expect(preserveSecond).toHaveBeenCalledOnce();
+    preserveFirst.mockClear();
+    preserveSecond.mockClear();
+
+    await act(async () => {
+      window.dispatchEvent(new Event("pagehide"));
+      await Promise.resolve();
+    });
+
+    expect(preserveFirst).toHaveBeenCalledOnce();
+    expect(preserveSecond).toHaveBeenCalledOnce();
+    expect(first.signal.aborted).toBe(false);
+    expect(first.isCurrent()).toBe(true);
+    expect(second.signal.aborted).toBe(false);
+    expect(second.isCurrent()).toBe(true);
+  });
+
+  it("skips callbacks from a stale scope generation", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const { result } = renderHook(() => useAutoSaveScopeRegistry(), {
+      wrapper,
+    });
+    const stale = activateScope(result.current, "user-1:goal-draft-1");
+    const preserveStale = vi.fn();
+    stale.onPreserve(preserveStale);
+    const current = activateScope(result.current, "user-1:goal-draft-1");
+    const preserveCurrent = vi.fn();
+    current.onPreserve(preserveCurrent);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+
+    expect(preserveStale).not.toHaveBeenCalled();
+    expect(preserveCurrent).toHaveBeenCalledOnce();
+  });
+
+  it("settles every current preservation callback when one fails", async () => {
+    const { result } = renderHook(() => useAutoSaveScopeRegistry(), {
+      wrapper,
+    });
+    const first = activateScope(result.current, "user-1:goal-draft-1");
+    const second = activateScope(result.current, "user-1:goal-review-1");
+    const failure = new Error("browser storage unavailable");
+    const rejected = vi.fn(() => {
+      throw failure;
+    });
+    const fulfilled = vi.fn().mockResolvedValue(undefined);
+    first.onPreserve(rejected);
+    second.onPreserve(fulfilled);
+
+    await expect(result.current.preserve()).resolves.toBeUndefined();
+
+    expect(rejected).toHaveBeenCalledOnce();
+    expect(fulfilled).toHaveBeenCalledOnce();
+  });
+
+  it("removes page lifecycle listeners when the provider unmounts", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
+    const removeWindowListener = vi.spyOn(window, "removeEventListener");
+    const rendered = renderHook(() => useAutoSaveScopeRegistry(), { wrapper });
+    const lease = activateScope(rendered.result.current, "user-1:goal-draft-1");
+    const preserve = vi.fn();
+    lease.onPreserve(preserve);
+
+    rendered.unmount();
+
+    expect(removeDocumentListener).toHaveBeenCalledWith(
+      "visibilitychange",
+      expect.any(Function),
+    );
+    expect(removeWindowListener).toHaveBeenCalledWith(
+      "pagehide",
+      expect.any(Function),
+    );
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("pagehide"));
+    await Promise.resolve();
+
+    expect(preserve).not.toHaveBeenCalled();
+  });
+
+  it("skips preservation while quiescence is in progress", async () => {
+    const { result } = renderHook(() => useAutoSaveScopeRegistry(), {
+      wrapper,
+    });
+    const releaseQuiesce = deferred<void>();
+    const lease = activateScope(result.current, "user-1:goal-draft-1");
+    const preserve = vi.fn();
+    lease.onPreserve(preserve);
+    lease.onQuiesce(() => releaseQuiesce.promise);
+
+    const quiesce = result.current.quiesce({ preserveDrafts: true });
+    await Promise.resolve();
+    await result.current.preserve();
+
+    expect(preserve).not.toHaveBeenCalled();
+
+    releaseQuiesce.resolve();
+    await quiesce;
+    await result.current.preserve();
+    expect(preserve).not.toHaveBeenCalled();
+  });
+
+  it("finishes an in-progress preservation before quiescence clears browser drafts", async () => {
+    const { result } = renderHook(() => useAutoSaveScopeRegistry(), {
+      wrapper,
+    });
+    const preservationStarted = deferred<void>();
+    const releasePreservation = deferred<void>();
+    const events: string[] = [];
+    const lease = activateScope(result.current, "user-1:goal-draft-1");
+    lease.onPreserve(() =>
+      lease.queueBrowserOperation(async () => {
+        events.push("preserve:start");
+        preservationStarted.resolve();
+        await releasePreservation.promise;
+        events.push("preserve:end");
+      }),
+    );
+    lease.onQuiesce(({ preserveDrafts, queueBrowserOperation }) =>
+      queueBrowserOperation(async () => {
+        events.push(preserveDrafts ? "preserve" : "clear");
+      }),
+    );
+
+    const preservation = result.current.preserve();
+    await preservationStarted.promise;
+    const quiesce = result.current.quiesce({ preserveDrafts: false });
+    await Promise.resolve();
+
+    expect(events).toEqual(["preserve:start"]);
+
+    releasePreservation.resolve();
+    await preservation;
+    await quiesce;
+
+    expect(events).toEqual(["preserve:start", "preserve:end", "clear"]);
+    expect(lease.signal.aborted).toBe(true);
+    expect(lease.isCurrent()).toBe(false);
   });
 
   it("aborts and invalidates the previous generation for one scope", () => {

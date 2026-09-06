@@ -3762,7 +3762,8 @@ Completed / Canceled Cycle、Goal VersionはAuto Save対象外。
 - API debounce: 800ms after last input
 - IndexedDB Draft Cache debounce: 150ms
 - blur: dirtyなら即enqueue
-- Tab / Route移動: dirtyなら即enqueue。ただし画面遷移自体は必要に応じ許可する
+- Application内Tab / SPA Route移動: dirtyなら即enqueue。ただし画面遷移自体は必要に応じ許可する
+- Browser lifecycleは`visibilitychange`の`hidden`を主checkpoint、`pagehide`をfallbackとし、dirtyな入力snapshotをBrowser Draft Cacheへbest-effortで即enqueueする。Background移行後もdocumentが存続する場合のloss低減が目的であり、即時のtab/window close、reload、full-document navigation、process終了後まで非同期IndexedDB commitが完了することは保証しない。離脱阻止、`sendBeacon`、exit時のAPI saveは行わない
 
 ## 28.3 Queue rules
 
