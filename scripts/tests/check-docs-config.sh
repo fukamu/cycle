@@ -25,8 +25,24 @@ assert_failure_contains() {
   if "$@" >"${output}" 2>&1; then
     fail "${description} unexpectedly succeeded"
   fi
+  assert_last_failure_contains "${description}" "${expected}"
+}
+
+assert_last_failure_contains() {
+  local description="$1"
+  local expected="$2"
+  local output="${test_root}/last-output"
   grep -Fq -- "${expected}" "${output}" \
     || fail "${description} did not report ${expected}"
+}
+
+assert_last_failure_excludes() {
+  local description="$1"
+  local unexpected="$2"
+  local output="${test_root}/last-output"
+  if grep -Fq -- "${unexpected}" "${output}"; then
+    fail "${description} unexpectedly reported ${unexpected}"
+  fi
 }
 
 copy_gate_scripts() {
@@ -1437,10 +1453,23 @@ test_config_gate() {
     'const dynamicCodeKey = "constructor";' \
     'const functionPrototype = Object.getPrototypeOf(() => {});' \
     'void Object.getOwnPropertyDescriptor(functionPrototype, dynamicCodeKey)?.value("return globalThis")();' \
+    'void Object.getPrototypeOf({});' \
+    'void Object.getPrototypeOf({});' \
+    'void Object.getPrototypeOf({});' \
+    'void Object.getPrototypeOf({});' \
+    'void Object.getPrototypeOf({});' \
+    'void Object.getPrototypeOf({});' \
+    'void Object.getPrototypeOf({});' \
     >"${fixture}/cloudflare/src/worker-reflective-constructor-dynamic-code.ts"
   assert_failure_contains "Worker reflective constructor dynamic code" \
-    "Worker cloudflare:workers module reference inventory" \
+    "cloudflare/src/worker-reflective-constructor-dynamic-code.ts:2:27" \
     bash "${fixture}/scripts/check-config-parity.sh"
+  assert_last_failure_contains "Worker reflective constructor dynamic code" \
+    "cloudflare/src/worker-reflective-constructor-dynamic-code.ts:9:6"
+  assert_last_failure_excludes "Worker reflective constructor dynamic code" \
+    "cloudflare/src/worker-reflective-constructor-dynamic-code.ts:10:6"
+  assert_last_failure_excludes "Worker reflective constructor dynamic code" \
+    "return globalThis"
 
   fixture="$(new_config_fixture worker-data-url-module)"
   printf '%s\n' \

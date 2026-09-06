@@ -36,6 +36,7 @@ assert.equal(
   "Frontend HTML parser dependency must remain exactly pinned",
 );
 const expectedTypeScriptVersion = "5.9.3";
+const maximumSyntaxDiagnostics = 8;
 const typeScriptModulePath = process.env.FUKAMU_CONFIG_TYPESCRIPT_MODULE;
 assert.ok(
   typeScriptModulePath,
@@ -1541,6 +1542,27 @@ function parseTypeScriptRepositoryFile(path, parseFailureMessage) {
   return sourceFile;
 }
 
+function pushSyntaxDiagnostic(diagnostics, sourceFile, path, node) {
+  if (diagnostics.length >= maximumSyntaxDiagnostics) return;
+  const { line, character } = sourceFile.getLineAndCharacterOfPosition(
+    node.getStart(sourceFile, false),
+  );
+  diagnostics.push(
+    `${path}:${line + 1}:${character + 1} (${typescript.SyntaxKind[node.kind]})`,
+  );
+}
+
+function assertSameSyntaxNode(actualNode, expectedNode, label) {
+  assert.equal(actualNode === expectedNode, true, label);
+}
+
+function assertExactSyntaxNodeSequence(actualNodes, expectedNodes, label) {
+  assert.equal(actualNodes.length, expectedNodes.length, label);
+  for (const [index, node] of actualNodes.entries()) {
+    assertSameSyntaxNode(node, expectedNodes[index], `${label}: node ${index}`);
+  }
+}
+
 function syntaxNameText(name) {
   if (
     typescript.isIdentifier(name) ||
@@ -1817,7 +1839,7 @@ function assertWorkerEnvironmentModuleReferenceInventory(
     ["cloudflare/src/index.ts"],
     label,
   );
-  assert.equal(
+  assertSameSyntaxNode(
     references[0].node,
     canonicalImportDeclaration.moduleSpecifier,
     label,
@@ -1943,8 +1965,17 @@ function isApprovedReflectiveRead(path, node) {
 }
 
 function assertNoDynamicWorkerCode(sourceFile, path, label) {
-  const dynamicMemberAccesses = [];
-  const dynamicIdentifiers = [];
+  const dynamicMemberAccessDiagnostics = [];
+  const dynamicIdentifierDiagnostics = [];
+  const recordDynamicMemberAccess = (node) =>
+    pushSyntaxDiagnostic(
+      dynamicMemberAccessDiagnostics,
+      sourceFile,
+      path,
+      node,
+    );
+  const recordDynamicIdentifier = (node) =>
+    pushSyntaxDiagnostic(dynamicIdentifierDiagnostics, sourceFile, path, node);
   const visit = (node) => {
     if (
       typescript.isElementAccessExpression(node) &&
@@ -1958,19 +1989,19 @@ function assertNoDynamicWorkerCode(sourceFile, path, label) {
           "prototype",
         ].includes(staticStringExpressionValue(node.argumentExpression)))
     ) {
-      dynamicMemberAccesses.push(node);
+      recordDynamicMemberAccess(node);
     }
     if (
       typescript.isPropertyAccessExpression(node) &&
       node.name.text === "constructor"
     ) {
-      dynamicMemberAccesses.push(node);
+      recordDynamicMemberAccess(node);
     }
     if (
       typescript.isPropertyAccessExpression(node) &&
       (node.name.text === "__proto__" || node.name.text === "prototype")
     ) {
-      dynamicMemberAccesses.push(node);
+      recordDynamicMemberAccess(node);
     }
     if (
       typescript.isCallExpression(node) &&
@@ -1984,7 +2015,7 @@ function assertNoDynamicWorkerCode(sourceFile, path, label) {
           staticStringExpressionValue(node.arguments[1]),
         ))
     ) {
-      dynamicMemberAccesses.push(node);
+      recordDynamicMemberAccess(node);
     }
     if (
       typescript.isCallExpression(node) &&
@@ -2002,20 +2033,20 @@ function assertNoDynamicWorkerCode(sourceFile, path, label) {
           ].includes(node.expression.name.text))) &&
       !isApprovedReflectiveRead(path, node)
     ) {
-      dynamicMemberAccesses.push(node);
+      recordDynamicMemberAccess(node);
     }
     if (
       typescript.isIdentifier(node) &&
       (node.text === "eval" ||
         (node.text === "Function" && !isApprovedFunctionIdentifier(path, node)))
     ) {
-      dynamicIdentifiers.push(node);
+      recordDynamicIdentifier(node);
     }
     typescript.forEachChild(node, visit);
   };
   visit(sourceFile);
-  assert.deepEqual(dynamicMemberAccesses, [], `${path}: ${label}`);
-  assert.deepEqual(dynamicIdentifiers, [], `${path}: ${label}`);
+  assert.deepEqual(dynamicMemberAccessDiagnostics, [], `${path}: ${label}`);
+  assert.deepEqual(dynamicIdentifierDiagnostics, [], `${path}: ${label}`);
 }
 
 function assertWorkerBindingProvenance(sourceFile, getContainerImport) {
@@ -2118,7 +2149,11 @@ function assertWorkerBindingProvenance(sourceFile, getContainerImport) {
   assert.equal(getContainerCalls.length, 1, label);
   const getContainerCall = getContainerCalls[0];
   assert.equal(getContainerCall.arguments.length, 2, label);
-  assert.equal(getContainerCall.arguments[0], bindingAccesses[1], label);
+  assertSameSyntaxNode(
+    getContainerCall.arguments[0],
+    bindingAccesses[1],
+    label,
+  );
   const assetsAccess = bindingAccesses[0];
   assert.ok(
     typescript.isPropertyAccessExpression(assetsAccess.parent) &&
@@ -2293,9 +2328,8 @@ function backendWorkerEnvironmentMappings() {
     0,
     "Worker required binding must be a single top-level function declaration",
   );
-  assert.equal(
-    requiredFunction.asteriskToken,
-    undefined,
+  assert.ok(
+    requiredFunction.asteriskToken === undefined,
     "Worker required binding must be a single top-level function declaration",
   );
   assert.ok(
@@ -2317,9 +2351,8 @@ function backendWorkerEnvironmentMappings() {
     "Worker required binding must keep canonical parameters",
   );
   const requiredSemanticsLabel = "Worker required function semantics";
-  assert.equal(
-    requiredFunction.questionToken,
-    undefined,
+  assert.ok(
+    requiredFunction.questionToken === undefined,
     requiredSemanticsLabel,
   );
   assert.equal(
@@ -2349,7 +2382,7 @@ function backendWorkerEnvironmentMappings() {
   );
   const [guardStatement, returnStatement] = requiredFunction.body.statements;
   assert.ok(typescript.isIfStatement(guardStatement), requiredSemanticsLabel);
-  assert.equal(guardStatement.elseStatement, undefined, requiredSemanticsLabel);
+  assert.ok(guardStatement.elseStatement === undefined, requiredSemanticsLabel);
   assert.ok(
     typescript.isBinaryExpression(guardStatement.expression) &&
       guardStatement.expression.operatorToken.kind ===
@@ -2475,7 +2508,11 @@ function backendWorkerEnvironmentMappings() {
 
   const backendClass = backendClasses[0];
   const backendDeclarationLabel = "Worker Backend declaration contract";
-  assert.equal(backendClass.parent, sourceFile, backendDeclarationLabel);
+  assertSameSyntaxNode(
+    backendClass.parent,
+    sourceFile,
+    backendDeclarationLabel,
+  );
   assert.equal(
     sourceFile.statements.includes(backendClass),
     true,
@@ -2486,7 +2523,7 @@ function backendWorkerEnvironmentMappings() {
     [typescript.SyntaxKind.ExportKeyword],
     backendDeclarationLabel,
   );
-  assert.equal(backendClass.typeParameters, undefined, backendDeclarationLabel);
+  assert.ok(backendClass.typeParameters === undefined, backendDeclarationLabel);
   assert.equal(
     backendClass.heritageClauses?.length,
     1,
@@ -2535,14 +2572,12 @@ function backendWorkerEnvironmentMappings() {
       envVarsMember.name.text === "envVars",
     "Worker Backend.envVars must use a direct identifier name",
   );
-  assert.equal(
-    envVarsMember.questionToken,
-    undefined,
+  assert.ok(
+    envVarsMember.questionToken === undefined,
     "Worker Backend.envVars must not be optional",
   );
-  assert.equal(
-    envVarsMember.exclamationToken,
-    undefined,
+  assert.ok(
+    envVarsMember.exclamationToken === undefined,
     "Worker Backend.envVars must not use definite assignment syntax",
   );
   assert.equal(
@@ -2588,7 +2623,7 @@ function backendWorkerEnvironmentMappings() {
     1,
     "Worker Backend.envVars must not be accessed or mutated outside its canonical class field",
   );
-  assert.equal(
+  assertSameSyntaxNode(
     envVarsSyntaxUses[0],
     envVarsMember.name,
     "Worker Backend.envVars must not be accessed or mutated outside its canonical class field",
@@ -2664,9 +2699,8 @@ function backendWorkerEnvironmentMappings() {
         key,
     );
     const requiredCall = property.initializer;
-    assert.equal(
-      requiredCall.questionDotToken,
-      undefined,
+    assert.ok(
+      requiredCall.questionDotToken === undefined,
       "Container envVars required() calls must not be optional: " + key,
     );
     assert.ok(
@@ -2750,7 +2784,7 @@ function assertExactNamedImport(sourceFile, moduleName, expectedNames, label) {
       typescript.isNamedImports(clause.namedBindings),
     label,
   );
-  assert.equal(declaration.attributes, undefined, label);
+  assert.ok(declaration.attributes === undefined, label);
   const elements = clause.namedBindings.elements;
   assert.deepEqual(
     elements.map((element) => element.name.text).sort(),
@@ -2759,7 +2793,7 @@ function assertExactNamedImport(sourceFile, moduleName, expectedNames, label) {
   );
   for (const element of elements) {
     assert.equal(element.isTypeOnly, false, label);
-    assert.equal(element.propertyName, undefined, label);
+    assert.ok(element.propertyName === undefined, label);
     assert.ok(typescript.isIdentifier(element.name), label);
   }
   return elements;
@@ -2864,8 +2898,8 @@ function exactConstDeclaration(statement, name, label) {
     typescript.isIdentifier(declaration.name) && declaration.name.text === name,
     label,
   );
-  assert.equal(declaration.exclamationToken, undefined, label);
-  assert.equal(declaration.type, undefined, label);
+  assert.ok(declaration.exclamationToken === undefined, label);
+  assert.ok(declaration.type === undefined, label);
   assert.notEqual(declaration.initializer, undefined, label);
   return declaration;
 }
@@ -2895,10 +2929,7 @@ function assertIdentifierNodeInventory(sourceFile, name, expectedNodes, label) {
     typescript.forEachChild(node, collectIdentifiers);
   };
   collectIdentifiers(sourceFile);
-  assert.equal(actualNodes.length, expectedNodes.length, label);
-  for (const [index, node] of actualNodes.entries()) {
-    assert.equal(node, expectedNodes[index], label);
-  }
+  assertExactSyntaxNodeSequence(actualNodes, expectedNodes, label);
 }
 
 function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
@@ -2928,7 +2959,7 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
       reactImportClause.namedBindings === undefined,
     label,
   );
-  assert.equal(importDeclarations[0].attributes, undefined, label);
+  assert.ok(importDeclarations[0].attributes === undefined, label);
   const [loadEnvironmentImport] = assertExactNamedImport(
     sourceFile,
     "vite",
@@ -2961,15 +2992,15 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
   );
   assert.equal(defaultExports.length, 1, label);
   assert.equal(sourceFile.statements.length, 5, label);
-  assert.deepEqual(
+  assertExactSyntaxNodeSequence(
     sourceFile.statements.slice(0, 4),
     importDeclarations,
     label,
   );
-  assert.equal(sourceFile.statements[4], defaultExports[0], label);
+  assertSameSyntaxNode(sourceFile.statements[4], defaultExports[0], label);
   assert.ok(typescript.isCallExpression(defaultExports[0].expression), label);
   const defineConfigCall = defaultExports[0].expression;
-  assert.equal(defineConfigCall.questionDotToken, undefined, label);
+  assert.ok(defineConfigCall.questionDotToken === undefined, label);
   assert.ok(
     typescript.isIdentifier(defineConfigCall.expression) &&
       defineConfigCall.expression.text === "defineConfig",
@@ -2982,14 +3013,14 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
   assert.equal(factory.modifiers?.length ?? 0, 0, label);
   assert.equal(factory.parameters.length, 1, label);
   const modeParameter = factory.parameters[0];
-  assert.equal(modeParameter.dotDotDotToken, undefined, label);
-  assert.equal(modeParameter.initializer, undefined, label);
+  assert.ok(modeParameter.dotDotDotToken === undefined, label);
+  assert.ok(modeParameter.initializer === undefined, label);
   assert.ok(typescript.isObjectBindingPattern(modeParameter.name), label);
   assert.equal(modeParameter.name.elements.length, 1, label);
   const modeBinding = modeParameter.name.elements[0];
-  assert.equal(modeBinding.propertyName, undefined, label);
-  assert.equal(modeBinding.dotDotDotToken, undefined, label);
-  assert.equal(modeBinding.initializer, undefined, label);
+  assert.ok(modeBinding.propertyName === undefined, label);
+  assert.ok(modeBinding.dotDotDotToken === undefined, label);
+  assert.ok(modeBinding.initializer === undefined, label);
   assert.ok(
     typescript.isIdentifier(modeBinding.name) &&
       modeBinding.name.text === "mode",
@@ -3008,7 +3039,7 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
     label,
   );
   const loadEnvironmentCall = environmentDeclaration.initializer;
-  assert.equal(loadEnvironmentCall.questionDotToken, undefined, label);
+  assert.ok(loadEnvironmentCall.questionDotToken === undefined, label);
   assert.ok(
     typescript.isIdentifier(loadEnvironmentCall.expression) &&
       loadEnvironmentCall.expression.text === "loadEnv",
@@ -3022,7 +3053,7 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
   );
   const workingDirectoryCall = loadEnvironmentCall.arguments[1];
   assert.ok(typescript.isCallExpression(workingDirectoryCall), label);
-  assert.equal(workingDirectoryCall.questionDotToken, undefined, label);
+  assert.ok(workingDirectoryCall.questionDotToken === undefined, label);
   assert.equal(workingDirectoryCall.arguments.length, 0, label);
   assert.ok(
     typescript.isPropertyAccessExpression(workingDirectoryCall.expression) &&
@@ -3049,7 +3080,7 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
     label,
   );
   const parseEnvironmentCall = deploymentDeclaration.initializer;
-  assert.equal(parseEnvironmentCall.questionDotToken, undefined, label);
+  assert.ok(parseEnvironmentCall.questionDotToken === undefined, label);
   assert.ok(
     typescript.isIdentifier(parseEnvironmentCall.expression) &&
       parseEnvironmentCall.expression.text === "parseDeploymentEnvironment",
@@ -3103,7 +3134,7 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
     label,
   );
   assert.ok(typescript.isCallExpression(searchIndexingCall), label);
-  assert.equal(searchIndexingCall.questionDotToken, undefined, label);
+  assert.ok(searchIndexingCall.questionDotToken === undefined, label);
   assert.equal(searchIndexingCall.arguments.length, 1, label);
   assert.ok(
     typescript.isIdentifier(searchIndexingCall.expression) &&
@@ -3195,7 +3226,11 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
     ["direct:VITE_DEPLOYMENT_ENV"],
     "Frontend build-config environment consumer inventory",
   );
-  assert.equal(viteAccesses[0].node, deploymentEnvironmentAccess, label);
+  assertSameSyntaxNode(
+    viteAccesses[0].node,
+    deploymentEnvironmentAccess,
+    label,
+  );
 }
 
 function assertNoAdditionalFrontendBuildEnvironmentConsumers() {
@@ -3224,18 +3259,18 @@ function assertNoAdditionalFrontendBuildEnvironmentConsumers() {
       typescript.isNamedImports(clause.namedBindings),
     label,
   );
-  assert.equal(viteImports[0].attributes, undefined, label);
+  assert.ok(viteImports[0].attributes === undefined, label);
   assert.deepEqual(
     clause.namedBindings.elements.map((element) => {
       assert.equal(element.isTypeOnly, false, label);
-      assert.equal(element.propertyName, undefined, label);
+      assert.ok(element.propertyName === undefined, label);
       return element.name.text;
     }),
     ["HtmlTagDescriptor", "Plugin"],
     label,
   );
 
-  const forbiddenEnvironmentNodes = [];
+  const forbiddenEnvironmentDiagnostics = [];
   const visit = (node) => {
     if (
       (typescript.isIdentifier(node) &&
@@ -3250,12 +3285,17 @@ function assertNoAdditionalFrontendBuildEnvironmentConsumers() {
           staticStringExpressionValue(node.argumentExpression),
         ))
     ) {
-      forbiddenEnvironmentNodes.push(node);
+      pushSyntaxDiagnostic(
+        forbiddenEnvironmentDiagnostics,
+        sourceFile,
+        helperPaths[0],
+        node,
+      );
     }
     typescript.forEachChild(node, visit);
   };
   visit(sourceFile);
-  assert.deepEqual(forbiddenEnvironmentNodes, [], label);
+  assert.deepEqual(forbiddenEnvironmentDiagnostics, [], label);
 }
 
 function frontendHtmlScriptInventory(path, source) {
