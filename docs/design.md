@@ -2125,6 +2125,7 @@ Auth=SessionのRequest / Response identityは次の共通Contractに従う。
 - Session recoveryの優先度は`SESSION_IDENTITY_UNVERIFIED` > `SESSION_IDENTITY_DRIFT` > `SESSION_MISSING` / `SESSION_EXPIRED` > `CSRF_INVALID`とする。上位事象はUI fenceとlease失効を同期反映してから下位attemptをabortしgenerationを進める。同順位以下の通知は重複recoveryを開始せず、UNVERIFIED後はreload-only latchとする。
 - Sessionがまだ確定していないtabでidentity変更またはAccount Delete advisoryを受信した場合、Userを推測してpublishせず、initial discovery、anonymous bootstrap、Cookie writer lock待機をabortしてreloadする。
 - `GET /session`の成功ResponseではHeader User IDとbody `user.id`が一致しなければならない。`POST /auth/google/login`ではHeaderは切替元source User、成功bodyは切替先target Userでよい。Frontendはsource leaseでResponseを検証した後にだけidentity transitionをpublishする。
+- `GET /session`は§27.2のSession-bound stable CSRF tokenを返し、同じSessionのdiscoveryをsecurity authorityのrotationとして扱わない。`CSRF_INVALID` recoveryもauthoritativeな`GET /session`へ収束させる。
 - Same-origin Cookieはtab間で共有される。Cross-tab通知は旧leaseを早期停止するadvisoryとして利用できるが、欠落・遅延し得るためResponse Header検証の代替にしない。User ID、Session / CSRF token、本文をlogやtelemetryへ追加しない。
 
 すべてのEndpointには、個別節へ重複記載していなくても次の共通Error Contractを適用する。
@@ -2241,6 +2242,8 @@ Errors:
 - `INTERNAL_ERROR`
 
 Session activityは毎Request書込せず、最終touchから15分以上経過時のみbest-effort更新する。
+
+`csrfToken`は§27.2のSession-bound stable tokenである。同じactive Sessionに対する再取得は同じtokenへ収束し、取得そのものはsecurity authorityをrotateしない。
 
 ## 21.2 `POST /api/v1/session/anonymous`
 
@@ -3674,19 +3677,37 @@ Google Identityのsign-in stateとFUKAMU Cycle Sessionは別概念として管�
 
 ## 27.2 CSRF
 
-Unsafe Requestで次を必須とする。
+Unsafe Requestでは、Session認証とExpected User guardの後、path / body parse、handler、Use Caseより前に次を必須とする。
 
-1. `Origin`がconfigured public originと一致。
-2. SessionごとにCSRF random tokenを発行。
-3. Frontendは`GET /session` responseからplain tokenをmemoryへ保持。
-4. `X-CSRF-Token` headerで送信。
-5. DBにはhashだけを保存しconstant-time比較。
+1. `Origin`がconfigured public originとexactに一致する。
+2. `X-CSRF-Token`がpaddingなしbase64urlのexact 43 ASCII文字である。
+3. 認証済みSessionへbindしたstable tokenまたは互換期間中の保存済みverifierとconstant-timeで一致する。
+
+Session-bound stable token v1のbyte-exact contractは次とする。`CSRF_TOKEN_PEPPER`のprocess内byte列を両HMACのkeyとして使い、scope / version文字列はconfiguration化しない。
+
+```text
+message      = ASCII("fukamu-csrf-token-v1")
+               || 0x00
+               || ASCII(lowercase canonical Session UUID v7)
+stableBytes  = HMAC-SHA-256(CSRF_TOKEN_PEPPER, message)
+stableToken  = BASE64URL-RAW(stableBytes)
+verifier(t)  = HMAC-SHA-256(CSRF_TOKEN_PEPPER, ASCII(t))
+```
+
+- canonical Session UUID v7は§19.1に従うlowercase ASCII 36 bytes、`stableBytes`は32 bytes、`stableToken`はpaddingなしのASCII 43文字である。Goでは`base64.RawURLEncoding`相当とする。
+- 返却tokenへraw Session token、Session ID、DB hashを連結しない。plain CSRF tokenとSession tokenをDBへ保存せず、Frontendは`GET /session` responseから得たplain CSRF tokenをmemoryだけに保持する。URL、Cookie、localStorage、sessionStorage、BroadcastChannel、log、trace、telemetryへ出さない。Session IDもBrowserやこれらの観測経路へ配布しない。
+- 新規Anonymous SessionとGoogle Upgrade / Login後の新Sessionはstable tokenを生成し、現在の`csrf_token_hash`へ`verifier(stableToken)`だけを保存する。
+- `GET /session`は認証済みSession IDから毎回同じstable tokenを導出し、active / idle expiry / absolute expiryのguard下でそのverifierをidempotentに保存する。既存のlegacy random verifierとpepper変更後のverifierはこの経路でstable verifierへ収束する。既に収束済みの場合も同じhashの再保存にとどまり、security authorityをrotateしない。将来この書込みを最適化する場合もrevoke / expiryとのrace guardを失わない。
+- 互換期間中のunsafe Requestは、形式検証後に `(a)` 認証済みSession IDから導出した`stableToken`対header tokenと、`(b)` `verifier(headerToken)`対保存済み`csrf_token_hash`の両方をconstant-time比較する。両比較を必ず評価した後に結果をORし、short-circuitによるstable / legacy token間のtiming差を作らない。どちらも不一致なら`CSRF_INVALID`とする。legacy verifier pathの終了条件は§41.5に従う。
+- 既存Sessionのlegacy tokenは最初の`GET /session`まで有効であり、そのResponseでstable tokenへ一度だけ収束する。別tabに残ったlegacy tokenは一度`CSRF_INVALID`になり得るが、そのtabも`GET /session` recovery後は同じstable tokenを使い、再取得同士で相互失効させない。
+
+stable tokenが漏洩した場合のreplay windowは次回`GET /session`までではなくactive Sessionの寿命までであり、idle 30日、absolute最大180日である。このtrade-offを受容しつつ、token単独を認証credentialとは扱わず、有効なHttpOnly Session Cookie、exact Origin、custom header、SameSite、Session revoke / expiryを独立して必須とする。Session ID自体は秘密ではないが、tokenの予測不能性は`CSRF_TOKEN_PEPPER`へ依存する。pepperと対象Session IDが同時に漏洩しても攻撃成立には有効なSession Cookieが必要である一方、独立random tokenより影響範囲が広い。XSS成立時は従来方式でも同一originから`GET /session`とunsafe操作が可能なため、GETごとのrotationをXSS境界として扱わない。
 
 Anonymous bootstrapはSession作成前のため、Origin + Turnstile + rate limitで保護する。
 
 ## 27.3 Session fixation
 
-Google Upgrade / Login成功時はSession tokenとCSRF tokenを必ずrotateし、更新前Sessionをrevokeする。
+Google Upgrade / Login成功時はSession tokenを必ずrotateし、更新前Sessionをrevokeする。新しいSession IDから別のstable CSRF tokenが導出されるため、旧SessionのCSRF tokenは新Sessionでは無効である。Revoke済み、idle expiry、absolute expiry、旧Session tokenはCSRFより先のSession認証で拒否する。
 
 ## 27.4 Same-origin Session Cookie writer coordination
 
@@ -3697,6 +3718,7 @@ Google Upgrade / Login成功時はSession tokenとCSRF tokenを必ずrotateし�
 - Anonymous bootstrapはlock取得後のownership確認からResponse検証までlockを保持する。
 - Google Upgrade / Loginはsource identity確認からtarget sessionのadvisory・cache publication完了までlockを保持する。
 - Account Deleteは`204`と最初のversioned deletion advisory publishまでlockを保持する。時間のかかるBrowser Draft cleanupは他tabのsession recoveryを妨げないようlock解放後に行う。
+- Cookieを共有するtabは同じactive Sessionについて同じstable CSRF tokenをdiscoveryする。CSRF tokenをtab間通知で配布せず、通知欠落時も各tabのauthoritativeな`GET /session`が同値へ収束する。
 
 Web Lockは同一origin内の協調境界であり、BackendのExpected User guard、Response identity Header、CSRF、transactionを置換しない。
 
@@ -5135,7 +5157,13 @@ Goal、Goal Draft、Goal Version、P/D/C/A、Goal Refine source/outputは、仕�
 
 ## 41.5 CSRF / Session
 
-§27のOpaque Session、Origin check、CSRF headerを必須とする。Goal Delete、Account Delete、Goal terminal transitionも通常unsafe requestと同じCSRF protectionを通す。
+§27のOpaque Session、exact Origin check、Session-bound stable CSRF headerを必須とする。Goal Delete、Account Delete、Goal terminal transitionも通常unsafe requestと同じCSRF protectionを通す。
+
+- 初版は`CSRF_TOKEN_PEPPER`のsingle active keyだけを持つ。plannedな無停止pepper rotationとstable issuanceのmulti-instance rolloutは非対応であり、keyring、両keyのconstant-time検証、active epoch切替または二段階issuance flagは別Issue / Decision gateで仕様化する。
+- 通常releaseでsecretだけを切り替えたり、旧keyと新keyのinstanceを混在させたりしない。緊急pepper rotationだけをmaintenanceとold-instance drain下で実施し、旧tokenの即時失効と一時的な`403 CSRF_INVALID` /再discoveryを受容して、drain後の単一active keyへ収束させる。Rollbackには切替前keyを安全に保持していることを必須とする。
+- stable v1初回rolloutは§27.2のdual-validationを含む。Cloudflare deploy成功は旧imageのdrain完了を意味せず、mixed-version中は旧Backendが返したlegacy tokenが一度`CSRF_INVALID`となり得るavailability上のdegraded behaviorを受容する。Origin、CSRF、Expected User、Session guardを緩和せず、drain確認後にmulti-tab smokeを行う。
+- `csrf_token_hash`とlegacy verifier pathは初回rolloutで削除しない。旧imageのdrainを記録した時点からSession absolute TTLの180日が経過した後に限り、別Issue / Decision gateで削除可否を判断する。既存baseline migrationを編集しない。
+- Production deploy前に、`CSRF_TOKEN_PEPPER`が環境専用・用途専用のCSPRNG由来256-bit相当keyであることを、値を表示・logせず確認する。不明な場合はProduction deployを停止し、先にmaintenance rotationの要否を判断する。Exact inventoryは§45と[`environment.md`](environment.md)、release手順は[`operations.md`](operations.md)が所有する。
 
 ## 41.6 SQL injection
 
@@ -5167,7 +5195,7 @@ TURNSTILE_SECRET_KEY
 - Runtime secretはCloudflare Worker Secrets等のsecret storeへ置く。
 - Migration URLはCI environment secretだけに置く。
 - Log、trace、error detailsへ出さない。
-- Rotation可能な構造にする。
+- Rotationは各secretのcanonical contractと運用手順に従う。特にsingle-keyの`CSRF_TOKEN_PEPPER`は§41.5のmaintenance / drain制約を外れてrotateしない。
 
 Google Web Client IDは公開識別子だがenvironment-specific configurationとして管理する。
 
@@ -5690,6 +5718,7 @@ Migration失敗時はApplication deployを行わない。Backward-incompatible�
 ## 44.7 Rollback
 
 - Application rollbackは直前のcontainer image / Worker deploymentへ戻す。
+- Stable CSRF releaseを同じ`CSRF_TOKEN_PEPPER`の旧Applicationへrollbackすると、保存済みstable verifierは旧版の通常比較で検証できるが、旧版の`GET /session`がlegacy random tokenを再発行するため#96の相互失効が既知のdegraded behaviorとして再発する。Pepper切替を跨ぐrollbackは§41.5のmaintenance / drainと切替前key保持を必須とする。
 - Destructive Migrationを同時実行せず、直前Application versionが移行期間中も動作できるExpand / Contractを守る。
 - Goal/Cycle transaction invariantが壊れるmigrationをdeployしない。
 - DB backup/restoreは運用Runbookで検証するが、Account/Goal Delete済みDataを通常環境へ個別復元しない。
@@ -5863,6 +5892,8 @@ Browser Draft privacy境界では、Goalに紐づくDraft putとdelete cleanup�
 
 Anonymous create rate limitでは、UTC hour境界の両端包含、23.5時間離れたbucketの24時間上限、guard待機後のcanonical time、future bucket除外、hour rollover並行request、guard / bucket expiryの単調性、sentinel更新失敗時のrollback、blocked attemptの永続化、limiterとcleanupの競合を実PostgreSQLで追加検証する。Frontendはrate-limit 429を自動再送しないこと、手動Retryと専用案内が残ることを検証する。
 
+Stable CSRFでは、固定key / Session IDのbyte-level golden vectorによりscope文字列、NUL separator、lowercase UUID、paddingなしbase64urlとverifier式を固定する。同じSession / keyの同値性、Sessionまたはkey変更時の差、空・不正token拒否、legacy verifier収束、同一hashのidempotent保存、revoke / expiry raceをunit / repository testで検証する。Application unit testはstable側が一致する場合もlegacy verifier側のconstant-time比較を実行してからORすることをcomparator call countで固定する。HTTP integrationはbarrier同期した2件以上の`GET /session`が同じtokenを返し、各tokenによるunsafe Requestがともに成功すること、invalid token / Origin、revoked / expired /旧Sessionを拒否すること、Session rotation後は旧CSRFを拒否して新CSRFが成功することを検証する。Pepper rotation testはmaintenanceとold-instance drain後の単一active keyだけを対象とし、旧token拒否と新token成功を固定する。Rollout検証はlegacy / stable token、旧 / 新Application、旧 / 新keyのmatrixと旧image drain後のsmokeを含む。
+
 Read operationはcursor tamper、scope mismatch、ordering、pagination境界、cross-user非開示を適用可能な範囲で検証する。
 
 ## 48.5 Critical E2E projection
@@ -5875,6 +5906,7 @@ E2Eは§6のuser flowと§§20–25のpublic contractを投影し、内部module
 - Goal維持/変更、terminal、History/Timeline。
 - 複数Progressing Goalのpolicy境界とDraft保全。
 - Goal Delete、Google upgrade/login collision、Account Delete。
+- 同一Browser Contextの二tabによる同時Session discovery、片方のreload、その後の両tabのcommand / autosave。Advisory欠落、Google Session切替、Account Deleteでもidentity fence / revoke contractへ収束する。
 - Save/AI/provider failure、response loss、session identity transition。
 
 Exact scenario manifestはversioned Playwright suiteを正とし、同じjourney一覧を文書へ複製しない。

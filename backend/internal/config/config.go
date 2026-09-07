@@ -10,7 +10,11 @@ import (
 	"time"
 )
 
-const minimumSecretLength = 24
+const (
+	minimumSecretLength         = 24
+	minimumCSRFTokenPepperBytes = 32
+	maximumSessionAbsoluteTTL   = 180 * 24 * time.Hour
+)
 
 type LookupEnv func(string) (string, bool)
 
@@ -223,7 +227,6 @@ func (config Config) Validate() error {
 	}
 	for name, secret := range map[string]string{
 		"SESSION_TOKEN_PEPPER":   config.Session.TokenPepper,
-		"CSRF_TOKEN_PEPPER":      config.Session.CSRFTokenPepper,
 		"BOOTSTRAP_ID_PEPPER":    config.Session.BootstrapIDPepper,
 		"RATE_LIMIT_HMAC_SECRET": config.Session.RateLimitHMACSecret,
 		"CURSOR_SIGNING_SECRET":  config.Session.CursorSigningSecret,
@@ -232,8 +235,14 @@ func (config Config) Validate() error {
 			problems = append(problems, name+" must be at least 24 characters")
 		}
 	}
+	if len([]byte(config.Session.CSRFTokenPepper)) < minimumCSRFTokenPepperBytes {
+		problems = append(problems, "CSRF_TOKEN_PEPPER must be at least 32 bytes")
+	}
 	if config.Session.IdleTTL <= 0 || config.Session.AbsoluteTTL < config.Session.IdleTTL || config.Session.ActivityTouchInterval <= 0 || config.Session.AnonymousBootstrapTTL <= 0 {
 		problems = append(problems, "session durations are invalid")
+	}
+	if config.Session.AbsoluteTTL > maximumSessionAbsoluteTTL {
+		problems = append(problems, "SESSION_ABSOLUTE_DAYS must be at most 180")
 	}
 	if config.Goals.MaxProgressingGoals <= 0 {
 		problems = append(problems, "MAX_PROGRESSING_GOALS must be positive")

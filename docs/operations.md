@@ -56,6 +56,7 @@ Worker / ContainerをTerraformとWranglerの両方で管理しません。Applic
 | R2 state | private bucket、Plan Read Only / Apply Read & Write token owner、GitHub scope owner、snapshot保持期間、復旧方針 |
 | Neon | Staging専用project / branch、region、compute / scale-to-zero、restore window、connection limit |
 | DB connections | pooled runtime URL、direct migration URL、pool上限、管理 / migration接続余裕 |
+| Session / CSRF | Session TTL、`CSRF_TOKEN_PEPPER` owner、CSPRNG由来256-bit相当の確認方法、stable CSRF release / drain確認者 |
 | Google / Turnstile | Staging client / widget、authorized origin、hostname / action、secret owner |
 | OpenAI | project / key owner、model、確認日、正式token単価、provider spend / rate limit |
 | Telemetry | OTLP collector、header credential owner、sampler / export volume受入、retention、dashboard、alert、notification、on-call |
@@ -191,6 +192,28 @@ Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し�
 - Fresh tabで`/api/v1`の`Cache-Control: no-store`、認証済みResponse Header、配信assetのcommitを確認する。Header値やUser IDを記録へ転記しない。
 - 同一Browser Contextの二tabでidentity切替journeyを実行し、旧tabがauthoritative Userへ収束することを確認する。失敗時はreleaseを停止し、ad-hocな互換gateで迂回しない。
 
+### Session-bound stable CSRF v1 release
+
+意味とbyte-exact contractは[`design.md` §27.2](design.md#272-csrf)、key inventoryは[`environment.md`](environment.md#backend-runtime)が所有します。この節はstable v1変更をreleaseする際のgateを所有し、Production Apply / Deployそのものを承認しません。
+
+Release前に次を満たします。
+
+- Candidateがstable token発行、legacy / stableのdual-validation、active / expiry guard下のidempotent convergenceを同時に含み、[`design.md` §48](design.md#48-testing-strategy)のgolden vector、実DB / HTTP concurrency、multi-tab E2E、旧 / 新Application・旧 / 新key matrixを完走している。
+- 通常releaseと同時に`CSRF_TOKEN_PEPPER`を変更しない。Initial single-key contractでは旧key / 新key instanceの混在とplannedな無停止rotationを許可しない。
+- Productionは、Production専用`CSRF_TOKEN_PEPPER`がCSPRNG由来256-bit相当であることを、secret値を表示・log・release記録へ転記せず確認する。確認不能ならProduction deployを停止し、先に[maintenance rotation](#csrf_token_pepper-rotation)の要否を判断する。
+
+Rolloutと確認は次の順で行います。
+
+1. 同一candidateのCI / release gateを通し、dual-validationを含むApplicationをdeployする。Cloudflareのdeploy成功はrollout開始であり、旧image drain完了の証拠として扱わない。
+2. Mixed-version中は旧Backendがlegacy random verifierを再保存し、新Backendがstable verifierへ収束させ得る。旧Backend自身はderived stable validationを知らないため、一時的な`403 CSRF_INVALID`をavailability上のdegraded behaviorとして受容するが、Origin、CSRF、Expected User、Session guardを緩和しない。
+3. Cloudflare deployment / Containerのversion・rollout evidenceで旧imageがtraffic対象から外れたことを確認し、drainしたimage version、確認時刻、確認者をaccess-controlled release recordへ残す。Evidenceを得られない場合はdrain完了とみなさない。
+4. Drain後、同一Browser Contextの二tabで同時`GET /session`が同じtokenへ収束すること、片方をreloadした後も両tabのcommand / autosaveが成功することを確認する。CSRF token、Session ID、Response bodyを記録へ残さない。
+5. Invalid token / Origin、revoke / expiry、Google Session切替、Account Delete、advisory欠落のsmokeが既存security / identity contractへ収束することを確認する。想定外の拒否が続く場合は新規deployを止め、security guardを迂回せず[Application rollback](#application)またはreviewed forward fixを選ぶ。
+
+現在のStagingは`max_instances: 1`の固定singletonでも旧imageから新版へ切り替わる一回の失効があり得ます。将来`max_instances > 1`へ変更する前に、dual-validationだけを全instanceへ先行配備してdrainを確認し、その後のstable issuanceを二段階release / issuance flagとして別Issue / Decision gateで仕様化します。単一DB列を旧版と新版が交互に上書きする状態を互換保証として扱いません。
+
+`csrf_token_hash`とlegacy verifier pathはこのreleaseで削除しません。上記の旧image drain確認時刻から180日が経過した後に限り、別Issue / Decision gateで削除可否を判断します。既存baseline migrationを編集せず、この条件成立だけで自動削除・migration追加を行いません。
+
 ## Post-deploy verification
 
 1. Commit SHA、Plan / Apply runとapprover、Cloudflare deployment / version、Container rollout、migration runをrelease記録へ残す。
@@ -203,6 +226,8 @@ Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し�
 8. Backend span / metricが承認済みcollectorへ到達し、collector障害中も`/readyz`と代表Application requestが影響を受けない。
 9. Neon、Container、OpenAI usage / cost、rate-limit拒否が承認済みlimit内であり、Anonymous createのUTC hour境界やrollout直後に想定外の許可・拒否burstがない。
 10. Canonical Staging hostname以外と`workers.dev`から利用できない。
+
+Stable CSRF v1を含むreleaseは、上記に加えて[専用のdrain / multi-tab gate](#session-bound-stable-csrf-v1-release)を完了します。
 
 Stagingはpublic internetから到達可能です。URLの秘匿をaccess controlとして扱わず、機密情報、Production data、失えないdataを入力しません。
 
@@ -267,6 +292,7 @@ Cleanupが収束しない場合、workflowは失敗し、`sha256:<64 lowercase h
 | `/healthz` 200 / `/readyz` 503 | Neon compute / pooled URL / pool | DB接続を修正。OpenAI / Google / Turnstile / OTLPをreadiness原因と誤認しない |
 | Static assetsだけ404 | Frontend build、Wrangler assets output | Frontend build後にdeployし、API routingと分けて確認 |
 | Deploy後5xx増加 | Version別logs / traces、schema互換性 | 互換なら直前成功commit、非互換ならforward fix |
+| Stable CSRF release中に`CSRF_INVALID`が継続 | 旧image drain evidence、Application version、pepper変更履歴、Session recovery。token値は取得しない | Mixed-version中の一時的拒否とdrain後の不具合を分離する。Guardを緩和せず、drain / recoveryを完了するかschema-compatible rollback / reviewed forward fixを選ぶ |
 | Logs / tracesが見えない | Wrangler observability、version / filter | 対象versionを修正し、secret / 本文の追加loggingで迂回しない |
 | OTLP exportが届かない | 固定error class、集約failure、provider status | Request / logsを維持して切り分け、credential漏洩時はexport停止・revoke / rotate |
 
@@ -316,14 +342,28 @@ Invite発行、新規redeem停止、Cookie key rotation、一般公開切替、7
 3. 理由、時刻、owner、失効確認だけを記録し、値を記録しない。
 4. `VITE_`対応値はFrontendをrebuildする。
 5. Main CI → Plan → approved Apply → Deployを通し、healthと代表操作を確認する。Terraform不変のApplication復旧だけはcurrent main HEADからDeployをmanual dispatchできる。
-6. Pepper変更は既存session / tokenへの移行影響を確認してから行う。
+6. `CSRF_TOKEN_PEPPER`は下記のsingle-key制約に従う。他のpepperも既存session / tokenへの移行影響を確認してから変更する。
 7. OTLP credential / payload漏洩疑いではexport停止、revoke / rotate、provider-side retention / deletionを確認する。
+
+### `CSRF_TOKEN_PEPPER` rotation
+
+Initial single-key contractはplannedな無停止rotationをサポートしません。通常変更としてsecretだけを切り替えず、旧keyと新keyのinstanceを同時にuser trafficへ載せません。Keyring、複数keyのconstant-time検証、active epoch切替は別Issue / Decision gateで仕様化します。
+
+緊急rotationはmaintenanceとして次の順で行います。
+
+1. 影響、owner、maintenance開始、rollback判断者を記録し、新規releaseとunsafe trafficを承認済みのmaintenance境界で止める。切替前keyはrollbackに必要な期間だけaccess-controlled secret storeへ安全に保持し、値を記録へ出さない。
+2. 旧keyを読むApplication instanceをdrainし、新旧key instanceが同時にtrafficを処理しないことを確認する。Drain evidenceがない状態でkeyを切り替えない。
+3. Secret storeを新しいCSPRNG由来256-bit相当keyへ更新し、その単一active keyを読むcandidateをdeployする。旧tokenは即時無効となり、一時的な`403 CSRF_INVALID`と`GET /session`再discoveryを受容する。
+4. 新imageのrollout / 旧image drainを確認してから、二tabのsession discovery、reload、unsafe command / autosave、旧token拒否、新token成功を検証する。Token値をlog、screenshot、recordへ残さない。
+5. Rollbackする場合もmaintenanceを維持し、新key instanceをdrainしてから安全に保持した切替前keyとcompatibleなApplicationへ戻す。切替前keyが保持されていない場合は推測・log・artifactから復元せず、forward recoveryを判断する。
 
 ## Rollback・recovery
 
 ### Application
 
 新version固有の5xx / readiness / 主要操作失敗、security / data corruption疑いでは新規deployを止めます。旧codeとDB schemaがcompatibleな場合だけ直前成功commitを再deployし、非互換ならforward fixします。Post-deploy journey失敗でmigrationを自動downしません。Collector障害だけを理由にApplicationをrollbackしません。
+
+Stable CSRF releaseを同じ`CSRF_TOKEN_PEPPER`の旧Applicationへ戻す場合、保存済みstable verifierは旧版の通常比較で受理できます。ただし旧版の`GET /session`がlegacy random tokenを再発行するため、multi-tab相互失効の再発を既知のdegraded behaviorとしてrelease記録へ残します。Pepper切替を跨ぐrollbackは[`CSRF_TOKEN_PEPPER` rotation](#csrf_token_pepper-rotation)のmaintenance、instance drain、切替前key保持を必須とし、通常rollbackで新旧keyを混在させません。
 
 ### Database
 
@@ -368,4 +408,5 @@ Production専用Cloudflare Worker / Container、Neon project、Turnstile、Googl
 - Production dataをStaging / local / testへcopyしない。
 - 手動UPDATE / DELETE、data correction、restoreは事前backup、query review、rollback plan、実行記録を必須にする。
 - Account deletion / retention要件を運用都合で変更しない。
+- Production専用`CSRF_TOKEN_PEPPER`のCSPRNG由来256-bit相当確認とstable CSRF releaseのold-image drainを完了するまでProduction deploy準備完了としない。
 - Neon restore window、追加backup、restore drill、observability owner / retention / alertsを決めるまでProduction準備完了としない。

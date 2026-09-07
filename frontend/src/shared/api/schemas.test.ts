@@ -4,6 +4,7 @@ import {
   goalVersionSchema,
   reviewSchema,
   saveFrameSchema,
+  sessionSchema,
   type GoalReview,
 } from "./schemas";
 
@@ -12,6 +13,15 @@ const reviewVersionId = "30000000-0000-7000-8000-000000000001";
 const reviewCycleId = "40000000-0000-7000-8000-000000000001";
 const reviewDraftId = "50000000-0000-7000-8000-000000000001";
 const otherId = "90000000-0000-7000-8000-000000000009";
+
+const sessionFixture = (csrfToken: string) => ({
+  user: {
+    id: "10000000-0000-7000-8000-000000000001",
+    googleConnected: false,
+    googleEmail: null,
+  },
+  csrfToken,
+});
 
 const reviewFixture = (): GoalReview => ({
   goal: {
@@ -270,6 +280,32 @@ describe("text response schemas", () => {
       expect(schema.safeParse("frame\0text").success).toBe(false);
       expect(schema.parse(" frame\r\ntext\r ")).toBe(" frame\ntext\n ");
     }
+  });
+});
+
+describe("Session response schema", () => {
+  it.each([
+    ["stable derived", "A".repeat(43)],
+    ["legacy random", "Q".repeat(43)],
+  ])("accepts a canonical %s CSRF token", (name, csrfToken) => {
+    expect(
+      sessionSchema.safeParse(sessionFixture(csrfToken)).success,
+      `${name} fixture must satisfy the Session parser without exposing its value`,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["short", "A".repeat(42)],
+    ["long", "A".repeat(44)],
+    ["padded", `${"A".repeat(43)}=`],
+    ["non-base64url", `${"A".repeat(42)}+`],
+    ["noncanonical", `${"A".repeat(42)}B`],
+  ])("rejects a %s CSRF token at the parser boundary", (name, csrfToken) => {
+    expect(
+      sessionSchema.safeParse(sessionFixture(csrfToken)).success,
+      `${name} fixture must be rejected without exposing its value`,
+    ).toBe(false);
   });
 });
 

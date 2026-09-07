@@ -12,7 +12,7 @@ Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging L
 - Staging runtime secretsはGitHub `staging` Environmentからdeploy時の一時`--secrets-file`経由でCloudflare Worker Secretsへ登録します。一時fileはworkflowの`always()` stepで削除します。
 - Neon migration direct URLはGitHub Actionsだけが使い、Worker/Containerへ渡しません。Runtimeにはpooled URLだけを渡します。
 - R2 backendはrepositoryのPlan用Object Read Only credentialと `staging-terraform-apply` EnvironmentのApply用Object Read & Write credentialを別tokenにし、Terraform/Turnstile token、Cloudflare deploy tokenとも分離します。
-- Session/CSRF/bootstrap pepper、rate-limit HMAC、cursor署名secretは環境ごと・用途ごとに異なる24文字以上の高entropy値にします。
+- Session/bootstrap pepper、rate-limit HMAC、cursor署名secretは環境ごと・用途ごとに異なる24文字以上の高entropy値にします。`CSRF_TOKEN_PEPPER`だけはBackendが使うbyte列で32 bytes以上を必須とし、Deployment用には環境専用・用途専用のCSPRNG由来256-bit相当keyを設定します。Productionでは値を表示・logせず由来を確認できることをdeploy gateにします。
 
 ## Temporary Closed Beta ingress
 
@@ -42,15 +42,17 @@ Stagingではdefaultを承認済み運用値とみなさず、[`operations.md`�
 | `DB_MAX_IDLE_CONNS` | idle max、`5` | 0以上かつopen以下 | server only、GitHub variable |
 | `DB_CONN_MAX_LIFETIME_MINUTES` | lifetime、`30` | positive | server only、GitHub variable |
 | `SESSION_TOKEN_PEPPER` | session hash | 24文字以上 | **secret**、GitHub secret |
-| `CSRF_TOKEN_PEPPER` | CSRF hash | 24文字以上 | **secret**、GitHub secret |
+| `CSRF_TOKEN_PEPPER` | Session-bound stable CSRF token導出とverifier HMAC | Backendが使うbyte列で32 bytes以上。CSPRNG由来256-bit相当、single active key。Production deploy前に値を開示せず由来を確認 | **secret**、GitHub secret |
 | `BOOTSTRAP_ID_PEPPER` | bootstrap hash | 24文字以上 | **secret**、GitHub secret |
 | `RATE_LIMIT_HMAC_SECRET` | IP等のrate key HMAC | 24文字以上 | **secret**、GitHub secret |
 | `CURSOR_SIGNING_SECRET` | Goal/Cycle cursor署名 | 24文字以上 | **secret**、GitHub secret |
 | `SESSION_IDLE_DAYS` | idle TTL、`30` | positive | GitHub variable |
-| `SESSION_ABSOLUTE_DAYS` | absolute TTL、`180` | idle以上 | GitHub variable |
+| `SESSION_ABSOLUTE_DAYS` | absolute TTL、`180` | idle以上かつ180以下 | GitHub variable |
 | `SESSION_ACTIVITY_TOUCH_MINUTES` | activity更新間隔、`15` | positive | GitHub variable |
 | `ANONYMOUS_BOOTSTRAP_TTL_MINUTES` | bootstrap idempotency TTL、`10` | positive | GitHub variable |
 | `MAX_PROGRESSING_GOALS` | 同時進行Goal上限、Free `2` | positive。Paid entitlementは`3`以上 | GitHub variable |
+
+Stable CSRF v1のbyte contractとdual-validationは[`design.md` §27.2](design.md#272-csrf)が所有します。Backendはtrim済みの`CSRF_TOKEN_PEPPER`をdecodeせず、そのbyte列をHMAC keyとして使い、32 bytes以上であることだけを機械検証します。CSPRNG由来と256-bit相当のentropyは値から自動判定せず、deployment ownerが値を開示しない手順で確認します。Version / scopeは固定値であり、keyring、active epoch、issuance flag用の環境変数を初版へ追加しません。`CSRF_TOKEN_PEPPER`のplannedな無停止rotationは未対応であり、maintenance / old-instance drainを含む唯一の手順は[`operations.md`](operations.md#csrf_token_pepper-rotation)に従います。
 
 OTLP endpoint、header credential ownerと実値は未決です。使用するpinned SDK defaultのsampler / export volumeをStagingで受入確認するまでStaging deployを行いません。Stagingは`APP_ENV=production`のため両方を必須とし、未設定または不正ならdeploy workflowのBackend config検証がmigration前に停止します。Collectorの到達可否はstartup、`/readyz`、Application requestの成否へ含めません。
 
@@ -244,4 +246,4 @@ Stagingの`OTEL_EXPORTER_OTLP_ENDPOINT`と`OTEL_EXPORTER_OTLP_HEADERS`は、Oper
 
 Staging deploy workflowはGitHub Environmentで`BETA_ADMISSION_MODE`が未設定の場合に明示的な`off`をWorkerへ渡します。Worker binding自体の欠落や未知のmodeは設定不備として新規利用開始をfail-closedにします。`closed`へ変更する場合だけ`BETA_ADMISSION_COOKIE_TTL_DAYS`と`BETA_INVITES`も追加し、上記のCookie key secretと同じdeployで反映します。
 
-Production Environmentは未構築です。公開domainは`cycle.fukamu.com`とし、Production専用resourceと値を追加するときは初期値`BETA_ADMISSION_MODE=closed`を必須にします。Stagingのsecret、DB、provider値を転用しません。
+Production Environmentは未構築です。公開domainは`cycle.fukamu.com`とし、Production専用resourceと値を追加するときは初期値`BETA_ADMISSION_MODE=closed`を必須にします。Stagingのsecret、DB、provider値を転用しません。Production専用`CSRF_TOKEN_PEPPER`がCSPRNG由来256-bit相当であることをsecret値なしで確認できない間はdeployせず、[`operations.md`](operations.md#session-bound-stable-csrf-v1-release)に従ってmaintenance rotationの要否を先に判断します。

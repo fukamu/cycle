@@ -1,12 +1,15 @@
 package account
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/fukamu/cycle/backend/internal/csrftoken"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	"github.com/fukamu/cycle/backend/internal/securehash"
 )
 
 var accountTestTime = time.Date(2026, time.August, 16, 1, 2, 3, 0, time.UTC)
@@ -31,8 +34,35 @@ func TestUpgradeGoogleKeepsUserAndHashesRotatedCredentials(t *testing.T) {
 	if repository.upgrade.Identity.Subject != "google-sub" || repository.upgrade.CurrentSessionID != "old-session" {
 		t.Fatalf("upgrade = %#v", repository.upgrade)
 	}
+	wantCSRF := accountTestCSRFToken(t, repository.upgrade.NewSessionID)
+	if view.CSRFToken != wantCSRF || len(view.CSRFToken) != 43 {
+		t.Fatalf("CSRF token = %q, want stable token %q", view.CSRFToken, wantCSRF)
+	}
 	if string(repository.upgrade.SessionTokenHash) == view.SessionToken || string(repository.upgrade.CSRFTokenHash) == view.CSRFToken {
 		t.Fatal("plain session material reached the repository")
+	}
+	if wantHash := securehash.HMACSHA256([]byte("csrf-key"), []byte(wantCSRF)); !bytes.Equal(repository.upgrade.CSRFTokenHash, wantHash) {
+		t.Fatalf("stored CSRF verifier = %x, want %x", repository.upgrade.CSRFTokenHash, wantHash)
+	}
+}
+
+func TestLoginGoogleReturnsStableCSRFForRotatedSession(t *testing.T) {
+	t.Parallel()
+
+	repository := &fakeAccountRepository{result: AuthResult{
+		UserID: user.ID("00000000-0000-7000-8000-000000000001"),
+	}}
+	service := accountTestService(repository, fakeGoogleVerifier{identity: GoogleIdentity{Subject: "google-sub"}})
+	view, err := service.LoginGoogle(context.Background(), "old-session", "signed-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCSRF := accountTestCSRFToken(t, repository.login.NewSessionID)
+	if view.CSRFToken != wantCSRF || len(view.CSRFToken) != 43 {
+		t.Fatalf("CSRF token = %q, want stable token %q", view.CSRFToken, wantCSRF)
+	}
+	if wantHash := securehash.HMACSHA256([]byte("csrf-key"), []byte(wantCSRF)); !bytes.Equal(repository.login.CSRFTokenHash, wantHash) {
+		t.Fatalf("stored CSRF verifier = %x, want %x", repository.login.CSRFTokenHash, wantHash)
 	}
 }
 
@@ -201,4 +231,13 @@ func (repository *fakeAccountRepository) LoginGoogle(_ context.Context, input Lo
 func (repository *fakeAccountRepository) DeleteAccount(context.Context, user.ID, time.Time) (DeleteResult, error) {
 	repository.deleted = true
 	return repository.deleteResult, repository.deleteErr
+}
+
+func accountTestCSRFToken(t *testing.T, sessionID string) string {
+	t.Helper()
+	token, err := csrftoken.Derive([]byte("csrf-key"), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
 }

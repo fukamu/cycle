@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { UUID_V7_PATTERN } from "../id/uuid";
+import { isValidCSRFToken } from "./csrfToken";
 import { stableAPIErrorCodeSchema } from "./errorCodes";
 import {
   FRAME_TEXT_MAX_CODE_POINTS,
@@ -37,7 +38,7 @@ export const sessionSchema = z.object({
     googleConnected: z.boolean(),
     googleEmail: z.string().min(1).nullable(),
   }),
-  csrfToken: z.string().min(1),
+  csrfToken: z.string().refine(isValidCSRFToken),
 });
 export type Session = z.infer<typeof sessionSchema>;
 

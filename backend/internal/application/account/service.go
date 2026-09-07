@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/csrftoken"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
 	"github.com/fukamu/cycle/backend/internal/securehash"
 )
@@ -192,7 +193,7 @@ func (service *Service) createSession(ctx context.Context, operation func(sessio
 	if err != nil {
 		return View{}, err
 	}
-	csrf, err := service.tokens.NewToken(tokenBytes)
+	csrf, err := csrftoken.Derive(service.settings.CSRFHashKey, sessionID)
 	if err != nil {
 		return View{}, err
 	}

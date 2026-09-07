@@ -67,7 +67,7 @@ Terminalを解放したまま起動する場合は`--detached`を使い、終了
 
 このスクリプトはNode/pnpm/Goのバージョンを確認し、未作成の場合だけ `.env.example` から `.env`、`frontend/.env.example` から `frontend/.env.local` を作り、rootで`pnpm install --frozen-lockfile`とBackendの`go mod download`を実行します。既存の環境ファイルを上書きしません。依存関係を入れず環境ファイルだけ準備する場合は `--skip-install` を指定できます。
 
-`.env` のSession/CSRF/bootstrap pepper、rate-limit HMAC、cursor署名secretは、ローカルでも24文字以上が必要です。example値をproductionで使ってはいけません。Frontendの `VITE_` 変数はブラウザへ公開されるため、秘密値を入れてはいけません。
+`.env` のSession/bootstrap pepper、rate-limit HMAC、cursor署名secretはローカルでも24文字以上、`CSRF_TOKEN_PEPPER`は32 bytes以上が必要です。Exact contractは[`environment.md`](environment.md)に従い、example値をproductionで使ってはいけません。Frontendの `VITE_` 変数はブラウザへ公開されるため、秘密値を入れてはいけません。
 
 Backendはdotenvを暗黙ロードしません。Backendを操作する各Bash terminalで、次のように現在のshellへ読み込みます。値は画面へ表示されません。このscriptをsubprocessとして実行しても親shellへ反映されないため、必ず`source`してください。
 

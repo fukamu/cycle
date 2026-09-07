@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/csrftoken"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
 	"github.com/fukamu/cycle/backend/internal/identifier"
 	"github.com/fukamu/cycle/backend/internal/securehash"
@@ -15,7 +16,6 @@ import (
 
 const (
 	sessionTokenBytes = 32
-	csrfTokenBytes    = 32
 )
 
 var (
@@ -27,7 +27,7 @@ var (
 
 type Repository interface {
 	FindByTokenHash(context.Context, []byte, time.Time) (AuthenticatedSession, error)
-	RotateCSRF(context.Context, string, []byte, time.Time) error
+	ConvergeCSRF(context.Context, string, []byte, time.Time) error
 	Touch(context.Context, string, time.Time, time.Time) error
 	CreateOrResumeAnonymous(context.Context, CreateAnonymousRecord) (AnonymousRecord, error)
 }
@@ -119,12 +119,12 @@ func (service *Service) Refresh(ctx context.Context, sessionToken string) (View,
 	if err != nil {
 		return View{}, err
 	}
-	csrfToken, err := service.tokens.NewToken(csrfTokenBytes)
+	csrfToken, err := csrftoken.Derive(service.settings.CSRFHashKey, record.ID)
 	if err != nil {
 		return View{}, err
 	}
 	now := service.clock.Now().UTC()
-	if err := service.repository.RotateCSRF(ctx, record.ID, securehash.HMACSHA256(service.settings.CSRFHashKey, []byte(csrfToken)), now); err != nil {
+	if err := service.repository.ConvergeCSRF(ctx, record.ID, securehash.HMACSHA256(service.settings.CSRFHashKey, []byte(csrfToken)), now); err != nil {
 		return View{}, err
 	}
 	return View{
@@ -157,7 +157,7 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 	if err != nil {
 		return View{}, err
 	}
-	csrfToken, err := service.tokens.NewToken(csrfTokenBytes)
+	csrfToken, err := csrftoken.Derive(service.settings.CSRFHashKey, sessionID)
 	if err != nil {
 		return View{}, err
 	}
@@ -186,10 +186,38 @@ func (service *Service) CreateAnonymous(ctx context.Context, input CreateAnonymo
 }
 
 func (service *Service) VerifyCSRF(record AuthenticatedSession, token string) error {
-	if token == "" || !hmac.Equal(record.CSRFTokenHash, securehash.HMACSHA256(service.settings.CSRFHashKey, []byte(token))) {
+	if !csrftoken.IsValid(token) {
+		return ErrCSRFInvalid
+	}
+	stableToken, err := csrftoken.Derive(service.settings.CSRFHashKey, record.ID)
+	if err != nil {
+		return ErrCSRFInvalid
+	}
+	presentedVerifier := securehash.HMACSHA256(service.settings.CSRFHashKey, []byte(token))
+	if !csrfTokenMatches(
+		stableToken,
+		token,
+		record.CSRFTokenHash,
+		presentedVerifier,
+		hmac.Equal,
+	) {
 		return ErrCSRFInvalid
 	}
 	return nil
+}
+
+func csrfTokenMatches(
+	stableToken string,
+	presentedToken string,
+	storedVerifier []byte,
+	presentedVerifier []byte,
+	equal func([]byte, []byte) bool,
+) bool {
+	// Evaluate both paths before the OR so legacy and stable tokens do not
+	// expose their type through short-circuit timing.
+	stableMatches := equal([]byte(stableToken), []byte(presentedToken))
+	storedVerifierMatches := equal(storedVerifier, presentedVerifier)
+	return stableMatches || storedVerifierMatches
 }
 
 func (service *Service) newEntityIDs() (string, string, error) {

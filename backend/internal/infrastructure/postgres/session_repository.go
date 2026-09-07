@@ -61,8 +61,8 @@ func (repository *SessionRepository) FindByTokenHash(ctx context.Context, hash [
 	}, nil
 }
 
-func (repository *SessionRepository) RotateCSRF(ctx context.Context, sessionID string, hash []byte, now time.Time) error {
-	rows, err := repository.queries.RotateSessionCSRF(ctx, db.RotateSessionCSRFParams{
+func (repository *SessionRepository) ConvergeCSRF(ctx context.Context, sessionID string, hash []byte, now time.Time) error {
+	rows, err := repository.queries.ConvergeSessionCSRF(ctx, db.ConvergeSessionCSRFParams{
 		ID:            mustUUID(sessionID),
 		CsrfTokenHash: hash,
 		IdleExpiresAt: timestamptz(now),

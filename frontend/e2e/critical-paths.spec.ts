@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 
 import { newUUIDv7 } from "../src/shared/id/uuid";
 import { expectAPIError, getSession, requestFromPage } from "./support/api";
@@ -190,6 +190,92 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     .getByRole("button", { name: "目標を削除" })
     .click();
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
+});
+
+test("same-session tabs keep one CSRF token across concurrent discovery and reload", async ({
+  context,
+  page,
+}) => {
+  await page.goto("/");
+  await expect(
+    page.getByRole("button", { name: "新しい目標を設定" }),
+  ).toBeVisible();
+
+  const concurrentTokens: string[] = [];
+  let discoveryArrivals = 0;
+  let releaseDiscoveries = () => undefined;
+  const discoveriesMayContinue = new Promise<void>((resolve) => {
+    releaseDiscoveries = resolve;
+  });
+  const sessionRoute = async (route: Route) => {
+    const request = route.request();
+    if (
+      request.method() !== "GET" ||
+      new URL(request.url()).pathname !== "/api/v1/session" ||
+      discoveryArrivals >= 2
+    ) {
+      await route.continue();
+      return;
+    }
+    discoveryArrivals += 1;
+    if (discoveryArrivals === 2) releaseDiscoveries();
+    await discoveriesMayContinue;
+    const response = await route.fetch();
+    const body = await response.body();
+    concurrentTokens.push(
+      (
+        JSON.parse(body.toString()) as {
+          readonly csrfToken: string;
+        }
+      ).csrfToken,
+    );
+    await route.fulfill({ response, body });
+  };
+  await context.route("**/api/v1/session", sessionRoute);
+
+  const peer = await context.newPage();
+  try {
+    await Promise.all([page.reload(), peer.goto("/")]);
+    await Promise.all([
+      expect(
+        page.getByRole("button", { name: "新しい目標を設定" }),
+      ).toBeVisible(),
+      expect(
+        peer.getByRole("button", { name: "新しい目標を設定" }),
+      ).toBeVisible(),
+    ]);
+    expect(concurrentTokens).toHaveLength(2);
+    expect(
+      concurrentTokens[0] === concurrentTokens[1],
+      "concurrent Session discovery must return one stable CSRF token",
+    ).toBe(true);
+    await context.unroute("**/api/v1/session", sessionRoute);
+
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "新しい目標を設定" }),
+    ).toBeVisible();
+
+    const createResponse = peer.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/v1/goal-drafts",
+    );
+    await peer.getByRole("button", { name: "新しい目標を設定" }).click();
+    expect((await createResponse).status()).toBe(201);
+    await expect(peer).toHaveURL("/goals/new");
+
+    await page.goto("/goals/new");
+    await saveText(
+      page,
+      page.getByRole("textbox", { name: "あなたの目標" }),
+      "再読込後も別タブから保存できる目標",
+      "/api/v1/goal-drafts/",
+    );
+  } finally {
+    await context.unroute("**/api/v1/session", sessionRoute);
+    await peer.close();
+  }
 });
 
 test("a failed Settings route chunk recovers through a full-page retry", async ({
@@ -402,35 +488,6 @@ test("two stale tabs converge from Cycle Complete and Review Continue without re
       stale.getByRole("button", { name: "サイクルを完了" }),
     ).toBeEnabled();
 
-    // Opening the second tab currently refreshes the session-wide CSRF token
-    // (tracked separately by #96). Authorize only the Complete/Continue
-    // requests from both tabs with the current token so this test isolates
-    // workspace-state convergence and still reaches the real Backend conflict
-    // contract without mocking either response.
-    const activeCSRFToken = (await getSession(stale)).csrfToken;
-    await page.route(
-      `**/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
-      async (route) => {
-        await route.continue({
-          headers: {
-            ...route.request().headers(),
-            "x-csrf-token": activeCSRFToken,
-          },
-        });
-      },
-    );
-    await page.route(
-      `**/api/v1/goals/${goalId}/review/continue`,
-      async (route) => {
-        await route.continue({
-          headers: {
-            ...route.request().headers(),
-            "x-csrf-token": activeCSRFToken,
-          },
-        });
-      },
-    );
-
     await page.getByRole("button", { name: "サイクルを完了" }).click();
     await page
       .getByRole("dialog")
@@ -445,12 +502,7 @@ test("two stale tabs converge from Cycle Complete and Review Continue without re
       `**/api/v1/goals/${goalId}/cycles/${cycleId}/complete`,
       async (route) => {
         if (route.request().method() === "POST") staleCompleteRequests += 1;
-        await route.continue({
-          headers: {
-            ...route.request().headers(),
-            "x-csrf-token": activeCSRFToken,
-          },
-        });
+        await route.continue();
       },
     );
     const staleCompleteResponse = stale.waitForResponse(
@@ -497,12 +549,7 @@ test("two stale tabs converge from Cycle Complete and Review Continue without re
       `**/api/v1/goals/${goalId}/review/continue`,
       async (route) => {
         if (route.request().method() === "POST") staleContinueRequests += 1;
-        await route.continue({
-          headers: {
-            ...route.request().headers(),
-            "x-csrf-token": activeCSRFToken,
-          },
-        });
+        await route.continue();
       },
     );
     const staleContinueResponse = stale.waitForResponse(
@@ -562,23 +609,6 @@ test("a stale Home tab converges to the existing creation draft without repeatin
       stale.getByRole("button", { name: "新しい目標を設定" }),
     ).toBeVisible();
 
-    // Opening the second tab currently refreshes the session-wide CSRF token
-    // (tracked separately by #96). Authorize only the two creation POSTs with
-    // the current token so this test reaches the real Backend 201/409 pair.
-    const activeCSRFToken = (await getSession(stale)).csrfToken;
-    await page.route("**/api/v1/goal-drafts", async (route) => {
-      if (route.request().method() !== "POST") {
-        await route.continue();
-        return;
-      }
-      await route.continue({
-        headers: {
-          ...route.request().headers(),
-          "x-csrf-token": activeCSRFToken,
-        },
-      });
-    });
-
     const winnerCreationResponse = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -591,19 +621,12 @@ test("a stale Home tab converges to the existing creation draft without repeatin
       readonly draft: { readonly id: string; readonly revision: number };
     };
 
-    const saved = await requestFromPage(page, {
-      path: `/api/v1/goal-drafts/${winnerDraft.draft.id}`,
-      method: "PATCH",
-      csrfToken: activeCSRFToken,
-      body: {
-        body: savedBody,
-        expectedRevision: winnerDraft.draft.revision,
-      },
-    });
-    expect(saved).toMatchObject({
-      status: 200,
-      payload: { draft: { body: savedBody } },
-    });
+    await saveText(
+      page,
+      page.getByRole("textbox", { name: "あなたの目標" }),
+      savedBody,
+      `/api/v1/goal-drafts/${winnerDraft.draft.id}`,
+    );
 
     let staleCreationRequests = 0;
     await stale.route("**/api/v1/goal-drafts", async (route) => {
@@ -612,12 +635,7 @@ test("a stale Home tab converges to the existing creation draft without repeatin
         return;
       }
       staleCreationRequests += 1;
-      await route.continue({
-        headers: {
-          ...route.request().headers(),
-          "x-csrf-token": activeCSRFToken,
-        },
-      });
+      await route.continue();
     });
     const staleCreationResponse = stale.waitForResponse(
       (response) =>

@@ -24,7 +24,7 @@ WHERE s.token_hash = $1
   AND s.idle_expires_at > $2
   AND s.absolute_expires_at > $2;
 
--- name: RotateSessionCSRF :execrows
+-- name: ConvergeSessionCSRF :execrows
 UPDATE sessions
 SET csrf_token_hash = $2
 WHERE id = $1
