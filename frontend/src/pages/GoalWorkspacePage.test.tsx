@@ -478,6 +478,127 @@ describe("GoalWorkspacePage", () => {
     ).toBeEmptyDOMElement();
   });
 
+  it("reviews the immutable goal and complete P/D/C/A in order before completion", async () => {
+    const reviewedCycle: Cycle = {
+      ...completableCycle,
+      goalVersion: {
+        ...completableCycle.goalVersion,
+        versionNumber: 2,
+        body: "固定された目標\n二行目",
+      },
+      sequenceNumber: 4,
+      plan: "計画\n全文",
+      do: "実行\n全文",
+      check: "確認\n全文",
+      action: "改善\n全文",
+    };
+    vi.mocked(getCycle).mockResolvedValue({ cycle: reviewedCycle });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+    fireEvent.click(screen.getByRole("button", { name: "サイクルを完了" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "サイクルを完了する前に確認",
+    });
+
+    expect(dialog).not.toHaveAttribute("aria-describedby");
+    expect(dialog).toHaveAttribute("aria-labelledby");
+    expect(within(dialog).getByText("Goal v2 · Cycle 4")).toBeVisible();
+    const headings = within(dialog).getAllByRole("heading");
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      "サイクルを完了する前に確認",
+      "目標",
+      "P — Plan",
+      "D — Do",
+      "C — Check",
+      "A — Action",
+    ]);
+    for (const content of [
+      "固定された目標\n二行目",
+      "計画\n全文",
+      "実行\n全文",
+      "確認\n全文",
+      "改善\n全文",
+    ])
+      expect(
+        [...dialog.querySelectorAll("p")].some(
+          (paragraph) => paragraph.textContent === content,
+        ),
+      ).toBe(true);
+    expect(
+      within(dialog).getByText(
+        "完了後はP/D/C/Aを編集できません。目標の見直しへ進みます。",
+      ),
+    ).toBeVisible();
+    expect(completeCycle).not.toHaveBeenCalled();
+  });
+
+  it("closes the completion summary and focuses the selected frame for editing", async () => {
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+    fireEvent.click(screen.getByRole("button", { name: "サイクルを完了" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Dを編集" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /D\s*Do/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    const editor = screen.getByRole("textbox", { name: "D — Do" });
+    await waitFor(() => expect(editor).toHaveFocus());
+    expect(editor).toHaveValue("実行");
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+    expect(completeCycle).not.toHaveBeenCalled();
+  });
+
+  it("cancels completion without changing editor or save state and returns focus", async () => {
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+    const complete = screen.getByRole("button", { name: "サイクルを完了" });
+    complete.focus();
+    fireEvent.click(complete);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "キャンセル" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(complete).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "A — Action" })).toHaveValue(
+      "改善",
+    );
+    expect(screen.getByText("保存済み")).toBeVisible();
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+    expect(completeCycle).not.toHaveBeenCalled();
+
+    fireEvent.click(complete);
+    const reopened = await screen.findByRole("dialog");
+    fireEvent(
+      reopened,
+      new Event("cancel", { bubbles: false, cancelable: true }),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(complete).toHaveFocus();
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+    expect(completeCycle).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       status: "completed",
@@ -2336,6 +2457,8 @@ describe("GoalWorkspacePage", () => {
       screen.getByRole("button", { name: "アクションを生成" }),
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "AIで推敲" })).toBeDisabled();
+    const complete = screen.getByRole("button", { name: "サイクルを完了" });
+    expect(complete).toBeDisabled();
     const pendingGuidance = screen.getByText(
       "サイクルの操作を処理しています。完了するまでお待ちください。",
     );
@@ -2343,7 +2466,10 @@ describe("GoalWorkspacePage", () => {
       screen.getByRole("button", { name: "アクションを生成" }),
     ).toHaveAttribute("aria-describedby", pendingGuidance.id);
     fireEvent.click(screen.getByRole("button", { name: "AIで推敲" }));
+    fireEvent.click(complete);
     expect(refineAction).not.toHaveBeenCalled();
+    expect(completeCycle).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("ignores a Complete result that arrives after navigating to another Cycle", async () => {

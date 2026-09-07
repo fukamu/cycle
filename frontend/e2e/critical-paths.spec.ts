@@ -132,12 +132,52 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   ).toHaveLength(2);
   await saveFrame(page, "C — Check", "3日は午前中に完了できた", "A");
   await page.getByRole("button", { name: "アクションを生成" }).click();
+  const actionEditor = page.getByRole("textbox", { name: "A — Action" });
+  await expect(actionEditor).not.toHaveValue("");
+  const generatedAction = await actionEditor.inputValue();
+  await page.getByRole("button", { name: "サイクルを完了" }).click();
+  const completionDialog = page.getByRole("dialog", {
+    name: "サイクルを完了する前に確認",
+  });
+  await expect(completionDialog).not.toHaveAttribute("aria-describedby");
+  await expect(completionDialog.getByText("Goal v1 · Cycle 1")).toBeVisible();
+  for (const content of [
+    goalText,
+    "朝に最重要タスクを決めて30分取り組む",
+    "5日中4日、朝に取り組んだ",
+    "3日は午前中に完了できた",
+    generatedAction,
+  ])
+    await expect(
+      completionDialog.getByText(content, { exact: true }),
+    ).toBeVisible();
   await expect(
-    page.getByRole("textbox", { name: "A — Action" }),
-  ).not.toHaveValue("");
+    completionDialog.getByText(
+      "完了後はP/D/C/Aを編集できません。目標の見直しへ進みます。",
+    ),
+  ).toBeVisible();
+  await expect(
+    completionDialog.getByRole("button", { name: /を編集$/ }),
+  ).toHaveCount(4);
+  expect(
+    await completionDialog.evaluate(
+      (element) => window.getComputedStyle(element).overflowY,
+    ),
+  ).toBe("auto");
+  expect(
+    await completionDialog
+      .locator(".cycle-completion-summary")
+      .evaluate((element) => window.getComputedStyle(element).overflowY),
+  ).toBe("visible");
+
+  await completionDialog.getByRole("button", { name: "Dを編集" }).click();
+  const doEditor = page.getByRole("textbox", { name: "D — Do" });
+  await expect(doEditor).toBeFocused();
+  await expect(doEditor).toHaveValue("5日中4日、朝に取り組んだ");
+  await page.getByRole("tab", { name: /A\s*Action/ }).click();
   await page.getByRole("button", { name: "サイクルを完了" }).click();
   await page
-    .getByRole("dialog")
+    .getByRole("dialog", { name: "サイクルを完了する前に確認" })
     .getByRole("button", { name: "サイクルを完了" })
     .click();
   await expect(page.getByRole("heading", { name: goalText })).toBeVisible();
