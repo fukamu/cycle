@@ -465,12 +465,46 @@ button:disabled {
   opacity: 0.48;
 }
 
-.button-row,
-.action-controls {
+.button-row {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+}
+
+.action-controls {
+  display: grid;
+  gap: 14px;
+}
+
+.action-controls__ai {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.action-controls__status {
+  display: grid;
+  gap: 6px;
+}
+
+.action-controls__guidance {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-small);
+}
+
+.action-controls__guidance:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.action-controls__complete {
+  width: fit-content;
 }
 
 .text-button,
@@ -1218,8 +1252,10 @@ textarea[readonly] {
   }
 
   .button-row > .button,
-  .action-controls > .button {
+  .action-controls__ai > .button,
+  .action-controls__complete {
     flex: 1 1 100%;
+    width: 100%;
   }
 
   .editor-page {

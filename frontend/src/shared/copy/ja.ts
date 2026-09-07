@@ -47,6 +47,25 @@ export const cycleCheckComparisonCopy = {
   reviewRecovery: (frameLabel: "P" | "D") => `${frameLabel}の入力を確認`,
 } as const;
 
+export const cycleActionCopy = {
+  disabled: {
+    commandPending:
+      "サイクルの操作を処理しています。完了するまでお待ちください。",
+    recoveryPending:
+      "確認待ちの入力があります。「要確認」のフレームを開き、使用する内容を選んでください。",
+    saveDirty: "未保存の入力があります。保存済みになるまでお待ちください。",
+    saveSaving: "入力を保存しています。保存済みになるまでお待ちください。",
+    saveFailed:
+      "入力を保存できていません。「再試行」で保存してから操作してください。",
+    aiGenerating: "アクションを生成しています。完了するまでお待ちください。",
+    aiRefining: "アクションを推敲しています。完了するまでお待ちください。",
+    missingPlanDoCheck: (frames: readonly string[]) =>
+      `${frames.join("・")}を入力して保存すると、Aの操作へ進めます。`,
+    missingAction:
+      "Aを入力するか「アクションを生成」を使うと、AIで推敲してサイクルを完了できます。",
+  },
+} as const;
+
 export const goalCopy = {
   guide:
     "これから良くしたいことや、目指したい状態を書いてみましょう。最初から完璧である必要はありません。",
