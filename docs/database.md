@@ -170,7 +170,7 @@ Application runtimeはNeon pooled URL、migrationはdirect URLを使います。
 - column/table削除、型の縮小、既存データ変換などは、同じreleaseでapplication rollbackを不可能にし得ます。expand/contractを使い、backupと復旧確認なしに実行しません。
 - Deploy失敗時にdown migrationを自動実行しません。application image/revisionのrollbackとDB schema rollbackは別判断です。
 - dirty versionを強制的に書き換える操作やproductionでのreset/drop/truncateを、汎用scriptとして提供しません。
-- production restore windowと追加backup設定は [`design.md`](design.md) §21・§54で正式値が未決です。初回production deploy前にNeon plan/compute、restore window、保持期間、復元演習方法を決定する必要があります。
+- production restore windowと追加backup設定の環境固有値・未決状態は [`design.md` §52.2](design.md#522-operational-values)と[`operations.md` Production readiness・data](operations.md#production-readinessdata)が所有します。Backup / restoreで削除済みAccount / Goal dataを通常環境へ個別復元しない契約は[`design.md` §41.10](design.md#4110-account-delete)と[§44.7](design.md#447-rollback)に従います。初回production deploy前にNeon plan/compute、restore window、保持期間、復元演習方法を決定する必要があります。
 - destructive migration前は、その決定済みpolicyに基づくbackupが成功しており、別instanceへのrestore手順が確認済みであることをrelease記録へ残します。
 
 Productionの復元やdata correctionが必要な場合は通常deployを止め、対象・時点・影響・承認・backupを確認した個別runbookを作成してください。既存仕様と矛盾するdata変更をその場で決めてはいけません。
