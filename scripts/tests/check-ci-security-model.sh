@@ -122,6 +122,27 @@ extract_step_mapping() {
   ' "${step_file}"
 }
 
+extract_literal_run_script() {
+  local step_file="$1"
+  awk '
+    $0 == "        run: |" {
+      found++
+      active = 1
+      next
+    }
+    active && /^        [^[:space:]]/ { active = 0 }
+    active {
+      if ($0 == "") {
+        print
+      } else {
+        if (substr($0, 1, 10) != "          ") exit 2
+        print substr($0, 11)
+      }
+    }
+    END { if (found != 1) exit 1 }
+  ' "${step_file}"
+}
+
 require_nonblank_lines() {
   local file="$1"
   shift
@@ -339,7 +360,7 @@ validate_secret_workflow_exact_digest() {
       expected_digest="3401da86fcb13bec1335fae58fa523c83cffcc1be7ddabedfcc976e900ec2bd7"
       ;;
     terraform-apply)
-      expected_digest="5ab3289be3c80cd7506c84a3a505100af05763bade1ec5f0faeb29a5cc2fae78"
+      expected_digest="1ffba0faa9bd4ffc6f4efddc913bcc58440d23d999395791ba77b0f831998750"
       ;;
     legacy-retirement)
       expected_digest="ffe1e152fd4c9f7dac2283751ac12adbf14d86f1080edb4199bcd944776e2036"
@@ -430,6 +451,222 @@ terraform-plan.yml|0
 JSON_PARSER_INVENTORY
 }
 
+validate_terraform_r2_secret_sources() {
+  local directory="$1"
+  local apply_workflow="${directory}/terraform-apply.yml"
+  local plan_job="${test_root}/terraform-plan-secret-sources.job"
+  local plan_env="${test_root}/terraform-plan-secret-sources.env"
+  local preflight_job="${test_root}/terraform-apply-preflight.job"
+  local preflight_steps="${test_root}/terraform-apply-preflight.steps"
+  local confirmation_step="${test_root}/terraform-apply-inventory-confirmation.step"
+  local confirmation_script="${test_root}/terraform-apply-inventory-confirmation.sh"
+  local confirmation_output="${test_root}/terraform-apply-inventory-confirmation.output"
+  local apply_job="${test_root}/terraform-apply-secret-sources.job"
+  local apply_env="${test_root}/terraform-apply-secret-sources.env"
+  local apply_steps="${test_root}/terraform-apply-secret-sources.steps"
+  local validation_step="${test_root}/terraform-apply-input-validation.step"
+  local validation_script="${test_root}/terraform-apply-input-validation.sh"
+  local validation_output="${test_root}/terraform-apply-input-validation.output"
+  local first_preflight_step
+  local first_apply_step
+
+  extract_job "${directory}/terraform-plan.yml" plan >"${plan_job}" || {
+    violation "Terraform Plan job must exist for R2 secret source validation"
+    return 1
+  }
+  extract_job_mapping "${plan_job}" env >"${plan_env}" || {
+    violation "Terraform Plan must define one job environment mapping"
+    return 1
+  }
+  # GitHub expression literals must remain unexpanded while validating YAML.
+  # shellcheck disable=SC2016
+  require_exact_line "${plan_env}" \
+    '      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}' || return 1
+  # shellcheck disable=SC2016
+  require_exact_line "${plan_env}" \
+    '      AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}' || return 1
+  if grep -Fq 'secrets.TERRAFORM_APPLY_R2_' "${plan_env}"; then
+    violation "Terraform Plan must not use Apply-only R2 secrets"
+    return 1
+  fi
+
+  require_exact_line "${apply_workflow}" "      credential_inventory_confirmation:" || return 1
+  require_exact_line "${apply_workflow}" \
+    "        description: Type CONFIRM APPLY R2 INVENTORY NO FALLBACK after value-free credential inventory checks" || return 1
+  # GitHub expression literal must remain unexpanded while validating YAML.
+  # shellcheck disable=SC2016
+  require_exact_line "${apply_workflow}" \
+    '          CREDENTIAL_INVENTORY_CONFIRMATION: ${{ inputs.credential_inventory_confirmation }}' || return 1
+
+  extract_job "${apply_workflow}" preflight >"${preflight_job}" || {
+    violation "Terraform Apply preflight job must exist for inventory confirmation validation"
+    return 1
+  }
+  extract_job_mapping "${preflight_job}" steps >"${preflight_steps}" || {
+    violation "Terraform Apply preflight must define one steps mapping"
+    return 1
+  }
+  first_preflight_step="$(awk 'NF { print; exit }' "${preflight_steps}")"
+  [[ "${first_preflight_step}" == "      - name: Verify Terraform credential inventory confirmation" ]] || {
+    violation "Terraform Apply must verify credential inventory confirmation before every GitHub API call"
+    return 1
+  }
+  extract_named_step "${preflight_job}" "Verify Terraform credential inventory confirmation" >"${confirmation_step}" || {
+    violation "Terraform Apply must contain one canonical credential inventory confirmation step"
+    return 1
+  }
+  # Workflow expressions and shell variables below are intentional literals.
+  # shellcheck disable=SC2016
+  require_nonblank_lines "${confirmation_step}" \
+    "      - name: Verify Terraform credential inventory confirmation" \
+    "        shell: bash" \
+    "        env:" \
+    '          CREDENTIAL_INVENTORY_CONFIRMATION: ${{ inputs.credential_inventory_confirmation }}' \
+    "        run: |" \
+    "          set -euo pipefail" \
+    "          if [[ \"\${CREDENTIAL_INVENTORY_CONFIRMATION}\" != 'CONFIRM APPLY R2 INVENTORY NO FALLBACK' ]]; then" \
+    "            echo '::error::Complete the value-free Terraform credential inventory checks and enter the exact confirmation.'" \
+    "            exit 1" \
+    "          fi" || return 1
+  if grep -Fq 'gh api' "${confirmation_step}"; then
+    violation "Terraform Apply inventory confirmation must not access the GitHub API"
+    return 1
+  fi
+  extract_literal_run_script "${confirmation_step}" >"${confirmation_script}" || {
+    violation "Terraform Apply inventory confirmation script must be extractable from the workflow"
+    return 1
+  }
+  if env -i \
+    PATH=/usr/bin:/bin \
+    CREDENTIAL_INVENTORY_CONFIRMATION=not-confirmed \
+    bash "${confirmation_script}" >"${confirmation_output}" 2>&1; then
+    violation "Terraform Apply inventory confirmation accepted an incorrect value"
+    return 1
+  fi
+  [[ "$(cat "${confirmation_output}")" == "::error::Complete the value-free Terraform credential inventory checks and enter the exact confirmation." ]] || {
+    violation "Terraform Apply inventory confirmation failure output is not fixed"
+    return 1
+  }
+  if ! env -i \
+    PATH=/usr/bin:/bin \
+    CREDENTIAL_INVENTORY_CONFIRMATION='CONFIRM APPLY R2 INVENTORY NO FALLBACK' \
+    bash "${confirmation_script}" >"${confirmation_output}" 2>&1; then
+    violation "Terraform Apply inventory confirmation rejected the exact confirmation"
+    return 1
+  fi
+  [[ ! -s "${confirmation_output}" ]] || {
+    violation "Terraform Apply inventory confirmation success fixture produced unexpected output"
+    return 1
+  }
+
+  extract_job "${apply_workflow}" apply >"${apply_job}" || {
+    violation "Terraform Apply job must exist for R2 secret source validation"
+    return 1
+  }
+  extract_job_mapping "${apply_job}" env >"${apply_env}" || {
+    violation "Terraform Apply must define one job environment mapping"
+    return 1
+  }
+  # shellcheck disable=SC2016
+  require_exact_line "${apply_env}" \
+    '      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_APPLY_R2_ACCESS_KEY_ID }}' || return 1
+  # shellcheck disable=SC2016
+  require_exact_line "${apply_env}" \
+    '      AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_APPLY_R2_SECRET_ACCESS_KEY }}' || return 1
+  # GitHub expression literals must remain unexpanded while validating YAML.
+  # shellcheck disable=SC2016
+  if grep -Fq '${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}' "${apply_env}" \
+    || grep -Fq '${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}' "${apply_env}"; then
+    violation "Terraform Apply must not fall back to repository-level R2 secrets"
+    return 1
+  fi
+
+  extract_job_mapping "${apply_job}" steps >"${apply_steps}" || {
+    violation "Terraform Apply must define one steps mapping"
+    return 1
+  }
+  first_apply_step="$(awk 'NF { print; exit }' "${apply_steps}")"
+  [[ "${first_apply_step}" == "      - name: Validate Terraform deployment inputs" ]] || {
+    violation "Terraform Apply must validate inputs before every external operation"
+    return 1
+  }
+  extract_named_step "${apply_job}" "Validate Terraform deployment inputs" >"${validation_step}" || {
+    violation "Terraform Apply must contain one canonical input validation step"
+    return 1
+  }
+  # Shell syntax below is the literal expected workflow body, not this script's variables.
+  # shellcheck disable=SC2016
+  require_nonblank_lines "${validation_step}" \
+    "      - name: Validate Terraform deployment inputs" \
+    "        shell: bash" \
+    "        run: |" \
+    "          set -euo pipefail" \
+    "          required=(" \
+    "            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY CLOUDFLARE_API_TOKEN" \
+    "            R2_STATE_BUCKET TF_VAR_cloudflare_account_id" \
+    "          )" \
+    "          missing=0" \
+    '          for name in "${required[@]}"; do' \
+    '            if [[ -z "${!name}" ]]; then' \
+    '              echo "::error::Missing GitHub Terraform Apply input: ${name}"' \
+    "              missing=1" \
+    "            fi" \
+    "          done" \
+    '          if [[ ! "${TF_VAR_cloudflare_account_id}" =~ ^[0-9a-f]{32}$ ]]; then' \
+    '            echo "::error::TERRAFORM_CLOUDFLARE_ACCOUNT_ID must be 32 lowercase hexadecimal characters."' \
+    "            missing=1" \
+    "          fi" \
+    '          if [[ ! "${R2_STATE_BUCKET}" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]; then' \
+    '            echo "::error::TERRAFORM_R2_STATE_BUCKET must be a 3-63 character R2 bucket name."' \
+    "            missing=1" \
+    "          fi" \
+    '          exit "${missing}"' || return 1
+
+  extract_literal_run_script "${validation_step}" >"${validation_script}" || {
+    violation "Terraform Apply input validation script must be extractable from the workflow"
+    return 1
+  }
+  if env -i \
+    PATH=/usr/bin:/bin \
+    AWS_ACCESS_KEY_ID= \
+    AWS_SECRET_ACCESS_KEY= \
+    CLOUDFLARE_API_TOKEN=present \
+    R2_STATE_BUCKET=cycle-state \
+    TF_VAR_cloudflare_account_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    bash "${validation_script}" >"${validation_output}" 2>&1; then
+    violation "Terraform Apply input validation accepted empty Apply credentials"
+    return 1
+  fi
+  grep -Fxq \
+    "::error::Missing GitHub Terraform Apply input: AWS_ACCESS_KEY_ID" \
+    "${validation_output}" || {
+    violation "Terraform Apply input validation did not reject an empty access key ID"
+    return 1
+  }
+  grep -Fxq \
+    "::error::Missing GitHub Terraform Apply input: AWS_SECRET_ACCESS_KEY" \
+    "${validation_output}" || {
+    violation "Terraform Apply input validation did not reject an empty secret access key"
+    return 1
+  }
+
+  if ! env -i \
+    PATH=/usr/bin:/bin \
+    AWS_ACCESS_KEY_ID=present-id \
+    AWS_SECRET_ACCESS_KEY=present-key \
+    CLOUDFLARE_API_TOKEN=present \
+    R2_STATE_BUCKET=cycle-state \
+    TF_VAR_cloudflare_account_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    bash "${validation_script}" >"${validation_output}" 2>&1; then
+    violation "Terraform Apply input validation rejected the complete success fixture"
+    return 1
+  fi
+  [[ ! -s "${validation_output}" ]] || {
+    violation "Terraform Apply input validation success fixture produced unexpected output"
+    return 1
+  }
+}
+
 validate_all_workflows() {
   local directory="$1"
   local expected_inventory
@@ -461,6 +698,7 @@ terraform-plan.yml|1|terraform-plan
 WORKFLOW_CHECKOUT_INVENTORY
   validate_json_parser_completion_contract "${directory}" || return 1
   validate_workflow_permissions_contract "${directory}" || return 1
+  validate_terraform_r2_secret_sources "${directory}" || return 1
 }
 
 validate_checkout_steps() {
@@ -1525,6 +1763,32 @@ replace_line_once "${workflow_set}/terraform-plan.yml" \
   '      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}' \
   '      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}'
 assert_invalid_workflow_set "Terraform Plan secret source change" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture terraform-plan-apply-secret-source)"
+# shellcheck disable=SC2016 # Expected workflow/fixture command is a literal.
+replace_line_once "${workflow_set}/terraform-plan.yml" \
+  '      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}' \
+  '      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_APPLY_R2_ACCESS_KEY_ID }}'
+assert_invalid_workflow_set "Terraform Plan using Apply-only R2 secret" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture terraform-apply-repository-secret-fallback)"
+# shellcheck disable=SC2016 # Expected workflow/fixture command is a literal.
+replace_line_once "${workflow_set}/terraform-apply.yml" \
+  '      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_APPLY_R2_ACCESS_KEY_ID }}' \
+  '      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}'
+assert_invalid_workflow_set "Terraform Apply repository R2 secret fallback" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture terraform-apply-inventory-confirmation-too-late)"
+move_named_step_before "${workflow_set}/terraform-apply.yml" \
+  "Verify approver and resolve saved plan" \
+  "Verify Terraform credential inventory confirmation"
+assert_invalid_workflow_set "Terraform Apply inventory confirmation placed after GitHub API access" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture terraform-apply-input-validation-too-late)"
+move_named_step_before "${workflow_set}/terraform-apply.yml" \
+  "Verify approved plan is still main HEAD" \
+  "Validate Terraform deployment inputs"
+assert_invalid_workflow_set "Terraform Apply input validation placed after external access" "${workflow_set}"
 
 workflow_set="$(new_workflow_set_fixture terraform-apply-job-env-extra)"
 replace_line_once "${workflow_set}/terraform-apply.yml" \

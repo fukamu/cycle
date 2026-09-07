@@ -125,8 +125,8 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 | `CI` | Playwright behavior | CIが自動設定 |
 | `CLOUDFLARE_ACCOUNT_ID` | Wrangler account | GitHub secret（値自体はcredentialではない） |
 | `CLOUDFLARE_API_TOKEN` | Wrangler deploy auth | **GitHub secret**、deploy最小権限 |
-| `AWS_ACCESS_KEY_ID` | R2 S3 backend access ID | **secret**、PlanはrepositoryのObject Read Only、Applyは `staging-terraform-apply` EnvironmentのObject Read & Write `TERRAFORM_R2_ACCESS_KEY_ID`から一時mapping |
-| `AWS_SECRET_ACCESS_KEY` | R2 S3 backend secret | **secret**、PlanはrepositoryのObject Read Only、Applyは `staging-terraform-apply` EnvironmentのObject Read & Write `TERRAFORM_R2_SECRET_ACCESS_KEY`から一時mapping |
+| `AWS_ACCESS_KEY_ID` | R2 S3 backend access ID | **secret**、PlanはrepositoryのObject Read Only `TERRAFORM_R2_ACCESS_KEY_ID`、Applyは `staging-terraform-apply` Environment専用のObject Read & Write `TERRAFORM_APPLY_R2_ACCESS_KEY_ID`から一時mapping |
+| `AWS_SECRET_ACCESS_KEY` | R2 S3 backend secret | **secret**、PlanはrepositoryのObject Read Only `TERRAFORM_R2_SECRET_ACCESS_KEY`、Applyは `staging-terraform-apply` Environment専用のObject Read & Write `TERRAFORM_APPLY_R2_SECRET_ACCESS_KEY`から一時mapping |
 
 ### Dockerローカル実機profile
 
@@ -134,7 +134,7 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 
 ## GitHub Terraform inputs
 
-Terraform PlanとApplyだけが使います。Application `staging` Environment、Worker、Containerへ渡しません。R2 secret名はscope間で同じですが、値は別tokenです。
+Terraform PlanとApplyだけが使います。Application `staging` Environment、Worker、Containerへ渡しません。Plan用repository secretとApply用Environment secretは名前とtokenを分離します。GitHubの`secrets` contextはEnvironment、Repository、Organizationから解決された値だけを返し、workflowへsource scopeを公開しません。このため名前の分離だけでは同名Repository / Organization secretへのfallbackを自動証明できず、Apply dispatch前のvalue-free inventory確認も必須です。
 
 Repository secrets:
 
@@ -150,12 +150,13 @@ TERRAFORM_R2_SECRET_ACCESS_KEY
 GitHub `staging-terraform-apply` Environment secrets:
 
 ```text
-TERRAFORM_R2_ACCESS_KEY_ID
-TERRAFORM_R2_SECRET_ACCESS_KEY
+TERRAFORM_APPLY_R2_ACCESS_KEY_ID
+TERRAFORM_APPLY_R2_SECRET_ACCESS_KEY
 ```
 
-- Environmentの同名2 secrets: state bucketだけの別の `Object Read & Write` credential。Pre-Apply snapshot/checksum、isolated restore drill、lock、Apply state更新に必要です。
-- Apply jobはこのEnvironmentを参照するため、GitHubのscope precedenceによりEnvironment値がRepositoryのRead Only値を上書きします。Environment値が未設定・Read Only・不正ならsnapshot uploadが失敗し、Apply前に停止します。
+- Environment専用の2 secrets: state bucketだけの `Object Read & Write` credential。Pre-Apply snapshot/checksum、isolated restore drill、lock、Apply state更新に必要です。Repository / Organizationからこのrepositoryへ同名secretを供給しません。
+- Apply jobはEnvironment専用名だけを参照し、解決値が空なら最初のApply stepで停止します。Apply job内のGitHub API access、checkout、artifact download、R2 access、backend init、Applyへ進みません。Credentialが不正ならbackend initまたはstate取得で、Read Onlyなどwrite scope不足なら最初のR2 write（通常はsnapshotのconditional put）で停止し、いずれも`terraform apply`へ進みません。
+- Environment secretの欠落時にRepository / Organizationの同名secretが存在すると、GitHub precedenceによりworkflowからは非空値に見えます。Workflow内でprovenanceを判定できないため、manual dispatchのたびに[`operations.md`](operations.md#terraform-plan--approved-apply)のinventoryを値なしで確認し、exact confirmationを入力します。
 
 Repository variables:
 
@@ -169,7 +170,9 @@ TERRAFORM_APPLY_APPROVER
 - `TERRAFORM_R2_STATE_BUCKET`: manual bootstrap済みの専用private bucket名。credentialではない。
 - `TERRAFORM_APPLY_APPROVER`: Plan review後に `Terraform Apply Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorと照合する。
 
-GitHub Environment `staging-terraform-apply`はApply用R2 Read/Write secretの必須保管場所です。Deployment branchを `main`へ制限します。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateも設定します。Workflow preflightはactorと `TERRAFORM_APPLY_APPROVER`を照合し、不一致・未設定ではEnvironment credentialを使うApply jobへ進みません。
+Manual dispatch input `credential_inventory_confirmation`には、inventory確認後だけexact text `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。これはsecret値やprovenanceの自動検証ではなく、現在のGitHub scope inventoryとCloudflare token metadataをownerが確認したことの明示gateです。
+
+GitHub Environment `staging-terraform-apply`はApply用R2 Read/Write secretの必須かつ運用上唯一の保管場所です。Deployment branchを `main`へ制限します。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateも設定します。Workflow preflightはinventory confirmationをGitHub API accessより先に検証し、その後actorと `TERRAFORM_APPLY_APPROVER`を照合します。不一致・未設定ではEnvironment credentialを使うApply jobへ進みません。
 
 ## GitHub legacy origin retirement input
 

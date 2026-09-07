@@ -81,7 +81,7 @@ R2 bucketとS3 credentialはTerraformより先に必要なmanual bootstrapです
 
 1. Private R2 bucketを作り、他用途と共有しない。
 2. Plan専用のbucket-scoped `Object Read Only` credentialを作り、repository secretsへ登録する。
-3. Apply専用の別のbucket-scoped `Object Read & Write` credentialを作り、`staging-terraform-apply` GitHub Environmentへ同じsecret名で登録する。値はPlan tokenと異なるものにする。
+3. Apply専用の別のbucket-scoped `Object Read & Write` credentialを作り、`staging-terraform-apply` GitHub Environmentへ`TERRAFORM_APPLY_R2_ACCESS_KEY_ID` / `TERRAFORM_APPLY_R2_SECRET_ACCESS_KEY`として登録する。値はPlan tokenと異なるものにし、この2名をrepository secretへ登録しない。
 4. [`backend.hcl.example`](../infra/terraform/staging/backend.hcl.example) をuntracked `backend.hcl`へcopyし、bucketとaccount IDだけを設定する。Credentialをfileへ書かない。
 5. 障害調査でlocal remote readが必要な場合だけ、Plan用credentialを現在のBash processへ注入する。通常releaseをlocal Applyで迂回しない。
 
@@ -91,7 +91,17 @@ R2はTerraform S3 lockfileが使うconditional Putを提供しますが、HashiC
 
 Turnstile EditだけにscopeしたCloudflare tokenをdeploy tokenから分離します。Repository / Environment inputのexact listとscope precedenceは [`environment.md`のGitHub Terraform inputs](environment.md#github-terraform-inputs) が正本です。
 
-`Terraform Apply Staging`は自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人がActions画面で成功したPlan run IDを入力します。Workflow preflightはactor、source workflow、repository、success、main、artifact、current main HEADを検査し、不一致ならApply Environment credentialへ進みません。利用中のGitHub planでRequired reviewerを使える場合は同じownerを設定し、owner本人がdispatchとreviewを行う運用では`Prevent self-review`を有効にしません。
+`Terraform Apply Staging`は自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人が、次のvalue-free inventoryを確認してからActions画面で成功したPlan run IDとexact confirmation `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。Workflowの最初のpreflight stepはconfirmationだけを検証し、不一致なら`gh api`を含む外部accessへ進みません。その後actor、source workflow、repository、success、main、artifact、current main HEADを検査し、不一致ならApply Environment credentialへ進みません。利用中のGitHub planでRequired reviewerを使える場合は同じownerを設定し、owner本人がdispatchとreviewを行う運用では`Prevent self-review`を有効にしません。
+
+```bash
+gh secret list --app actions --repo fukamu/cycle --json name,updatedAt
+gh secret list --app actions --repo fukamu/cycle --env staging-terraform-apply --json name,updatedAt
+gh secret list --app actions --org fukamu --json name,visibility,numSelectedRepos,selectedReposURL,updatedAt
+```
+
+Commandはsecret値を返さず、名前、scope、更新時刻、Organization access metadataだけを確認します。RepositoryにはPlan用`TERRAFORM_R2_ACCESS_KEY_ID` / `TERRAFORM_R2_SECRET_ACCESS_KEY`があり、Apply専用名がないことを確認します。`staging-terraform-apply` EnvironmentにはApply専用`TERRAFORM_APPLY_R2_ACCESS_KEY_ID` / `TERRAFORM_APPLY_R2_SECRET_ACCESS_KEY`があり、Plan用名がないことを確認します。Organizationに4名のいずれかがある場合は`visibility`とselected repositories metadataをGitHub Settingsまたは`selectedReposURL`のvalue-free API responseで調べ、`fukamu/cycle`へ供給されないことを確認できなければdispatchしません。List権限不足、inventory欠落、同名fallbackの可能性、確認後のscope変更がある場合もconfirmationを入力せず停止します。
+
+Cloudflare DashboardのR2 API token metadataで、Plan tokenが対象state bucketだけの`Object Read Only`、Apply tokenが同じbucketだけの`Object Read & Write`であり、別token record / identityであることを確認します。Access Key ID、Secret Access Key、token値を表示、copy、log、Issue、release recordへ転記しません。GitHubは登録済みsecret値を再表示せず、workflowの`secrets` contextもsource scopeを返さないため、既存の`GITHUB_TOKEN`、R2 S3 credential、Terraform用Cloudflare tokenだけでEnvironment provenanceとCloudflare token recordの対応を自動証明する強い仕組みはありません。作成・rotation時の管理された登録と、各dispatchのmetadata inventory confirmationを境界とします。
 
 ```text
 CI (main HEAD。PR検証treeを完全一致で再利用できなければ全check)
@@ -99,10 +109,13 @@ CI (main HEAD。PR検証treeを完全一致で再利用できなければ全chec
    -> Object Read Only credentialでR2 stateをlockなしでread
    -> terraform plan -lock=false -out=staging.tfplan
    -> SHA-256 + commit SHA付きartifact（7日）
--> ownerがPlan run IDを指定してTerraform Apply Stagingをmanual dispatch
+-> ownerがvalue-free credential inventoryを確認し、Plan run IDとexact confirmationを指定してTerraform Apply Stagingをmanual dispatch
+-> inventory confirmationを外部access前に検証
 -> actor / source Plan / artifact / current main HEADを検証
 -> staging-terraform-apply Environment
-   -> Object Read & Write credentialへscope override
+   -> Environment専用名のObject Read & Write credentialを最初のApply stepで検証
+   -> 解決値が空ならApply job内のGitHub API / checkout / artifact downloadより前に停止
+   -> 不正credentialはbackend init / state取得、write scope不足は最初のR2 writeで停止
    -> saved plan再検証とlock対応backend init
    -> live state snapshot / checksum / isolated restore drill
    -> 同じsaved planをlock付きapply
@@ -148,7 +161,7 @@ Cloudflare application deploy tokenは対象account / zoneのWorker、Container�
 
 ### GitHub Environments and deployment inputs
 
-- `staging-terraform-apply`: Apply用R2 Read & Write credentialを保管し、deployment branchを`main`へ制限する。
+- `staging-terraform-apply`: Apply専用名のR2 Read & Write credentialだけを保管し、同名をrepositoryへ登録せず、deployment branchを`main`へ制限する。
 - `staging`: Application runtime / migration / deploy inputsを保管し、deployment branchを`main`へ制限する。
 - Exact secret / variable list、Closed Beta追加値、Frontend public mappingは [`environment.md`](environment.md) だけを更新する。
 - Workflowは [`deployment-contract.json`](../config/deployment-contract.json) から入力分類を導出し、Worker parserとBackend typed config checkerをmigration前に実行する。

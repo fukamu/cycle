@@ -375,10 +375,15 @@ done
 
 assert_exact_line "${plan_workflow}" "      AWS_ACCESS_KEY_ID: \${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}"
 assert_exact_line "${plan_workflow}" "      AWS_SECRET_ACCESS_KEY: \${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}"
-assert_exact_line "${apply_workflow}" "      AWS_ACCESS_KEY_ID: \${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}"
-assert_exact_line "${apply_workflow}" "      AWS_SECRET_ACCESS_KEY: \${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}"
+assert_exact_line "${apply_workflow}" "      AWS_ACCESS_KEY_ID: \${{ secrets.TERRAFORM_APPLY_R2_ACCESS_KEY_ID }}"
+assert_exact_line "${apply_workflow}" "      AWS_SECRET_ACCESS_KEY: \${{ secrets.TERRAFORM_APPLY_R2_SECRET_ACCESS_KEY }}"
 if grep -Fq -- 'staging-terraform-apply' "${plan_workflow}"; then
   fail "Terraform Plan must not receive the Apply environment"
+fi
+# shellcheck disable=SC2016 # GitHub expressions are intentional literal contract text.
+if grep -Fq -- '${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}' "${apply_workflow}" \
+  || grep -Fq -- '${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}' "${apply_workflow}"; then
+  fail "Terraform Apply must not use repository-level R2 secrets"
 fi
 assert_exact_line "${plan_workflow}" '          terraform_wrapper: false'
 assert_exact_line "${apply_workflow}" '          terraform_wrapper: false'
@@ -389,6 +394,10 @@ assert_exact_line "${apply_workflow}" '      - name: Back up and drill Terraform
 assert_exact_line "${apply_workflow}" '        id: state_recovery'
 assert_exact_line "${apply_workflow}" '        run: bash ./scripts/backup-and-drill-terraform-state.sh'
 assert_lines_in_order "${apply_workflow}" \
+  '      - name: Validate Terraform deployment inputs' \
+  '      - name: Verify approved plan is still main HEAD' \
+  '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' \
+  '      - name: Download approved saved plan' \
   '      - name: Initialize Terraform' \
   '      - name: Re-verify approved plan is still main HEAD' \
   '      - name: Back up and drill Terraform state' \
@@ -402,9 +411,16 @@ done
 
 assert_contains "${environment_doc}" 'Object Read Only'
 assert_contains "${environment_doc}" 'Object Read & Write'
+assert_contains "${environment_doc}" 'workflowへsource scopeを公開しません'
+assert_contains "${environment_doc}" 'CONFIRM APPLY R2 INVENTORY NO FALLBACK'
 assert_contains "${operations_doc}" 'Object Read Only'
 assert_contains "${operations_doc}" 'staging-terraform-apply'
 assert_contains "${operations_doc}" 'Object Read & Write'
+assert_contains "${operations_doc}" 'gh secret list --app actions --repo fukamu/cycle --json name,updatedAt'
+assert_contains "${operations_doc}" 'gh secret list --app actions --repo fukamu/cycle --env staging-terraform-apply --json name,updatedAt'
+assert_contains "${operations_doc}" 'gh secret list --app actions --org fukamu --json name,visibility,numSelectedRepos,selectedReposURL,updatedAt'
+assert_contains "${operations_doc}" 'List権限不足、inventory欠落、同名fallbackの可能性'
+assert_contains "${operations_doc}" '別token record / identity'
 assert_contains "${operations_doc}" 'fukamu-cycle/staging/state-backups/<commit-sha>/<utc-timestamp>.tfstate'
 assert_contains "${operations_doc}" 'fukamu-cycle/staging/state-restore-drills/'
 assert_contains "${operations_doc}" 'automatic snapshot deletion is disabled'
