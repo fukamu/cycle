@@ -192,6 +192,18 @@ Playwright自身の既定portは55432です。このリポジトリのDocker例�
 
 Localから日常的に実行せず、Production originやProduction dataへ向けません。障害調査でOperations ownerが直接実行する場合も、承認済みsecret managerから環境へ注入し、shell history、process argument、terminal recordingへRaw Invite Tokenを残さず、[`operations.md`](operations.md#staging-critical-journey-cleanup)のcleanup確認まで完了させます。
 
+### Stable CSRF initial rollout fixtures
+
+初回rolloutのlive手順は[`operations.md`](operations.md#session-bound-stable-csrf-v1-release)を正本とし、LocalからStagingへ向けて実行しません。Cloudflare API、Browser process、fixed deploy child、safe evidenceの境界は外部credentialを使わない次のfixtureで確認できます。全体checkとCommit前gateにも含まれます。
+
+```bash
+node --test scripts/tests/cloudflare-drain-evidence.test.mjs
+node --test scripts/tests/staging-csrf-rollout.test.mjs
+node --test scripts/tests/staging-rollout-evidence.test.mjs
+bash scripts/tests/check-staging-csrf-rollout.sh
+bash scripts/tests/check-staging-candidate-deploy-and-drain.sh
+```
+
 ### Commit前の必須gate
 
 Commitへ含める変更をすべてstageし、unstaged/untracked fileがない状態で次を実行します。この1コマンドはNode/pnpm/Go/Terraformの標準version、frozen lockfile install、CI再利用・権限modelのnegative fixture、actionlint 1.7.12、文書・設定・securityを含む全scopeの品質check、CI設定のPlaywright E2Eを検証します。sqlc生成物は、検証開始時点から`sqlc generate`後に差分が増えないことも確認します。

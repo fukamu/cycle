@@ -1,10 +1,23 @@
 name: Deploy Staging
 
 on:
-  workflow_run:
-    workflows: [Terraform Apply Staging]
-    types: [completed]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Select normal after Terraform Apply, or schema-compatible application recovery
+        required: true
+        type: choice
+        options:
+          - normal
+          - recovery
+      apply_run_id:
+        description: Successful exact-current-main Terraform Apply Staging run ID (normal only)
+        required: false
+        type: string
+      recovery_confirmation:
+        description: Type RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY (recovery only)
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -16,40 +29,159 @@ concurrency:
 
 jobs:
   resolve:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.name == 'Terraform Apply Staging' &&
-       github.event.workflow_run.path == '.github/workflows/terraform-apply.yml' &&
-       github.event.workflow_run.event == 'workflow_dispatch' &&
-       github.event.workflow_run.status == 'completed' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      ci_run_id: ${{ steps.resolve.outputs.ci_run_id }}
       commit_sha: ${{ steps.resolve.outputs.commit_sha }}
     steps:
-      - name: Resolve deployment commit
+      - name: Verify deploy dispatch preflight
+        shell: bash
+        env:
+          APPLY_RUN_ID: ${{ inputs.apply_run_id }}
+          EXPECTED_APPROVER: ${{ vars.STAGING_DEPLOY_APPROVER }}
+          MODE: ${{ inputs.mode }}
+          RECOVERY_CONFIRMATION: ${{ inputs.recovery_confirmation }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != 'workflow_dispatch' ]]; then
+            echo '::error::Deploy Staging accepts manual workflow dispatch only.'
+            exit 1
+          fi
+          if [[ "${GITHUB_RUN_ATTEMPT}" != '1' ]]; then
+            echo '::error::Deploy Staging workflow reruns are prohibited; start a new manual dispatch after reviewing the prior attempt.'
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != 'refs/heads/main' || "${GITHUB_REF_NAME}" != 'main' ]]; then
+            echo '::error::Deploy Staging is allowed only from main.'
+            exit 1
+          fi
+          if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::Deploy Staging dispatch commit is not a valid SHA.'
+            exit 1
+          fi
+          if [[ -z "${EXPECTED_APPROVER}" ]]; then
+            echo '::error::Missing repository variable STAGING_DEPLOY_APPROVER.'
+            exit 1
+          fi
+          if [[ ! "${EXPECTED_APPROVER}" =~ ^[[:alnum:]]([[:alnum:]-]{0,37}[[:alnum:]])?$ || "${EXPECTED_APPROVER}" =~ -- ]]; then
+            echo '::error::Repository variable STAGING_DEPLOY_APPROVER is not a valid GitHub login.'
+            exit 1
+          fi
+          if [[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" || "${GITHUB_TRIGGERING_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]; then
+            echo '::error::Deploy Staging actor and triggering actor must both match STAGING_DEPLOY_APPROVER.'
+            exit 1
+          fi
+
+          case "${MODE}" in
+            normal)
+              if [[ ! "${APPLY_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+                echo '::error::Normal deployment requires a numeric Terraform Apply workflow run ID.'
+                exit 1
+              fi
+              if [[ -n "${RECOVERY_CONFIRMATION}" ]]; then
+                echo '::error::Normal deployment must not include a recovery confirmation.'
+                exit 1
+              fi
+              ;;
+            recovery)
+              if [[ -n "${APPLY_RUN_ID}" ]]; then
+                echo '::error::Recovery deployment must not include a Terraform Apply workflow run ID.'
+                exit 1
+              fi
+              if [[ "${RECOVERY_CONFIRMATION}" != 'RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY' ]]; then
+                echo '::error::Recovery deployment requires the exact schema-compatible recovery confirmation.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::Deploy Staging mode must be normal or recovery.'
+              exit 1
+              ;;
+          esac
+
+      - name: Resolve approved deployment
         id: resolve
         shell: bash
         env:
-          APPLY_RUN_ID: ${{ github.event.workflow_run.id }}
+          APPLY_RUN_ID: ${{ inputs.apply_run_id }}
+          DISPATCH_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == 'workflow_dispatch' ]]; then
-            if [[ "${GITHUB_REF}" != 'refs/heads/main' ]]; then
-              echo '::error::Manual Staging deployment is allowed only from main.'
+
+          main_ref_json="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main"
+          )"
+          current_main_sha="$(
+            jq -ser \
+              '
+                if (
+                  length == 1 and
+                  (.[0] | type) == "object" and
+                  .[0].ref == "refs/heads/main" and
+                  (.[0].object | type) == "object" and
+                  .[0].object.type == "commit" and
+                  (.[0].object.sha | type) == "string" and
+                  (.[0].object.sha | test("^[0-9a-f]{40}$"))
+                ) then
+                  .[0].object.sha
+                else
+                  error("invalid current main ref response")
+                end
+              ' \
+              <<< "${main_ref_json}"
+          )"
+          if [[ "${DISPATCH_SHA}" != "${current_main_sha}" ]]; then
+            echo '::error::Deploy Staging dispatch commit is not current main.'
+            exit 1
+          fi
+
+          artifact_name=''
+          if [[ "${MODE}" == 'normal' ]]; then
+            apply_run_json="$(
+              gh api \
+                -H 'Accept: application/vnd.github+json' \
+                "/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}"
+            )"
+            apply_head_sha="$(
+              jq -ser \
+                --arg run_id "${APPLY_RUN_ID}" \
+                --arg repository "${GITHUB_REPOSITORY}" \
+                '
+                  if (
+                    length == 1 and
+                    (.[0] | type) == "object" and
+                    (.[0].id | type) == "number" and
+                    (.[0].id | floor) == .[0].id and
+                    .[0].id > 0 and
+                    (.[0].id | tostring) == $run_id and
+                    .[0].name == "Terraform Apply Staging" and
+                    .[0].path == ".github/workflows/terraform-apply.yml" and
+                    .[0].event == "workflow_dispatch" and
+                    .[0].status == "completed" and
+                    .[0].conclusion == "success" and
+                    (.[0].head_sha | type) == "string" and
+                    (.[0].head_sha | test("^[0-9a-f]{40}$")) and
+                    .[0].head_branch == "main" and
+                    (.[0].head_repository | type) == "object" and
+                    .[0].head_repository.full_name == $repository
+                  ) then
+                    .[0].head_sha
+                  else
+                    error("invalid Terraform Apply workflow run response")
+                  end
+                ' \
+                <<< "${apply_run_json}"
+            )"
+            if [[ "${apply_head_sha}" != "${current_main_sha}" ]]; then
+              echo '::error::Terraform Apply workflow run is not for current main.'
               exit 1
             fi
-            commit_sha="${GITHUB_SHA}"
-          else
-            if [[ ! "${APPLY_RUN_ID}" =~ ^[0-9]+$ ]]; then
-              echo "::error::Terraform Apply workflow run ID must be numeric: ${APPLY_RUN_ID}"
-              exit 1
-            fi
+
             artifacts_json="$(
               gh api \
                 -H 'Accept: application/vnd.github+json' \
@@ -58,7 +190,7 @@ jobs:
             artifact_name="$(
               jq -ser \
                 --arg run_id "${APPLY_RUN_ID}" \
-                --arg prefix "terraform-apply-staging-" \
+                --arg expected_name "terraform-apply-staging-${apply_head_sha}" \
                 '
                   if (
                     length == 1 and
@@ -86,7 +218,7 @@ jobs:
                       .[0].artifacts[]
                       | select(
                           .expired == false and
-                          (.name | startswith($prefix))
+                          .name == $expected_name
                         )
                     ] as $matches
                     | if ($matches | length) == 1 then
@@ -100,29 +232,162 @@ jobs:
                 ' \
                 <<< "${artifacts_json}"
             )"
-            commit_sha="${artifact_name#terraform-apply-staging-}"
           fi
 
-          if [[ ! "${commit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Resolved deployment commit is not a valid SHA: ${commit_sha}"
+          ci_runs_json="$(
+            gh api \
+              --method GET \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="${current_main_sha}" \
+              -f branch=main \
+              -f event=push \
+              -f status=completed \
+              -f per_page=100
+          )"
+          successful_ci_run_id="$(
+            jq -ser \
+              --arg commit_sha "${current_main_sha}" \
+              --arg repository "${GITHUB_REPOSITORY}" \
+              '
+                if (
+                  length == 1 and
+                  (.[0] | type) == "object" and
+                  (.[0].total_count | type) == "number" and
+                  (.[0].total_count | floor) == .[0].total_count and
+                  .[0].total_count >= 0 and
+                  (.[0].workflow_runs | type) == "array" and
+                  .[0].total_count == (.[0].workflow_runs | length) and
+                  .[0].total_count <= 100 and
+                  all(.[0].workflow_runs[];
+                    (type == "object") and
+                    (.id | type) == "number" and
+                    (.id | floor) == .id and
+                    .id > 0 and
+                    (.name | type) == "string" and
+                    (.path | type) == "string" and
+                    (.event | type) == "string" and
+                    (.status | type) == "string" and
+                    (.conclusion | type) == "string" and
+                    (.head_sha | type) == "string" and
+                    (.head_branch | type) == "string" and
+                    (.head_repository | type) == "object" and
+                    (.head_repository.full_name | type) == "string"
+                  )
+                ) then
+                  ([
+                    .[0].workflow_runs[]
+                    | select(
+                        .name == "CI" and
+                        .path == ".github/workflows/ci.yml" and
+                        .event == "push" and
+                        .status == "completed" and
+                        .conclusion == "success" and
+                        .head_sha == $commit_sha and
+                        .head_branch == "main" and
+                        .head_repository.full_name == $repository
+                      )
+                  ]) as $matches
+                  | if ($matches | length) >= 1 then
+                      ($matches[0].id | tostring)
+                    else
+                      error("no exact successful main CI run")
+                    end
+                else
+                  error("invalid CI workflow-run response")
+                end
+              ' \
+              <<< "${ci_runs_json}"
+          )"
+          if [[ ! "${successful_ci_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo '::error::No exact successful main push CI run found for the deployment commit.'
             exit 1
           fi
-          current_main_sha="$(
+
+          {
+            echo "apply_artifact_name=${artifact_name}"
+            echo "apply_run_id=${APPLY_RUN_ID}"
+            echo "ci_run_id=${successful_ci_run_id}"
+            echo "commit_sha=${current_main_sha}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Download approved Terraform Apply metadata
+        if: inputs.mode == 'normal'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.resolve.outputs.apply_artifact_name }}
+          path: ${{ runner.temp }}/fukamu-cycle-terraform-apply-metadata
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.resolve.outputs.apply_run_id }}
+
+      - name: Verify approved Terraform Apply metadata
+        if: inputs.mode == 'normal'
+        shell: bash
+        env:
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/fukamu-cycle-terraform-apply-metadata
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! -d "${ARTIFACT_DIRECTORY}" || -L "${ARTIFACT_DIRECTORY}" ]]; then
+            echo '::error::Terraform Apply metadata artifact directory is invalid.'
+            exit 1
+          fi
+          entry_count="$(find -P "${ARTIFACT_DIRECTORY}" -mindepth 1 -maxdepth 1 -printf '.' | wc -c)"
+          metadata_file="${ARTIFACT_DIRECTORY}/commit-sha"
+          if [[ "${entry_count}" != '1' || ! -f "${metadata_file}" || -L "${metadata_file}" ]]; then
+            echo '::error::Terraform Apply metadata artifact must contain only one regular commit-sha file.'
+            exit 1
+          fi
+          if [[ "$(wc -c < "${metadata_file}")" != '41' ]]; then
+            echo '::error::Terraform Apply metadata commit-sha has an invalid size.'
+            exit 1
+          fi
+          artifact_commit="$(tr -d '\n' < "${metadata_file}")"
+          if [[ ! "${artifact_commit}" =~ ^[0-9a-f]{40}$ || "${artifact_commit}" != "${COMMIT_SHA}" ]]; then
+            echo '::error::Terraform Apply metadata commit does not match current main.'
+            exit 1
+          fi
+
+      - name: Re-verify deployment commit before Staging approval
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          main_ref_json="$(
             gh api \
               -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-              --jq '.object.sha'
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main"
           )"
-          if [[ "${commit_sha}" != "${current_main_sha}" ]]; then
-            echo "::error::Deployment commit ${commit_sha} is stale; current main is ${current_main_sha}."
+          current_main_sha="$(
+            jq -ser \
+              '
+                if (
+                  length == 1 and
+                  (.[0] | type) == "object" and
+                  .[0].ref == "refs/heads/main" and
+                  (.[0].object | type) == "object" and
+                  .[0].object.type == "commit" and
+                  (.[0].object.sha | type) == "string" and
+                  (.[0].object.sha | test("^[0-9a-f]{40}$"))
+                ) then
+                  .[0].object.sha
+                else
+                  error("invalid current main ref response")
+                end
+              ' \
+              <<< "${main_ref_json}"
+          )"
+          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
+            echo '::error::Deployment commit became stale before Staging approval.'
             exit 1
           fi
-          echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"
 
   deploy:
     needs: resolve
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment:
       name: staging
       url: https://cycle.staging.fukamu.matoruru.com
@@ -172,71 +437,6 @@ jobs:
       RATE_AI_PER_SESSION_MINUTE: ${{ vars.RATE_AI_PER_SESSION_MINUTE }}
       RATE_AI_PER_IP_MINUTE: ${{ vars.RATE_AI_PER_IP_MINUTE }}
     steps:
-      - name: Verify commit has successful CI
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          successful_runs="$(
-            gh api \
-              --method GET \
-              -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
-              -f head_sha="${COMMIT_SHA}" \
-              -f branch=main \
-              -f event=push \
-              -f status=completed \
-              -f per_page=100 \
-              | jq -er \
-                --arg commit_sha "${COMMIT_SHA}" \
-                --arg repository "${GITHUB_REPOSITORY}" \
-                '
-                  . as $root
-                  | if (
-                      ($root | type) == "object" and
-                      ($root.total_count | type) == "number" and
-                      $root.total_count >= 0 and
-                      ($root.workflow_runs | type) == "array" and
-                      $root.total_count == ($root.workflow_runs | length) and
-                      $root.total_count <= 100 and
-                      all($root.workflow_runs[];
-                        (type == "object") and
-                        (.name | type) == "string" and
-                        (.path | type) == "string" and
-                        (.event | type) == "string" and
-                        (.status | type) == "string" and
-                        (.conclusion | type) == "string" and
-                        (.head_sha | type) == "string" and
-                        (.head_branch | type) == "string" and
-                        (.head_repository | type) == "object" and
-                        (.head_repository.full_name | type) == "string"
-                      )
-                    ) then
-                      [
-                        $root.workflow_runs[]
-                        | select(
-                            .name == "CI" and
-                            .path == ".github/workflows/ci.yml" and
-                            .event == "push" and
-                            .status == "completed" and
-                            .conclusion == "success" and
-                            .head_sha == $commit_sha and
-                            .head_branch == "main" and
-                            .head_repository.full_name == $repository
-                          )
-                      ]
-                      | length
-                    else
-                      error("invalid CI workflow-run response")
-                    end
-                '
-          )"
-          if [[ ! "${successful_runs}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::No exact successful main push CI run found for commit ${COMMIT_SHA}."
-            exit 1
-          fi
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.COMMIT_SHA }}
@@ -323,60 +523,17 @@ jobs:
           STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}
         run: bash ./scripts/check-staging-critical.sh
 
-      - name: Re-verify deployment commit is still main HEAD
+      - name: Run stable CSRF initial rollout and authoritative drain
         shell: bash
         env:
+          DEPLOY_MODE: ${{ inputs.mode }}
+          APPLY_RUN_ID: ${{ inputs.apply_run_id }}
+          EXACT_MAIN_CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          current_main_sha="$(
-            gh api \
-              -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-              --jq '.object.sha'
-          )"
-          if [[ ! "${current_main_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Current main ref did not resolve to a valid commit SHA: ${current_main_sha}"
-            exit 1
-          fi
-          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
-            echo "::error::Deployment commit ${COMMIT_SHA} became stale before migration; current main is ${current_main_sha}."
-            exit 1
-          fi
-
-      - name: Apply database migrations
-        shell: bash
-        working-directory: backend
-        env:
-          DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}
-          MIGRATIONS_DIR: migrations
-        run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go run ./cmd/migrate
-
-      - name: Re-verify deployment commit after migrations
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          current_main_sha="$(
-            gh api \
-              -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-              --jq '.object.sha'
-          )"
-          if [[ ! "${current_main_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Current main ref did not resolve to a valid commit SHA: ${current_main_sha}"
-            exit 1
-          fi
-          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
-            echo "::error::Deployment commit ${COMMIT_SHA} became stale after migration; refusing secret materialization and traffic switch. Current main is ${current_main_sha}."
-            exit 1
-          fi
-
-      - name: Create ephemeral Worker secrets file
-        shell: bash
-        env:
-          SECRETS_FILE: ${{ runner.temp }}/fukamu-cycle-worker-secrets.json
+          STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}
+          STAGING_ADMISSION_MODE: auto
+          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}
+          MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
           SESSION_TOKEN_PEPPER: ${{ secrets.SESSION_TOKEN_PEPPER }}
@@ -387,61 +544,33 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
           BETA_ADMISSION_COOKIE_KEY: ${{ secrets.BETA_ADMISSION_COOKIE_KEY }}
-        run: |
-          node - <<'NODE'
-          const fs = require("node:fs");
-          const names = [
-            "DATABASE_URL", "OTEL_EXPORTER_OTLP_HEADERS", "SESSION_TOKEN_PEPPER", "CSRF_TOKEN_PEPPER",
-            "BOOTSTRAP_ID_PEPPER", "RATE_LIMIT_HMAC_SECRET", "CURSOR_SIGNING_SECRET", "OPENAI_API_KEY", "TURNSTILE_SECRET_KEY",
-          ];
-          if (process.env.BETA_ADMISSION_COOKIE_KEY) names.push("BETA_ADMISSION_COOKIE_KEY");
-          const values = Object.fromEntries(names.map((name) => [name, process.env[name]]));
-          fs.writeFileSync(process.env.SECRETS_FILE, JSON.stringify(values), { mode: 0o600 });
-          NODE
-
-      - name: Deploy Worker, static assets, and Container
-        shell: bash
-        env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
-          variable_names=(
-            PUBLIC_ORIGIN OTEL_EXPORTER_OTLP_ENDPOINT BETA_ADMISSION_MODE DB_MAX_OPEN_CONNS
-            DB_MAX_IDLE_CONNS DB_CONN_MAX_LIFETIME_MINUTES
-            SESSION_IDLE_DAYS SESSION_ABSOLUTE_DAYS SESSION_ACTIVITY_TOUCH_MINUTES
-            ANONYMOUS_BOOTSTRAP_TTL_MINUTES MAX_PROGRESSING_GOALS AI_MODEL AI_REASONING_EFFORT
-            AI_MAX_INPUT_TOKENS
-            AI_GOAL_REFINE_MAX_OUTPUT_TOKENS AI_ACTION_MAX_OUTPUT_TOKENS AI_MAX_CONTEXT_CYCLES
-            AI_TIMEOUT_SECONDS AI_MAX_PROVIDER_ATTEMPTS AI_MAX_RETRY_BACKOFF_SECONDS
-            AI_FINALIZATION_GRACE_SECONDS AI_LEASE_SECONDS AI_MAX_GENERATIONS_PER_USER_24H
-            AI_GOAL_REFINE_PROMPT_VERSION AI_GENERATE_PROMPT_VERSION AI_REFINE_PROMPT_VERSION
-            AI_TOKENIZER_ENCODING AI_MONTHLY_BUDGET_USD AI_WARNING_THRESHOLDS
-            AI_PRICE_INPUT_USD_PER_MILLION AI_PRICE_OUTPUT_USD_PER_MILLION GOOGLE_WEB_CLIENT_ID
-            RATE_ANONYMOUS_CREATE_PER_IP_HOUR RATE_ANONYMOUS_CREATE_PER_IP_24H
-            RATE_GOAL_START_PER_USER_MINUTE RATE_GOAL_START_PER_SESSION_MINUTE
-            RATE_AI_PER_USER_MINUTE RATE_AI_PER_SESSION_MINUTE RATE_AI_PER_IP_MINUTE
-          )
-          variable_args=()
-          for name in "${variable_names[@]}"; do
-            variable_args+=(--var "${name}:${!name}")
-          done
-          if [[ "${BETA_ADMISSION_MODE}" == 'closed' ]]; then
-            variable_args+=(
-              --var "BETA_ADMISSION_COOKIE_TTL_DAYS:${BETA_ADMISSION_COOKIE_TTL_DAYS}"
-              --var "BETA_INVITES:${BETA_INVITES}"
-            )
-          fi
-          variable_args+=(--var "AI_PRICING_MODEL:${AI_MODEL}")
-          pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \
-            "${variable_args[@]}" \
-            --secrets-file "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json" \
-            --containers-rollout=immediate
+          bash ./scripts/check-staging-csrf-rollout.sh
+          STAGING_ROLLOUT_EVIDENCE_STAGE=smoke_passed \
+            STAGING_ROLLOUT_PENDING_EVIDENCE_FILE="${RUNNER_TEMP}/fukamu-cycle-stable-csrf-rollout-drained.json" \
+            STAGING_ROLLOUT_EVIDENCE_FILE="${RUNNER_TEMP}/fukamu-cycle-stable-csrf-rollout-smoke-passed.json" \
+            node ./scripts/write-staging-rollout-evidence.mjs
+          {
+            echo '### Stable CSRF live smoke result'
+            echo
+            echo "- Exact-main CI commit: \`${COMMIT_SHA}\`"
+            echo '- Legacy-to-stable two-tab/security smoke: passed'
+            echo '- Public account cleanup and revoked-session check: passed'
+          } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Remove ephemeral Worker secrets file
-        if: always()
-        shell: bash
-        run: rm -f -- "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"
+      - name: Upload stable CSRF rollout evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stable-csrf-rollout-${{ env.COMMIT_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/fukamu-cycle-stable-csrf-rollout-drained.json
+            ${{ runner.temp }}/fukamu-cycle-stable-csrf-rollout-smoke-passed.json
+          if-no-files-found: ignore
+          retention-days: 90
 
       - name: Smoke test
         shell: bash

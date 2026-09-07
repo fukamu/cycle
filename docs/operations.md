@@ -91,7 +91,7 @@ R2はTerraform S3 lockfileが使うconditional Putを提供しますが、HashiC
 
 Turnstile EditだけにscopeしたCloudflare tokenをdeploy tokenから分離します。Repository / Environment inputのexact listとscope precedenceは [`environment.md`のGitHub Terraform inputs](environment.md#github-terraform-inputs) が正本です。
 
-`Terraform Apply Staging`は自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人が、次のvalue-free inventoryを確認してからActions画面で成功したPlan run IDとexact confirmation `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。Workflowの最初のpreflight stepはconfirmationだけを検証し、不一致なら`gh api`を含む外部accessへ進みません。その後actor、source workflow、repository、success、main、artifact、current main HEADを検査し、不一致ならApply Environment credentialへ進みません。利用中のGitHub planでRequired reviewerを使える場合は同じownerを設定し、owner本人がdispatchとreviewを行う運用では`Prevent self-review`を有効にしません。
+`Terraform Apply Staging`は自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人が、次のvalue-free inventoryを確認してからActions画面で成功したPlan run IDとexact confirmation `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。Workflowの最初のpreflight stepはconfirmationだけを検証し、不一致なら`gh api`を含む外部accessへ進みません。その後actor / triggering actorの両方、source workflow、repository、success、main、artifact、current main HEADを検査し、不一致ならApply Environment credentialへ進みません。Rerunもconfigured approver本人だけが実行します。利用中のGitHub planでRequired reviewerを使える場合は同じownerを設定し、owner本人がdispatchとreviewを行う運用では`Prevent self-review`を有効にしません。
 
 ```bash
 gh secret list --app actions --repo fukamu/cycle --json name,updatedAt
@@ -111,7 +111,7 @@ CI (main HEAD。PR検証treeを完全一致で再利用できなければ全chec
    -> SHA-256 + commit SHA付きartifact（7日）
 -> ownerがvalue-free credential inventoryを確認し、Plan run IDとexact confirmationを指定してTerraform Apply Stagingをmanual dispatch
 -> inventory confirmationを外部access前に検証
--> actor / source Plan / artifact / current main HEADを検証
+-> actor / triggering actor / source Plan / artifact / current main HEADを検証
 -> staging-terraform-apply Environment
    -> Environment専用名のObject Read & Write credentialを最初のApply stepで検証
    -> 解決値が空ならApply job内のGitHub API / checkout / artifact downloadより前に停止
@@ -120,10 +120,20 @@ CI (main HEAD。PR検証treeを完全一致で再利用できなければ全chec
    -> live state snapshot / checksum / isolated restore drill
    -> 同じsaved planをlock付きapply
 -> Apply metadata artifact
--> Deploy Staging
+-> Apply完了。Deployは自動起動しない
+-> configured approverが別途Deploy Stagingをmanual dispatch
 ```
 
 Plan中にdestroy / replaceがないこと、hostnameとTurnstile modeが承認値であることを確認します。Mainが進んだ、stateが別経路で変化した、artifactがstale / expiredの場合はPlanを破棄し、新しいCI / Planからやり直します。Saved planとTerraform stateはsecret相当としてdownload・転記・長期保存しません。
+
+### Manual Staging Deploy approval
+
+`Deploy Staging`は`workflow_run`から自動起動しません。Dispatch inputとrepository variableのexact contractは[`environment.md`のGitHub Staging Deploy input](environment.md#github-staging-deploy-input)を正本とします。
+
+- 通常releaseはApplyとは別の明示承認とし、reviewしたexact-current-mainの成功Apply run IDを指定する。Workflowはinput形式とmodeの組合せをGitHub API accessより前に拒否し、その後configured approver、Apply workflow identity、repository、main、success、head SHA、未失効artifact内SHA、current main、同一SHAの成功CIを検証する。
+- Application recoveryは通常releaseと別modeでdispatchし、Terraform Apply evidenceの代わりに専用exact confirmationを使う。Current main、configured approver、同一SHAの成功CI、schema compatibilityを満たすApplication復旧だけに限定し、Terraform変更を含む通常releaseや任意commitのDeployへ使わない。
+- Preflight成功後も`staging` Environmentのreviewer gateを維持できる。Environmentへ入る直前にcurrent mainを再取得し、検証済みSHAから進んでいればtraffic切替前に停止する。
+- Actual Apply、Deploy、secret / credential設定、権限変更、live provider smokeは、それぞれの実行時に個別承認を得る。事前のIssue / Pull Request承認をlive変更の承認として扱わない。
 
 #### Pre-Apply state snapshot and restore drill
 
@@ -174,27 +184,32 @@ Cloudflare application deploy tokenは対象account / zoneのWorker、Container�
 2. `staging` Environmentを [`environment.md`](environment.md) に従って設定する。Turnstile未作成の初回はApply後にpublic site keyとsecret keyを追加する。
 3. 対象変更を`main`へmergeし、同じcommitの`CI`成功を確認する。
 4. `Terraform Plan Staging`をreviewし、owner本人がPlan run IDを指定して`Terraform Apply Staging`をdispatchする。
-5. OptionalなEnvironment reviewer gateがある場合はpending deploymentを明示Approve / Rejectする。
-6. Apply後に自動起動する`Deploy Staging`が次の順で完了することを確認する。
+5. OptionalなEnvironment reviewer gateがある場合はpending Applyを明示Approve / Rejectし、Applyの成功を確認する。
+6. `STAGING_DEPLOY_APPROVER`本人が`mode=normal`と成功Apply run IDを指定し、`Deploy Staging`を別途manual dispatchする。
+7. `staging` Environmentのreviewer gateがある場合はpending Deployを明示Approve / Rejectする。
+8. `Deploy Staging`が次の順で完了することを確認する。
 
 ```text
-saved plan integrity / exact main SHA check
--> owner approval
--> pre-Apply state backup / isolated restore drill
--> terraform apply
+configured approver / dispatch input / exact main SHA / CI / Apply evidence check
+-> staging Environment approval
 -> staging Chromium install
 -> frontend build
 -> 現在配信中Stagingのpre-switch baseline + 公開account cleanup
+-> 同じBrowser processでlegacy Sessionを二度取得し、同一Userでtokenが変化することをmutation前に確認
+-> Cloudflare Worker / Container baseline取得
 -> Neon direct URLでmigration
 -> ephemeral secrets file作成
--> Wrangler deploy Worker + Container + assets
--> secrets file削除 (always)
+-> Wrangler deploy Worker + Container + assets（candidate SHA tag）
+-> secrets file削除 (child trap)
+-> candidate-only old-image drainをauthoritative metadataの連続2観測で確認
+-> 同じBrowser process / Contextの二tabでstable convergence、unsafe操作、拒否、Account Deleteを確認
+-> drain-pending recordと、smoke成功後だけのseparate markerを保存
 -> /healthz, /readyz smoke test
 -> Goal / Cycle / Review / History critical journey
 -> 公開account-delete APIでaccount cleanup
 ```
 
-Pre-switch baselineはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへfresh Browser Contextで`/healthz`、`/readyz`、Admission off / closedのentry、Turnstile anonymous bootstrap、session discovery、公開account delete、削除後session 401を確認します。Candidateの`BETA_ADMISSION_MODE`を現在配信中revisionへ適用せず`auto`でentryし、現在がclosedでcandidateがoffへ変わる場合も非個人Inviteをprocess memory内だけで使用します。Post-deploy full journeyだけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。失敗またはcleanup未確認では後続の変更処理へ進みません。Migration失敗時もWrangler deployへ進みません。Input不足でDeployだけ停止した場合は承認値を修正し、同じrunのfailed jobをrerunできます。`workflow_dispatch`はcurrent main HEADのApplication復旧用であり、Terraform変更を迂回する経路ではありません。
+Pre-switch baselineはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへfresh Browser Contextで`/healthz`、`/readyz`、Admission off / closedのentry、Turnstile anonymous bootstrap、session discovery、公開account delete、削除後session 401を確認します。Candidateの`BETA_ADMISSION_MODE`を現在配信中revisionへ適用せず`auto`でentryし、現在がclosedでcandidateがoffへ変わる場合も非個人Inviteをprocess memory内だけで使用します。Post-deploy full journeyだけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。失敗またはcleanup未確認では後続の変更処理へ進みません。Migration失敗時もWrangler deployへ進みません。`Deploy Staging`はrun attempt 1だけを許可し、child開始前の失敗でもworkflow rerunではなく、原因と前attemptを確認して新しいmanual dispatchを作成します。Recovery modeはApplication authorization boundaryであり、stable初回rolloutのpartial resumeやsmoke bypassには使いません。
 
 Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し、CloudflareがDNS recordとcertificateを管理します。同名recordがある場合は所有用途を確認し、不要と確認できたrecordだけをDashboardから除去します。`workers.dev`とpreview URLは無効のまま維持します。
 
@@ -244,11 +259,17 @@ Release前に次を満たします。
 
 Rolloutと確認は次の順で行います。
 
-1. 同一candidateのCI / release gateを通し、dual-validationを含むApplicationをdeployする。Cloudflareのdeploy成功はrollout開始であり、旧image drain完了の証拠として扱わない。
+1. 同一candidateのCI / release gateを通す。Deploy前に同じpublic Sessionでtokenを二度取得し、同一Userのtokenが変化するlegacy baselineだけを受理する。Stable同値、identity変更、形式不正、取得失敗ではmigration / deployを開始しない。Dual-validationを含むApplicationのCloudflare deploy成功はrollout開始であり、旧image drain完了の証拠として扱わない。
 2. Mixed-version中は旧Backendがlegacy random verifierを再保存し、新Backendがstable verifierへ収束させ得る。旧Backend自身はderived stable validationを知らないため、一時的な`403 CSRF_INVALID`をavailability上のdegraded behaviorとして受容するが、Origin、CSRF、Expected User、Session guardを緩和しない。
-3. Cloudflare deployment / Containerのversion・rollout evidenceで旧imageがtraffic対象から外れたことを確認し、drainしたimage version、確認時刻、確認者をaccess-controlled release recordへ残す。Evidenceを得られない場合はdrain完了とみなさない。
+3. [`design.md` §41.5](design.md#415-csrf--session)のauthoritative drain条件を、Deploy前後のWorker deployment / version / tagとContainer application / rollout / instanceのbounded API取得で確認する。各観測の前後でactive stateが変わらないことも照合する。旧Worker version、旧Container image digest、candidate version / digest、rollout、確認時刻、確認者だけをaccess-controlled drain-pending recordへ残し、API取得不能またはtimeoutでは停止する。
 4. Drain後、同一Browser Contextの二tabで同時`GET /session`が同じtokenへ収束すること、片方をreloadした後も両tabのcommand / autosaveが成功することを確認する。CSRF token、Session ID、Response bodyを記録へ残さない。
-5. Invalid token / Origin、revoke / expiry、Google Session切替、Account Delete、advisory欠落のsmokeが既存security / identity contractへ収束することを確認する。想定外の拒否が続く場合は新規deployを止め、security guardを迂回せず[Application rollback](#application)またはreviewed forward fixを選ぶ。
+5. Live smokeではconvergence後のlegacy token、invalid token / Origin、Account Delete後の旧Session、advisory欠落時のauthoritative recoveryを確認する。Expiry / revoke race、旧 / 新Application・旧 / 新key matrix、Google fake / Session rotationはartifactに記録するexact-main CI runの証跡へ対応付け、Google live provider確認が必要な場合は非個人test identityによる別のmanual checkpointとする。Drain-pending recordとは別に、同じCI run / Deploy run ID / attempt / commitへbindingした`smoke_passed` markerをlive smoke完了後だけ作成し、両方がある場合だけ初回live smoke成功とする。想定外の拒否が続く場合は新規deployを止め、security guardを迂回せず[Application rollback](#application)またはreviewed forward fixを選ぶ。
+
+このone-time harnessでstable rollout childを開始した後の失敗、cancel、timeoutは、checkpointの有無にかかわらずmutation unknownとして扱い、同じDeploy jobを単純rerunしません。新規Deployを停止し、safe metadata artifactを保全してauthoritative Worker / Container stateを確認します。Exact baselineへ戻せるschema-compatible rollbackは個別のlive承認後にold-version drainまで確認し、それ以外はreviewed forward fixを選びます。Migration down、pepper変更、legacy smoke waiver、自動rollbackは行いません。Drain済みでも`smoke_passed` markerがなければ初回rollout受入は未完了です。
+
+Workflow artifactは90日保持の一時checkpointであり、180日後のlegacy verifier削除判断の正本にはしません。Actual live rolloutでは、drain-pending recordと`smoke_passed` markerのsafe metadataを失効前に承認済みのaccess-controlledな長期release recordへ保全します。対応する長期記録がなければdrain時刻を推測せず、legacy verifier削除を解禁しません。
+
+初回rollout成功後、このharnessはstable baselineをlegacy未確認として意図的に停止します。次のlive Deploy前に、#139の`smoke_passed` artifact / runを根拠としてsteady-state gateへ置換する別Issue / Pull Requestを完了します。Runtime inputやRecovery modeでone-time gateをskipしません。
 
 現在のStagingは`max_instances: 1`の固定singletonでも旧imageから新版へ切り替わる一回の失効があり得ます。将来`max_instances > 1`へ変更する前に、dual-validationだけを全instanceへ先行配備してdrainを確認し、その後のstable issuanceを二段階release / issuance flagとして別Issue / Decision gateで仕様化します。単一DB列を旧版と新版が交互に上書きする状態を互換保証として扱いません。
 
@@ -311,7 +332,7 @@ OTLP failureでは固定error classと集約`failure_count`だけを確認し、
 
 失敗annotationはclosed enumの`phase` / `reason`とGitHub run ID / attempt / commit SHAだけを記録します。`phase`は`configuration`、`browser_launch`、`health`、`readiness`、`bootstrap_seed`、`entry`、`session_discovery`、`goal_creation`、`cycle_editing`、`cycle_completion`、`review_transition`、`history_verification`、`account_delete`、`cleanup_verification`のいずれかです。`reason`は`entry_cta_timeout`、`anonymous_session_not_observed`、`unexpected_status`、`session_discovery_failed`、`account_delete_failed`、`cleanup_unverified`のいずれかです。任意の例外message、URL query / fragment、token / cookie、account ID、email、本文、response body、screenshot、trace、video、profile、storage stateを記録しません。
 
-1. `ANONYMOUS_BOOTSTRAP_TTL_MINUTES`内に同じfailed jobをrerunする。同じrun / commit / modeで未削除accountをresumeし、既に削除済みなら新しい検証accountを作成して同じ公開delete経路へ収束させる。
+1. Stable rollout child開始前のpre-switch baseline失敗は、`ANONYMOUS_BOOTSTRAP_TTL_MINUTES`内でもworkflow rerunせず、cleanup状況と前attemptを確認して新しいmanual dispatchを作成する。Child開始後またはpost-deploy journeyの失敗では新しいdispatchも開始せず、[stable CSRF release手順](#session-bound-stable-csrf-v1-release)のmutation unknown処理に従う。
 2. Workers Logsではroute template、status、固定error class / code、request / trace IDだけを確認し、annotationへ相関用の識別子を追加しない。
 3. TTL内でも失敗する場合は新規deployを止め、schema互換なら直前Wrangler deploymentへのrollback、非互換ならforward fixを選ぶ。Migrationをdownせず、SQL手動DELETE / UPDATE、Raw DB correction、別の管理削除経路を作らない。
 
