@@ -62,7 +62,7 @@ const session: Session = {
     googleConnected: false,
     googleEmail: null,
   },
-  csrfToken: "csrf-token",
+  csrfToken: "A".repeat(43),
 };
 
 const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);

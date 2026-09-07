@@ -43,7 +43,7 @@ describe("account API", () => {
             googleConnected: true,
             googleEmail: "person@example.test",
           },
-          csrfToken: "next-csrf",
+          csrfToken: "Q".repeat(43),
         },
         {
           headers: { "X-Fukamu-Authenticated-User-ID": sourceUserId },

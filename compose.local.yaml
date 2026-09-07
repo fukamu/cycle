@@ -7,7 +7,7 @@ x-runtime-environment: &runtime-environment
   STATIC_DIR: /app/static
   DATABASE_URL: postgres://fukamu_cycle:fukamu_cycle@postgres:5432/fukamu_cycle_local?sslmode=disable
   SESSION_TOKEN_PEPPER: local-only-session-token-pepper
-  CSRF_TOKEN_PEPPER: local-only-csrf-token-pepper
+  CSRF_TOKEN_PEPPER: local-only-csrf-token-pepper-1234
   BOOTSTRAP_ID_PEPPER: local-only-bootstrap-id-pepper
   RATE_LIMIT_HMAC_SECRET: local-only-rate-limit-hmac-secret
   CURSOR_SIGNING_SECRET: local-only-cursor-signing-secret

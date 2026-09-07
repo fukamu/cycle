@@ -11,6 +11,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const convergeSessionCSRF = `-- name: ConvergeSessionCSRF :execrows
+UPDATE sessions
+SET csrf_token_hash = $2
+WHERE id = $1
+  AND revoked_at IS NULL
+  AND idle_expires_at > $3
+  AND absolute_expires_at > $3
+`
+
+type ConvergeSessionCSRFParams struct {
+	ID            pgtype.UUID
+	CsrfTokenHash []byte
+	IdleExpiresAt pgtype.Timestamptz
+}
+
+func (q *Queries) ConvergeSessionCSRF(ctx context.Context, arg ConvergeSessionCSRFParams) (int64, error) {
+	result, err := q.db.Exec(ctx, convergeSessionCSRF, arg.ID, arg.CsrfTokenHash, arg.IdleExpiresAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteAnonymousBootstrapByKeyHash = `-- name: DeleteAnonymousBootstrapByKeyHash :exec
 DELETE FROM anonymous_bootstraps
 WHERE key_hash = $1
@@ -261,29 +284,6 @@ type RevokeSessionParams struct {
 
 func (q *Queries) RevokeSession(ctx context.Context, arg RevokeSessionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeSession, arg.Now, arg.SessionID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const rotateSessionCSRF = `-- name: RotateSessionCSRF :execrows
-UPDATE sessions
-SET csrf_token_hash = $2
-WHERE id = $1
-  AND revoked_at IS NULL
-  AND idle_expires_at > $3
-  AND absolute_expires_at > $3
-`
-
-type RotateSessionCSRFParams struct {
-	ID            pgtype.UUID
-	CsrfTokenHash []byte
-	IdleExpiresAt pgtype.Timestamptz
-}
-
-func (q *Queries) RotateSessionCSRF(ctx context.Context, arg RotateSessionCSRFParams) (int64, error) {
-	result, err := q.db.Exec(ctx, rotateSessionCSRF, arg.ID, arg.CsrfTokenHash, arg.IdleExpiresAt)
 	if err != nil {
 		return 0, err
 	}

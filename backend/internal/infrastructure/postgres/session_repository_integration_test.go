@@ -5,15 +5,50 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
+	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
+
+type sessionCSRFConvergeContextKey struct{}
+
+type sessionCSRFConvergeTracer struct {
+	started chan uint32
+}
+
+func newSessionCSRFConvergeTracer() *sessionCSRFConvergeTracer {
+	return &sessionCSRFConvergeTracer{started: make(chan uint32, 1)}
+}
+
+func (tracer *sessionCSRFConvergeTracer) TraceQueryStart(
+	ctx context.Context,
+	connection *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if ctx.Value(sessionCSRFConvergeContextKey{}) == true && isSessionCSRFConvergeQuery(data.SQL) {
+		tracer.started <- connection.PgConn().PID()
+	}
+	return ctx
+}
+
+func (*sessionCSRFConvergeTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func isSessionCSRFConvergeQuery(sql string) bool {
+	normalized := normalizeObservedSQL(sql)
+	return strings.HasPrefix(normalized, "update sessions set csrf_token_hash=") &&
+		strings.Contains(normalized, "revoked_at is null") &&
+		strings.Contains(normalized, "idle_expires_at>") &&
+		strings.Contains(normalized, "absolute_expires_at>")
+}
 
 func TestSessionRepositoryFindByTokenHashEnforcesValidity(t *testing.T) {
 	pool := integrationPool(t)
@@ -194,7 +229,7 @@ VALUES($1,$2,'google',$3,$4,$5,$6)`, test.identityID, test.userID, test.subject,
 	}
 }
 
-func TestSessionRepositoryRotateCSRFRequiresExactlyOneActiveSession(t *testing.T) {
+func TestSessionRepositoryConvergeCSRFIsIdempotentForExactlyOneActiveSession(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	now := integrationNow()
@@ -237,22 +272,166 @@ func TestSessionRepositoryRotateCSRFRequiresExactlyOneActiveSession(t *testing.T
 
 	newHash := []byte("rotate-active-new-csrf")
 	repository := NewSessionRepository(pool)
-	if err := repository.RotateCSRF(context.Background(), active.id, newHash, now); err != nil {
+	if err := repository.ConvergeCSRF(context.Background(), active.id, newHash, now); err != nil {
 		t.Fatal(err)
 	}
 	assertSessionRepositoryCSRFHash(t, pool, active.id, newHash)
 	assertSessionRepositoryCSRFHash(t, pool, control.id, control.csrfHash)
+	if err := repository.ConvergeCSRF(context.Background(), active.id, newHash, now); err != nil {
+		t.Fatalf("idempotent convergence error = %v", err)
+	}
+	assertSessionRepositoryCSRFHash(t, pool, active.id, newHash)
 
 	for _, fixture := range invalid {
-		err := repository.RotateCSRF(context.Background(), fixture.id, []byte("must-not-be-written"), now)
+		err := repository.ConvergeCSRF(context.Background(), fixture.id, []byte("must-not-be-written"), now)
 		if !errors.Is(err, appsession.ErrSessionExpired) {
-			t.Fatalf("RotateCSRF(%s) error = %v, want %v", fixture.id, err, appsession.ErrSessionExpired)
+			t.Fatalf("ConvergeCSRF(%s) error = %v, want %v", fixture.id, err, appsession.ErrSessionExpired)
 		}
 		assertSessionRepositoryCSRFHash(t, pool, fixture.id, fixture.csrfHash)
 	}
 	missingID := "20000000-0000-7000-8000-000000000026"
-	if err := repository.RotateCSRF(context.Background(), missingID, []byte("missing"), now); !errors.Is(err, appsession.ErrSessionExpired) {
-		t.Fatalf("RotateCSRF(missing) error = %v, want %v", err, appsession.ErrSessionExpired)
+	if err := repository.ConvergeCSRF(context.Background(), missingID, []byte("missing"), now); !errors.Is(err, appsession.ErrSessionExpired) {
+		t.Fatalf("ConvergeCSRF(missing) error = %v, want %v", err, appsession.ErrSessionExpired)
+	}
+}
+
+func TestSessionRepositoryConvergeCSRFRechecksInvalidationAfterRowLockWait(t *testing.T) {
+	pool := integrationPool(t)
+	now := integrationNow()
+	const (
+		userID    = "10000000-0000-7000-8000-000000000027"
+		sessionID = "20000000-0000-7000-8000-000000000027"
+	)
+	type invalidation uint8
+	const (
+		invalidateByRevoke invalidation = iota + 1
+		invalidateByIdleExpiry
+		invalidateByAbsoluteExpiry
+	)
+	for _, test := range []struct {
+		name         string
+		invalidation invalidation
+	}{
+		{name: "revoke", invalidation: invalidateByRevoke},
+		{name: "idle expiry", invalidation: invalidateByIdleExpiry},
+		{name: "absolute expiry", invalidation: invalidateByAbsoluteExpiry},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resetDatabase(t, pool)
+			originalVerifier := bytes.Repeat([]byte{0x11}, 32)
+			proposedVerifier := bytes.Repeat([]byte{0x22}, 32)
+			insertSessionRepositoryUser(t, pool, userID, now)
+			insertSessionRepositorySession(t, pool, sessionRepositoryFixture{
+				id: sessionID, userID: userID,
+				tokenHash: []byte("converge-invalidation-race-token"), csrfHash: originalVerifier,
+				lastSeenAt: now, idleExpiresAt: now.Add(time.Hour), absoluteExpiresAt: now.Add(24 * time.Hour),
+			})
+
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			blocker, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = blocker.Rollback(context.Background()) }()
+			var ignored string
+			if err = blocker.QueryRow(ctx, `SELECT id::text FROM sessions WHERE id=$1 FOR UPDATE`, sessionID).Scan(&ignored); err != nil {
+				t.Fatal(err)
+			}
+			blockerPID := blocker.Conn().PgConn().PID()
+
+			tracer := newSessionCSRFConvergeTracer()
+			tracedPool := newSessionActivityTracedPool(t, pool, tracer)
+			convergeCalls := make(chan error, 1)
+			convergeCtx := context.WithValue(ctx, sessionCSRFConvergeContextKey{}, true)
+			go func() {
+				convergeCalls <- NewSessionRepository(tracedPool).ConvergeCSRF(
+					convergeCtx,
+					sessionID,
+					proposedVerifier,
+					now,
+				)
+			}()
+			var convergePID uint32
+			select {
+			case convergePID = <-tracer.started:
+			case callErr := <-convergeCalls:
+				t.Fatalf("ConvergeCSRF returned before issuing its UPDATE: %v", callErr)
+			case <-ctx.Done():
+				t.Fatalf("ConvergeCSRF did not issue its UPDATE: %v", ctx.Err())
+			}
+			if err = waitForBlockedBackend(ctx, pool, convergePID, blockerPID); err != nil {
+				t.Fatalf("ConvergeCSRF backend did not wait for the Session row lock: %v", err)
+			}
+
+			var invalidatedRows int64
+			switch test.invalidation {
+			case invalidateByRevoke:
+				invalidatedRows, err = db.New(blocker).RevokeSession(ctx, db.RevokeSessionParams{
+					SessionID: mustUUID(sessionID),
+					Now:       timestamptz(now.Add(time.Minute)),
+				})
+			case invalidateByIdleExpiry:
+				var tag pgconn.CommandTag
+				tag, err = blocker.Exec(ctx, `UPDATE sessions SET idle_expires_at=$2 WHERE id=$1`, sessionID, now)
+				invalidatedRows = tag.RowsAffected()
+			case invalidateByAbsoluteExpiry:
+				var tag pgconn.CommandTag
+				tag, err = blocker.Exec(ctx, `UPDATE sessions SET absolute_expires_at=$2 WHERE id=$1`, sessionID, now)
+				invalidatedRows = tag.RowsAffected()
+			default:
+				t.Fatal("unknown invalidation case")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if invalidatedRows != 1 {
+				t.Fatalf("invalidation rows = %d, want 1", invalidatedRows)
+			}
+			if err = blocker.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case callErr := <-convergeCalls:
+				if !errors.Is(callErr, appsession.ErrSessionExpired) {
+					t.Fatalf("ConvergeCSRF error = %v, want %v", callErr, appsession.ErrSessionExpired)
+				}
+			case <-ctx.Done():
+				t.Fatalf("ConvergeCSRF did not finish after invalidation commit: %v", ctx.Err())
+			}
+
+			var (
+				gotVerifier       []byte
+				idleExpiresAt     time.Time
+				absoluteExpiresAt time.Time
+				revokedAt         pgtype.Timestamptz
+			)
+			if err = pool.QueryRow(ctx, `SELECT csrf_token_hash,idle_expires_at,absolute_expires_at,revoked_at FROM sessions WHERE id=$1`, sessionID).Scan(
+				&gotVerifier,
+				&idleExpiresAt,
+				&absoluteExpiresAt,
+				&revokedAt,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotVerifier, originalVerifier) {
+				t.Fatal("CSRF verifier changed after concurrent Session invalidation")
+			}
+			switch test.invalidation {
+			case invalidateByRevoke:
+				if !revokedAt.Valid || !revokedAt.Time.Equal(now.Add(time.Minute)) {
+					t.Fatal("Session revoke did not commit")
+				}
+			case invalidateByIdleExpiry:
+				if !idleExpiresAt.Equal(now) || revokedAt.Valid {
+					t.Fatal("Session idle expiry did not commit independently")
+				}
+			case invalidateByAbsoluteExpiry:
+				if !absoluteExpiresAt.Equal(now) || revokedAt.Valid {
+					t.Fatal("Session absolute expiry did not commit independently")
+				}
+			}
+		})
 	}
 }
 

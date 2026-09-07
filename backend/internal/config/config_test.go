@@ -35,6 +35,60 @@ func TestLoadDevelopmentConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresCSRFPepperOfAtLeast32Bytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		pepper  string
+		wantErr bool
+	}{
+		{name: "31 bytes", pepper: "1234567890123456789012345678901", wantErr: true},
+		{name: "exactly 32 bytes", pepper: "12345678901234567890123456789012"},
+		{name: "more than 32 bytes", pepper: "123456789012345678901234567890123"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			environment := validEnvironment()
+			environment["CSRF_TOKEN_PEPPER"] = test.pepper
+			_, err := Load(mapLookup(environment))
+			if test.wantErr && (err == nil || !strings.Contains(err.Error(), "CSRF_TOKEN_PEPPER must be at least 32 bytes")) {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadCapsSessionAbsoluteTTLAt180Days(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		days    string
+		wantErr bool
+	}{
+		{name: "exact boundary", days: "180"},
+		{name: "above boundary", days: "181", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			environment := validEnvironment()
+			environment["SESSION_ABSOLUTE_DAYS"] = test.days
+			_, err := Load(mapLookup(environment))
+			if test.wantErr && (err == nil || !strings.Contains(err.Error(), "SESSION_ABSOLUTE_DAYS must be at most 180")) {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadRequiresProductionTelemetryConfigurationWithoutExposingHeaders(t *testing.T) {
 	t.Parallel()
 
@@ -298,6 +352,7 @@ func TestLoadRejectsDurationOverflow(t *testing.T) {
 		{name: "seconds", key: "AI_TIMEOUT_SECONDS", value: "18446744074"},
 		{name: "minutes", key: "DB_CONN_MAX_LIFETIME_MINUTES", value: "307445735"},
 		{name: "days", key: "SESSION_IDLE_DAYS", value: "213504"},
+		{name: "absolute days", key: "SESSION_ABSOLUTE_DAYS", value: "213504"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -317,7 +372,7 @@ func validEnvironment() map[string]string {
 		"PUBLIC_ORIGIN":          "http://localhost:5173",
 		"DATABASE_URL":           "postgres://fukamu_cycle:fukamu_cycle@localhost:5432/fukamu_cycle?sslmode=disable",
 		"SESSION_TOKEN_PEPPER":   "123456789012345678901234",
-		"CSRF_TOKEN_PEPPER":      "123456789012345678901234",
+		"CSRF_TOKEN_PEPPER":      "12345678901234567890123456789012",
 		"BOOTSTRAP_ID_PEPPER":    "123456789012345678901234",
 		"RATE_LIMIT_HMAC_SECRET": "123456789012345678901234",
 		"CURSOR_SIGNING_SECRET":  "123456789012345678901234",

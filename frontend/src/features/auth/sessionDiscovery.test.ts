@@ -23,7 +23,7 @@ const anonymousSession = {
     googleConnected: false,
     googleEmail: null,
   },
-  csrfToken: "anonymous-csrf",
+  csrfToken: "A".repeat(43),
 };
 
 describe("anonymous session discovery", () => {

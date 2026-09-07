@@ -73,13 +73,15 @@ const tombstoneDeletedGoalAndClearDraftsMock = vi.mocked(
 );
 
 const requestID = "00000000-0000-7000-8000-000000000001";
+const csrfTokenFixture = (label: string) =>
+  `${label}${"A".repeat(42)}`.slice(0, 42) + "A";
 const session: Session = {
   user: {
     id: "00000000-0000-7000-8000-000000000002",
     googleConnected: false,
     googleEmail: null,
   },
-  csrfToken: "csrf-token",
+  csrfToken: csrfTokenFixture("current"),
 };
 const switchedSession: Session = {
   user: {
@@ -87,7 +89,7 @@ const switchedSession: Session = {
     googleConnected: true,
     googleEmail: "existing@example.com",
   },
-  csrfToken: "switched-csrf-token",
+  csrfToken: csrfTokenFixture("switched"),
 };
 const latestSession: Session = {
   user: {
@@ -95,7 +97,7 @@ const latestSession: Session = {
     googleConnected: true,
     googleEmail: "latest@example.com",
   },
-  csrfToken: "latest-csrf-token",
+  csrfToken: csrfTokenFixture("latest"),
 };
 
 beforeEach(() => {
@@ -448,7 +450,7 @@ describe("SessionProvider identity boundary", () => {
         googleConnected: true,
         googleEmail: "upgraded@example.com",
       },
-      csrfToken: "rotated-csrf-token",
+      csrfToken: csrfTokenFixture("rotated-upgrade"),
     };
 
     renderProvider(
@@ -489,7 +491,7 @@ describe("SessionProvider identity boundary", () => {
         googleConnected: true,
         googleEmail: "upgraded@example.com",
       },
-      csrfToken: "rotated-csrf-token",
+      csrfToken: csrfTokenFixture("rotated-autosave"),
     };
     const lifecycle = vi.fn<AutoSaveQuiesceCallback>();
     const leases: AutoSaveScopeLease[] = [];
@@ -1058,7 +1060,7 @@ describe("SessionProvider runtime recovery", () => {
   it("single-flights CSRF_INVALID commands and refreshes the same user without quiescing or remounting", async () => {
     const refreshedSession: Session = {
       user: session.user,
-      csrfToken: "refreshed-csrf-token",
+      csrfToken: csrfTokenFixture("refreshed-recovery"),
     };
     const lifecycle = vi.fn<AutoSaveQuiesceCallback>();
     const leases: AutoSaveScopeLease[] = [];
@@ -1303,7 +1305,7 @@ describe("SessionProvider runtime recovery", () => {
   it("keeps a dirty editor on CSRF recovery failure until an explicit retry", async () => {
     const refreshedSession: Session = {
       user: session.user,
-      csrfToken: "explicit-retry-csrf-token",
+      csrfToken: csrfTokenFixture("explicit-retry"),
     };
     const lifecycle = vi.fn<AutoSaveQuiesceCallback>();
     let sessionRequests = 0;
@@ -1381,7 +1383,7 @@ describe("SessionProvider runtime recovery", () => {
   it("remounts a fresh autosave lease when retry returns the same user after quiesced bootstrap failure", async () => {
     const refreshedSession: Session = {
       user: session.user,
-      csrfToken: "same-user-after-quiesce",
+      csrfToken: csrfTokenFixture("same-user-after-quiesce"),
     };
     const lifecycle = vi.fn<AutoSaveQuiesceCallback>();
     const leases: AutoSaveScopeLease[] = [];
@@ -1468,7 +1470,7 @@ describe("SessionProvider runtime recovery", () => {
   it("keeps the old session and mounted draft behind a safe retry alert when recovery fails", async () => {
     const refreshedSession: Session = {
       user: session.user,
-      csrfToken: "retry-refreshed-csrf-token",
+      csrfToken: csrfTokenFixture("retry-refreshed"),
     };
     const lifecycle = vi.fn<AutoSaveQuiesceCallback>();
     const client = createClient();
@@ -1826,7 +1828,7 @@ describe("SessionProvider runtime recovery", () => {
   it("registers recovery before mounting children from a preseeded session cache", async () => {
     const refreshedSession: Session = {
       user: session.user,
-      csrfToken: "eager-refreshed-csrf-token",
+      csrfToken: csrfTokenFixture("eager-refreshed"),
     };
     const client = createClient();
     client.setQueryData(["session"], session);
@@ -2898,7 +2900,7 @@ describe("SessionProvider runtime recovery", () => {
   it("treats a same-user advisory as a weak CSRF refresh", async () => {
     const refreshedSession: Session = {
       ...session,
-      csrfToken: "advisory-refreshed-csrf",
+      csrfToken: csrfTokenFixture("advisory-refreshed"),
     };
     const lifecycle = vi.fn<AutoSaveQuiesceCallback>();
     const requestLeases: AuthenticatedRequestLease[] = [];
@@ -3048,7 +3050,10 @@ function OperationLeaseProbe({
           lease === contextLease,
           lease.isCurrent(),
         );
-        return { ...latestSession, csrfToken: "transition-csrf" };
+        return {
+          ...latestSession,
+          csrfToken: csrfTokenFixture("transition"),
+        };
       },
     );
     await runTerminalSessionOperation(
