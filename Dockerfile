@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS backend-build
+FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS backend-build
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN GOENV=off GOTOOLCHAIN=local GOWORK=off GOFLAGS=-mod=readonly go mod download
