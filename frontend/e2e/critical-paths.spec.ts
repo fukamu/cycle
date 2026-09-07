@@ -962,10 +962,10 @@ test("free users can progress two goals while a third start is rejected without 
   await page.goto("/");
   await expect(page.getByText("2 / 2")).toBeVisible();
   await expect(
-    page.getByRole("link", { name: new RegExp(firstGoal) }),
+    page.getByRole("article", { name: new RegExp(firstGoal) }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: new RegExp(secondGoal) }),
+    page.getByRole("article", { name: new RegExp(secondGoal) }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
@@ -1057,6 +1057,53 @@ test("cycle autosave serializes an edit made during a slow save", async ({
   await expect(page.getByText("保存済み")).toBeVisible();
   await page.reload();
   await expect(plan).toHaveValue("保存中に更新した最終内容");
+});
+
+test("Home presents one clear next action for an active Cycle without horizontal overflow", async ({
+  page,
+}) => {
+  const goalText = "長い目標".repeat(20);
+  await page.setViewportSize({ width: 320, height: 844 });
+  await createProgressingGoal(page, goalText);
+  const cyclePath = new URL(page.url()).pathname;
+
+  await page.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
+
+  const card = page.getByRole("article", { name: goalText });
+  await expect(card).toBeVisible();
+  await expect(
+    card.getByRole("heading", { level: 3, name: goalText }),
+  ).toBeVisible();
+  await expect(card.getByText("Cycle 1 実行中")).toBeVisible();
+  await expect(card.getByText("P/D/C/Aの記録を続けましょう。")).toBeVisible();
+  await expect(card.locator("a, button, input, select, textarea")).toHaveCount(
+    1,
+  );
+  const nextAction = card.getByRole("link", { name: "Cycle 1を続ける" });
+  await expect(nextAction).toHaveAttribute("href", cyclePath);
+  expect((await nextAction.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+
+  await nextAction.click();
+  await expect(page).toHaveURL(cyclePath);
 });
 
 test("mobile long content stays in bounds and frame tabs support keyboard navigation", async ({

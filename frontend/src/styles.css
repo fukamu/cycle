@@ -330,19 +330,16 @@ summary:focus-visible {
 .goal-card {
   display: grid;
   gap: 14px;
-  text-decoration: none;
-  transition: border-color 0.16s ease;
+  min-width: 0;
 }
 
-.goal-card:hover {
-  border-color: var(--line-strong);
-}
-
-.goal-card strong {
+.goal-card__goal {
+  margin: 0;
   color: var(--brand-deep);
   font-size: 1.12rem;
   line-height: 1.7;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .goal-card__kicker {
@@ -351,7 +348,32 @@ summary:focus-visible {
   font-weight: var(--font-weight-bold);
 }
 
-.goal-card__meta,
+.goal-card__progress {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.goal-card__status,
+.goal-card__helper {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.goal-card__status {
+  color: var(--brand-dark);
+  font-weight: var(--font-weight-bold);
+}
+
+.goal-card__helper {
+  color: var(--muted);
+}
+
+.goal-card__cta {
+  width: fit-content;
+  max-width: 100%;
+}
+
 .history-row__meta,
 .editor-meta {
   display: flex;

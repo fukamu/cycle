@@ -448,12 +448,15 @@ Homeは`progressingGoals: GoalView[]`をCollectionとして扱う。Freeでは0�
 
 ## 9.2 Goal Card
 
+Goal Cardは`GoalView.currentWork`を使い、現在地、次にすること、既存WorkspaceへのCTAを一続きで表示する。`progressingGoals`の順序を維持し、Card全体は非interactiveな`article`、Card内のinteractive targetはCTA link 1つだけとする。
+
 ```text
 あなたの目標
 平日は主要業務を18時までに終えたい
 
-Cycle 3
-Pを編集中
+Cycle 3 実行中
+P/D/C/Aの記録を続けましょう。
+[Cycle 3を続ける]
 ```
 
 または:
@@ -462,9 +465,14 @@ Pを編集中
 あなたの目標
 平日は主要業務を18時までに終えたい
 
-Goal Review
-前回Cycleを振り返って目標を確認してください
+目標の見直し中
+Cycle 3を振り返り、目標を続けるか決めましょう。
+[目標を見直す]
 ```
+
+- `currentWork.kind=active_cycle`: `Cycle {cycleSequenceNumber} 実行中`、`P/D/C/Aの記録を続けましょう。`、`Cycle {cycleSequenceNumber}を続ける`を表示し、Active Cycle routeへ遷移する。
+- `currentWork.kind=goal_review`: `目標の見直し中`、`Cycle {triggerCycleSequenceNumber}を振り返り、目標を続けるか決めましょう。`、`目標を見直す`を表示し、Goal Review routeへ遷移する。
+- Goal本文はCardのheadingとし、改行を維持しながら長い文字列を折り返す。CTAは44px以上のtouch targetとし、Collection順と同じ安定したfocus順を維持する。320px幅および200% text zoomで横scrollを発生させない。
 
 ## 9.3 Navigation rules
 

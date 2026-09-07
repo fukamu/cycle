@@ -89,7 +89,7 @@ test("Google collision login selects the linked account without merging after re
     await expect(source.locator("code")).toHaveText(targetSession.user.id);
     await source.goto("/");
     await expect(
-      source.getByRole("link", { name: new RegExp(targetGoal) }),
+      source.getByRole("article", { name: new RegExp(targetGoal) }),
     ).toBeVisible();
     await expect(source.getByText(sourceGoal)).toHaveCount(0);
   } finally {
@@ -119,7 +119,7 @@ test("same-tab Google collision login isolates a fresh Home cache without reload
     await createProgressingGoal(source, sourceGoal);
     await source.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
     await expect(
-      source.getByRole("link", { name: new RegExp(sourceGoal) }),
+      source.getByRole("article", { name: new RegExp(sourceGoal) }),
     ).toBeVisible();
     await source.getByRole("button", { name: "メニューを開く" }).click();
     await source.getByRole("link", { name: "設定" }).click();
@@ -158,7 +158,7 @@ test("same-tab Google collision login isolates a fresh Home cache without reload
     await source.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
     await expect(source.getByText(sourceGoal)).toHaveCount(0);
     await expect(
-      source.getByRole("link", { name: new RegExp(targetGoal) }),
+      source.getByRole("article", { name: new RegExp(targetGoal) }),
     ).toBeVisible();
   } finally {
     await targetContext.close();
@@ -188,7 +188,7 @@ test("cross-tab request and response identity binding recovers without exposing 
     await createProgressingGoal(staleTab, sourceGoal);
     await staleTab.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
     await expect(
-      staleTab.getByRole("link", { name: new RegExp(sourceGoal) }),
+      staleTab.getByRole("article", { name: new RegExp(sourceGoal) }),
     ).toBeVisible();
     const sourceSession = await getSession(staleTab);
     expect(await staleTab.evaluate(() => typeof window.BroadcastChannel)).toBe(
