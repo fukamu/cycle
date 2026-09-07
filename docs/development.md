@@ -182,9 +182,11 @@ export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fu
 
 Playwright自身の既定portは55432です。このリポジトリのDocker例は5432なので、上記のように `TEST_DATABASE_URL` を明示してください。E2EではGoogle Identity、Turnstile、OpenAIのtest doubleを使い、外部APIを呼びません。
 
-### Staging post-deploy critical journey
+### Staging pre-switch baseline / post-deploy critical journey
 
-`./scripts/check-staging-critical.sh`は通常のlocal checkではなく、`Deploy Staging`が実際のStaging traffic切替とsmoke testの後にだけ実行します。`STAGING_BASE_URL`と`STAGING_E2E_INVITE_TOKEN`はGitHub `staging` Environmentからstep scopeで渡し、引数にはしません。HarnessはPlaywright test reporterを使わず、trace、screenshot、video、artifactを作らず、debug modeを無効化します。成功・失敗にかかわらず公開account-delete APIで検証accountを削除します。
+`./scripts/check-staging-critical.sh`は通常のlocal checkではなく、`Deploy Staging`が2回実行します。最初の`baseline`は現在配信中のStagingを対象に、migration、Worker secretのmaterialize、Wrangler deployより前にhealth / readiness、anonymous bootstrap、session discovery、公開account-delete、削除後401を確認します。Admissionは`auto`で、現在のUIが`off`ならNew Goalへ直接進み、`closed`なら招待fragmentをmemory上で消費して「利用を開始する」を選択します。2回目の`full`はtraffic切替とsmoke testの後にcandidateのAdmission modeを使い、Goal / Cycle / Review / History journeyと同じcleanup proofまで確認します。
+
+`STAGING_BASE_URL`、`STAGING_CRITICAL_MODE`、`STAGING_ADMISSION_MODE`と、`auto` / `closed`の場合だけ必要な`STAGING_E2E_INVITE_TOKEN`はGitHub `staging` Environmentからstep scopeで渡し、引数にはしません。`off`ではwrapperがInvite TokenをHarnessへ渡しません。HarnessはPlaywright test reporterを使わず、trace、screenshot、video、artifactを作らず、debug modeを無効化します。成功・失敗にかかわらず、検証済みsessionがあれば一時的なcleanup rediscovery失敗時にも公開account-delete APIを試行し、失敗はclosed-enum診断に残します。
 
 Localから日常的に実行せず、Production originやProduction dataへ向けません。障害調査でOperations ownerが直接実行する場合も、承認済みsecret managerから環境へ注入し、shell history、process argument、terminal recordingへRaw Invite Tokenを残さず、[`operations.md`](operations.md#staging-critical-journey-cleanup)のcleanup確認まで完了させます。
 

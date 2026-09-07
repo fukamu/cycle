@@ -5723,17 +5723,18 @@ External OpenAI / Google / Turnstileの実callを通常PR必須testにしない�
 
 ```text
 1. main commitをbuild
-2. staging migrationをdirect DB URLで適用
-3. Worker/Container/assetsをdeploy
-4. /healthz /readyz smoke test
-5. critical E2E
-6. production approval
-7. production migration
-8. production deploy
-9. smoke / metrics確認
+2. CandidateのAdmission modeを現在配信中revisionへ仮定せず、/healthz、/readyz、fresh Browser Context、Admission off / closedを自動判定するentry、Turnstile anonymous bootstrap、session discovery、公開account delete、削除後session 401のpre-switch baselineを実行
+3. staging migrationをdirect DB URLで適用
+4. Worker/Container/assetsをdeploy
+5. /healthz /readyz smoke test
+6. Goal / Cycle / Review / Historyを含むpost-deploy critical E2Eと公開account cleanupを実行
+7. production approval
+8. production migration
+9. production deploy
+10. smoke / metrics確認
 ```
 
-Migration失敗時はApplication deployを行わない。Backward-incompatible変更はExpand / Contractを使い、同一Deployで直前Application versionとの互換性を即座に破壊しない。
+Pre-switch baselineまたはそのcleanup proofが失敗した場合はmigration、secret materialization、Application deployへ進まない。Migration失敗時はApplication deployを行わない。Backward-incompatible変更はExpand / Contractを使い、同一Deployで直前Application versionとの互換性を即座に破壊しない。
 
 ## 44.5 Health endpoints
 

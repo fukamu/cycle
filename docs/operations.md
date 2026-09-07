@@ -184,6 +184,7 @@ saved plan integrity / exact main SHA check
 -> terraform apply
 -> staging Chromium install
 -> frontend build
+-> 現在配信中Stagingのpre-switch baseline + 公開account cleanup
 -> Neon direct URLでmigration
 -> ephemeral secrets file作成
 -> Wrangler deploy Worker + Container + assets
@@ -193,7 +194,7 @@ saved plan integrity / exact main SHA check
 -> 公開account-delete APIでaccount cleanup
 ```
 
-Migration失敗時はWrangler deployへ進みません。Input不足でDeployだけ停止した場合は承認値を修正し、同じrunのfailed jobをrerunできます。`workflow_dispatch`はcurrent main HEADのApplication復旧用であり、Terraform変更を迂回する経路ではありません。
+Pre-switch baselineはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへfresh Browser Contextで`/healthz`、`/readyz`、Admission off / closedのentry、Turnstile anonymous bootstrap、session discovery、公開account delete、削除後session 401を確認します。Candidateの`BETA_ADMISSION_MODE`を現在配信中revisionへ適用せず`auto`でentryし、現在がclosedでcandidateがoffへ変わる場合も非個人Inviteをprocess memory内だけで使用します。Post-deploy full journeyだけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。失敗またはcleanup未確認では後続の変更処理へ進みません。Migration失敗時もWrangler deployへ進みません。Input不足でDeployだけ停止した場合は承認値を修正し、同じrunのfailed jobをrerunできます。`workflow_dispatch`はcurrent main HEADのApplication復旧用であり、Terraform変更を迂回する経路ではありません。
 
 Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し、CloudflareがDNS recordとcertificateを管理します。同名recordがある場合は所有用途を確認し、不要と確認できたrecordだけをDashboardから除去します。`workers.dev`とpreview URLは無効のまま維持します。
 
@@ -306,12 +307,12 @@ OTLP failureでは固定error classと集約`failure_count`だけを確認し、
 
 ## Staging critical journey cleanup
 
-`Deploy Staging`はrepository / run ID / commitから同一runで安定するUUIDv7 bootstrap IDを作り、Raw IDを表示しません。Browserを閉じてsessionを更新し、CSRF、expected-user binding、`{"confirmed":true}`を使う公開`DELETE /api/v1/account`だけでcleanupします。204とresponse identityを確認するまで1、2、4、8、16秒backoffで再試行し、最後に`GET /api/v1/session`が401であることを確認します。
+`Deploy Staging`のpre-switch baselineとpost-deploy full journeyは、それぞれrepository / run ID / commit / modeから同一runで安定する別のUUIDv7 bootstrap IDを作り、Raw IDを表示しません。各検証でBrowserを閉じてsessionを更新し、CSRF、expected-user binding、`{"confirmed":true}`を使う公開`DELETE /api/v1/account`だけでcleanupします。204とresponse identityを確認するまで1、2、4、8、16秒backoffで再試行し、最後に`GET /api/v1/session`が401であることを確認します。
 
-Cleanupが収束しない場合、workflowは失敗し、`sha256:<64 lowercase hex>`のaccount correlationだけをannotationへ記録します。Raw account ID、session / CSRF、Invite Token、本文、response body、screenshot、trace、videoを記録しません。
+失敗annotationはclosed enumの`phase` / `reason`とGitHub run ID / attempt / commit SHAだけを記録します。`phase`は`configuration`、`browser_launch`、`health`、`readiness`、`bootstrap_seed`、`entry`、`session_discovery`、`goal_creation`、`cycle_editing`、`cycle_completion`、`review_transition`、`history_verification`、`account_delete`、`cleanup_verification`のいずれかです。`reason`は`entry_cta_timeout`、`anonymous_session_not_observed`、`unexpected_status`、`session_discovery_failed`、`account_delete_failed`、`cleanup_unverified`のいずれかです。任意の例外message、URL query / fragment、token / cookie、account ID、email、本文、response body、screenshot、trace、video、profile、storage stateを記録しません。
 
-1. `ANONYMOUS_BOOTSTRAP_TTL_MINUTES`内に同じfailed jobをrerunする。同じrun / commitで未削除accountをresumeし、既に削除済みなら新しい検証accountを作成して同じ公開delete経路へ収束させる。
-2. Workers Logsではroute template、status、固定error class / code、request / trace IDだけを確認し、hashed correlationからRaw IDを復元しない。
+1. `ANONYMOUS_BOOTSTRAP_TTL_MINUTES`内に同じfailed jobをrerunする。同じrun / commit / modeで未削除accountをresumeし、既に削除済みなら新しい検証accountを作成して同じ公開delete経路へ収束させる。
+2. Workers Logsではroute template、status、固定error class / code、request / trace IDだけを確認し、annotationへ相関用の識別子を追加しない。
 3. TTL内でも失敗する場合は新規deployを止め、schema互換なら直前Wrangler deploymentへのrollback、非互換ならforward fixを選ぶ。Migrationをdownせず、SQL手動DELETE / UPDATE、Raw DB correction、別の管理削除経路を作らない。
 
 ## Cloud troubleshooting

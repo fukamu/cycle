@@ -331,6 +331,7 @@ test("deployment contract is the exact repository handoff classification", () =>
       "name: Install staging Chromium",
       "name: Build static frontend",
       "name: Validate Backend runtime configuration",
+      "name: Verify current Staging baseline before migration",
       "name: Re-verify deployment commit is still main HEAD",
       "name: Apply database migrations",
       "name: Re-verify deployment commit after migrations",
@@ -338,7 +339,7 @@ test("deployment contract is the exact repository handoff classification", () =>
       "name: Deploy Worker, static assets, and Container",
       "name: Remove ephemeral Worker secrets file",
       "name: Smoke test",
-      "name: Run staging critical journey",
+      "name: Run post-deploy staging critical journey",
     ],
     "deployment step inventory",
   );
@@ -857,31 +858,74 @@ test("deployment contract is the exact repository handoff classification", () =>
     ].join("\n"),
     "deployment smoke test step",
   );
-  const stagingCriticalStep = extractStep(
+  const stagingBaselineStep = extractStep(
     workflow,
-    "Run staging critical journey",
+    "Verify current Staging baseline before migration",
   );
   assertStepExecutionControls(
-    stagingCriticalStep,
-    "deployment staging critical journey",
+    stagingBaselineStep,
+    "deployment pre-switch staging baseline",
     "bash",
   );
   assert.equal(
-    stagingCriticalStep.trimEnd(),
+    stagingBaselineStep.trimEnd(),
     [
-      "      - name: Run staging critical journey",
+      "      - name: Verify current Staging baseline before migration",
       "        shell: bash",
       "        env:",
       "          STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}",
+      "          STAGING_CRITICAL_MODE: baseline",
+      "          STAGING_ADMISSION_MODE: auto",
       "          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}",
       "        run: bash ./scripts/check-staging-critical.sh",
     ].join("\n"),
-    "deployment staging critical journey step",
+    "deployment pre-switch staging baseline step",
   );
-  assert.deepEqual(stepEnvironmentMappings(stagingCriticalStep), {
+  assert.deepEqual(stepEnvironmentMappings(stagingBaselineStep), {
     STAGING_BASE_URL: {
       kind: "environment",
       value: "PUBLIC_ORIGIN",
+    },
+    STAGING_CRITICAL_MODE: { kind: "literal", value: "baseline" },
+    STAGING_ADMISSION_MODE: { kind: "literal", value: "auto" },
+    STAGING_E2E_INVITE_TOKEN: {
+      kind: "secret",
+      value: "STAGING_E2E_INVITE_TOKEN",
+    },
+  });
+
+  const postDeployStagingCriticalStep = extractStep(
+    workflow,
+    "Run post-deploy staging critical journey",
+  );
+  assertStepExecutionControls(
+    postDeployStagingCriticalStep,
+    "deployment post-deploy staging critical journey",
+    "bash",
+  );
+  assert.equal(
+    postDeployStagingCriticalStep.trimEnd(),
+    [
+      "      - name: Run post-deploy staging critical journey",
+      "        shell: bash",
+      "        env:",
+      "          STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}",
+      "          STAGING_CRITICAL_MODE: full",
+      "          STAGING_ADMISSION_MODE: ${{ env.BETA_ADMISSION_MODE }}",
+      "          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}",
+      "        run: bash ./scripts/check-staging-critical.sh",
+    ].join("\n"),
+    "deployment post-deploy staging critical journey step",
+  );
+  assert.deepEqual(stepEnvironmentMappings(postDeployStagingCriticalStep), {
+    STAGING_BASE_URL: {
+      kind: "environment",
+      value: "PUBLIC_ORIGIN",
+    },
+    STAGING_CRITICAL_MODE: { kind: "literal", value: "full" },
+    STAGING_ADMISSION_MODE: {
+      kind: "environment",
+      value: "BETA_ADMISSION_MODE",
     },
     STAGING_E2E_INVITE_TOKEN: {
       kind: "secret",
@@ -1206,6 +1250,9 @@ test("deployment contract is the exact repository handoff classification", () =>
   const backendValidationPosition = workflow.indexOf(
     "      - name: Validate Backend runtime configuration\n",
   );
+  const stagingBaselinePosition = workflow.indexOf(
+    "      - name: Verify current Staging baseline before migration\n",
+  );
   const preMigrationMainIdentityPosition = workflow.indexOf(
     "      - name: Re-verify deployment commit is still main HEAD\n",
   );
@@ -1222,19 +1269,20 @@ test("deployment contract is the exact repository handoff classification", () =>
     "      - name: Deploy Worker, static assets, and Container\n",
   );
   const smokeTestPosition = workflow.indexOf("      - name: Smoke test\n");
-  const stagingCriticalPosition = workflow.indexOf(
-    "      - name: Run staging critical journey\n",
+  const postDeployStagingCriticalPosition = workflow.indexOf(
+    "      - name: Run post-deploy staging critical journey\n",
   );
   assert.ok(
     browserInstallPosition < frontendBuildPosition &&
-      backendValidationPosition < preMigrationMainIdentityPosition &&
+      backendValidationPosition < stagingBaselinePosition &&
+      stagingBaselinePosition < preMigrationMainIdentityPosition &&
       preMigrationMainIdentityPosition < migrationPosition &&
       migrationPosition < postMigrationMainIdentityPosition &&
       postMigrationMainIdentityPosition < secretFilePosition &&
       secretFilePosition < deploymentPosition &&
       deploymentPosition < smokeTestPosition &&
-      smokeTestPosition < stagingCriticalPosition,
-    "browser install, runtime validation, migration, traffic switch, smoke, and staging critical journey order",
+      smokeTestPosition < postDeployStagingCriticalPosition,
+    "browser install, runtime validation, pre-switch baseline, migration, traffic switch, smoke, and post-deploy staging critical journey order",
   );
 
   const expectedStepSecretSources = [
@@ -1243,6 +1291,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     "NEON_MIGRATION_DATABASE_URL",
     ...Object.values(workerSecretSources),
     ...Object.values(cloudflareDeploySecretSources),
+    "STAGING_E2E_INVITE_TOKEN",
     "STAGING_E2E_INVITE_TOKEN",
   ].sort();
   assert.deepEqual(

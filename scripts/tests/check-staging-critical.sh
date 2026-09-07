@@ -31,13 +31,19 @@ set -Eeuo pipefail
 [[ "$#" == "1" ]]
 [[ "$1" == "${EXPECTED_HARNESS_PATH}" ]]
 [[ "${STAGING_BASE_URL}" == "https://cycle.staging.fukamu.matoruru.com" ]]
-[[ "${STAGING_E2E_INVITE_TOKEN}" =~ ^fukamu_cycle_beta_[A-Za-z0-9_-]{43}$ ]]
+[[ "${STAGING_CRITICAL_MODE}" == "baseline" || "${STAGING_CRITICAL_MODE}" == "full" ]]
+[[ "${STAGING_ADMISSION_MODE}" == "auto" || "${STAGING_ADMISSION_MODE}" == "off" || "${STAGING_ADMISSION_MODE}" == "closed" ]]
+if [[ "${STAGING_ADMISSION_MODE}" != "off" ]]; then
+  [[ "${STAGING_E2E_INVITE_TOKEN}" =~ ^fukamu_cycle_beta_[A-Za-z0-9_-]{43}$ ]]
+else
+  [[ -z "${STAGING_E2E_INVITE_TOKEN+x}" ]]
+fi
 [[ -z "${DEBUG+x}" ]]
 [[ -z "${NODE_DEBUG+x}" ]]
 [[ -z "${NODE_OPTIONS+x}" ]]
 [[ -z "${PWDEBUG+x}" ]]
 printf 'node %s\n' "$1" >"${TEST_COMMAND_LOG}"
-printf 'token_length=%s\n' "${#STAGING_E2E_INVITE_TOKEN}" >>"${TEST_COMMAND_LOG}"
+printf 'mode=%s admission=%s\n' "${STAGING_CRITICAL_MODE}" "${STAGING_ADMISSION_MODE}" >>"${TEST_COMMAND_LOG}"
 EOF
 chmod +x -- "${bin}/node"
 
@@ -51,13 +57,15 @@ env \
   NODE_OPTIONS="--trace-warnings" \
   PWDEBUG="console" \
   STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="full" \
+  STAGING_ADMISSION_MODE="closed" \
   STAGING_E2E_INVITE_TOKEN="${token}" \
   bash "${repo_root}/scripts/check-staging-critical.sh" >"${output}" 2>&1
 
 expected="$(
   printf '%s\n' \
     "node ${repo_root}/frontend/e2e/staging-critical.mjs" \
-    "token_length=61"
+    "mode=full admission=closed"
 )"
 [[ "$(cat "${log}")" == "${expected}" ]] || fail "staging wrapper did not invoke the exact harness command"
 if grep -Fq -- "${token}" "${output}" || grep -Fq -- "${token}" "${log}"; then
@@ -66,21 +74,59 @@ fi
 
 assert_failure "staging wrapper with arguments" \
   env STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="full" STAGING_ADMISSION_MODE="closed" \
   STAGING_E2E_INVITE_TOKEN="${token}" \
   bash "${repo_root}/scripts/check-staging-critical.sh" unexpected
 assert_failure "staging wrapper without base URL" \
-  env -u STAGING_BASE_URL STAGING_E2E_INVITE_TOKEN="${token}" \
+  env -u STAGING_BASE_URL STAGING_CRITICAL_MODE="full" STAGING_ADMISSION_MODE="closed" STAGING_E2E_INVITE_TOKEN="${token}" \
   bash "${repo_root}/scripts/check-staging-critical.sh"
 assert_failure "staging wrapper with blank base URL" \
-  env STAGING_BASE_URL="   " STAGING_E2E_INVITE_TOKEN="${token}" \
+  env STAGING_BASE_URL="   " STAGING_CRITICAL_MODE="full" STAGING_ADMISSION_MODE="closed" STAGING_E2E_INVITE_TOKEN="${token}" \
   bash "${repo_root}/scripts/check-staging-critical.sh"
 assert_failure "staging wrapper without invite token" \
   env -u STAGING_E2E_INVITE_TOKEN \
   STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="full" STAGING_ADMISSION_MODE="closed" \
   bash "${repo_root}/scripts/check-staging-critical.sh"
 assert_failure "staging wrapper with blank invite token" \
   env STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="full" STAGING_ADMISSION_MODE="closed" \
   STAGING_E2E_INVITE_TOKEN=$' \t ' \
+  bash "${repo_root}/scripts/check-staging-critical.sh"
+env \
+  PATH="${bin}:${PATH}" \
+  TEST_COMMAND_LOG="${log}" \
+  EXPECTED_HARNESS_PATH="${repo_root}/frontend/e2e/staging-critical.mjs" \
+  STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="baseline" \
+  STAGING_ADMISSION_MODE="off" \
+  bash "${repo_root}/scripts/check-staging-critical.sh" >"${output}" 2>&1
+[[ "$(tail -n 1 "${log}")" == "mode=baseline admission=off" ]] || fail "off-mode wrapper contract failed"
+
+env \
+  PATH="${bin}:${PATH}" \
+  TEST_COMMAND_LOG="${log}" \
+  EXPECTED_HARNESS_PATH="${repo_root}/frontend/e2e/staging-critical.mjs" \
+  STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="baseline" \
+  STAGING_ADMISSION_MODE="auto" \
+  STAGING_E2E_INVITE_TOKEN="${token}" \
+  bash "${repo_root}/scripts/check-staging-critical.sh" >"${output}" 2>&1
+[[ "$(tail -n 1 "${log}")" == "mode=baseline admission=auto" ]] || fail "auto-mode wrapper contract failed"
+
+assert_failure "auto-mode staging wrapper without invite token" \
+  env -u STAGING_E2E_INVITE_TOKEN \
+  STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="baseline" STAGING_ADMISSION_MODE="auto" \
+  bash "${repo_root}/scripts/check-staging-critical.sh"
+
+assert_failure "staging wrapper without critical mode" \
+  env -u STAGING_CRITICAL_MODE STAGING_ADMISSION_MODE="off" \
+  STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  bash "${repo_root}/scripts/check-staging-critical.sh"
+assert_failure "staging wrapper without admission mode" \
+  env -u STAGING_ADMISSION_MODE STAGING_CRITICAL_MODE="baseline" \
+  STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
   bash "${repo_root}/scripts/check-staging-critical.sh"
 
 printf '%s\n' "Staging critical wrapper tests passed."
