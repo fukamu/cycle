@@ -79,6 +79,8 @@ source ./scripts/import-env.sh
 
 固定imageによる開発DB起動は [`database.md`のLocal PostgreSQL](database.md#local-postgresql)、migration適用は [`database.md`のローカル適用](database.md#ローカル適用)に従います。既存containerのdata確認、PostgreSQL 18のvolume境界、seed / 初期dataの説明もDatabase正本だけを更新します。
 
+Survivor funnel KPI queryを開発・確認する場合は、保持不要なsynthetic dataだけを入れたlocal `*_test` DBを使用し、[`database.md`の専用手順](database.md#survivor-funnel-kpi-report)に従います。Report commandはmigrationやseedを行わず、Production / Staging、通常の開発DB、`DATABASE_URL`へ自動接続しません。境界fixtureは`TEST_DATABASE_URL`を設定したBackend integration testで検証します。
+
 ## 開発サーバー
 
 Terminal 1でBackendを起動します。
@@ -116,7 +118,7 @@ go run ./cmd/server
 ./scripts/check.sh
 ```
 
-実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate/cleanup/configcheck build、Bash syntax/ShellCheck 0.11.0/shfmt 3.13.1/script test、文書・設定contract、security scan、Dockerローカル実機Composeの構文確認、Docker build context監査、Terraform 1.15.8 exactのformat/init/validate、Wrangler config/typecheck/dry-runです。`TEST_DATABASE_URL` が未設定ならBackend integration testはskipされます。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
+実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate/cleanup/configcheck build、Bash syntax/ShellCheck 0.11.0/shfmt 3.13.1/script test、文書・設定contract、security scan、Dockerローカル実機Composeの構文確認、Docker build context監査、Terraform 1.15.8 exactのformat/init/validate、Wrangler config/typecheck/dry-runです。`go test ./...`は`kpireport` commandもcompileし、`TEST_DATABASE_URL`が未設定ならその実PostgreSQL integration testをskipします。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
 
 Frontend、Backend、Infrastructureだけを確認できます。
 

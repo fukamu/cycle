@@ -105,11 +105,13 @@ const productionFrontendEnvironmentAccessAllowlist = [
 const productionBackendEnvironmentAccessAllowlist = [
   "backend/cmd/cleanup/main.go:os.LookupEnv:consumer=os.Exit(runCleanupCommand(ctx, os.Args[1:], os.LookupEnv, os.Stdout, dependencies))",
   "backend/cmd/configcheck/main.go:os.LookupEnv:consumer=return checkConfigurationWithLookup(os.LookupEnv)",
+  "backend/cmd/kpireport/main.go:os.LookupEnv:consumer=lookupEnvironment := os.LookupEnv",
   "backend/cmd/migrate/main.go:os.Getenv:DATABASE_URL",
   "backend/cmd/migrate/main.go:os.Getenv:MIGRATIONS_DIR",
   "backend/cmd/server/main.go:os.LookupEnv:consumer=settings, err := config.Load(os.LookupEnv)",
   "backend/internal/infrastructure/observability/runtime.go:os.Environ:<all>",
   "backend/internal/infrastructure/postgres/cleanup_repository.go:os.LookupEnv:consumer=poolConfig, err := cleanupPoolConfig(databaseURL, os.LookupEnv)",
+  "backend/internal/infrastructure/postgres/kpi_report_repository.go:os.LookupEnv:consumer=poolConfig, err := kpiReportPoolConfig(databaseURL, os.LookupEnv)",
 ];
 const approvedCleanupPostgresEnvironmentVariables = [
   "PGHOST",
@@ -3554,11 +3556,13 @@ function assertApprovedProductionBackendEnvironmentConsumers() {
     [
       "backend/cmd/cleanup/main.go:os.LookupEnv:consumer=os.Exit(runCleanupCommand(ctx, os.Args[1:], os.LookupEnv, os.Stdout, dependencies))",
       "backend/cmd/configcheck/main.go:os.LookupEnv:consumer=return checkConfigurationWithLookup(os.LookupEnv)",
+      "backend/cmd/kpireport/main.go:os.LookupEnv:consumer=lookupEnvironment := os.LookupEnv",
       'backend/cmd/migrate/main.go:os.Getenv:consumer=databaseURL := os.Getenv("DATABASE_URL")',
       'backend/cmd/migrate/main.go:os.Getenv:consumer=directory := os.Getenv("MIGRATIONS_DIR")',
       "backend/cmd/server/main.go:os.LookupEnv:consumer=settings, err := config.Load(os.LookupEnv)",
       "backend/internal/infrastructure/observability/runtime.go:os.Environ:consumer=for _, entry := range os.Environ()",
       "backend/internal/infrastructure/postgres/cleanup_repository.go:os.LookupEnv:consumer=poolConfig, err := cleanupPoolConfig(databaseURL, os.LookupEnv)",
+      "backend/internal/infrastructure/postgres/kpi_report_repository.go:os.LookupEnv:consumer=poolConfig, err := kpiReportPoolConfig(databaseURL, os.LookupEnv)",
     ],
     inventory.environmentAccesses.map(
       (access) =>
@@ -3584,6 +3588,13 @@ function assertApprovedProductionBackendEnvironmentConsumers() {
         uses: [{ kind: "argument", expression: "config.Load(lookup)" }],
       },
       {
+        path: "backend/cmd/kpireport/main.go",
+        function: "runKPIReportCommand",
+        name: "lookupEnv",
+        type: "func(string) (string, bool)",
+        uses: [{ kind: "call", expression: 'lookupEnv("KPI_DATABASE_URL")' }],
+      },
+      {
         path: "backend/internal/config/config.go",
         function: "Load",
         name: "lookup",
@@ -3596,6 +3607,18 @@ function assertApprovedProductionBackendEnvironmentConsumers() {
         name: "lookupEnv",
         type: "func(string) (string, bool)",
         uses: [{ kind: "call", expression: "lookupEnv(name)" }],
+      },
+      {
+        path: "backend/internal/infrastructure/postgres/kpi_report_repository.go",
+        function: "kpiReportPoolConfig",
+        name: "lookupEnv",
+        type: "func(string) (string, bool)",
+        uses: [
+          {
+            kind: "argument",
+            expression: "cleanupPoolConfig(databaseURL, lookupEnv)",
+          },
+        ],
       },
     ],
     "production Backend environment consumer inventory",

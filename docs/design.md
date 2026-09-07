@@ -5461,6 +5461,35 @@ DBから後で集計可能にする。
 
 Goal本文による分析をMVPで行わない。
 
+MVPのProduct KPIは、既存のApplication DBに残っているUser / Goal / Cycleだけを、明示したUTC時点のread-only snapshotからaggregateする。集計単位はApplication User（`users.id`）であり、同一人物の推定・名寄せは行わない。AnonymousからGoogleへupgradeしたAccountは同じApplication Userとして扱い、Google Login collisionのsource / target Userは別単位のままとする。
+
+この集計は**survivor-only**である。Account Delete済みUserと配下recordは分母・分子の両方から消え、Goal Delete後は残存Goalのうち`(created_at, id)`が最小のものがFirst Goalへ繰り上がる。過去時点の母集団やDeleted recordを復元せず、同じ過去期間を後から再集計した値が不変であるとは表現しない。
+
+すべてのcohortは`cohort_start <= anchor < cohort_end`の半開区間とし、`cohort_start`、`cohort_end`、`as_of`をUTC instantで毎回明示する。暗黙の現在時刻やdefault期間を使わない。Window `W`の対象は`anchor + W <= as_of`を満たすmature recordだけとし、成功eventは`anchor <= event <= anchor + W`（上端を含む）で数える。
+
+### Activation 48h
+
+- Anchorはsurviving Application Userの`users.created_at`。
+- 分母は48時間matureなUser cohort。GoalがないUserも分母へ残す。
+- 分子はUserごとに`(goals.created_at, goals.id)`が最小のsurviving GoalがUser作成から48時間以内に開始されたUser数。
+- 成功UserについてUser作成からFirst Goal開始までの秒数を集計する。
+
+### First Goal funnel 168h
+
+- UserごとのFirst Goalだけを`(goals.created_at, goals.id)`で一意に選び、そのGoalの`created_at`をAnchorとする。
+- 分母は168時間matureなFirst Goal cohort。
+- Cycle 1完了は同じGoalの`sequence_number = 1`の`completed_at`で判定する。
+- Review decisionはCycle 1完了後の最初のdecisionである。Cycle 2の`started_at`、またはCycle 2が存在しないGoal Reviewからの`goals.terminal_at`のうち適用可能な早い方とする。Cycle 1完了前のActive Cycleからのterminal / cancelはReview decisionに含めない。
+- Meaningful loopはWindow内のCycle 1完了とReview decisionの両方を満たすこととし、Review decisionを`next_cycle`と`terminal_review`に分ける。
+- Cycle 2開始とCycle 3開始は同じFirst Goal cohort / 168時間Window内のdiagnostic stageとして報告する。
+- 各stageはFirst Goal cohort分母と直前stage分母を併記する。分子・分母の整数をSource of Truthとし、rateの丸め値をreport contractにしない。
+
+成功recordだけを対象に、User作成からFirst Goal開始、First Goal開始からCycle 1完了、Cycle 1完了からReview decisionまでの各所要時間を`observation_count`、p50、p90の秒数で報告する。Raw User / Goal / Cycle ID、本文、Email、event timestampは出力しない。
+
+このreportをD1 / D7 retentionと呼ばず、`users.last_active_at`からD1 / D7を推定しない。Draft Recoveryは§42.3のとおり未観測であり、0%または100%として補完しない。OTel由来の運用aggregateを同じ期間のsidecarとして比較する場合もUser cohortへjoinせず、User相関metric、Browser event、event ledger、durable rollupを追加しない。
+
+Production dataがまだ存在しない間はsyntheticな破棄可能Test DBでquery contractだけを検証する。MatureなProduction baselineが得られるまでKPI targetを設定せず、実行周期、Production credential owner、保持期間、small-N非表示値をこの仕様から推測しない。
+
 ## 42.5 Tracing
 
 HTTP → Worker → Container → Application → PostgreSQL / OpenAI / Google / Turnstileをtrace可能にする。Span attributeへResource IDを入れる場合は必要最小限・短期Retentionとし、本文を入れない。
@@ -5900,7 +5929,7 @@ PostgreSQL固有のconstraint、deferred FK、row lock、transactionをSQLiteで
 | AI prompt、schema、context、result | §§32–37 | typed fake、mock transport、semantic boundary、context-isolation query/application、Frontend adoption |
 | AI quota、cost、abuse | §§38–39 | real-DB quota/rate/budget/settlement/cleanup concurrency、failure and replay |
 | API / stable error / text semantics | §§19–26、40 | decoder/DTO/error unit、actual HTTP、real-DB text constraint、Frontend Zod/error presentation |
-| Privacy / security / observability | §§27、41–42 | cross-user matrix、safe-log/attribute allowlist、metric/span export、security gate |
+| Privacy / security / observability / Product KPI | §§27、41–42 | cross-user matrix、safe-log/attribute allowlist、metric/span export、survivor-only aggregateの実DB boundary / delete / privacy、security gate |
 | Typography / accessibility | §43 | token/lint、component/A11y、responsive browser journey |
 | Configuration / infrastructure | §§44–45、50–51 | config parity、negative fixtures、Terraform/Worker/container static checks、migration smoke |
 
@@ -6174,7 +6203,7 @@ MVP acceptanceは、各canonical ownerのContractと§48のverificationが同じ
 | Autosave / recovery / identity isolation | §§20.1、27–28 | Frontend fake-timer/component、HTTP identity matrix、E2E |
 | AI behavior / context / quality | §§32–39、49 | typed fake、mock transport、context/privacy、Cost concurrency、quality gate |
 | API / validation / errors | §§19–26、40 | decoder/contract/schema、actual HTTP、real DB、Frontend parse/presentation |
-| Security / privacy / observability | §§27、41–42 | cross-user、redaction/allowlist、metric/span、S |
+| Security / privacy / observability | §§27、41–42 | cross-user、redaction/allowlist、metric/span、aggregate KPI snapshot、S |
 | Typography / accessibility | §43 | token/lint、component/A11y、responsive E2E |
 | Infrastructure / migration / configuration | §§44–45、50–51 | empty DB、Q、I、config parity、health/readiness |
 

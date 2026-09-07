@@ -695,6 +695,7 @@ new_config_fixture() {
   mkdir -p -- \
     "${fixture}/backend/cmd/cleanup" \
     "${fixture}/backend/cmd/configcheck" \
+    "${fixture}/backend/cmd/kpireport" \
     "${fixture}/backend/cmd/migrate" \
     "${fixture}/backend/cmd/server" \
     "${fixture}/backend/internal/config" \
@@ -709,11 +710,13 @@ new_config_fixture() {
   cp -- "${repo_root}/.env.example" "${fixture}/.env.example"
   cp -- "${repo_root}/backend/cmd/cleanup/main.go" "${fixture}/backend/cmd/cleanup/main.go"
   cp -- "${repo_root}/backend/cmd/configcheck/main.go" "${fixture}/backend/cmd/configcheck/main.go"
+  cp -- "${repo_root}/backend/cmd/kpireport/main.go" "${fixture}/backend/cmd/kpireport/main.go"
   cp -- "${repo_root}/backend/cmd/migrate/main.go" "${fixture}/backend/cmd/migrate/main.go"
   cp -- "${repo_root}/backend/cmd/server/main.go" "${fixture}/backend/cmd/server/main.go"
   cp -- "${repo_root}/backend/internal/config/config.go" "${fixture}/backend/internal/config/config.go"
   cp -- "${repo_root}/backend/internal/infrastructure/observability/runtime.go" "${fixture}/backend/internal/infrastructure/observability/runtime.go"
   cp -- "${repo_root}/backend/internal/infrastructure/postgres/cleanup_repository.go" "${fixture}/backend/internal/infrastructure/postgres/cleanup_repository.go"
+  cp -- "${repo_root}/backend/internal/infrastructure/postgres/kpi_report_repository.go" "${fixture}/backend/internal/infrastructure/postgres/kpi_report_repository.go"
   cp -- "${repo_root}/cloudflare/package.json" "${fixture}/cloudflare/package.json"
   ln -s -- "${repo_root}/cloudflare/node_modules" "${fixture}/cloudflare/node_modules"
   cp -- "${repo_root}/cloudflare/src/beta-admission/beta-admission.ts" "${fixture}/cloudflare/src/beta-admission/beta-admission.ts"
