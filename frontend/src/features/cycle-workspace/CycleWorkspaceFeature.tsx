@@ -2,6 +2,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -55,7 +56,7 @@ import {
   usePostCommitCleanup,
 } from "../../shared/cleanup/postCommitCleanupContext";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
-import { frameCopy } from "../../shared/copy/ja";
+import { cycleActionCopy, frameCopy } from "../../shared/copy/ja";
 import {
   type BrowserDraft,
   clearGoalDrafts,
@@ -79,7 +80,11 @@ import {
   normalizeBoundedTextInput,
   normalizeLineEndings,
 } from "../../shared/text/semantics";
-import { getCycleEligibility } from "./model/eligibility";
+import {
+  type CycleActionDisabledReason,
+  getCycleActionControls,
+  getCycleEligibility,
+} from "./model/eligibility";
 import { CycleCheckComparison } from "./CycleCheckComparison";
 
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
@@ -100,6 +105,31 @@ type MovedWorkspace = {
 };
 
 type CycleTerminalCommand = "complete" | "terminate" | "delete";
+
+function cycleActionGuidanceText(reason: CycleActionDisabledReason): string {
+  switch (reason.kind) {
+    case "command-pending":
+      return cycleActionCopy.disabled.commandPending;
+    case "recovery-pending":
+      return cycleActionCopy.disabled.recoveryPending;
+    case "save-dirty":
+      return cycleActionCopy.disabled.saveDirty;
+    case "save-saving":
+      return cycleActionCopy.disabled.saveSaving;
+    case "save-failed":
+      return cycleActionCopy.disabled.saveFailed;
+    case "ai-generating":
+      return cycleActionCopy.disabled.aiGenerating;
+    case "ai-refining":
+      return cycleActionCopy.disabled.aiRefining;
+    case "missing-frames":
+      return reason.frames.includes("action")
+        ? cycleActionCopy.disabled.missingAction
+        : cycleActionCopy.disabled.missingPlanDoCheck(
+            reason.frames.map((frame) => frameCopy[frame].label),
+          );
+  }
+}
 
 function preferCycle(current: Cycle | undefined, incoming: Cycle): Cycle {
   if (!current) return incoming;
@@ -284,6 +314,7 @@ function CycleWorkspace({
   const [pendingAction, setPendingAction] = useState(false);
   const [confirmation, setConfirmation] = useState<WorkspaceConfirmation>();
   const [error, setError] = useState<string>();
+  const actionGuidanceId = useId();
   const scopeRegistry = useAutoSaveScopeRegistry();
   const scopeKey = ["cycle", userId, goal.id, cycle.id].join(":");
   const lease = useMemo(
@@ -1575,6 +1606,17 @@ function CycleWorkspace({
         : values[frame],
     ]),
   ) as Readonly<Record<(typeof comparisonFrames)[number], string>>;
+  const actionControls = getCycleActionControls(values, saveState, aiState, {
+    pendingAction,
+    recoveryPending:
+      recoveryConflicts.size > 0 || cycleRevisionConflictsRef.current.size > 0,
+  });
+  const actionGuidance = actionControls.guidance;
+  const actionGuidanceText = actionGuidance
+    ? cycleActionGuidanceText(actionGuidance.reason)
+    : "";
+  const actionDescribedBy = (command: "generate" | "refine" | "complete") =>
+    actionGuidance?.commands.includes(command) ? actionGuidanceId : undefined;
   const end = cycle.completedAt ?? cycle.canceledAt;
   return (
     <main className="page editor-page">
@@ -1708,42 +1750,62 @@ function CycleWorkspace({
           onBlur={() => flush(selected)}
         />
         <div className="editor-meta">
-          {editable && !workspaceMoved ? (
+          {editable && !workspaceMoved && selected !== "action" ? (
             <SaveBadge
               state={saveState}
               retry={recoveryConflicts.size ? undefined : retrySave}
             />
-          ) : (
+          ) : !editable || workspaceMoved ? (
             <span className="read-only-badge">読み取り専用</span>
-          )}
+          ) : null}
           <span>
             {codePointCount(values[selected])} / {FRAME_TEXT_MAX_CODE_POINTS}
           </span>
         </div>
         {editable && !workspaceMoved && selected === "action" && (
           <div className="action-controls">
+            <div className="action-controls__ai">
+              <button
+                className="button button--secondary"
+                type="button"
+                aria-describedby={actionDescribedBy("generate")}
+                disabled={!actionControls.generate.enabled}
+                onClick={() => requestAI("generating")}
+              >
+                {aiState === "generating"
+                  ? "生成しています…"
+                  : "アクションを生成"}
+              </button>
+              <button
+                className="button button--secondary"
+                type="button"
+                aria-describedby={actionDescribedBy("refine")}
+                disabled={!actionControls.refine.enabled}
+                onClick={() => requestAI("refining")}
+              >
+                {aiState === "refining" ? "推敲しています…" : "AIで推敲"}
+              </button>
+            </div>
+            <div className="action-controls__status">
+              <SaveBadge
+                state={saveState}
+                retry={recoveryConflicts.size ? undefined : retrySave}
+              />
+              <p
+                className="action-controls__guidance"
+                id={actionGuidanceId}
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                {actionGuidanceText}
+              </p>
+            </div>
             <button
-              className="button button--secondary"
+              className="button button--primary action-controls__complete"
               type="button"
-              disabled={!commandsAvailable || !eligibility.canGenerateAction}
-              onClick={() => requestAI("generating")}
-            >
-              {aiState === "generating"
-                ? "生成しています…"
-                : "アクションを生成"}
-            </button>
-            <button
-              className="button button--secondary"
-              type="button"
-              disabled={!commandsAvailable || !eligibility.canRefineAction}
-              onClick={() => requestAI("refining")}
-            >
-              {aiState === "refining" ? "推敲しています…" : "AIで推敲"}
-            </button>
-            <button
-              className="button button--primary"
-              type="button"
-              disabled={!commandsAvailable || !eligibility.canCompleteCycle}
+              aria-describedby={actionDescribedBy("complete")}
+              disabled={!actionControls.complete.enabled}
               onClick={() => setConfirmation({ kind: "complete-cycle" })}
             >
               サイクルを完了
