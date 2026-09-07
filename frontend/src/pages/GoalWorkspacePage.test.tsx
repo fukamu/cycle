@@ -341,6 +341,13 @@ describe("GoalWorkspacePage", () => {
     expect(
       screen.getByRole("button", { name: "サイクルを完了" }),
     ).toBeDisabled();
+    const savingGuidance = screen.getByText(
+      "入力を保存しています。保存済みになるまでお待ちください。",
+    );
+    expect(savingGuidance).toHaveAttribute("role", "status");
+    expect(
+      screen.getByRole("button", { name: "アクションを生成" }),
+    ).toHaveAttribute("aria-describedby", savingGuidance.id);
     expect(
       screen.getByRole("button", {
         name: "目標を達成として終了",
@@ -377,6 +384,225 @@ describe("GoalWorkspacePage", () => {
         hidden: true,
       }),
     ).toBeEnabled();
+  });
+
+  it("explains missing P/D/C and follows the specified Action control order", async () => {
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+
+    const generate = screen.getByRole("button", { name: "アクションを生成" });
+    const refine = screen.getByRole("button", { name: "AIで推敲" });
+    const complete = screen.getByRole("button", { name: "サイクルを完了" });
+    const saveStatus = screen.getByText("保存済み");
+    const guidance = screen.getByText(
+      "D・Cを入力して保存すると、Aの操作へ進めます。",
+    );
+
+    expect(guidance).toBeVisible();
+    expect(generate).toBeDisabled();
+    expect(refine).toBeDisabled();
+    expect(complete).toBeDisabled();
+    expect(guidance).toHaveAttribute("role", "status");
+    expect(guidance).toHaveAttribute("aria-live", "polite");
+    expect(generate).toHaveAttribute("aria-describedby", guidance.id);
+    expect(refine).toHaveAttribute("aria-describedby", guidance.id);
+    expect(complete).toHaveAttribute("aria-describedby", guidance.id);
+    expect(
+      generate.compareDocumentPosition(refine) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(
+      refine.compareDocumentPosition(saveStatus) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(
+      saveStatus.compareDocumentPosition(complete) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it("keeps Generate available and links only Refine and Complete to the missing A guidance", async () => {
+    vi.mocked(getCycle).mockResolvedValue({
+      cycle: {
+        ...completableCycle,
+        action: "",
+        contentRevision: 3,
+        frameRevisions: { ...completableCycle.frameRevisions, action: 0 },
+      },
+    });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+
+    const generate = screen.getByRole("button", { name: "アクションを生成" });
+    const refine = screen.getByRole("button", { name: "AIで推敲" });
+    const complete = screen.getByRole("button", { name: "サイクルを完了" });
+    const guidance = screen.getByText(
+      "Aを入力するか「アクションを生成」を使うと、AIで推敲してサイクルを完了できます。",
+    );
+
+    expect(generate).toBeEnabled();
+    expect(generate).not.toHaveAttribute("aria-describedby");
+    expect(refine).toBeDisabled();
+    expect(refine).toHaveAttribute("aria-describedby", guidance.id);
+    expect(complete).toBeDisabled();
+    expect(complete).toHaveAttribute("aria-describedby", guidance.id);
+  });
+
+  it("does not render warning text or descriptions when every Action control is available", async () => {
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const view = renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+
+    for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
+      const control = screen.getByRole("button", { name });
+      expect(control).toBeEnabled();
+      expect(control).not.toHaveAttribute("aria-describedby");
+    }
+    expect(
+      view.container.querySelector(".action-controls__guidance"),
+    ).toBeEmptyDOMElement();
+  });
+
+  it.each([
+    {
+      status: "completed",
+      endedAt: { completedAt: "2026-08-20T00:06:00.000Z" },
+    },
+    {
+      status: "canceled",
+      endedAt: {
+        canceledAt: "2026-08-20T00:06:00.000Z",
+        cancellationReason: "goal_ended",
+      },
+    },
+  ] as const)(
+    "keeps $status Cycle actions read-only without presenting unavailable CTAs",
+    async ({ status, endedAt }) => {
+      vi.mocked(getCycle).mockResolvedValue({
+        cycle: { ...completableCycle, status, ...endedAt },
+      });
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      renderPage(cache);
+
+      await screen.findByText("読み取り専用");
+      fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+
+      expect(
+        screen.getByRole("textbox", { name: "A — Action" }),
+      ).toHaveAttribute("readonly");
+      for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
+        expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+      }
+    },
+  );
+
+  it("prioritizes recovery guidance over missing-frame guidance", async () => {
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    vi.mocked(getBrowserDraft).mockImplementation(async (_userId, key) =>
+      key.endsWith(":plan")
+        ? {
+            userId: session.user.id,
+            goalId: goal.id,
+            subjectKey: key,
+            body: "この端末に残った計画",
+            baseRevision: 9,
+            updatedAt: new Date().toISOString(),
+          }
+        : null,
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("別の更新が見つかりました");
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+
+    const guidance = screen.getByText(
+      "確認待ちの入力があります。「要確認」のフレームを開き、使用する内容を選んでください。",
+    );
+    expect(guidance).toBeVisible();
+    for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
+      expect(screen.getByRole("button", { name })).toHaveAttribute(
+        "aria-describedby",
+        guidance.id,
+      );
+    }
+  });
+
+  it("explains a failed Action save and removes the guidance after retry succeeds", async () => {
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    vi.mocked(saveCycleFrame)
+      .mockRejectedValueOnce(
+        new APIError(
+          409,
+          "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+          "different resource conflict",
+          "60000000-0000-7000-8000-000000000019",
+        ),
+      )
+      .mockResolvedValueOnce({
+        cycleId: cycle.id,
+        frame: "action",
+        content: "保存できない改善",
+        frameRevision: 2,
+        contentRevision: 5,
+        savedAt: "2026-08-20T00:02:00.000Z",
+      });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const view = renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+    const editor = screen.getByRole("textbox", { name: "A — Action" });
+    fireEvent.change(editor, { target: { value: "保存できない改善" } });
+    fireEvent.blur(editor);
+
+    expect(await screen.findByText("保存失敗")).toBeInTheDocument();
+    const guidance = screen.getByText(
+      "入力を保存できていません。「再試行」で保存してから操作してください。",
+    );
+    expect(guidance).toBeVisible();
+    const retry = screen.getByRole("button", { name: "再試行" });
+    expect(retry).toBeVisible();
+    for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
+      expect(screen.getByRole("button", { name })).toHaveAttribute(
+        "aria-describedby",
+        guidance.id,
+      );
+    }
+
+    fireEvent.click(retry);
+
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    expect(saveCycleFrame).toHaveBeenCalledTimes(2);
+    expect(
+      view.container.querySelector(".action-controls__guidance"),
+    ).toBeEmptyDOMElement();
+    for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
+      const control = screen.getByRole("button", { name });
+      expect(control).toBeEnabled();
+      expect(control).not.toHaveAttribute("aria-describedby");
+    }
   });
 
   it("keeps hydration-time input and saves it only after every draft read completes", async () => {
@@ -1463,6 +1689,10 @@ describe("GoalWorkspacePage", () => {
           ? `/goals/${goal.id}/review`
           : `/goals/${goal.id}/cycles/${currentCycleId}`,
       );
+      fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+      for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
+        expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+      }
     },
   );
 
@@ -2042,7 +2272,7 @@ describe("GoalWorkspacePage", () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache);
+    const view = renderPage(cache);
 
     fireEvent.click(await screen.findByRole("tab", { name: /A\s*Action/ }));
     const editor = screen.getByRole("textbox", { name: "A — Action" });
@@ -2054,6 +2284,14 @@ describe("GoalWorkspacePage", () => {
     expect(
       await screen.findByRole("button", { name: "推敲しています…" }),
     ).toBeDisabled();
+    const aiGuidance = screen.getByText(
+      "アクションを推敲しています。完了するまでお待ちください。",
+    );
+    expect(aiGuidance).toHaveAttribute("role", "status");
+    expect(aiGuidance).toHaveAttribute("aria-live", "polite");
+    expect(
+      screen.getByRole("button", { name: "推敲しています…" }),
+    ).toHaveAttribute("aria-describedby", aiGuidance.id);
     await act(async () => rejectRefinement(new Error("provider failure")));
 
     expect(
@@ -2062,7 +2300,14 @@ describe("GoalWorkspacePage", () => {
       ),
     ).toBeInTheDocument();
     expect(editor).toHaveValue("現在のA");
-    expect(screen.getByRole("button", { name: "AIで推敲" })).toBeEnabled();
+    for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
+      const control = screen.getByRole("button", { name });
+      expect(control).toBeEnabled();
+      expect(control).not.toHaveAttribute("aria-describedby");
+    }
+    expect(
+      view.container.querySelector(".action-controls__guidance"),
+    ).toBeEmptyDOMElement();
     expect(refineAction).toHaveBeenCalledWith(
       sessionLease,
       goal.id,
@@ -2091,6 +2336,12 @@ describe("GoalWorkspacePage", () => {
       screen.getByRole("button", { name: "アクションを生成" }),
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "AIで推敲" })).toBeDisabled();
+    const pendingGuidance = screen.getByText(
+      "サイクルの操作を処理しています。完了するまでお待ちください。",
+    );
+    expect(
+      screen.getByRole("button", { name: "アクションを生成" }),
+    ).toHaveAttribute("aria-describedby", pendingGuidance.id);
     fireEvent.click(screen.getByRole("button", { name: "AIで推敲" }));
     expect(refineAction).not.toHaveBeenCalled();
   });
