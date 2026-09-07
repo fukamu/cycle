@@ -375,7 +375,7 @@ flowchart TD
 | Goal / Cycle identity、version、immutability | §§12–15 | Domain、Database、API、read-only UI |
 | Goal / Frame text semantics | §§14.1、14.5 | Frontend、Domain、Database constraint、AI output validation |
 | Progressing Goal entitlement | §§14.7、38.6–38.7 | Policy、User lock、Transaction、UI eligibility |
-| Aggregate delete / retention | §§14.8、15.8、18.7、38.2、41.9–41.11 | FK/CAS、cleanup、browser deletion boundary |
+| Aggregate delete / retention | §§14.8、15.8、18.7、38.2、41.9–41.12 | FK/CAS、cleanup、browser deletion boundary |
 | Autosave / recovery | §28 | revision CAS、single-flight coordinator、IndexedDB isolation |
 | Authentication / authorization | §§20.1、27、41 | HTTP middleware、owner-scoped query、session/browser fence |
 | Transaction / lock / replay | §§18、20.4 | Application Unit of Work、PostgreSQL integration |
@@ -5274,6 +5274,28 @@ IndexedDBはXSSに対する暗号化境界ではない。
 - User切替時に別Userへ自動送信しない。
 - `localStorage`へGoal/P/D/C/A本文を保存しない。
 
+## 41.12 Legacy PDCAI origin retirement
+
+旧Staging origin `https://pdcai.matoruru.com` とlegacy IndexedDB `pdcai-browser-drafts-v2` は、通常のFUKAMU Cycle releaseから分離したretirement-only surfaceとして扱う。旧interactive Application、Backend API、health endpointを再公開せず、現行origin `https://cycle.staging.fukamu.matoruru.com`、現行IndexedDB `fukamu-cycle-browser-drafts-v2`、Application DBを読取・変更しない。
+
+Legacy DBは実DB versionを`2`へ上げる。これをbrowser単位のwriter fenceとし、version `1`を指定する旧codeの新しいopen / writeを`VersionError`へ収束させる。旧tabがversion `1` connectionを保持してupgradeをblockした場合は完了扱いにせず、「他のPDCAI tabを閉じる」案内と明示Retryを表示する。Blocked requestが後から成功したconnectionは閉じ、cleanupは次のRetryまたは旧origin再訪で行う。
+
+Retirement cleanupはorigin内のread-write transactionでだけ行い、record本文、Raw User ID、件数、error detailをnetwork、URL、log、telemetry、新metadataへ出さない。`indexedDB.deleteDatabase()`は旧writerによるversion `1` DB再作成を許すため使用しない。
+
+| Legacy record | Retirement outcome |
+|---|---|
+| current-user valid fresh | 移行・回復・送信せず、canonical `updatedAt`から24時間未満だけ保持する |
+| other-user valid fresh | current-userと区別せず、同じ24時間規則で保持する |
+| `updatedAt`から24時間以上 | 次のretirement cleanupで削除する |
+| non-canonical / future / invalid timestamp、または旧schemaとして不正 | 次のretirement cleanupで削除する |
+| deleted-user | legacy originではexactに識別できない制約を受容し、同じ24時間規則で削除する |
+
+Valid legacy recordはversion `1`の`key / userId / subjectKey / body / baseRevision / updatedAt` contractを満たし、`key == userId + ":" + subjectKey`、`baseRevision`が非負safe integer、`updatedAt`がfutureでないcanonical ISO timestampでなければならない。24時間境界ちょうどはexpiredとする。Cleanupはrepeat可能かつidempotentにし、transaction abort / errorを成功扱いにしない。
+
+Static retirement pageは起動ごとにcleanupを試行する。Writer fence後は新しいvalid writeが成立しないため、最後のlegacy writeから24時間後の次回旧originアクセスで全recordが削除対象になる。ただしorigin storageはserverから遠隔実行できないため、そのbrowserが旧originへ再訪しなければphysical recordを削除できない。この制約を「削除済み」またはremote cleanup完了とは表現しない。
+
+Retirement Workerへの切替は、Product OwnerのB2承認、成功したcurrent main CI、exact main SHA、設定済みapprover、破壊的確認phraseをすべて検証する専用manual workflowだけで行う。通常のTerraform Apply / Application Deployから自動起動せず、DB migration、Container rollout、現行Worker、runtime secret変更を含めない。切替後に旧interactive Applicationをrollbackしてversion `1` writerを再有効化せず、問題時はversion `2`以上を維持したretirement pageのforward fixだけを行う。
+
 ---
 
 # 42. Observability
@@ -5894,6 +5916,8 @@ Exact test file名やcase IDはRepositoryのTest suiteをSourceとし、本書�
 9. 削除後にcontent、cache、late callbackがresourceを復元しないこと。
 
 Browser Draft privacy境界では、Goalに紐づくDraft putとdelete cleanupの両直列化順、Goal cleanupとAccount cleanupの両直列化順、別User / Goal isolation、旧schema writer、advisoryのsender / receiver / 重複 / 未達を決定的に検証する。
+
+Legacy PDCAI retirement境界では、current-user fresh、other-user fresh、expired、invalid / future timestamp、deleted-userのoutcome、version `1` writer fence、blocked / Retry / late success、transaction abort / error、repeat実行、現行origin DB非変更をfake IndexedDB unitで検証する。加えて実Browserの同一origin二tabで、旧version connectionがupgradeをblockし、旧tab close後の明示Retryだけがversion `2` cleanupへ進むことを検証する。
 
 Anonymous create rate limitでは、UTC hour境界の両端包含、23.5時間離れたbucketの24時間上限、guard待機後のcanonical time、future bucket除外、hour rollover並行request、guard / bucket expiryの単調性、sentinel更新失敗時のrollback、blocked attemptの永続化、limiterとcleanupの競合を実PostgreSQLで追加検証する。Frontendはrate-limit 429を自動再送しないこと、手動Retryと専用案内が残ることを検証する。
 

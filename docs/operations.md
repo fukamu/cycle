@@ -184,6 +184,32 @@ Migration失敗時はWrangler deployへ進みません。Input不足でDeployだ
 
 Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し、CloudflareがDNS recordとcertificateを管理します。同名recordがある場合は所有用途を確認し、不要と確認できたrecordだけをDashboardから除去します。`workers.dev`とpreview URLは無効のまま維持します。
 
+### Legacy PDCAI origin retirement
+
+旧`https://pdcai.matoruru.com`は現行Stagingとは別のlegacy Worker `pdcai-staging`が所有する。B2のprivacy / retention契約は[`design.md` §41.12](design.md#4112-legacy-pdcai-origin-retirement)、approver inputは[`environment.md`](environment.md#github-legacy-origin-retirement-input)を正本とする。専用[`retire-legacy-origin.yml`](../.github/workflows/retire-legacy-origin.yml)は自動起動せず、通常のTerraform Plan / Apply / Deployを代替しない。
+
+Cutover前に次を満たす。
+
+1. B2判断と、recovery / migrationを提供しないことがIssueへ記録されている。
+2. Retirement artifactを含むcurrent main SHAのCIが成功している。
+3. Repository variable `LEGACY_RETIREMENT_APPROVER`が実行ownerと一致し、`staging` Environmentを`main`だけに制限している。
+4. Cloudflare deploy tokenが旧Workerと`pdcai.matoruru.com` custom domainを変更できる最小scopeを持つ。Token値や旧Worker secret値を確認記録へ出さない。
+5. 旧originで旧interactive HTMLが配信中であることだけを本文・credentialなしで確認し、旧DB内容や件数を収集しない。
+
+Actions画面で`Retire Legacy PDCAI Origin`を`main`からmanual dispatchし、current main SHAとexact confirmation `RETIRE pdcai.matoruru.com WITHOUT RECOVERY`を入力する。Workflowはactor、confirmation、SHA、current main、成功CIをEnvironment credentialの前に検証し、同じ旧Worker名へ[`legacy-retirement/wrangler.jsonc`](../cloudflare/legacy-retirement/wrangler.jsonc)のstatic assetsだけをdeployする。Application DB migration、現行Worker、Container、Turnstile、Terraform state、Application runtime secretを変更しない。
+
+Deployment後はworkflowのsmokeで次を確認する。
+
+- root responseがversion `2` retirement markerとCSP / noindex headerを返す。
+- `/api/session`が`404`で、旧Backend APIが公開されていない。
+- Browserで旧tabを開いたまま別tabからretirement pageを開くと、成功表示ではなく旧tabを閉じてRetryする案内になる。
+- 旧tabを閉じてRetryするとcleanupが完了し、reloadしてもrepeat可能である。
+- 専用test profileではcurrent-user fresh / other-user freshを保持し、expired / invalidを削除し、現行Cycle IndexedDBを変更しない。実利用者のrecord本文・Raw User ID・件数をinspectionしない。
+
+Cutover後24時間未満はvalid fresh recordを削除するための全消去へ変更しない。24時間経過後も同じpageを配信し、再訪browserでは`updatedAt`基準のcleanupにより全legacy recordを削除対象にする。再訪しないbrowserのorigin storageはremote削除不能であり、削除完了として記録しない。旧custom domain停止、旧Worker / Container削除、残存secret削除はこのworkflowに含めず、影響と復旧不要を確認した別のowner-approved teardownで扱う。
+
+Retirement切替後に旧interactive Applicationをrollbackしてはいけない。問題時はDB version `2`以上とstatic-only / no-API境界を維持したforward fixをcurrent mainからreview・deployする。
+
 ### Protected response identity release
 
 [Protected Response identity binding](design.md#201-common-conventions)を変更するreleaseではBackend HeaderとFrontend bundleを同じcandidateとして検証し、release記録へ次を残します。

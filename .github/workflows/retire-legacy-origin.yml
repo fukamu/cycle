@@ -1,0 +1,246 @@
+name: Retire Legacy PDCAI Origin
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Successful main commit to deploy as the legacy retirement page
+        required: true
+        type: string
+      confirmation:
+        description: Type RETIRE pdcai.matoruru.com WITHOUT RECOVERY
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: legacy-pdcai-origin-retirement
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      commit_sha: ${{ steps.verify.outputs.commit_sha }}
+    steps:
+      - name: Verify owner decision and exact main commit
+        id: verify
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_APPROVER: ${{ vars.LEGACY_RETIREMENT_APPROVER }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != 'refs/heads/main' ]]; then
+            echo '::error::Legacy origin retirement is allowed only from main.'
+            exit 1
+          fi
+          if [[ -z "${EXPECTED_APPROVER}" ]]; then
+            echo '::error::Missing repository variable LEGACY_RETIREMENT_APPROVER.'
+            exit 1
+          fi
+          if [[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]; then
+            echo "::error::Only the configured legacy retirement approver may run this workflow."
+            exit 1
+          fi
+          if [[ "${CONFIRMATION}" != 'RETIRE pdcai.matoruru.com WITHOUT RECOVERY' ]]; then
+            echo '::error::The exact legacy retirement confirmation is required.'
+            exit 1
+          fi
+          if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::commit_sha must be a lowercase 40-character commit SHA.'
+            exit 1
+          fi
+
+          current_main_json="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main"
+          )"
+          current_main_sha="$(
+            jq -ser \
+              --arg repository "${GITHUB_REPOSITORY}" \
+              '
+                if (
+                  length == 1 and
+                  (.[0] | type) == "object" and
+                  .[0].ref == "refs/heads/main" and
+                  (.[0].object | type) == "object" and
+                  (.[0].object.sha | type) == "string" and
+                  (.[0].object.sha | test("^[0-9a-f]{40}$")) and
+                  (.[0].url | type) == "string" and
+                  (.[0].url | contains("/repos/" + $repository + "/"))
+                ) then
+                  .[0].object.sha
+                else
+                  error("invalid main ref response")
+                end
+              ' \
+              <<< "${current_main_json}"
+          )"
+          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
+            echo "::error::The approved commit is not current main HEAD."
+            exit 1
+          fi
+          ci_runs_json="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${COMMIT_SHA}&branch=main&status=success&per_page=1"
+          )"
+          successful_runs="$(
+            jq -ser \
+              --arg commit_sha "${COMMIT_SHA}" \
+              --arg repository "${GITHUB_REPOSITORY}" \
+              '
+                if (
+                  length == 1 and
+                  (.[0] | type) == "object" and
+                  (.[0].total_count | type) == "number" and
+                  (.[0].total_count | floor) == .[0].total_count and
+                  .[0].total_count >= 1 and
+                  (.[0].workflow_runs | type) == "array" and
+                  (.[0].workflow_runs | length) == 1 and
+                  (.[0].workflow_runs[0] | type) == "object" and
+                  .[0].workflow_runs[0].name == "CI" and
+                  .[0].workflow_runs[0].path == ".github/workflows/ci.yml" and
+                  .[0].workflow_runs[0].event == "push" and
+                  .[0].workflow_runs[0].status == "completed" and
+                  .[0].workflow_runs[0].conclusion == "success" and
+                  .[0].workflow_runs[0].head_branch == "main" and
+                  .[0].workflow_runs[0].head_sha == $commit_sha and
+                  .[0].workflow_runs[0].head_repository.full_name == $repository
+                ) then
+                  .[0].total_count
+                else
+                  error("invalid successful CI response")
+                end
+              ' \
+              <<< "${ci_runs_json}"
+          )"
+          if [[ ! "${successful_runs}" =~ ^[0-9]+$ ]] ||
+             ((successful_runs < 1)); then
+            echo '::error::The approved main commit does not have successful CI.'
+            exit 1
+          fi
+          echo "commit_sha=${COMMIT_SHA}" >> "${GITHUB_OUTPUT}"
+
+  deploy:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: staging
+      url: https://pdcai.matoruru.com
+    env:
+      COMMIT_SHA: ${{ needs.preflight.outputs.commit_sha }}
+    steps:
+      - name: Verify approved commit is still main HEAD
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_main_json="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main"
+          )"
+          current_main_sha="$(
+            jq -ser \
+              --arg repository "${GITHUB_REPOSITORY}" \
+              '
+                if (
+                  length == 1 and
+                  (.[0] | type) == "object" and
+                  .[0].ref == "refs/heads/main" and
+                  (.[0].object | type) == "object" and
+                  (.[0].object.sha | type) == "string" and
+                  (.[0].object.sha | test("^[0-9a-f]{40}$")) and
+                  (.[0].url | type) == "string" and
+                  (.[0].url | contains("/repos/" + $repository + "/"))
+                ) then
+                  .[0].object.sha
+                else
+                  error("invalid main ref response")
+                end
+              ' \
+              <<< "${current_main_json}"
+          )"
+          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
+            echo '::error::The approved commit became stale before deployment.'
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+          persist-credentials: false
+
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          runtime: node@24
+          cache: true
+          install: false
+
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify dependency install preserved approved tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --quiet --
+          git diff --cached --quiet --
+          untracked_files="$(git ls-files --others --exclude-standard)"
+          [[ -z "${untracked_files}" ]]
+
+      - name: Validate static retirement deployment
+        working-directory: cloudflare
+        run: pnpm exec wrangler deploy --config legacy-retirement/wrangler.jsonc --dry-run --outdir .wrangler/legacy-retirement-dry-run
+
+      - name: Replace the legacy Worker with static retirement assets
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm exec wrangler deploy --config legacy-retirement/wrangler.jsonc --containers-rollout=none
+
+      - name: Verify the old interactive application is no longer served
+        shell: bash
+        env:
+          RETIREMENT_ORIGIN: https://pdcai.matoruru.com
+        run: |
+          set -euo pipefail
+          headers="${RUNNER_TEMP}/legacy-retirement-headers"
+          body="${RUNNER_TEMP}/legacy-retirement-body"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 12 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --max-time 30 \
+            --dump-header "${headers}" \
+            --output "${body}" \
+            "${RETIREMENT_ORIGIN}/"
+          grep -Fq 'data-legacy-retirement="v2"' "${body}"
+          grep -Eiq '^content-security-policy:' "${headers}"
+          grep -Eiq '^x-robots-tag:.*noindex' "${headers}"
+          api_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              "${RETIREMENT_ORIGIN}/api/session"
+          )"
+          if [[ "${api_status}" != '404' ]]; then
+            echo '::error::The retired origin must not expose the legacy API route.'
+            exit 1
+          fi
