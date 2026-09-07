@@ -160,7 +160,7 @@ func TestMetricsExposeCompleteServerSideSoTContract(t *testing.T) {
 		assertMetricContract(t, measurement, expectation)
 	}
 	if _, ok := measurements["draft_recovery_total"]; ok {
-		t.Error("owner-gated browser draft_recovery_total must not be defined by the Backend")
+		t.Error("Closed Beta does not collect draft_recovery_total; the Backend must not define it")
 	}
 	assertMetricLabel(t, measurements["ai_generation_total"], "operation_type", "action_generate")
 	assertMetricHasNoLabel(t, measurements["ai_generation_total"], "type")

@@ -236,7 +236,7 @@ Stagingはpublic internetから到達可能です。URLの秘匿をaccess contro
 - Cloudflare Worker / Containerのconsole出力をWorkers Logsで収集する。
 - Cloudflare automatic tracesは5%、logsは100% sampleを維持する。
 - Go safe JSON loggerは [`design.md` §42.2](design.md#422-structured-log-fields) のfieldだけを記録し、free-form message、unknown / malformed fieldを拒否する。
-- Backend traceとserver-side metricをvendor-neutralなOTLP/HTTPでexportする。Browser-only `draft_recovery_total`は送信しない。
+- Backend traceとserver-side metricをvendor-neutralなOTLP/HTTPでexportする。Browser Draft RecoveryはClosed Betaでは収集・export経路を持たない。正本は[`design.md` §42.3](design.md#423-minimum-metrics)とする。
 - Cloudflare Analytics / Logs、Neon Monitoring、OpenAI usageを横断して確認する。
 
 OTLP endpoint / header credential ownerと実値、retention、dashboard、alert、notification、uptime monitor、on-callはProduction release blockerです。Collector障害はApplication requestやreadinessを失敗させず、bounded retry後の固定diagnosticだけをWorkers Logsへ出します。Process終了時はHTTP requestをdrainしてからtrace / metric providerをflushします。
