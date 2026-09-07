@@ -14,3 +14,5 @@ export {
   userMutationKeys,
   userQueryKeys,
 } from "./goalCache";
+export { ProgressingGoalCard } from "./ProgressingGoalCard";
+export { getProgressingGoalCardViewModel } from "./progressingGoalCardModel";

@@ -5,7 +5,9 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
@@ -88,6 +90,7 @@ describe("HomePage progressing goal collection", () => {
   });
 
   it("renders two independently routed goal cards at the free limit", async () => {
+    const user = userEvent.setup();
     const home: Home = {
       progressingGoals: [firstGoal, secondGoal],
       creationDraft: null,
@@ -101,14 +104,25 @@ describe("HomePage progressing goal collection", () => {
 
     expect(await screen.findByText("2 / 2")).toBeInTheDocument();
     expect(getHome).toHaveBeenCalledWith(sessionLease, expect.any(AbortSignal));
-    expect(screen.getByRole("link", { name: /最初の目標/ })).toHaveAttribute(
+    const cards = screen.getAllByRole("article");
+    expect(cards).toHaveLength(2);
+    expect(
+      within(cards[0]!).getByRole("heading", { name: "最初の目標" }),
+    ).toBeInTheDocument();
+    expect(
+      within(cards[1]!).getByRole("heading", { name: "二つ目の目標" }),
+    ).toBeInTheDocument();
+    const activeCTA = screen.getByRole("link", { name: "Cycle 1を続ける" });
+    const reviewCTA = screen.getByRole("link", { name: "目標を見直す" });
+    expect(activeCTA).toHaveAttribute(
       "href",
       `/goals/${firstGoal.id}/cycles/${firstGoal.currentWork?.cycleId}`,
     );
-    expect(screen.getByRole("link", { name: /二つ目の目標/ })).toHaveAttribute(
-      "href",
-      `/goals/${secondGoal.id}/review`,
-    );
+    expect(reviewCTA).toHaveAttribute("href", `/goals/${secondGoal.id}/review`);
+    await user.tab();
+    expect(activeCTA).toHaveFocus();
+    await user.tab();
+    expect(reviewCTA).toHaveFocus();
   });
 
   it("keeps the collection contract usable at the paid boundary of three", async () => {
@@ -123,10 +137,36 @@ describe("HomePage progressing goal collection", () => {
     renderHome();
 
     expect(await screen.findByText("3 / 3")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /三つ目の目標/ })).toHaveAttribute(
+    expect(
+      screen.getAllByRole("link", { name: "Cycle 1を続ける" })[1],
+    ).toHaveAttribute(
       "href",
       `/goals/${thirdGoal.id}/cycles/${thirdGoal.currentWork?.cycleId}`,
     );
+  });
+
+  it("shows the existing load error instead of guessing an action for inconsistent current work", async () => {
+    const cache = createCache();
+    vi.mocked(getHome).mockResolvedValue({
+      progressingGoals: [{ ...firstGoal, status: "goal_review" }],
+      creationDraft: null,
+      canCreateGoalDraft: true,
+      progressingGoalLimit: 2,
+      canStartProgressingGoal: false,
+    });
+
+    renderHome(cache);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "読み込めませんでした。",
+    );
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "目標を見直す" }),
+    ).not.toBeInTheDocument();
+    expect(
+      cache.getQueryData(userQueryKeys.goal(session.user.id, firstGoal.id)),
+    ).toBeUndefined();
   });
 
   it("opens the existing draft after an exact create conflict and one canonical Home refetch", async () => {

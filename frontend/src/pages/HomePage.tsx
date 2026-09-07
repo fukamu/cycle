@@ -10,11 +10,12 @@ import { AppReferralPromotion } from "../features/app-referral/AppReferralPromot
 import { useGoalCreationDraftCommand } from "../features/goal-creation";
 import {
   cacheGoals,
+  getProgressingGoalCardViewModel,
+  ProgressingGoalCard,
   userQueryKeys,
-} from "../features/goal-collection/goalCache";
+} from "../features/goal-collection";
 import { getHome } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
-import { statusLabel } from "../shared/copy/ja";
 
 export function HomePage() {
   const session = useSession();
@@ -26,23 +27,38 @@ export function HomePage() {
     queryKey: userQueryKeys.home(userId),
     queryFn: ({ signal }) => getHome(sessionLease, signal),
   });
+  const progressingGoalCards =
+    query.data?.progressingGoals.map(getProgressingGoalCardViewModel) ?? [];
+  const validProgressingGoalCards = progressingGoalCards.filter(
+    (card): card is NonNullable<typeof card> => card !== null,
+  );
+  const progressingGoalsAreValid =
+    validProgressingGoalCards.length === progressingGoalCards.length;
   const openCreationDraft = useCallback(
     () => navigate("/goals/new"),
     [navigate],
   );
   const create = useGoalCreationDraftCommand(openCreationDraft);
   useEffect(() => {
-    if (query.data)
+    if (query.data && progressingGoalsAreValid)
       cacheGoals(
         cache,
         userId,
         query.data.progressingGoals,
         query.dataUpdatedAt,
       );
-  }, [cache, query.data, query.dataUpdatedAt, userId]);
+  }, [
+    cache,
+    progressingGoalsAreValid,
+    query.data,
+    query.dataUpdatedAt,
+    userId,
+  ]);
   if (query.isPending) return <PageLoading />;
   if (query.isError) return <PageError retry={() => void query.refetch()} />;
   const home = query.data;
+  if (!progressingGoalsAreValid)
+    return <PageError retry={() => void query.refetch()} />;
   return (
     <main className="page home-page">
       <header className="page-heading">
@@ -65,32 +81,9 @@ export function HomePage() {
             <p>まだ進行中の目標はありません。</p>
           </div>
         )}
-        {home.progressingGoals.map((goal) => {
-          const activeWork =
-            goal.currentWork?.kind === "active_cycle"
-              ? goal.currentWork
-              : undefined;
-          const target =
-            goal.status === "goal_review"
-              ? `/goals/${goal.id}/review`
-              : activeWork
-                ? `/goals/${goal.id}/cycles/${activeWork.cycleId}`
-                : `/goals/${goal.id}`;
-          return (
-            <Link className="goal-card" key={goal.id} to={target}>
-              <span className="goal-card__kicker">あなたの目標</span>
-              <strong>{goal.currentVersion.body}</strong>
-              <div className="goal-card__meta">
-                <span>{statusLabel[goal.status]}</span>
-                <span>
-                  {goal.status === "active_cycle"
-                    ? `Cycle ${activeWork?.cycleSequenceNumber ?? ""}`
-                    : "前回Cycleを振り返って目標を確認してください"}
-                </span>
-              </div>
-            </Link>
-          );
-        })}
+        {validProgressingGoalCards.map((view) => (
+          <ProgressingGoalCard key={view.goalId} view={view} />
+        ))}
       </section>
       {home.creationDraft && (
         <section className="draft-card">
