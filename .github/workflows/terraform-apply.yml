@@ -57,8 +57,8 @@ jobs:
             echo '::error::Missing repository variable TERRAFORM_APPLY_APPROVER.'
             exit 1
           fi
-          if [[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]; then
-            echo "::error::Only configured approver ${EXPECTED_APPROVER} may run Terraform Apply; actor was ${GITHUB_ACTOR}."
+          if [[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" || "${GITHUB_TRIGGERING_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]; then
+            echo '::error::Terraform Apply actor and triggering actor must both match TERRAFORM_APPLY_APPROVER.'
             exit 1
           fi
           if [[ ! "${PLAN_RUN_ID}" =~ ^[0-9]+$ ]]; then
@@ -338,7 +338,7 @@ jobs:
             echo "- Turnstile site key (public): \`${sitekey}\`"
             echo "- State backup: \`${{ steps.state_recovery.outputs.state_backup_key }}\`"
             echo "- State backup checksum: \`${{ steps.state_recovery.outputs.state_backup_checksum_key }}\`"
-            echo "- \`Deploy Staging\` will start automatically from this successful workflow."
+            echo "- Manually run \`Deploy Staging\` in \`normal\` mode with Apply workflow run ID \`${GITHUB_RUN_ID}\`."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Write deployment metadata

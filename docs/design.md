@@ -5165,7 +5165,8 @@ Goal、Goal Draft、Goal Version、P/D/C/A、Goal Refine source/outputは、仕�
 
 - 初版は`CSRF_TOKEN_PEPPER`のsingle active keyだけを持つ。plannedな無停止pepper rotationとstable issuanceのmulti-instance rolloutは非対応であり、keyring、両keyのconstant-time検証、active epoch切替または二段階issuance flagは別Issue / Decision gateで仕様化する。
 - 通常releaseでsecretだけを切り替えたり、旧keyと新keyのinstanceを混在させたりしない。緊急pepper rotationだけをmaintenanceとold-instance drain下で実施し、旧tokenの即時失効と一時的な`403 CSRF_INVALID` /再discoveryを受容して、drain後の単一active keyへ収束させる。Rollbackには切替前keyを安全に保持していることを必須とする。
-- stable v1初回rolloutは§27.2のdual-validationを含む。Cloudflare deploy成功は旧imageのdrain完了を意味せず、mixed-version中は旧Backendが返したlegacy tokenが一度`CSRF_INVALID`となり得るavailability上のdegraded behaviorを受容する。Origin、CSRF、Expected User、Session guardを緩和せず、drain確認後にmulti-tab smokeを行う。
+- stable v1初回rolloutは§27.2のdual-validationを含む。Cloudflare deploy成功は旧imageのdrain完了を意味せず、mixed-version中は旧Backendが返したlegacy tokenが一度`CSRF_INVALID`となり得るavailability上のdegraded behaviorを受容する。Origin、CSRF、Expected User、Session guardを緩和しない。Deploy前のWorker deployment / versionとrunning Container imageをbaselineとし、Deploy後はcandidate SHAにtag付けされたWorker versionだけが100% trafficを受け、candidateへのContainer rolloutがcompletedで、running instanceがcandidate imageだけになったauthoritative Cloudflare metadataを連続2回取得できた場合だけdrain完了とする。Empty / inactive / unknown state、旧image残存、API schema不明、取得不能、timeoutは成功扱いにせず、drain確認後だけmulti-tab smokeを行う。
+- Deploy前にlegacy Applicationから作成したSession、legacy CSRF token、同一Browser Contextの二tabは、一つのPlaywright processのmemoryだけに保持する。そのprocessがmigration、secret materialization、Deploy、drain確認を行う固定child commandの完了を待ち、processを跨がずpost-drain smokeへ進む。Session / CSRF tokenはenvironment、argv、file、log、trace、screenshot、artifactへ出さない。
 - `csrf_token_hash`とlegacy verifier pathは初回rolloutで削除しない。旧imageのdrainを記録した時点からSession absolute TTLの180日が経過した後に限り、別Issue / Decision gateで削除可否を判断する。既存baseline migrationを編集しない。
 - Production deploy前に、`CSRF_TOKEN_PEPPER`が環境専用・用途専用のCSPRNG由来256-bit相当keyであることを、値を表示・logせず確認する。不明な場合はProduction deployを停止し、先にmaintenance rotationの要否を判断する。Exact inventoryは§45と[`environment.md`](environment.md)、release手順は[`operations.md`](operations.md)が所有する。
 
@@ -5750,17 +5751,20 @@ External OpenAI / Google / Turnstileの実callを通常PR必須testにしない�
 
 ## 44.4 Deploy sequence
 
+`Terraform Apply Staging`と`Deploy Staging`は別々のmanual approval boundaryとする。通常Deployはconfigured approverがexact-current-mainの成功Apply run IDを指定した場合だけ実行し、Apply成功から自動起動しない。Application recoveryは別modeとし、current main、同一SHAの成功CI、configured approver、exact confirmationを必須にする。Recoveryは通常releaseのApply gateを迂回する一般Deploy経路として使わない。
+
 ```text
-1. main commitをbuild
-2. CandidateのAdmission modeを現在配信中revisionへ仮定せず、/healthz、/readyz、fresh Browser Context、Admission off / closedを自動判定するentry、Turnstile anonymous bootstrap、session discovery、公開account delete、削除後session 401のpre-switch baselineを実行
-3. staging migrationをdirect DB URLで適用
-4. Worker/Container/assetsをdeploy
-5. /healthz /readyz smoke test
-6. Goal / Cycle / Review / Historyを含むpost-deploy critical E2Eと公開account cleanupを実行
-7. production approval
-8. production migration
-9. production deploy
-10. smoke / metrics確認
+1. current main、manual Deploy approver、mode固有のApply evidenceまたはrecovery confirmation、同一SHAの成功CIを検証
+2. main commitをbuild
+3. CandidateのAdmission modeを現在配信中revisionへ仮定せず、/healthz、/readyz、fresh Browser Context、Admission off / closedを自動判定するentry、Turnstile anonymous bootstrap、session discovery、公開account delete、削除後session 401のpre-switch baselineを実行。Stable CSRF rolloutでは別の同一Browser Context二tabとlegacy Session / tokenをprocess memoryへ保持する
+4. 同じBrowser test processが固定child commandを待つ間に、staging migrationをdirect DB URLで適用し、Worker/Container/assetsをdeployする
+5. Authoritative Cloudflare metadataからold-image drainをbounded pollし、candidate-only stateを連続2回確認する。証跡不能またはtimeoutでは停止する
+6. 保持した二tabでstable convergence / security smokeを行い、続けて/healthz /readyz smoke testを行う
+7. Goal / Cycle / Review / Historyを含むpost-deploy critical E2Eと公開account cleanupを実行
+8. production approval
+9. production migration
+10. production deploy
+11. smoke / metrics確認
 ```
 
 Pre-switch baselineまたはそのcleanup proofが失敗した場合はmigration、secret materialization、Application deployへ進まない。Migration失敗時はApplication deployを行わない。Backward-incompatible変更はExpand / Contractを使い、同一Deployで直前Application versionとの互換性を即座に破壊しない。
@@ -5955,7 +5959,7 @@ Legacy PDCAI retirement境界では、current-user fresh、other-user fresh、ex
 
 Anonymous create rate limitでは、UTC hour境界の両端包含、23.5時間離れたbucketの24時間上限、guard待機後のcanonical time、future bucket除外、hour rollover並行request、guard / bucket expiryの単調性、sentinel更新失敗時のrollback、blocked attemptの永続化、limiterとcleanupの競合を実PostgreSQLで追加検証する。Frontendはrate-limit 429を自動再送しないこと、手動Retryと専用案内が残ることを検証する。
 
-Stable CSRFでは、固定key / Session IDのbyte-level golden vectorによりscope文字列、NUL separator、lowercase UUID、paddingなしbase64urlとverifier式を固定する。同じSession / keyの同値性、Sessionまたはkey変更時の差、空・不正token拒否、legacy verifier収束、同一hashのidempotent保存、revoke / expiry raceをunit / repository testで検証する。Application unit testはstable側が一致する場合もlegacy verifier側のconstant-time比較を実行してからORすることをcomparator call countで固定する。HTTP integrationはbarrier同期した2件以上の`GET /session`が同じtokenを返し、各tokenによるunsafe Requestがともに成功すること、invalid token / Origin、revoked / expired /旧Sessionを拒否すること、Session rotation後は旧CSRFを拒否して新CSRFが成功することを検証する。Pepper rotation testはmaintenanceとold-instance drain後の単一active keyだけを対象とし、旧token拒否と新token成功を固定する。Rollout検証はlegacy / stable token、旧 / 新Application、旧 / 新keyのmatrixと旧image drain後のsmokeを含む。
+Stable CSRFでは、固定key / Session IDのbyte-level golden vectorによりscope文字列、NUL separator、lowercase UUID、paddingなしbase64urlとverifier式を固定する。同じSession / keyの同値性、Sessionまたはkey変更時の差、空・不正token拒否、legacy verifier収束、同一hashのidempotent保存、revoke / expiry raceをunit / repository testで検証する。Application unit testはstable側が一致する場合もlegacy verifier側のconstant-time比較を実行してからORすることをcomparator call countで固定する。HTTP integrationはbarrier同期した2件以上の`GET /session`が同じtokenを返し、各tokenによるunsafe Requestがともに成功すること、invalid token / Origin、revoked / expired /旧Sessionを拒否すること、Session rotation後は旧CSRFを拒否して新CSRFが成功することを検証する。Pepper rotation testはmaintenanceとold-instance drain後の単一active keyだけを対象とし、旧token拒否と新token成功を固定する。Rolloutのdeterministic testはlegacy / stable token、旧 / 新Application、旧 / 新key、expiry / revoke raceをexact-main CI evidenceで固定する。Live Stagingはlegacy Sessionを持つ同一Browser Context二tabをprocess memoryに保持したままDeploy / drainを待ち、candidate-only authoritative evidenceの後だけ、同時Session discoveryの同値、片tab reload後の両tab unsafe command / autosave、convergence後のlegacy token拒否、invalid token / Origin拒否、Account Delete後の401、advisory欠落時のauthoritative recoveryを検証する。TTL短縮、DB直接操作、test-only Production endpoint、pepper変更でlive caseを作らない。
 
 Read operationはcursor tamper、scope mismatch、ordering、pagination境界、cross-user非開示を適用可能な範囲で検証する。
 

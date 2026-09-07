@@ -59,7 +59,26 @@ assert.equal(
 );
 const workflow = readRepositoryFile(".github/workflows/deploy.yml");
 const resolveJobPreamble = between(workflow, "  resolve:\n", "\n    steps:\n");
-const resolveStep = extractStep(workflow, "Resolve deployment commit");
+const deployDispatchPreflightStep = extractStep(
+  workflow,
+  "Verify deploy dispatch preflight",
+);
+const resolveStep = extractStep(workflow, "Resolve approved deployment");
+const candidateDeployAndDrainScript = readRepositoryFile(
+  "scripts/run-staging-candidate-deploy-and-drain.sh",
+);
+const workerSecretsMaterializer = readRepositoryFile(
+  "scripts/materialize-staging-worker-secrets.mjs",
+);
+const drainEvidenceCLI = readRepositoryFile(
+  "scripts/check-cloudflare-drain-evidence.mjs",
+);
+const rolloutEvidenceWriter = readRepositoryFile(
+  "scripts/write-staging-rollout-evidence.mjs",
+);
+const stagingRolloutBrowserEntry = readRepositoryFile(
+  "frontend/e2e/staging-csrf-rollout-entry.mjs",
+);
 const validationStep = extractStep(
   workflow,
   "Validate required deployment inputs",
@@ -162,6 +181,16 @@ test("deployment contract is the exact repository handoff classification", () =>
     ["name: Deploy Staging", "on:", "permissions:", "concurrency:", "jobs:"],
     "deployment workflow root field inventory",
   );
+  assert.equal(
+    between(workflow, "permissions:\n", "\nconcurrency:\n").trimEnd(),
+    ["  actions: read", "  contents: read"].join("\n"),
+    "deployment workflow permissions must remain read-only",
+  );
+  assert.equal(
+    between(workflow, "concurrency:\n", "\njobs:\n").trimEnd(),
+    ["  group: staging-deploy", "  cancel-in-progress: false"].join("\n"),
+    "deployment workflow must serialize staging changes without cancelling an active rollout",
+  );
   assert.deepEqual(
     between(workflow, "jobs:\n", "")
       .split("\n")
@@ -169,127 +198,214 @@ test("deployment contract is the exact repository handoff classification", () =>
     ["  resolve:", "  deploy:"],
     "deployment workflow job ID inventory",
   );
+  const resolveJob = between(workflow, "  resolve:\n", "\n  deploy:\n");
+  assert.deepEqual(
+    matches(resolveJob, /^      - ([^\n]+)$/gm),
+    [
+      "name: Verify deploy dispatch preflight",
+      "name: Resolve approved deployment",
+      "name: Download approved Terraform Apply metadata",
+      "name: Verify approved Terraform Apply metadata",
+      "name: Re-verify deployment commit before Staging approval",
+    ],
+    "deployment pre-approval step inventory",
+  );
   assert.deepEqual(
     resolveJobPreamble.split("\n").filter((line) => line !== ""),
     [
-      "    if: >-",
-      "      github.event_name == 'workflow_dispatch' ||",
-      "      (github.event_name == 'workflow_run' &&",
-      "       github.event.workflow_run.name == 'Terraform Apply Staging' &&",
-      "       github.event.workflow_run.path == '.github/workflows/terraform-apply.yml' &&",
-      "       github.event.workflow_run.event == 'workflow_dispatch' &&",
-      "       github.event.workflow_run.status == 'completed' &&",
-      "       github.event.workflow_run.conclusion == 'success' &&",
-      "       github.event.workflow_run.head_branch == 'main' &&",
-      "       github.event.workflow_run.head_repository.full_name == github.repository)",
       "    runs-on: ubuntu-latest",
       "    timeout-minutes: 5",
       "    outputs:",
+      "      ci_run_id: ${{ steps.resolve.outputs.ci_run_id }}",
       "      commit_sha: ${{ steps.resolve.outputs.commit_sha }}",
     ],
     "deployment resolve job contract",
   );
-  assertStepExecutionControls(resolveStep, "Resolve deployment commit", "bash");
+  assert.doesNotMatch(
+    between(workflow, "on:\n", "\npermissions:\n"),
+    /\bworkflow_run\b/,
+    "Staging deployment must never start automatically from workflow_run",
+  );
+  assert.equal(
+    between(workflow, "on:\n", "\npermissions:\n").trimEnd(),
+    [
+      "  workflow_dispatch:",
+      "    inputs:",
+      "      mode:",
+      "        description: Select normal after Terraform Apply, or schema-compatible application recovery",
+      "        required: true",
+      "        type: choice",
+      "        options:",
+      "          - normal",
+      "          - recovery",
+      "      apply_run_id:",
+      "        description: Successful exact-current-main Terraform Apply Staging run ID (normal only)",
+      "        required: false",
+      "        type: string",
+      "      recovery_confirmation:",
+      "        description: Type RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY (recovery only)",
+      "        required: false",
+      "        type: string",
+    ].join("\n"),
+    "deployment workflow must expose only the approved manual modes",
+  );
+  assertStepExecutionControls(
+    deployDispatchPreflightStep,
+    "Verify deploy dispatch preflight",
+    "bash",
+  );
+  assert.deepEqual(stepEnvironmentMappings(deployDispatchPreflightStep), {
+    APPLY_RUN_ID: { kind: "literal", value: "${{ inputs.apply_run_id }}" },
+    EXPECTED_APPROVER: {
+      kind: "literal",
+      value: "${{ vars.STAGING_DEPLOY_APPROVER }}",
+    },
+    MODE: { kind: "literal", value: "${{ inputs.mode }}" },
+    RECOVERY_CONFIRMATION: {
+      kind: "literal",
+      value: "${{ inputs.recovery_confirmation }}",
+    },
+  });
+  for (const fragment of [
+    "Deploy Staging accepts manual workflow dispatch only.",
+    "Deploy Staging workflow reruns are prohibited; start a new manual dispatch after reviewing the prior attempt.",
+    "Deploy Staging is allowed only from main.",
+    "Missing repository variable STAGING_DEPLOY_APPROVER.",
+    "Deploy Staging actor and triggering actor must both match STAGING_DEPLOY_APPROVER.",
+    "Normal deployment requires a numeric Terraform Apply workflow run ID.",
+    "Normal deployment must not include a recovery confirmation.",
+    "Recovery deployment must not include a Terraform Apply workflow run ID.",
+    "RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY",
+    "Deploy Staging mode must be normal or recovery.",
+    '[[ ! "${EXPECTED_APPROVER}" =~ ^[[:alnum:]]([[:alnum:]-]{0,37}[[:alnum:]])?$ || "${EXPECTED_APPROVER}" =~ -- ]]',
+    '[[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" || "${GITHUB_TRIGGERING_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]',
+    "[[ \"${GITHUB_RUN_ATTEMPT}\" != '1' ]]",
+    '[[ ! "${APPLY_RUN_ID}" =~ ^[1-9][0-9]*$ ]]',
+    "[[ \"${RECOVERY_CONFIRMATION}\" != 'RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY' ]]",
+  ]) {
+    assert.equal(
+      deployDispatchPreflightStep.split(fragment).length - 1,
+      1,
+      `deployment dispatch preflight must contain exactly one guard: ${fragment}`,
+    );
+  }
+  assert.match(
+    deployDispatchPreflightStep,
+    /case "\$\{MODE\}" in[\s\S]*normal\)[\s\S]*recovery\)[\s\S]*\*\)/,
+    "deployment dispatch preflight must fail closed across the two approved modes",
+  );
+  assertStepExecutionControls(
+    resolveStep,
+    "Resolve approved deployment",
+    "bash",
+  );
   assert.equal(extractStepProperty(resolveStep, "id"), "resolve");
   assert.deepEqual(stepEnvironmentMappings(resolveStep), {
-    APPLY_RUN_ID: {
+    APPLY_RUN_ID: { kind: "literal", value: "${{ inputs.apply_run_id }}" },
+    DISPATCH_SHA: { kind: "literal", value: "${{ github.sha }}" },
+    GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
+    MODE: { kind: "literal", value: "${{ inputs.mode }}" },
+  });
+  assert.equal(
+    resolveStep.split("gh api \\").length - 1,
+    4,
+    "approved deployment resolution must keep the exact GitHub API invocation count",
+  );
+  for (const fragment of [
+    '"/repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
+    '"/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}"',
+    '"/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}/artifacts?per_page=100"',
+    '"/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs"',
+    '.name == "Terraform Apply Staging"',
+    '.path == ".github/workflows/terraform-apply.yml"',
+    "(.[0].id | tostring) == $run_id",
+    '.event == "workflow_dispatch"',
+    '.status == "completed"',
+    '.conclusion == "success"',
+    '.head_branch == "main"',
+    ".head_repository.full_name == $repository",
+    '--arg expected_name "terraform-apply-staging-${apply_head_sha}"',
+    "if ($matches | length) == 1 then",
+    '.name == "CI"',
+    '.path == ".github/workflows/ci.yml"',
+    'echo "ci_run_id=${successful_ci_run_id}"',
+    'echo "commit_sha=${current_main_sha}"',
+  ]) {
+    assert.ok(
+      resolveStep.includes(fragment),
+      `approved deployment resolution is missing: ${fragment}`,
+    );
+  }
+  const downloadApplyMetadataStep = extractStep(
+    workflow,
+    "Download approved Terraform Apply metadata",
+  );
+  assert.equal(
+    downloadApplyMetadataStep.trimEnd(),
+    [
+      "      - name: Download approved Terraform Apply metadata",
+      "        if: inputs.mode == 'normal'",
+      "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+      "        with:",
+      "          name: ${{ steps.resolve.outputs.apply_artifact_name }}",
+      "          path: ${{ runner.temp }}/fukamu-cycle-terraform-apply-metadata",
+      "          github-token: ${{ github.token }}",
+      "          run-id: ${{ steps.resolve.outputs.apply_run_id }}",
+    ].join("\n"),
+    "normal mode must download only the resolved Terraform Apply evidence",
+  );
+  const verifyApplyMetadataStep = extractStep(
+    workflow,
+    "Verify approved Terraform Apply metadata",
+  );
+  assert.equal(
+    extractStepProperty(verifyApplyMetadataStep, "if"),
+    "inputs.mode == 'normal'",
+  );
+  assert.deepEqual(stepEnvironmentMappings(verifyApplyMetadataStep), {
+    ARTIFACT_DIRECTORY: {
       kind: "literal",
-      value: "${{ github.event.workflow_run.id }}",
+      value: "${{ runner.temp }}/fukamu-cycle-terraform-apply-metadata",
+    },
+    COMMIT_SHA: {
+      kind: "literal",
+      value: "${{ steps.resolve.outputs.commit_sha }}",
+    },
+  });
+  for (const fragment of [
+    '! -d "${ARTIFACT_DIRECTORY}" || -L "${ARTIFACT_DIRECTORY}"',
+    'entry_count="$(find -P "${ARTIFACT_DIRECTORY}" -mindepth 1 -maxdepth 1 -printf \'.\' | wc -c)"',
+    '"${entry_count}" != \'1\' || ! -f "${metadata_file}" || -L "${metadata_file}"',
+    '"$(wc -c < "${metadata_file}")" != \'41\'',
+    '"${artifact_commit}" != "${COMMIT_SHA}"',
+  ]) {
+    assert.ok(
+      verifyApplyMetadataStep.includes(fragment),
+      `Terraform Apply metadata verification is missing: ${fragment}`,
+    );
+  }
+  const preApprovalMainGuard = extractStep(
+    workflow,
+    "Re-verify deployment commit before Staging approval",
+  );
+  assertStepExecutionControls(
+    preApprovalMainGuard,
+    "Re-verify deployment commit before Staging approval",
+    "bash",
+  );
+  assert.deepEqual(stepEnvironmentMappings(preApprovalMainGuard), {
+    COMMIT_SHA: {
+      kind: "literal",
+      value: "${{ steps.resolve.outputs.commit_sha }}",
     },
     GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
   });
   assert.equal(
-    resolveStep.trimEnd(),
-    [
-      "      - name: Resolve deployment commit",
-      "        id: resolve",
-      "        shell: bash",
-      "        env:",
-      "          APPLY_RUN_ID: ${{ github.event.workflow_run.id }}",
-      "          GH_TOKEN: ${{ github.token }}",
-      "        run: |",
-      "          set -euo pipefail",
-      "          if [[ \"${GITHUB_EVENT_NAME}\" == 'workflow_dispatch' ]]; then",
-      "            if [[ \"${GITHUB_REF}\" != 'refs/heads/main' ]]; then",
-      "              echo '::error::Manual Staging deployment is allowed only from main.'",
-      "              exit 1",
-      "            fi",
-      '            commit_sha="${GITHUB_SHA}"',
-      "          else",
-      '            if [[ ! "${APPLY_RUN_ID}" =~ ^[0-9]+$ ]]; then',
-      '              echo "::error::Terraform Apply workflow run ID must be numeric: ${APPLY_RUN_ID}"',
-      "              exit 1",
-      "            fi",
-      '            artifacts_json="$(',
-      "              gh api \\",
-      "                -H 'Accept: application/vnd.github+json' \\",
-      '                "/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}/artifacts?per_page=100"',
-      '            )"',
-      '            artifact_name="$(',
-      "              jq -ser \\",
-      '                --arg run_id "${APPLY_RUN_ID}" \\',
-      '                --arg prefix "terraform-apply-staging-" \\',
-      "                '",
-      "                  if (",
-      "                    length == 1 and",
-      '                    (.[0] | type) == "object" and',
-      '                    (.[0].total_count | type) == "number" and',
-      "                    (.[0].total_count | floor) == .[0].total_count and",
-      "                    .[0].total_count >= 0 and",
-      '                    (.[0].artifacts | type) == "array" and',
-      "                    .[0].total_count == (.[0].artifacts | length) and",
-      "                    .[0].total_count <= 100 and",
-      "                    all(.[0].artifacts[];",
-      '                      (type == "object") and',
-      '                      (.id | type) == "number" and',
-      "                      (.id | floor) == .id and",
-      "                      .id > 0 and",
-      '                      (.name | type) == "string" and',
-      '                      (.expired | type) == "boolean" and',
-      '                      (.workflow_run | type) == "object" and',
-      '                      (.workflow_run.id | type) == "number" and',
-      "                      (.workflow_run.id | floor) == .workflow_run.id and",
-      "                      (.workflow_run.id | tostring) == $run_id",
-      "                    )",
-      "                  ) then",
-      "                    [",
-      "                      .[0].artifacts[]",
-      "                      | select(",
-      "                          .expired == false and",
-      "                          (.name | startswith($prefix))",
-      "                        )",
-      "                    ] as $matches",
-      "                    | if ($matches | length) == 1 then",
-      "                        $matches[0].name",
-      "                      else",
-      '                        error("expected exactly one deployment metadata artifact")',
-      "                      end",
-      "                  else",
-      '                    error("invalid or paginated artifact response")',
-      "                  end",
-      "                ' \\",
-      '                <<< "${artifacts_json}"',
-      '            )"',
-      '            commit_sha="${artifact_name#terraform-apply-staging-}"',
-      "          fi",
-      "",
-      '          if [[ ! "${commit_sha}" =~ ^[0-9a-f]{40}$ ]]; then',
-      '            echo "::error::Resolved deployment commit is not a valid SHA: ${commit_sha}"',
-      "            exit 1",
-      "          fi",
-      '          current_main_sha="$(',
-      "            gh api \\",
-      "              -H 'Accept: application/vnd.github+json' \\",
-      '              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \\',
-      "              --jq '.object.sha'",
-      '          )"',
-      '          if [[ "${commit_sha}" != "${current_main_sha}" ]]; then',
-      '            echo "::error::Deployment commit ${commit_sha} is stale; current main is ${current_main_sha}."',
-      "            exit 1",
-      "          fi",
-      '          echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"',
-    ].join("\n"),
-    "deployment resolve step",
+    preApprovalMainGuard.split(
+      '"/repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
+    ).length - 1,
+    1,
+    "the deployment commit must be checked against current main immediately before staging approval",
   );
 
   const deployJob = between(workflow, "  deploy:\n", "");
@@ -301,7 +417,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     [
       "    needs: resolve",
       "    runs-on: ubuntu-latest",
-      "    timeout-minutes: 30",
+      "    timeout-minutes: 45",
       "    environment:",
       "    env:",
     ],
@@ -310,7 +426,7 @@ test("deployment contract is the exact repository handoff classification", () =>
   for (const expectedJobLine of [
     "    needs: resolve",
     "    runs-on: ubuntu-latest",
-    "    timeout-minutes: 30",
+    "    timeout-minutes: 45",
     "      name: staging",
     "      url: https://cycle.staging.fukamu.matoruru.com",
   ]) {
@@ -323,7 +439,6 @@ test("deployment contract is the exact repository handoff classification", () =>
   assert.deepEqual(
     matches(deployJob, /^      - ([^\n]+)$/gm),
     [
-      "name: Verify commit has successful CI",
       "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
       "uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0",
       "uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
@@ -334,12 +449,8 @@ test("deployment contract is the exact repository handoff classification", () =>
       "name: Build static frontend",
       "name: Validate Backend runtime configuration",
       "name: Verify current Staging baseline before migration",
-      "name: Re-verify deployment commit is still main HEAD",
-      "name: Apply database migrations",
-      "name: Re-verify deployment commit after migrations",
-      "name: Create ephemeral Worker secrets file",
-      "name: Deploy Worker, static assets, and Container",
-      "name: Remove ephemeral Worker secrets file",
+      "name: Run stable CSRF initial rollout and authoritative drain",
+      "name: Upload stable CSRF rollout evidence",
       "name: Smoke test",
       "name: Run post-deploy staging critical journey",
     ],
@@ -504,83 +615,6 @@ test("deployment contract is the exact repository handoff classification", () =>
     "deployment job must not expose secrets",
   );
 
-  const verifyCIStep = extractStep(workflow, "Verify commit has successful CI");
-  assertStepExecutionControls(
-    verifyCIStep,
-    "Verify commit has successful CI",
-    "bash",
-  );
-  assert.equal(
-    verifyCIStep.trimEnd(),
-    [
-      "      - name: Verify commit has successful CI",
-      "        shell: bash",
-      "        env:",
-      "          GH_TOKEN: ${{ github.token }}",
-      "        run: |",
-      "          set -euo pipefail",
-      '          successful_runs="$(',
-      "            gh api \\",
-      "              --method GET \\",
-      "              -H 'Accept: application/vnd.github+json' \\",
-      '              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \\',
-      '              -f head_sha="${COMMIT_SHA}" \\',
-      "              -f branch=main \\",
-      "              -f event=push \\",
-      "              -f status=completed \\",
-      "              -f per_page=100 \\",
-      "              | jq -er \\",
-      '                --arg commit_sha "${COMMIT_SHA}" \\',
-      '                --arg repository "${GITHUB_REPOSITORY}" \\',
-      "                '",
-      "                  . as $root",
-      "                  | if (",
-      '                      ($root | type) == "object" and',
-      '                      ($root.total_count | type) == "number" and',
-      "                      $root.total_count >= 0 and",
-      '                      ($root.workflow_runs | type) == "array" and',
-      "                      $root.total_count == ($root.workflow_runs | length) and",
-      "                      $root.total_count <= 100 and",
-      "                      all($root.workflow_runs[];",
-      '                        (type == "object") and',
-      '                        (.name | type) == "string" and',
-      '                        (.path | type) == "string" and',
-      '                        (.event | type) == "string" and',
-      '                        (.status | type) == "string" and',
-      '                        (.conclusion | type) == "string" and',
-      '                        (.head_sha | type) == "string" and',
-      '                        (.head_branch | type) == "string" and',
-      '                        (.head_repository | type) == "object" and',
-      '                        (.head_repository.full_name | type) == "string"',
-      "                      )",
-      "                    ) then",
-      "                      [",
-      "                        $root.workflow_runs[]",
-      "                        | select(",
-      '                            .name == "CI" and',
-      '                            .path == ".github/workflows/ci.yml" and',
-      '                            .event == "push" and',
-      '                            .status == "completed" and',
-      '                            .conclusion == "success" and',
-      "                            .head_sha == $commit_sha and",
-      '                            .head_branch == "main" and',
-      "                            .head_repository.full_name == $repository",
-      "                          )",
-      "                      ]",
-      "                      | length",
-      "                    else",
-      '                      error("invalid CI workflow-run response")',
-      "                    end",
-      "                '",
-      '          )"',
-      '          if [[ ! "${successful_runs}" =~ ^[1-9][0-9]*$ ]]; then',
-      '            echo "::error::No exact successful main push CI run found for commit ${COMMIT_SHA}."',
-      "            exit 1",
-      "          fi",
-    ].join("\n"),
-    "deployment CI-success verification step",
-  );
-
   const checkoutStep = extractUsesStep(
     workflow,
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
@@ -697,154 +731,295 @@ test("deployment contract is the exact repository handoff classification", () =>
     null,
   );
 
-  const workerDeployStep = extractStep(
+  const stableRolloutStep = extractStep(
     workflow,
-    "Deploy Worker, static assets, and Container",
+    "Run stable CSRF initial rollout and authoritative drain",
   );
   assertStepExecutionControls(
-    workerDeployStep,
-    "Deploy Worker, static assets, and Container",
+    stableRolloutStep,
+    "Run stable CSRF initial rollout and authoritative drain",
     "bash",
+  );
+  assert.deepEqual(
+    stepEnvironmentMappings(stableRolloutStep),
+    {
+      DEPLOY_MODE: { kind: "literal", value: "${{ inputs.mode }}" },
+      APPLY_RUN_ID: { kind: "literal", value: "${{ inputs.apply_run_id }}" },
+      EXACT_MAIN_CI_RUN_ID: {
+        kind: "literal",
+        value: "${{ needs.resolve.outputs.ci_run_id }}",
+      },
+      GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
+      STAGING_BASE_URL: { kind: "environment", value: "PUBLIC_ORIGIN" },
+      STAGING_ADMISSION_MODE: { kind: "literal", value: "auto" },
+      STAGING_E2E_INVITE_TOKEN: {
+        kind: "secret",
+        value: "STAGING_E2E_INVITE_TOKEN",
+      },
+      MIGRATION_DATABASE_URL: {
+        kind: "secret",
+        value: "NEON_MIGRATION_DATABASE_URL",
+      },
+      ...secretEnvironmentMappings(workerSecretSources),
+      ...secretEnvironmentMappings(cloudflareDeploySecretSources),
+    },
+    "deployment contract/stable rollout environment",
+  );
+  assert.deepEqual(
+    between(stableRolloutStep, "        run: |\n", "").split("\n").slice(0, 2),
+    [
+      "          set -euo pipefail",
+      "          bash ./scripts/check-staging-csrf-rollout.sh",
+    ],
+    "stable rollout must run through the same-process browser orchestrator",
+  );
+  assert.equal(
+    stableRolloutStep.split("bash ./scripts/check-staging-csrf-rollout.sh")
+      .length - 1,
+    1,
+    "stable rollout must invoke exactly one browser orchestrator",
+  );
+  for (const fragment of [
+    "STAGING_ROLLOUT_EVIDENCE_STAGE=smoke_passed",
+    'STAGING_ROLLOUT_PENDING_EVIDENCE_FILE="${RUNNER_TEMP}/fukamu-cycle-stable-csrf-rollout-drained.json"',
+    'STAGING_ROLLOUT_EVIDENCE_FILE="${RUNNER_TEMP}/fukamu-cycle-stable-csrf-rollout-smoke-passed.json"',
+    "node ./scripts/write-staging-rollout-evidence.mjs",
+  ]) {
+    assert.equal(
+      stableRolloutStep.split(fragment).length - 1,
+      1,
+      `stable rollout smoke evidence must be finalized exactly once: ${fragment}`,
+    );
+  }
+  const fixedChildSpawn = [
+    "  const child = spawn(",
+    '    "bash",',
+    '    ["./scripts/run-staging-candidate-deploy-and-drain.sh"],',
+    "    {",
+    "      cwd: repositoryRoot,",
+    "      detached: true,",
+    "      shell: false,",
+    '      stdio: "ignore",',
+    "    },",
+    "  );",
+  ].join("\n");
+  assert.equal(
+    stagingRolloutBrowserEntry.split(fixedChildSpawn).length - 1,
+    1,
+    "the live Browser process must await the exact fixed child command without arguments or inherited stdio",
+  );
+  assert.equal(
+    stagingRolloutBrowserEntry.split("await deploymentChildCompletion").length -
+      1,
+    1,
+    "the live Browser process must await the deployment and drain child",
+  );
+
+  const uploadEvidenceStep = extractStep(
+    workflow,
+    "Upload stable CSRF rollout evidence",
+  );
+  assert.equal(
+    uploadEvidenceStep.trimEnd(),
+    [
+      "      - name: Upload stable CSRF rollout evidence",
+      "        if: ${{ always() }}",
+      "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+      "        with:",
+      "          name: stable-csrf-rollout-${{ env.COMMIT_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}",
+      "          path: |",
+      "            ${{ runner.temp }}/fukamu-cycle-stable-csrf-rollout-drained.json",
+      "            ${{ runner.temp }}/fukamu-cycle-stable-csrf-rollout-smoke-passed.json",
+      "          if-no-files-found: ignore",
+      "          retention-days: 90",
+    ].join("\n"),
+    "stable rollout evidence must be uploaded after both success and failure without masking the rollout result",
+  );
+
+  assert.equal(
+    candidateDeployAndDrainScript.split("go run ./cmd/migrate").length - 1,
+    1,
+    "the child script must be the sole migration consumer",
+  );
+  assert.equal(
+    candidateDeployAndDrainScript.split("wrangler deploy").length - 1,
+    1,
+    "the child script must be the sole Wrangler deploy consumer",
+  );
+  assert.equal(
+    workflow.split("go run ./cmd/migrate").length - 1,
+    0,
+    "the workflow must not bypass the fixed rollout child for migrations",
+  );
+  assert.equal(
+    workflow.split("wrangler deploy").length - 1,
+    0,
+    "the workflow must not bypass the fixed rollout child for deployment",
   );
   assertExactSet(
     [...backend.githubVariables, closedBeta.mode.name],
-    extractBashArray(workerDeployStep, "variable_names"),
-    "deployment contract/workflow Worker variables",
-  );
-  const workerVariableLoopLine =
-    '            variable_args+=(--var "${name}:${!name}")';
-  const workerConditionalArgumentLines = closedBeta.conditionalVariables.map(
-    (name) => `              --var "${name}:${bashParameter(name)}"`,
-  );
-  const workerDerivedArgumentLines = Object.entries(backend.derived).map(
-    ([target, source]) =>
-      `          variable_args+=(--var "${target}:${bashParameter(source)}")`,
-  );
-  assert.deepEqual(
-    workerDeployStep.split("\n").filter((line) => line.includes("--var ")),
-    [
-      workerVariableLoopLine,
-      ...workerConditionalArgumentLines,
-      ...workerDerivedArgumentLines,
-    ],
-    "deployment contract/workflow Worker target/source mappings",
-  );
-  const workerVariableLoop = [
-    '          for name in "${variable_names[@]}"; do',
-    workerVariableLoopLine,
-    "          done",
-  ].join("\n");
-  assert.equal(
-    workerDeployStep.split(workerVariableLoop).length - 1,
-    1,
-    "deployment contract/workflow Worker variable loop",
-  );
-  const workerConditionalArguments = [
-    "          if [[ \"${BETA_ADMISSION_MODE}\" == 'closed' ]]; then",
-    "            variable_args+=(",
-    ...workerConditionalArgumentLines,
-    "            )",
-    "          fi",
-  ].join("\n");
-  assert.equal(
-    workerDeployStep.split(workerConditionalArguments).length - 1,
-    1,
-    "deployment contract/workflow closed-Beta variable condition",
-  );
-  assert.deepEqual(
-    workerDeployStep
-      .split("\n")
-      .filter((line) => line.includes("variable_args")),
-    [
-      "          variable_args=()",
-      workerVariableLoopLine,
-      "            variable_args+=(",
-      ...workerDerivedArgumentLines,
-      '            "${variable_args[@]}" \\',
-    ],
-    "deployment contract/workflow Worker variable argument lifecycle",
-  );
-  const wranglerDeployCommand = [
-    "          pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \\",
-    '            "${variable_args[@]}" \\',
-    '            --secrets-file "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json" \\',
-    "            --containers-rollout=immediate",
-  ].join("\n");
-  assert.equal(
-    workerDeployStep.split(wranglerDeployCommand).length - 1,
-    1,
-    "deployment contract/workflow Wrangler deploy consumer",
+    extractBashArray(candidateDeployAndDrainScript, "variable_names"),
+    "deployment contract/fixed child Worker variables",
   );
   assert.equal(
-    [...workerDeployStep.matchAll(/\bwrangler deploy\b/g)].length,
+    candidateDeployAndDrainScript.split(
+      'variable_args+=(--var "${name}:${!name}")',
+    ).length - 1,
     1,
-    "deployment workflow must invoke Wrangler deploy exactly once",
+    "the fixed child must map each classified Worker variable exactly once",
+  );
+  for (const name of closedBeta.conditionalVariables) {
+    assert.equal(
+      candidateDeployAndDrainScript.split(
+        `--var "${name}:${bashParameter(name)}"`,
+      ).length - 1,
+      1,
+      `the fixed child must map conditional Worker variable ${name}`,
+    );
+  }
+  for (const [target, source] of Object.entries(backend.derived)) {
+    assert.equal(
+      candidateDeployAndDrainScript.split(
+        `--var "${target}:${bashParameter(source)}"`,
+      ).length - 1,
+      1,
+      `the fixed child must map derived Worker variable ${target}`,
+    );
+  }
+  for (const fragment of [
+    "set -Eeuo pipefail",
+    "trap cleanup EXIT",
+    'secrets_file="${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"',
+    "coproc DRAIN_EVIDENCE { node ./scripts/check-cloudflare-drain-evidence.mjs; }",
+    '[[ "${baseline_signal}" == "cloudflare_drain_baseline_ready" ]]',
+    'DATABASE_URL="${MIGRATION_DATABASE_URL}"',
+    "go run ./cmd/migrate",
+    "node ./scripts/materialize-staging-worker-secrets.mjs",
+    "wrangler deploy \\",
+    '--secrets-file "${secrets_file}" \\',
+    "--containers-rollout=immediate \\",
+    '--tag "${COMMIT_SHA}"',
+    "printf '%s\\n' \"candidate_deploy_completed\"",
+    "STAGING_ROLLOUT_EVIDENCE_STAGE=drained",
+    "node ./scripts/write-staging-rollout-evidence.mjs",
+  ]) {
+    assert.equal(
+      candidateDeployAndDrainScript.split(fragment).length - 1,
+      1,
+      `candidate deployment child contract is missing or duplicated: ${fragment}`,
+    );
+  }
+  assert.equal(
+    candidateDeployAndDrainScript.split('rm -f -- "${secrets_file}"').length -
+      1,
+    2,
+    "ephemeral Worker secrets must be removed both on EXIT and immediately after deploy",
+  );
+  assert.equal(
+    candidateDeployAndDrainScript.split("    go run ./cmd/migrate\n").length -
+      1,
+    1,
+    "the candidate migration command must remain fail-closed",
+  );
+  assert.equal(
+    candidateDeployAndDrainScript.split("variable_names=(").length - 1,
+    1,
+    "the fixed child must define the classified Worker variable array exactly once",
+  );
+  assert.equal(
+    candidateDeployAndDrainScript.split(
+      'for name in "${variable_names[@]}"; do',
+    ).length - 1,
+    1,
+    "the fixed child must iterate only the classified Worker variable array",
+  );
+  assert.equal(
+    candidateDeployAndDrainScript.split('  "${variable_args[@]}" \\').length -
+      1,
+    1,
+    "Wrangler must consume the classified Worker variable arguments exactly once",
+  );
+  assert.equal(
+    candidateDeployAndDrainScript.split(
+      'if [[ "${BETA_ADMISSION_MODE}" == "closed" ]]; then',
+    ).length - 1,
+    1,
+    "the fixed child must gate closed-Beta variables on closed mode",
+  );
+  assert.doesNotMatch(
+    candidateDeployAndDrainScript,
+    /^PUBLIC_ORIGIN=/m,
+    "the fixed child must not rewrite a modeled Worker variable source",
+  );
+  assert.ok(
+    candidateDeployAndDrainScript.indexOf("cloudflare_drain_baseline_ready") <
+      candidateDeployAndDrainScript.indexOf("go run ./cmd/migrate") &&
+      candidateDeployAndDrainScript.indexOf("go run ./cmd/migrate") <
+        candidateDeployAndDrainScript.indexOf("wrangler deploy") &&
+      candidateDeployAndDrainScript.indexOf("wrangler deploy") <
+        candidateDeployAndDrainScript.indexOf("candidate_deploy_completed") &&
+      candidateDeployAndDrainScript.indexOf("candidate_deploy_completed") <
+        candidateDeployAndDrainScript.indexOf(
+          "node ./scripts/write-staging-rollout-evidence.mjs",
+        ),
+    "baseline, migration, tagged deploy, drain handshake, and evidence order",
   );
 
-  const expectedWorkerDeployStep = [
-    "      - name: Deploy Worker, static assets, and Container",
-    "        shell: bash",
-    "        env:",
-    "          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}",
-    "          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}",
-    "        run: |",
-    "          set -euo pipefail",
-    "          variable_names=(",
-    "            PUBLIC_ORIGIN OTEL_EXPORTER_OTLP_ENDPOINT BETA_ADMISSION_MODE DB_MAX_OPEN_CONNS",
-    "            DB_MAX_IDLE_CONNS DB_CONN_MAX_LIFETIME_MINUTES",
-    "            SESSION_IDLE_DAYS SESSION_ABSOLUTE_DAYS SESSION_ACTIVITY_TOUCH_MINUTES",
-    "            ANONYMOUS_BOOTSTRAP_TTL_MINUTES MAX_PROGRESSING_GOALS AI_MODEL AI_REASONING_EFFORT",
-    "            AI_MAX_INPUT_TOKENS",
-    "            AI_GOAL_REFINE_MAX_OUTPUT_TOKENS AI_ACTION_MAX_OUTPUT_TOKENS AI_MAX_CONTEXT_CYCLES",
-    "            AI_TIMEOUT_SECONDS AI_MAX_PROVIDER_ATTEMPTS AI_MAX_RETRY_BACKOFF_SECONDS",
-    "            AI_FINALIZATION_GRACE_SECONDS AI_LEASE_SECONDS AI_MAX_GENERATIONS_PER_USER_24H",
-    "            AI_GOAL_REFINE_PROMPT_VERSION AI_GENERATE_PROMPT_VERSION AI_REFINE_PROMPT_VERSION",
-    "            AI_TOKENIZER_ENCODING AI_MONTHLY_BUDGET_USD AI_WARNING_THRESHOLDS",
-    "            AI_PRICE_INPUT_USD_PER_MILLION AI_PRICE_OUTPUT_USD_PER_MILLION GOOGLE_WEB_CLIENT_ID",
-    "            RATE_ANONYMOUS_CREATE_PER_IP_HOUR RATE_ANONYMOUS_CREATE_PER_IP_24H",
-    "            RATE_GOAL_START_PER_USER_MINUTE RATE_GOAL_START_PER_SESSION_MINUTE",
-    "            RATE_AI_PER_USER_MINUTE RATE_AI_PER_SESSION_MINUTE RATE_AI_PER_IP_MINUTE",
-    "          )",
-    "          variable_args=()",
-    '          for name in "${variable_names[@]}"; do',
-    '            variable_args+=(--var "${name}:${!name}")',
-    "          done",
-    "          if [[ \"${BETA_ADMISSION_MODE}\" == 'closed' ]]; then",
-    "            variable_args+=(",
-    '              --var "BETA_ADMISSION_COOKIE_TTL_DAYS:${BETA_ADMISSION_COOKIE_TTL_DAYS}"',
-    '              --var "BETA_INVITES:${BETA_INVITES}"',
-    "            )",
-    "          fi",
-    '          variable_args+=(--var "AI_PRICING_MODEL:${AI_MODEL}")',
-    "          pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \\",
-    '            "${variable_args[@]}" \\',
-    '            --secrets-file "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json" \\',
-    "            --containers-rollout=immediate",
-  ].join("\n");
-  assert.equal(
-    workerDeployStep.trimEnd(),
-    expectedWorkerDeployStep,
-    "deployment contract/workflow Worker deploy step",
+  const materializedSecretNames = between(
+    workerSecretsMaterializer,
+    "const requiredSecretNames = Object.freeze([",
+    "]);",
   );
-  assert.deepEqual(
-    stepEnvironmentMappings(workerDeployStep),
-    secretEnvironmentMappings(cloudflareDeploySecretSources),
-    "deployment contract/workflow Cloudflare deploy credentials",
+  assertExactSet(
+    backend.secrets,
+    matches(materializedSecretNames, /"([A-Z][A-Z0-9_]*)"/g),
+    "deployment contract/Worker secret materializer",
   );
-
-  const secretCleanupStep = extractStep(
-    workflow,
-    "Remove ephemeral Worker secrets file",
+  assert.ok(
+    workerSecretsMaterializer.includes(
+      'names.push("BETA_ADMISSION_COOKIE_KEY")',
+    ),
+    "closed-Beta secret must be materialized only for closed mode",
+  );
+  assertExactSet(
+    closedBeta.conditionalSecrets,
+    matches(workerSecretsMaterializer, /names\.push\("([A-Z][A-Z0-9_]*)"\)/g),
+    "deployment contract/conditional Worker secret materializer",
+  );
+  assert.ok(
+    workerSecretsMaterializer.includes('flag: "wx"') &&
+      workerSecretsMaterializer.includes("mode: 0o600"),
+    "Worker secret materialization must be exclusive and owner-only",
+  );
+  assert.doesNotMatch(
+    workerSecretsMaterializer,
+    /console\.(?:log|debug|info)|process\.stdout\.write/,
+    "Worker secret materializer must not log secret-bearing output",
   );
   assert.equal(
-    secretCleanupStep.trimEnd(),
-    [
-      "      - name: Remove ephemeral Worker secrets file",
-      "        if: always()",
-      "        shell: bash",
-      '        run: rm -f -- "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"',
-    ].join("\n"),
-    "deployment Worker secret cleanup step",
+    workerSecretsMaterializer.split(
+      "const values = Object.fromEntries(names.map((name) => [name, env[name]]));",
+    ).length - 1,
+    1,
+    "Worker secret materializer must read each classified secret by its own name",
+  );
+  assert.ok(
+    drainEvidenceCLI.includes(
+      'const wakeSignal = "cloudflare_drain_baseline_ready\\n"',
+    ) &&
+      drainEvidenceCLI.includes(
+        'const wakeAcknowledgement = "candidate_deploy_completed\\n"',
+      ),
+    "authoritative drain CLI must implement the exact bounded handshake",
+  );
+  assert.ok(
+    rolloutEvidenceWriter.includes('flag: "wx"') &&
+      rolloutEvidenceWriter.includes("mode: 0o600") &&
+      rolloutEvidenceWriter.includes("cloudflareDrain") &&
+      rolloutEvidenceWriter.includes('"drained_smoke_pending"') &&
+      rolloutEvidenceWriter.includes('"smoke_passed"') &&
+      rolloutEvidenceWriter.includes("exactMainCIWorkflowRunID"),
+    "release evidence must be exclusive, owner-only, and include Cloudflare proof",
   );
   const smokeTestStep = extractStep(workflow, "Smoke test");
   assertStepExecutionControls(smokeTestStep, "deployment smoke test", "bash");
@@ -934,122 +1109,6 @@ test("deployment contract is the exact repository handoff classification", () =>
       value: "STAGING_E2E_INVITE_TOKEN",
     },
   });
-
-  const migrationStep = extractStep(workflow, "Apply database migrations");
-  assertStepExecutionControls(
-    migrationStep,
-    "Apply database migrations",
-    "bash",
-  );
-  assert.equal(
-    extractStepProperty(migrationStep, "working-directory"),
-    "backend",
-  );
-  assert.equal(
-    extractRunCommand(migrationStep),
-    "GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go run ./cmd/migrate",
-  );
-  assert.deepEqual(
-    stepEnvironmentMappings(migrationStep),
-    {
-      DATABASE_URL: {
-        kind: "secret",
-        value: "NEON_MIGRATION_DATABASE_URL",
-      },
-      MIGRATIONS_DIR: { kind: "literal", value: "migrations" },
-    },
-    "deployment contract/migration environment",
-  );
-  const migrationCommand =
-    "GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go run ./cmd/migrate";
-  const wranglerCommand = "wrangler deploy";
-  const secretsFileConsumer =
-    '--secrets-file "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"';
-  assert.equal(
-    workflow.split(migrationCommand).length - 1,
-    1,
-    "deployment workflow must invoke the migration command exactly once",
-  );
-  assert.equal(
-    [...workflow.matchAll(/\bwrangler deploy\b/g)].length,
-    1,
-    "deployment workflow must invoke Wrangler deploy exactly once globally",
-  );
-  assert.equal(
-    workflow.split(secretsFileConsumer).length - 1,
-    1,
-    "deployment workflow must consume the Worker secrets file exactly once",
-  );
-  assert.equal(
-    migrationStep.split(migrationCommand).length - 1,
-    1,
-    "the sole migration command must belong to the canonical migration step",
-  );
-  assert.equal(
-    workerDeployStep.split(wranglerCommand).length - 1,
-    1,
-    "the sole Wrangler command must belong to the canonical deploy step",
-  );
-  assert.ok(
-    workflow.indexOf(migrationCommand) < workflow.indexOf(wranglerCommand),
-    "database migrations must run before Worker deployment",
-  );
-
-  const secretFileStep = extractStep(
-    workflow,
-    "Create ephemeral Worker secrets file",
-  );
-  assertStepExecutionControls(
-    secretFileStep,
-    "Create ephemeral Worker secrets file",
-    "bash",
-  );
-  const secretNamesBody = between(secretFileStep, "const names = [", "];", 0);
-  assertExactSet(
-    backend.secrets,
-    matches(secretNamesBody, /"([A-Z][A-Z0-9_]*)"/g),
-    "deployment contract/workflow Worker secrets",
-  );
-  const conditionalSecretSourceLines = closedBeta.conditionalSecrets.map(
-    (name) => `          if (process.env.${name}) names.push("${name}");`,
-  );
-  assert.deepEqual(
-    secretFileStep.split("\n").filter((line) => line.includes("names.push(")),
-    conditionalSecretSourceLines,
-    "deployment contract/workflow conditional Worker secret sources",
-  );
-  assert.deepEqual(
-    stepEnvironmentMappings(secretFileStep),
-    {
-      SECRETS_FILE: {
-        kind: "literal",
-        value: "${{ runner.temp }}/fukamu-cycle-worker-secrets.json",
-      },
-      ...secretEnvironmentMappings(workerSecretSources),
-    },
-    "deployment contract/workflow Worker secret file environment",
-  );
-  const secretValuesLine =
-    "          const values = Object.fromEntries(names.map((name) => [name, process.env[name]]));";
-  const secretWriteLine =
-    "          fs.writeFileSync(process.env.SECRETS_FILE, JSON.stringify(values), { mode: 0o600 });";
-  assert.deepEqual(
-    secretFileStep.split("\n").filter((line) => line.includes("names.map(")),
-    [secretValuesLine],
-    "deployment contract/workflow Worker secret sources",
-  );
-  assert.deepEqual(
-    secretFileStep
-      .split("\n")
-      .filter((line) => line.includes("fs.writeFileSync(")),
-    [secretWriteLine],
-    "deployment contract/workflow Worker secret file write",
-  );
-  assert.deepEqual(
-    secretFileStep.split("\n").filter((line) => line.includes("process.env")),
-    [...conditionalSecretSourceLines, secretValuesLine, secretWriteLine],
-    "deployment contract/workflow Worker secret environment access",
-  );
 
   const frontendExampleKeys = matches(
     readRepositoryFile("frontend/.env.example"),
@@ -1167,82 +1226,6 @@ test("deployment contract is the exact repository handoff classification", () =>
     3,
     "OTLP header credential must be exposed to exactly the three required steps",
   );
-  const preMigrationMainIdentityStep = extractStep(
-    workflow,
-    "Re-verify deployment commit is still main HEAD",
-  );
-  assertStepExecutionControls(
-    preMigrationMainIdentityStep,
-    "deployment pre-migration main identity guard",
-    "bash",
-  );
-  assert.equal(
-    preMigrationMainIdentityStep.trimEnd(),
-    [
-      "      - name: Re-verify deployment commit is still main HEAD",
-      "        shell: bash",
-      "        env:",
-      "          GH_TOKEN: ${{ github.token }}",
-      "        run: |",
-      "          set -euo pipefail",
-      '          current_main_sha="$(',
-      "            gh api \\",
-      "              -H 'Accept: application/vnd.github+json' \\",
-      '              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \\',
-      "              --jq '.object.sha'",
-      '          )"',
-      '          if [[ ! "${current_main_sha}" =~ ^[0-9a-f]{40}$ ]]; then',
-      '            echo "::error::Current main ref did not resolve to a valid commit SHA: ${current_main_sha}"',
-      "            exit 1",
-      "          fi",
-      '          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then',
-      '            echo "::error::Deployment commit ${COMMIT_SHA} became stale before migration; current main is ${current_main_sha}."',
-      "            exit 1",
-      "          fi",
-    ].join("\n"),
-    "deployment pre-migration main identity guard",
-  );
-  assert.deepEqual(stepEnvironmentMappings(preMigrationMainIdentityStep), {
-    GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
-  });
-  const postMigrationMainIdentityStep = extractStep(
-    workflow,
-    "Re-verify deployment commit after migrations",
-  );
-  assertStepExecutionControls(
-    postMigrationMainIdentityStep,
-    "deployment post-migration main identity guard",
-    "bash",
-  );
-  assert.equal(
-    postMigrationMainIdentityStep.trimEnd(),
-    [
-      "      - name: Re-verify deployment commit after migrations",
-      "        shell: bash",
-      "        env:",
-      "          GH_TOKEN: ${{ github.token }}",
-      "        run: |",
-      "          set -euo pipefail",
-      '          current_main_sha="$(',
-      "            gh api \\",
-      "              -H 'Accept: application/vnd.github+json' \\",
-      '              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \\',
-      "              --jq '.object.sha'",
-      '          )"',
-      '          if [[ ! "${current_main_sha}" =~ ^[0-9a-f]{40}$ ]]; then',
-      '            echo "::error::Current main ref did not resolve to a valid commit SHA: ${current_main_sha}"',
-      "            exit 1",
-      "          fi",
-      '          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then',
-      '            echo "::error::Deployment commit ${COMMIT_SHA} became stale after migration; refusing secret materialization and traffic switch. Current main is ${current_main_sha}."',
-      "            exit 1",
-      "          fi",
-    ].join("\n"),
-    "deployment post-migration main identity guard",
-  );
-  assert.deepEqual(stepEnvironmentMappings(postMigrationMainIdentityStep), {
-    GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
-  });
   const browserInstallPosition = workflow.indexOf(
     "      - name: Install staging Chromium\n",
   );
@@ -1255,20 +1238,11 @@ test("deployment contract is the exact repository handoff classification", () =>
   const stagingBaselinePosition = workflow.indexOf(
     "      - name: Verify current Staging baseline before migration\n",
   );
-  const preMigrationMainIdentityPosition = workflow.indexOf(
-    "      - name: Re-verify deployment commit is still main HEAD\n",
+  const rolloutPosition = workflow.indexOf(
+    "      - name: Run stable CSRF initial rollout and authoritative drain\n",
   );
-  const migrationPosition = workflow.indexOf(
-    "      - name: Apply database migrations\n",
-  );
-  const postMigrationMainIdentityPosition = workflow.indexOf(
-    "      - name: Re-verify deployment commit after migrations\n",
-  );
-  const secretFilePosition = workflow.indexOf(
-    "      - name: Create ephemeral Worker secrets file\n",
-  );
-  const deploymentPosition = workflow.indexOf(
-    "      - name: Deploy Worker, static assets, and Container\n",
+  const evidenceUploadPosition = workflow.indexOf(
+    "      - name: Upload stable CSRF rollout evidence\n",
   );
   const smokeTestPosition = workflow.indexOf("      - name: Smoke test\n");
   const postDeployStagingCriticalPosition = workflow.indexOf(
@@ -1276,15 +1250,13 @@ test("deployment contract is the exact repository handoff classification", () =>
   );
   assert.ok(
     browserInstallPosition < frontendBuildPosition &&
+      frontendBuildPosition < backendValidationPosition &&
       backendValidationPosition < stagingBaselinePosition &&
-      stagingBaselinePosition < preMigrationMainIdentityPosition &&
-      preMigrationMainIdentityPosition < migrationPosition &&
-      migrationPosition < postMigrationMainIdentityPosition &&
-      postMigrationMainIdentityPosition < secretFilePosition &&
-      secretFilePosition < deploymentPosition &&
-      deploymentPosition < smokeTestPosition &&
+      stagingBaselinePosition < rolloutPosition &&
+      rolloutPosition < evidenceUploadPosition &&
+      evidenceUploadPosition < smokeTestPosition &&
       smokeTestPosition < postDeployStagingCriticalPosition,
-    "browser install, runtime validation, pre-switch baseline, migration, traffic switch, smoke, and post-deploy staging critical journey order",
+    "browser install, build, runtime validation, pre-switch baseline, same-process rollout/drain, evidence, smoke, and post journey order",
   );
 
   const expectedStepSecretSources = [
@@ -1293,6 +1265,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     "NEON_MIGRATION_DATABASE_URL",
     ...Object.values(workerSecretSources),
     ...Object.values(cloudflareDeploySecretSources),
+    "STAGING_E2E_INVITE_TOKEN",
     "STAGING_E2E_INVITE_TOKEN",
     "STAGING_E2E_INVITE_TOKEN",
   ].sort();

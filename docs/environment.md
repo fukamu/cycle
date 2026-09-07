@@ -9,7 +9,7 @@ Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging L
 - Local backendはuntracked `.env`、Viteはuntracked `frontend/.env.local`を使います。Backendが`.env`を暗黙loadする前提にせず、Bashで `source ./scripts/import-env.sh` を使います。
 - `VITE_`値はbundleへ埋め込まれ、全利用者から見えます。Secretを設定しません。
 - Stagingのnon-secret configurationはGitHub `staging` Environment variablesからWrangler `--var`で登録します。
-- Staging runtime secretsはGitHub `staging` Environmentからdeploy時の一時`--secrets-file`経由でCloudflare Worker Secretsへ登録します。一時fileはworkflowの`always()` stepで削除します。
+- Staging runtime secretsはGitHub `staging` Environmentからdeploy時の一時`--secrets-file`経由でCloudflare Worker Secretsへ登録します。一時fileは固定deploy child commandの終了trapで、成功・失敗・cancel時に削除します。
 - Neon migration direct URLはGitHub Actionsだけが使い、Worker/Containerへ渡しません。Runtimeにはpooled URLだけを渡します。
 - R2 backendはrepositoryのPlan用Object Read Only credentialと `staging-terraform-apply` EnvironmentのApply用Object Read & Write credentialを別tokenにし、Terraform/Turnstile token、Cloudflare deploy tokenとも分離します。
 - Session/bootstrap pepper、rate-limit HMAC、cursor署名secretは環境ごと・用途ごとに異なる24文字以上の高entropy値にします。`CSRF_TOKEN_PEPPER`だけはBackendが使うbyte列で32 bytes以上を必須とし、Deployment用には環境専用・用途専用のCSPRNG由来256-bit相当keyを設定します。Productionでは値を表示・logせず由来を確認できることをdeploy gateにします。
@@ -171,11 +171,28 @@ TERRAFORM_APPLY_APPROVER
 
 - `TERRAFORM_CLOUDFLARE_ACCOUNT_ID`: 32文字lowercase hexadecimal account ID。credentialではない。
 - `TERRAFORM_R2_STATE_BUCKET`: manual bootstrap済みの専用private bucket名。credentialではない。
-- `TERRAFORM_APPLY_APPROVER`: Plan review後に `Terraform Apply Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorと照合する。
+- `TERRAFORM_APPLY_APPROVER`: Plan review後に `Terraform Apply Staging`をmanual dispatchまたはrerunできる唯一のGitHub user login。大文字小文字を無視してworkflow actorとtriggering actorの両方に照合する。
 
 Manual dispatch input `credential_inventory_confirmation`には、inventory確認後だけexact text `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。これはsecret値やprovenanceの自動検証ではなく、現在のGitHub scope inventoryとCloudflare token metadataをownerが確認したことの明示gateです。
 
-GitHub Environment `staging-terraform-apply`はApply用R2 Read/Write secretの必須かつ運用上唯一の保管場所です。Deployment branchを `main`へ制限します。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateも設定します。Workflow preflightはinventory confirmationをGitHub API accessより先に検証し、その後actorと `TERRAFORM_APPLY_APPROVER`を照合します。不一致・未設定ではEnvironment credentialを使うApply jobへ進みません。
+GitHub Environment `staging-terraform-apply`はApply用R2 Read/Write secretの必須かつ運用上唯一の保管場所です。Deployment branchを `main`へ制限します。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateも設定します。Workflow preflightはinventory confirmationをGitHub API accessより先に検証し、その後actor / triggering actorの両方と `TERRAFORM_APPLY_APPROVER`を照合します。不一致・未設定ではEnvironment credentialを使うApply jobへ進みません。
+
+## GitHub Staging Deploy input
+
+`Deploy Staging`のmanual approvalだけが使います。Application runtime、Terraform、Worker、Containerへ渡しません。
+
+Repository variable:
+
+```text
+STAGING_DEPLOY_APPROVER
+```
+
+- `STAGING_DEPLOY_APPROVER`: `Deploy Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorとtriggering actorの両方に照合する。`staging` Environment variableには登録しない。
+- 通常modeはinput `mode=normal`と、成功したexact-current-main `Terraform Apply Staging` runのnumeric `apply_run_id`を必須とする。`recovery_confirmation`は空でなければならない。
+- Application recovery modeはinput `mode=recovery`とexact `recovery_confirmation=RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY`を必須とし、`apply_run_id`は空でなければならない。これはsecret、credential、Terraform変更を伴わないschema-compatibleなcurrent-main Application復旧だけに使う。
+- 両modeともconfigured approver、current main SHA、同一SHAの成功`CI`をEnvironment credentialより前に検証する。通常modeはさらにApply workflow名/path/event/status/conclusion/repository/head SHAと、未失効のexact artifactを検証する。
+
+`CLOUDFLARE_API_TOKEN`はDeployに加えて、対象Worker deployment / version / trafficと対象Container application / rollout / instanceのread-only metadataを取得できる必要があります。現在のtokenで不足する権限を推測して拡張せず、Cloudflare metadataを取得できない場合はDeploy前に停止してcredential ownerの個別承認を得ます。
 
 ## GitHub legacy origin retirement input
 

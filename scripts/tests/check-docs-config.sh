@@ -705,6 +705,7 @@ new_config_fixture() {
     "${fixture}/cloudflare/src/config" \
     "${fixture}/config" \
     "${fixture}/docs" \
+    "${fixture}/frontend/e2e" \
     "${fixture}/frontend/vite" \
     "${fixture}/.github/workflows"
   cp -- "${repo_root}/.env.example" "${fixture}/.env.example"
@@ -730,6 +731,9 @@ new_config_fixture() {
   cp -- "${repo_root}/frontend/.env.example" "${fixture}/frontend/.env.example"
   cp -- "${repo_root}/frontend/index.html" "${fixture}/frontend/index.html"
   cp -- "${repo_root}/frontend/package.json" "${fixture}/frontend/package.json"
+  cp -- \
+    "${repo_root}/frontend/e2e/staging-csrf-rollout-entry.mjs" \
+    "${fixture}/frontend/e2e/staging-csrf-rollout-entry.mjs"
   ln -s -- "${repo_root}/frontend/node_modules" "${fixture}/frontend/node_modules"
   cp -- "${repo_root}/frontend/vite.config.ts" "${fixture}/frontend/vite.config.ts"
   cp -- \
@@ -737,6 +741,12 @@ new_config_fixture() {
     "${fixture}/frontend/vite/searchIndexing.ts"
   cp -R -- "${repo_root}/frontend/src" "${fixture}/frontend/src"
   cp -- "${repo_root}/.github/workflows/deploy.yml" "${fixture}/.github/workflows/deploy.yml"
+  cp -- \
+    "${repo_root}/scripts/check-cloudflare-drain-evidence.mjs" \
+    "${repo_root}/scripts/materialize-staging-worker-secrets.mjs" \
+    "${repo_root}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    "${repo_root}/scripts/write-staging-rollout-evidence.mjs" \
+    "${fixture}/scripts/"
   cp -- "${repo_root}/scripts/validate-deploy-inputs.mjs" "${fixture}/scripts/validate-deploy-inputs.mjs"
   initialize_candidate_fixture "${fixture}"
   printf '%s\n' "${fixture}"
@@ -940,7 +950,7 @@ test_config_gate() {
   # shellcheck disable=SC2016 # GitHub runner variable is an intentional fixture literal.
   insert_before_exact_line \
     "${fixture}/.github/workflows/deploy.yml" \
-    '      - name: Deploy Worker, static assets, and Container' \
+    '      - name: Run stable CSRF initial rollout and authoritative drain' \
     '      - run: test ! -f "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"'
   assert_failure_contains "deployment anonymous run step" \
     "deployment step inventory" \
@@ -2005,9 +2015,9 @@ test_config_gate() {
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture skipped-resolve-job)"
-  replace_exact_line \
+  insert_after_exact_line \
     "${fixture}/.github/workflows/deploy.yml" \
-    '    if: >-' \
+    '  resolve:' \
     '    if: false'
   assert_failure_contains "skipped deployment resolve job" \
     "deployment resolve job contract" \
@@ -2017,11 +2027,11 @@ test_config_gate() {
   # shellcheck disable=SC1003 # Trailing backslashes are intentional workflow fixture text.
   replace_exact_line_after_marker \
     "${fixture}/.github/workflows/deploy.yml" \
-    '      - name: Resolve deployment commit' \
+    '      - name: Resolve approved deployment' \
     '            gh api \' \
     '            false \'
   assert_failure_contains "replaced deployment resolve command" \
-    "deployment resolve step" \
+    "approved deployment resolution must keep the exact GitHub API invocation count" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture self-hosted-deploy-runner)"
@@ -2035,12 +2045,13 @@ test_config_gate() {
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture skipped-ci-success-check)"
-  insert_after_exact_line \
+  replace_exact_line_after_marker \
     "${fixture}/.github/workflows/deploy.yml" \
-    '      - name: Verify commit has successful CI' \
-    '        if: false'
+    '      - name: Resolve approved deployment' \
+    '                        .name == "CI" and' \
+    '                        .name == "CI Renamed" and'
   assert_failure_contains "skipped deployment CI-success verification" \
-    "Verify commit has successful CI execution controls" \
+    "approved deployment resolution is missing" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture checkout-ref-drift)"
@@ -2073,13 +2084,14 @@ test_config_gate() {
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture disabled-secret-cleanup)"
+  # shellcheck disable=SC1003,SC2016 # Trailing backslash and child variables are intentional fixture literals.
   replace_exact_line_after_marker \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '      - name: Remove ephemeral Worker secrets file' \
-    '        if: always()' \
-    '        if: false'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    'pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \' \
+    'rm -f -- "${secrets_file}"' \
+    ':'
   assert_failure_contains "disabled Worker secret cleanup" \
-    "deployment Worker secret cleanup step" \
+    "ephemeral Worker secrets must be removed both on EXIT and immediately after deploy" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture skipped-deployment-smoke-test)"
@@ -2144,7 +2156,7 @@ test_config_gate() {
   # shellcheck disable=SC2016 # GitHub expression is an intentional fixture literal.
   insert_after_exact_line \
     "${fixture}/.github/workflows/deploy.yml" \
-    '          MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}' \
+    '          EXACT_MAIN_CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}' \
     '          BASH_ENV: /tmp/untrusted-step-env'
   assert_failure_contains "deployment step BASH_ENV" \
     "must not expose BASH_ENV at root, job, or step scope" \
@@ -2181,45 +2193,39 @@ test_config_gate() {
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture tolerated-migration-failure)"
-  insert_after_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '      - name: Apply database migrations' \
-    '        continue-on-error: true'
+  replace_exact_line \
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    '    go run ./cmd/migrate' \
+    '    go run ./cmd/migrate || true'
   assert_failure_contains "tolerated migration failure" \
-    "Apply database migrations execution controls" \
+    "the candidate migration command must remain fail-closed" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture custom-migration-shell)"
-  replace_exact_line_after_marker \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '      - name: Apply database migrations' \
-    '        shell: bash' \
-    '        shell: bash {0} || true'
+  replace_exact_line \
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    'set -Eeuo pipefail' \
+    'set +e'
   assert_failure_contains "custom migration shell" \
-    "Apply database migrations execution controls" \
+    "candidate deployment child contract is missing or duplicated" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture extra-pre-migration-deploy)"
   insert_before_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '      - name: Apply database migrations' \
-    $'      - name: Premature deploy fixture
-        run: pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy
-'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    '    go run ./cmd/migrate' \
+    '    pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy'
   assert_failure_contains "extra pre-migration deploy" \
-    "deployment step inventory" \
+    "the child script must be the sole Wrangler deploy consumer" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture extra-migration-command)"
   insert_before_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '      - name: Apply database migrations' \
-    $'      - name: Extra migration fixture
-        working-directory: backend
-        run: go run ./cmd/migrate
-'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    '    go run ./cmd/migrate' \
+    '    go run ./cmd/migrate'
   assert_failure_contains "extra migration command" \
-    "deployment step inventory" \
+    "the child script must be the sole migration consumer" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture validation-secret-source-swap)"
@@ -2237,22 +2243,22 @@ test_config_gate() {
   # shellcheck disable=SC2016 # GitHub expressions are intentional fixture literals.
   replace_exact_line_after_marker \
     "${fixture}/.github/workflows/deploy.yml" \
-    "      - name: Create ephemeral Worker secrets file" \
+    "      - name: Run stable CSRF initial rollout and authoritative drain" \
     '          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}' \
     '          OPENAI_API_KEY: ${{ secrets.NEON_DATABASE_URL }}'
   assert_failure_contains "Worker secret-file source swap" \
-    "deployment contract/workflow Worker secret file environment" \
+    "deployment contract/stable rollout environment" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture cloudflare-secret-source-swap)"
   # shellcheck disable=SC2016 # GitHub expressions are intentional fixture literals.
   replace_exact_line_after_marker \
     "${fixture}/.github/workflows/deploy.yml" \
-    "      - name: Deploy Worker, static assets, and Container" \
+    "      - name: Run stable CSRF initial rollout and authoritative drain" \
     '          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}' \
     '          CLOUDFLARE_API_TOKEN: ${{ secrets.OPENAI_API_KEY }}'
   assert_failure_contains "Cloudflare credential source swap" \
-    "deployment contract/workflow Worker deploy step" \
+    "deployment contract/stable rollout environment" \
     bash "${fixture}/scripts/check-config-parity.sh"
   fixture="$(new_config_fixture secret-classification-drift)"
   # shellcheck disable=SC2016 # GitHub expressions are intentional fixture literals.
@@ -2269,127 +2275,129 @@ test_config_gate() {
   # shellcheck disable=SC2016 # GitHub expressions are intentional fixture literals.
   replace_exact_line_after_marker \
     "${fixture}/.github/workflows/deploy.yml" \
-    "      - name: Apply database migrations" \
-    '          DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}' \
-    '          DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL || secrets.NEON_DATABASE_URL }}'
+    "      - name: Run stable CSRF initial rollout and authoritative drain" \
+    '          MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}' \
+    '          MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL || secrets.NEON_DATABASE_URL }}'
   assert_failure_contains "deployment workflow expression suffix" \
-    "deployment contract/migration environment" \
+    "deployment contract/stable rollout environment" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture migration-source-swap)"
   # shellcheck disable=SC2016 # GitHub expressions are intentional fixture literals.
   replace_exact_line_after_marker \
     "${fixture}/.github/workflows/deploy.yml" \
-    "      - name: Apply database migrations" \
-    '          DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}' \
-    '          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}'
+    "      - name: Run stable CSRF initial rollout and authoritative drain" \
+    '          MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}' \
+    '          MIGRATION_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}'
   assert_failure_contains "migration database source swap" \
-    "deployment contract/migration environment" \
+    "deployment contract/stable rollout environment" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-variable-source-swap)"
   # shellcheck disable=SC2016 # Bash parameter expansions are intentional fixture literals.
   replace_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '            variable_args+=(--var "${name}:${!name}")' \
-    '            variable_args+=(--var "${name}:${AI_MODEL}")'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    '  variable_args+=(--var "${name}:${!name}")' \
+    '  variable_args+=(--var "${name}:${AI_MODEL}")'
   assert_failure_contains "Worker variable source swap" \
-    "deployment contract/workflow Worker target/source mappings" \
+    "the fixed child must map each classified Worker variable exactly once" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-variable-loop-source)"
   # shellcheck disable=SC2016 # Bash parameter expansion is an intentional fixture literal.
   replace_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '          for name in "${variable_names[@]}"; do' \
-    '          for name in AI_MODEL; do'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    'for name in "${variable_names[@]}"; do' \
+    'for name in AI_MODEL; do'
   assert_failure_contains "Worker variable loop source drift" \
-    "deployment contract/workflow Worker variable loop" \
+    "the fixed child must iterate only the classified Worker variable array" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-variable-array-reassignment)"
   insert_before_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    $'          variable_args=()' \
-    $'          variable_names=(PUBLIC_ORIGIN)'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    'variable_args=()' \
+    'variable_names=(PUBLIC_ORIGIN)'
   assert_failure_contains "Worker variable array reassignment" \
-    "deployment contract/workflow Worker deploy step" \
+    "the fixed child must define the classified Worker variable array exactly once" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-modeled-source-reassignment)"
   # shellcheck disable=SC2016 # Bash parameter expansions are intentional fixture literals.
   insert_before_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    $'          variable_args=()' \
-    $'          PUBLIC_ORIGIN="${DATABASE_URL}"'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    'variable_args=()' \
+    'PUBLIC_ORIGIN="${DATABASE_URL}"'
   assert_failure_contains "Worker modeled source reassignment" \
-    "deployment contract/workflow Worker deploy step" \
+    "the fixed child must not rewrite a modeled Worker variable source" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-conditional-condition)"
+  # shellcheck disable=SC2016 # Child-script parameter expansions are intentional fixture literals.
   replace_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    "          if [[ \"\${BETA_ADMISSION_MODE}\" == 'closed' ]]; then" \
-    "          if [[ \"\${BETA_ADMISSION_MODE}\" == 'off' ]]; then"
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    'if [[ "${BETA_ADMISSION_MODE}" == "closed" ]]; then' \
+    'if [[ "${BETA_ADMISSION_MODE}" == "off" ]]; then'
   assert_failure_contains "Worker conditional condition drift" \
-    "deployment contract/workflow closed-Beta variable condition" \
+    "the fixed child must gate closed-Beta variables on closed mode" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture duplicate-worker-deploy-step)"
+  # shellcheck disable=SC1003 # Trailing backslash is intentional child-script fixture text.
   insert_before_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    $'      - name: Deploy Worker, static assets, and Container' \
-    $'      - name: Deploy Worker, static assets, and Container\n        shell: bash\n        run: true'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    'pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \' \
+    'pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy'
   assert_failure_contains "duplicate Worker deploy step" \
-    "deployment step inventory" \
+    "the child script must be the sole Wrangler deploy consumer" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-variable-consumer-swap)"
   # shellcheck disable=SC2016 # Bash array expansions are intentional fixture literals.
   replace_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    $'            "${variable_args[@]}" \\' \
-    $'            "${variable_names[@]}" \\'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    $'  "${variable_args[@]}" \\' \
+    $'  "${variable_names[@]}" \\'
   assert_failure_contains "Wrangler variable argument consumer swap" \
-    "deployment contract/workflow Worker variable argument lifecycle" \
+    "Wrangler must consume the classified Worker variable arguments exactly once" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-secret-source-swap)"
   replace_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    $'          const values = Object.fromEntries(names.map((name) => [name, process.env[name]]));' \
-    $'          const values = Object.fromEntries(names.map((name) => [name, process.env.OPENAI_API_KEY]));'
+    "${fixture}/scripts/materialize-staging-worker-secrets.mjs" \
+    '  const values = Object.fromEntries(names.map((name) => [name, env[name]]));' \
+    '  const values = Object.fromEntries(names.map((name) => [name, env.OPENAI_API_KEY]));'
   assert_failure_contains "Worker secret source swap" \
-    "deployment contract/workflow Worker secret sources" \
+    "Worker secret materializer must read each classified secret by its own name" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-secret-file-destination)"
-  # shellcheck disable=SC2016 # GitHub expressions are intentional fixture literals.
+  # shellcheck disable=SC2016 # Child-script parameter expansions are intentional fixture literals.
   replace_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '          SECRETS_FILE: ${{ runner.temp }}/fukamu-cycle-worker-secrets.json' \
-    '          SECRETS_FILE: ${{ runner.temp }}/different-worker-secrets.json'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    'secrets_file="${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"' \
+    'secrets_file="${RUNNER_TEMP}/different-worker-secrets.json"'
   assert_failure_contains "Worker secret file destination drift" \
-    "deployment contract/workflow Worker secret file environment" \
+    "candidate deployment child contract is missing or duplicated" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-secret-file-mode)"
   replace_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    $'          fs.writeFileSync(process.env.SECRETS_FILE, JSON.stringify(values), { mode: 0o600 });' \
-    $'          fs.writeFileSync(process.env.SECRETS_FILE, JSON.stringify(values), { mode: 0o644 });'
+    "${fixture}/scripts/materialize-staging-worker-secrets.mjs" \
+    '    mode: 0o600,' \
+    '    mode: 0o644,'
   assert_failure_contains "Worker secret file mode drift" \
-    "deployment contract/workflow Worker secret file write" \
+    "Worker secret materialization must be exclusive and owner-only" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-secret-file-consumer)"
   # shellcheck disable=SC2016 # Bash parameter expansions are intentional fixture literals.
   replace_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    $'            --secrets-file "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json" \\' \
-    $'            --secrets-file "${RUNNER_TEMP}/different-worker-secrets.json" \\'
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    $'  --secrets-file "${secrets_file}" \\' \
+    $'  --secrets-file "${RUNNER_TEMP}/different-worker-secrets.json" \\'
   assert_failure_contains "Wrangler secret file consumer drift" \
-    "deployment contract/workflow Wrangler deploy consumer" \
+    "candidate deployment child contract is missing or duplicated" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture wrangler-variable-sentinel)"
@@ -2410,9 +2418,9 @@ test_config_gate() {
 
   fixture="$(new_config_fixture workflow-drift)"
   remove_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    $'            RATE_AI_PER_USER_MINUTE RATE_AI_PER_SESSION_MINUTE RATE_AI_PER_IP_MINUTE'
-  assert_failure_contains "deployment workflow drift" "deployment contract/workflow Worker variables" \
+    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    '  RATE_AI_PER_USER_MINUTE RATE_AI_PER_SESSION_MINUTE RATE_AI_PER_IP_MINUTE'
+  assert_failure_contains "deployment workflow drift" "deployment contract/fixed child Worker variables" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   pass "configuration parity gate has deterministic cross-boundary negative fixtures"

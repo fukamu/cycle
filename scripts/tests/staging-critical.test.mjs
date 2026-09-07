@@ -713,24 +713,44 @@ test("keeps the pre-switch baseline before every deployment mutation", () => {
   const baseline = workflow.indexOf(
     "- name: Verify current Staging baseline before migration",
   );
-  const migration = workflow.indexOf("- name: Apply database migrations");
-  const secrets = workflow.indexOf(
-    "- name: Create ephemeral Worker secrets file",
-  );
-  const deploy = workflow.indexOf(
-    "- name: Deploy Worker, static assets, and Container",
+  const rollout = workflow.indexOf(
+    "- name: Run stable CSRF initial rollout and authoritative drain",
   );
   const postDeploy = workflow.indexOf(
     "- name: Run post-deploy staging critical journey",
   );
-  assert.ok(0 <= baseline && baseline < migration);
-  assert.ok(baseline < secrets && secrets < deploy);
-  assert.ok(deploy < postDeploy);
-  const baselineStep = workflow.slice(baseline, migration);
+  assert.ok(0 <= baseline && baseline < rollout && rollout < postDeploy);
+  const baselineStep = workflow.slice(baseline, rollout);
   assert.match(baselineStep, /STAGING_CRITICAL_MODE: baseline/);
   assert.match(baselineStep, /STAGING_ADMISSION_MODE: auto/);
   assert.doesNotMatch(baselineStep, /STAGING_ADMISSION_MODE: \$\{\{/);
   assert.doesNotMatch(baselineStep, /continue-on-error:/);
+  const child = readFileSync(
+    fileURLToPath(
+      new URL("../run-staging-candidate-deploy-and-drain.sh", import.meta.url),
+    ),
+    "utf8",
+  );
+  const drainBaseline = child.indexOf(
+    "node ./scripts/check-cloudflare-drain-evidence.mjs",
+  );
+  const migration = child.indexOf("go run ./cmd/migrate");
+  const secrets = child.indexOf(
+    "node ./scripts/materialize-staging-worker-secrets.mjs",
+  );
+  const deploy = child.indexOf("wrangler deploy");
+  const drainWake = child.indexOf("candidate_deploy_completed");
+  const evidence = child.indexOf(
+    "node ./scripts/write-staging-rollout-evidence.mjs",
+  );
+  assert.ok(
+    0 <= drainBaseline &&
+      drainBaseline < migration &&
+      migration < secrets &&
+      secrets < deploy &&
+      deploy < drainWake &&
+      drainWake < evidence,
+  );
   const postDeployStep = workflow.slice(postDeploy);
   assert.match(postDeployStep, /STAGING_CRITICAL_MODE: full/);
   assert.match(
