@@ -83,6 +83,28 @@ source ./scripts/import-env.sh
 
 出力は`ai_usage_events`、`abuse_rate_buckets`、`anonymous_rate_limit_guards`のresource別にmode、候補・削除・batch件数だけをsafe JSON logへ記録します。Deadline、row ID、bucket / guard keyやhash、Database URL、SQL、raw errorは出力しません。Productionでの実行経路・周期を確定するまではdeployやserver起動へ自動接続しません。
 
+## Survivor funnel KPI report
+
+`backend/cmd/kpireport`は、[`design.md` §42.4](design.md#424-product-analysis-queries)のsurvivor-only KPIを既存User / Goal / Cycleからaggregateするread-only commandです。Schema、index、event ledger、durable rollupを作らず、`REPEATABLE READ READ ONLY`の単一snapshot内でsqlc queryを一度実行します。出力は固定versionのaggregate JSONだけで、Raw User / Goal / Cycle ID、本文、Email、個別event timestamp、Database URL、credential、SQLやraw errorを含めません。
+
+接続はsecret環境変数`KPI_DATABASE_URL`だけから取得し、引数、`DATABASE_URL`、`TEST_DATABASE_URL`、`.env`暗黙loadへfallbackしません。URLとambient `PG*`値には[Retention cleanup command](#retention-cleanup-command)と同じsingle-target allowlist、default file不使用、`pg_catalog,public`固定、UTC、1 connectionの制約を適用します。`--cohort-start`、`--cohort-end`、`--as-of`はoffset 0のRFC 3339 instantをすべて明示し、`cohort-start < cohort-end <= as-of`を満たす必要があります。各48時間 / 168時間のmaturityは§42.4のevent-relative条件でquery内から未成熟anchorを除外します。
+
+Production / Stagingのcredential owner、実行経路、周期、report保持、small-N policyは未決であり、このcommandをdeployやschedulerへ接続しません。現在の安全な実行対象は破棄可能なlocal `*_test` DBのsynthetic dataだけです。
+
+```bash
+export KPI_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable'
+(
+  cd backend
+  go run ./cmd/kpireport \
+    --cohort-start=2026-01-01T00:00:00Z \
+    --cohort-end=2026-02-01T00:00:00Z \
+    --as-of=2026-02-08T00:00:00Z
+)
+unset KPI_DATABASE_URL
+```
+
+上記のURLはlocal例であり、実値をterminal log、Issue、Pull Requestへ貼らないでください。KPI targetはmatureなProduction baseline取得後に別判断します。
+
 ## ローカル適用
 
 ```bash

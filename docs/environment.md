@@ -116,6 +116,7 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 |---|---|---|
 | `MIGRATIONS_DIR` | migration directory、`migrations` | GitHub Actionsで明示 |
 | `NEON_MIGRATION_DATABASE_URL` | Staging direct URL | **GitHub secret**、workflowが`DATABASE_URL`へ一時mapping |
+| `KPI_DATABASE_URL` | Survivor funnel KPI report専用PostgreSQL URL | **secret**。引数、`DATABASE_URL`、`TEST_DATABASE_URL`、ambient `PG*`へfallbackしない。現在は破棄可能なlocal `*_test` DBだけに手動設定し、Production / Staging source、owner、schedulerは未決 |
 | `STAGING_BASE_URL` | pre-switch baseline / post-deploy critical journeyのcanonical origin | workflowが`PUBLIC_ORIGIN`からstep scopeで設定。固定Staging HTTPS originだけを許可 |
 | `STAGING_CRITICAL_MODE` | `baseline`でpre-switch最小journey、`full`でpost-deploy全journey | workflowがstep scopeで固定し、未知値を拒否 |
 | `STAGING_ADMISSION_MODE` | critical journeyのAdmission entry処理 | Pre-switchは現在配信中revisionをcandidate設定から推測しない`auto`、post-deployは`BETA_ADMISSION_MODE`由来の`off` / `closed`をstep scopeで設定し、未知値を拒否 |
