@@ -7,6 +7,10 @@ on:
         description: Successful Terraform Plan Staging workflow run ID to approve
         required: true
         type: string
+      credential_inventory_confirmation:
+        description: Type CONFIRM APPLY R2 INVENTORY NO FALLBACK after value-free credential inventory checks
+        required: true
+        type: string
 
 permissions:
   actions: write
@@ -25,6 +29,17 @@ jobs:
       commit_sha: ${{ steps.resolve.outputs.commit_sha }}
       plan_run_id: ${{ steps.resolve.outputs.plan_run_id }}
     steps:
+      - name: Verify Terraform credential inventory confirmation
+        shell: bash
+        env:
+          CREDENTIAL_INVENTORY_CONFIRMATION: ${{ inputs.credential_inventory_confirmation }}
+        run: |
+          set -euo pipefail
+          if [[ "${CREDENTIAL_INVENTORY_CONFIRMATION}" != 'CONFIRM APPLY R2 INVENTORY NO FALLBACK' ]]; then
+            echo '::error::Complete the value-free Terraform credential inventory checks and enter the exact confirmation.'
+            exit 1
+          fi
+
       - name: Verify approver and resolve saved plan
         id: resolve
         shell: bash
@@ -181,8 +196,8 @@ jobs:
       name: staging-terraform-apply
       url: https://cycle.staging.fukamu.matoruru.com
     env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_R2_SECRET_ACCESS_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_APPLY_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_APPLY_R2_SECRET_ACCESS_KEY }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.TERRAFORM_CLOUDFLARE_API_TOKEN }}
       COMMIT_SHA: ${{ needs.preflight.outputs.commit_sha }}
       PLAN_ARTIFACT_NAME: ${{ needs.preflight.outputs.artifact_name }}
@@ -192,6 +207,31 @@ jobs:
       TF_INPUT: "false"
       TF_VAR_cloudflare_account_id: ${{ vars.TERRAFORM_CLOUDFLARE_ACCOUNT_ID }}
     steps:
+      - name: Validate Terraform deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY CLOUDFLARE_API_TOKEN
+            R2_STATE_BUCKET TF_VAR_cloudflare_account_id
+          )
+          missing=0
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing GitHub Terraform Apply input: ${name}"
+              missing=1
+            fi
+          done
+          if [[ ! "${TF_VAR_cloudflare_account_id}" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "::error::TERRAFORM_CLOUDFLARE_ACCOUNT_ID must be 32 lowercase hexadecimal characters."
+            missing=1
+          fi
+          if [[ ! "${R2_STATE_BUCKET}" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]; then
+            echo "::error::TERRAFORM_R2_STATE_BUCKET must be a 3-63 character R2 bucket name."
+            missing=1
+          fi
+          exit "${missing}"
+
       - name: Verify approved plan is still main HEAD
         shell: bash
         env:
@@ -233,31 +273,6 @@ jobs:
             exit 1
           fi
           sha256sum --check staging.tfplan.sha256
-
-      - name: Validate Terraform deployment inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          required=(
-            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY CLOUDFLARE_API_TOKEN
-            R2_STATE_BUCKET TF_VAR_cloudflare_account_id
-          )
-          missing=0
-          for name in "${required[@]}"; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Missing GitHub Terraform repository input: ${name}"
-              missing=1
-            fi
-          done
-          if [[ ! "${TF_VAR_cloudflare_account_id}" =~ ^[0-9a-f]{32}$ ]]; then
-            echo "::error::TERRAFORM_CLOUDFLARE_ACCOUNT_ID must be 32 lowercase hexadecimal characters."
-            missing=1
-          fi
-          if [[ ! "${R2_STATE_BUCKET}" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]; then
-            echo "::error::TERRAFORM_R2_STATE_BUCKET must be a 3-63 character R2 bucket name."
-            missing=1
-          fi
-          exit "${missing}"
 
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
