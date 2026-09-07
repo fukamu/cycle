@@ -80,6 +80,7 @@ import {
   normalizeLineEndings,
 } from "../../shared/text/semantics";
 import { getCycleEligibility } from "./model/eligibility";
+import { CycleCheckComparison } from "./CycleCheckComparison";
 
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
 type Values = Record<Frame, string>;
@@ -1007,6 +1008,14 @@ function CycleWorkspace({
     setSelected(frame);
   }
 
+  function reviewFrameRecovery(frame: "plan" | "do") {
+    selectFrame(frame);
+    window.setTimeout(
+      () => document.getElementById(`cycle-frame-recovery-${frame}`)?.focus(),
+      0,
+    );
+  }
+
   function handleTabKeyDown(
     event: ReactKeyboardEvent<HTMLButtonElement>,
     frame: Frame,
@@ -1554,6 +1563,18 @@ function CycleWorkspace({
   const copy = frameCopy[selected];
   const selectedConflict = recoveryConflicts.get(selected);
   const workspaceMoved = movedWorkspace !== undefined;
+  const comparisonFrames = ["plan", "do"] as const;
+  const comparisonRecoveryPending = new Set(
+    comparisonFrames.filter((frame) => recoveryConflicts.has(frame)),
+  );
+  const comparisonValues = Object.fromEntries(
+    comparisonFrames.map((frame) => [
+      frame,
+      comparisonRecoveryPending.has(frame)
+        ? (coordinator.getSavedValue(frame) ?? initialValuesRef.current[frame])
+        : values[frame],
+    ]),
+  ) as Readonly<Record<(typeof comparisonFrames)[number], string>>;
   const end = cycle.completedAt ?? cycle.canceledAt;
   return (
     <main className="page editor-page">
@@ -1597,6 +1618,7 @@ function CycleWorkspace({
       >
         {!workspaceMoved && selectedConflict && (
           <DraftRecoveryNotice
+            focusTargetId={`cycle-frame-recovery-${selected}`}
             onRestore={() => restoreRecovery(selected)}
             onDiscard={() => discardRecovery(selected)}
           />
@@ -1655,6 +1677,13 @@ function CycleWorkspace({
         <p className="frame-guide" id="cycle-frame-guide">
           {copy.guide}
         </p>
+        {selected === "check" && (
+          <CycleCheckComparison
+            values={comparisonValues}
+            recoveryPending={comparisonRecoveryPending}
+            onReviewRecovery={reviewFrameRecovery}
+          />
+        )}
         <textarea
           id="cycle-frame-editor"
           aria-label={`${copy.label} — ${copy.name}`}

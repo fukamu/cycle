@@ -113,6 +113,23 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     "D",
   );
   await saveFrame(page, "D — Do", "5日中4日、朝に取り組んだ", "C");
+  const checkComparison = page.getByRole("region", {
+    name: "今回のPとDを比べる",
+  });
+  await expect(checkComparison).toBeVisible();
+  await expect(
+    checkComparison.getByText("朝に最重要タスクを決めて30分取り組む"),
+  ).toBeVisible();
+  await expect(
+    checkComparison.getByText("5日中4日、朝に取り組んだ"),
+  ).toBeVisible();
+  expect(
+    await checkComparison
+      .locator(".cycle-check-comparison__grid")
+      .evaluate((element) =>
+        window.getComputedStyle(element).gridTemplateColumns.split(" "),
+      ),
+  ).toHaveLength(2);
   await saveFrame(page, "C — Check", "3日は午前中に完了できた", "A");
   await page.getByRole("button", { name: "アクションを生成" }).click();
   await expect(
@@ -1046,7 +1063,7 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   page,
 }) => {
   const goalText = "長い目標".repeat(20);
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 320, height: 844 });
   await page.goto("/");
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
   await saveText(
@@ -1072,6 +1089,58 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   await page.keyboard.press("ArrowRight");
   await expect(doTab).toBeFocused();
   await expect(doTab).toHaveAttribute("aria-selected", "true");
+
+  await saveFrame(page, "D — Do", "実行".repeat(100), "P");
+  await saveFrame(page, "P — Plan", "計画".repeat(100), "C");
+  const comparison = page.getByRole("region", {
+    name: "今回のPとDを比べる",
+  });
+  await expect(comparison).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "C — Check" })).toBeVisible();
+  const comparisonLayout = await comparison.evaluate((element) => {
+    const grid = element.querySelector<HTMLElement>(
+      ".cycle-check-comparison__grid",
+    );
+    const items = Array.from(
+      element.querySelectorAll<HTMLElement>(".cycle-check-comparison__item"),
+    );
+    const hasNestedScroll = [element, ...element.querySelectorAll("*")].some(
+      (candidate) => {
+        const style = window.getComputedStyle(candidate);
+        const canScroll = [style.overflowX, style.overflowY].some((overflow) =>
+          ["auto", "scroll"].includes(overflow),
+        );
+        return (
+          canScroll &&
+          (candidate.scrollWidth > candidate.clientWidth ||
+            candidate.scrollHeight > candidate.clientHeight)
+        );
+      },
+    );
+    return {
+      columns: grid
+        ? window.getComputedStyle(grid).gridTemplateColumns.split(" ").length
+        : 0,
+      hasHorizontalOverflow: element.scrollWidth > element.clientWidth,
+      hasNestedScroll,
+      itemTops: items.map((item) => item.getBoundingClientRect().top),
+    };
+  });
+  expect(comparisonLayout).toMatchObject({
+    columns: 1,
+    hasHorizontalOverflow: false,
+    hasNestedScroll: false,
+  });
+  expect(comparisonLayout.itemTops[1]).toBeGreaterThan(
+    comparisonLayout.itemTops[0] ?? 0,
+  );
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
 });
 
 test("goal review termination discards an unversioned change explicitly", async ({

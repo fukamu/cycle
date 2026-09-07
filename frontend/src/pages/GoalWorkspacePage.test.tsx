@@ -1033,6 +1033,55 @@ describe("GoalWorkspacePage", () => {
     );
   });
 
+  it("compares saved P and D without exposing a pending browser draft", async () => {
+    const browserOnlyPlan = "比較欄には出してはいけない端末の計画";
+    vi.mocked(getBrowserDraft).mockImplementation(async (_userId, key) =>
+      key.endsWith(":plan")
+        ? {
+            userId: session.user.id,
+            goalId: goal.id,
+            subjectKey: key,
+            body: browserOnlyPlan,
+            baseRevision: 9,
+            updatedAt: new Date().toISOString(),
+          }
+        : null,
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const planEditor = await screen.findByRole("textbox", {
+      name: "P — Plan",
+    });
+    await waitFor(() => expect(planEditor).toHaveValue(browserOnlyPlan));
+    expect(planEditor).toHaveAttribute("readonly");
+
+    fireEvent.click(screen.getByRole("tab", { name: /C\s*Check/ }));
+    const comparison = await screen.findByRole("region", {
+      name: "今回のPとDを比べる",
+    });
+    expect(within(comparison).getByText(cycle.plan)).toBeInTheDocument();
+    expect(
+      within(comparison).queryByText(browserOnlyPlan),
+    ).not.toBeInTheDocument();
+    expect(within(comparison).getByText("要確認")).toBeInTheDocument();
+
+    fireEvent.click(
+      within(comparison).getByRole("button", { name: "Pの入力を確認" }),
+    );
+    const recoveryNotice = (
+      await screen.findByText("別の更新が見つかりました")
+    ).closest<HTMLElement>('[role="alert"]');
+    expect(recoveryNotice).not.toBeNull();
+    await waitFor(() => expect(recoveryNotice).toHaveFocus());
+    expect(screen.getByRole("tab", { name: /P\s*Plan/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   it("keeps the original mismatch revision across persistence and reload", async () => {
     const subjectKey = `cycle:${cycle.id}:plan`;
     const localBody = "選択を待つ端末の計画";
