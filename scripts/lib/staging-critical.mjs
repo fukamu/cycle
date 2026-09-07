@@ -6,6 +6,241 @@ const uuidV7Pattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const maximumUUIDTimestamp = 0xffffffffffff;
 
+export const stagingCriticalFailureReasons = Object.freeze([
+  "entry_cta_timeout",
+  "anonymous_session_not_observed",
+  "unexpected_status",
+  "session_discovery_failed",
+  "account_delete_failed",
+  "cleanup_unverified",
+]);
+
+export const stagingCriticalPhases = Object.freeze([
+  "configuration",
+  "browser_launch",
+  "health",
+  "readiness",
+  "bootstrap_seed",
+  "entry",
+  "session_discovery",
+  "goal_creation",
+  "cycle_editing",
+  "cycle_completion",
+  "review_transition",
+  "history_verification",
+  "account_delete",
+  "cleanup_verification",
+]);
+const stagingCriticalPhaseSet = new Set(stagingCriticalPhases);
+const stagingCriticalReasons = new Set(stagingCriticalFailureReasons);
+
+export class StagingCriticalFailure extends Error {
+  constructor(phase, reason) {
+    if (
+      !stagingCriticalPhaseSet.has(phase) ||
+      !stagingCriticalReasons.has(reason)
+    ) {
+      throw new Error("staging critical failure classification is invalid");
+    }
+    super("staging critical check failed");
+    this.name = "StagingCriticalFailure";
+    this.phase = phase;
+    this.reason = reason;
+  }
+}
+
+export function parseStagingCriticalMode(value) {
+  if (value !== "baseline" && value !== "full") {
+    throw new Error("staging critical mode is invalid");
+  }
+  return value;
+}
+
+export function parseStagingAdmissionMode(value) {
+  if (value !== "auto" && value !== "off" && value !== "closed") {
+    throw new Error("staging admission mode is invalid");
+  }
+  return value;
+}
+
+export function formatStagingCriticalDiagnostic(failure, metadata) {
+  if (
+    !(failure instanceof StagingCriticalFailure) ||
+    typeof metadata !== "object" ||
+    metadata === null ||
+    !/^(?:local|[1-9][0-9]*)$/.test(metadata.runID) ||
+    !/^(?:local|[1-9][0-9]*)$/.test(metadata.runAttempt) ||
+    !/^(?:local|[0-9a-f]{40})$/.test(metadata.commitSHA)
+  ) {
+    throw new Error("staging critical diagnostic metadata is invalid");
+  }
+  return `::error::Staging critical failed; phase=${failure.phase}; reason=${failure.reason}; run_id=${metadata.runID}; run_attempt=${metadata.runAttempt}; commit_sha=${metadata.commitSHA}.`;
+}
+
+export async function runStagingCritical({
+  mode,
+  admissionMode,
+  adapter,
+  retryOptions,
+}) {
+  parseStagingCriticalMode(mode);
+  parseStagingAdmissionMode(admissionMode);
+  if (typeof adapter !== "object" || adapter === null) {
+    throw new Error("staging critical adapter is invalid");
+  }
+
+  const failures = [];
+  let phase = "browser_launch";
+  let bootstrapMayHaveRun = false;
+  let session;
+  let validatedSession;
+
+  const record = (failure, fallbackPhase = phase) => {
+    const classified =
+      failure instanceof StagingCriticalFailure
+        ? failure
+        : new StagingCriticalFailure(fallbackPhase, "unexpected_status");
+    if (
+      !failures.some(
+        (existing) =>
+          existing.phase === classified.phase &&
+          existing.reason === classified.reason,
+      )
+    ) {
+      failures.push(classified);
+    }
+  };
+
+  try {
+    await adapter.launch();
+    phase = "health";
+    if ((await adapter.checkHealth()) !== 200) {
+      throw new StagingCriticalFailure(phase, "unexpected_status");
+    }
+    phase = "readiness";
+    if ((await adapter.checkReadiness()) !== 200) {
+      throw new StagingCriticalFailure(phase, "unexpected_status");
+    }
+    phase = "bootstrap_seed";
+    await adapter.seedBootstrap();
+    bootstrapMayHaveRun = true;
+    phase = "entry";
+    session = await adapter.enter(admissionMode);
+    if (session === undefined) {
+      throw new StagingCriticalFailure(phase, "anonymous_session_not_observed");
+    }
+    phase = "session_discovery";
+    let discoveredSession;
+    try {
+      discoveredSession = await adapter.discoverSession();
+    } catch {
+      throw new StagingCriticalFailure(phase, "session_discovery_failed");
+    }
+    if (
+      discoveredSession === undefined ||
+      discoveredSession.userID !== session.userID
+    ) {
+      throw new StagingCriticalFailure(phase, "session_discovery_failed");
+    }
+    session = discoveredSession;
+    validatedSession = discoveredSession;
+    if (mode === "full") {
+      await adapter.runFullJourney((nextPhase) => {
+        if (!stagingCriticalPhaseSet.has(nextPhase)) {
+          throw new StagingCriticalFailure(
+            "configuration",
+            "unexpected_status",
+          );
+        }
+        phase = nextPhase;
+      });
+    }
+  } catch (failure) {
+    record(failure);
+  }
+
+  if (bootstrapMayHaveRun) {
+    await adapter.beforeCleanup().catch(() => undefined);
+    let cleanupSession;
+    try {
+      cleanupSession = await adapter.discoverSession();
+    } catch {
+      record(
+        new StagingCriticalFailure(
+          "session_discovery",
+          "session_discovery_failed",
+        ),
+      );
+    }
+    if (cleanupSession === undefined) {
+      if (
+        !failures.some(
+          (failure) => failure.reason === "session_discovery_failed",
+        )
+      ) {
+        record(
+          new StagingCriticalFailure(
+            "session_discovery",
+            "session_discovery_failed",
+          ),
+        );
+      }
+    }
+    let deletionSession = validatedSession ?? session;
+    if (cleanupSession !== undefined) {
+      if (
+        deletionSession !== undefined &&
+        cleanupSession.userID !== deletionSession.userID
+      ) {
+        record(
+          new StagingCriticalFailure(
+            "session_discovery",
+            "session_discovery_failed",
+          ),
+        );
+      } else {
+        deletionSession = cleanupSession;
+      }
+    }
+    if (deletionSession !== undefined) {
+      let deleted = false;
+      try {
+        await retryPublicAccountDelete(
+          () => adapter.deleteAccount(deletionSession),
+          retryOptions,
+        );
+        deleted = true;
+      } catch {
+        record(
+          new StagingCriticalFailure("account_delete", "account_delete_failed"),
+        );
+      }
+      if (deleted) {
+        try {
+          if ((await adapter.verifyDeleted()) !== 401) {
+            throw new StagingCriticalFailure(
+              "cleanup_verification",
+              "cleanup_unverified",
+            );
+          }
+        } catch (failure) {
+          record(
+            failure instanceof StagingCriticalFailure
+              ? failure
+              : new StagingCriticalFailure(
+                  "cleanup_verification",
+                  "cleanup_unverified",
+                ),
+          );
+        }
+      }
+    }
+  }
+
+  await adapter.close().catch(() => undefined);
+  return failures;
+}
+
 export function parseStagingBaseURL(value) {
   if (value !== canonicalStagingBaseURL) {
     throw new Error("staging base URL is not canonical");
@@ -58,13 +293,6 @@ export function deriveBootstrapUUIDv7(runKey, timestampMilliseconds) {
     hexadecimal.slice(16, 20),
     hexadecimal.slice(20),
   ].join("-");
-}
-
-export function accountCorrelation(userID) {
-  if (typeof userID !== "string" || !uuidV7Pattern.test(userID)) {
-    throw new Error("account identifier is invalid");
-  }
-  return `sha256:${createHash("sha256").update(userID, "utf8").digest("hex")}`;
 }
 
 export function parseAnonymousSession(payload, authenticatedUserID) {

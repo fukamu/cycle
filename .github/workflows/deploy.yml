@@ -314,6 +314,15 @@ jobs:
           TURNSTILE_EXPECTED_ACTION: anonymous_bootstrap
         run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go run ./cmd/configcheck
 
+      - name: Verify current Staging baseline before migration
+        shell: bash
+        env:
+          STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}
+          STAGING_CRITICAL_MODE: baseline
+          STAGING_ADMISSION_MODE: auto
+          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}
+        run: bash ./scripts/check-staging-critical.sh
+
       - name: Re-verify deployment commit is still main HEAD
         shell: bash
         env:
@@ -441,9 +450,11 @@ jobs:
           curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 10 --max-time 30 "${PUBLIC_ORIGIN}/healthz"
           curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 --max-time 30 "${PUBLIC_ORIGIN}/readyz"
 
-      - name: Run staging critical journey
+      - name: Run post-deploy staging critical journey
         shell: bash
         env:
           STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}
+          STAGING_CRITICAL_MODE: full
+          STAGING_ADMISSION_MODE: ${{ env.BETA_ADMISSION_MODE }}
           STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}
         run: bash ./scripts/check-staging-critical.sh
