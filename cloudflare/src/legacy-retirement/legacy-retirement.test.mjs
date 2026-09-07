@@ -240,6 +240,10 @@ test("legacy deployment is static, manual, origin-bound, and data-silent", () =>
   assert.match(workflow, /RETIRE pdcai\.matoruru\.com WITHOUT RECOVERY/);
   assert.match(workflow, /legacy-retirement\/wrangler\.jsonc/);
   assert.match(workflow, /--containers-rollout=none/);
+  assert.match(workflow, /for attempt in \{1\.\.12\}; do/);
+  assert.match(workflow, /retirement_ready=false/);
+  assert.match(workflow, /sleep 5/);
+  assert.match(workflow, /retirement_ready.*api_status.*'404'/);
   assert.doesNotMatch(
     workflow,
     /NEON_|DATABASE_URL|OPENAI_API_KEY|migrate|terraform|secret delete/,

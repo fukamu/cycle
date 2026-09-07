@@ -342,7 +342,7 @@ validate_secret_workflow_exact_digest() {
       expected_digest="5ab3289be3c80cd7506c84a3a505100af05763bade1ec5f0faeb29a5cc2fae78"
       ;;
     legacy-retirement)
-      expected_digest="4d23f28d43c69fa25a3907353a887dabe5a0cbfd29e8aa4b04b2d3641eb5493d"
+      expected_digest="ffe1e152fd4c9f7dac2283751ac12adbf14d86f1080edb4199bcd944776e2036"
       ;;
     *) return 0 ;;
   esac

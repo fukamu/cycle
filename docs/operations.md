@@ -198,7 +198,7 @@ Cutover前に次を満たす。
 
 Actions画面で`Retire Legacy PDCAI Origin`を`main`からmanual dispatchし、current main SHAとexact confirmation `RETIRE pdcai.matoruru.com WITHOUT RECOVERY`を入力する。Workflowはactor、confirmation、SHA、current main、成功CIをEnvironment credentialの前に検証し、同じ旧Worker名へ[`legacy-retirement/wrangler.jsonc`](../cloudflare/legacy-retirement/wrangler.jsonc)のstatic assetsだけをdeployする。Application DB migration、現行Worker、Container、Turnstile、Terraform state、Application runtime secretを変更しない。
 
-Deployment後はworkflowのsmokeで次を確認する。
+Deployment後はworkflowのsmokeで次を確認する。Deploy直後に旧edge cacheがHTTP 200で残る伝播競合を考慮し、全条件が同時に成立するまで最大12回、5秒間隔で再評価する。
 
 - root responseがversion `2` retirement markerとCSP / noindex headerを返す。
 - `/api/session`が`404`で、旧Backend APIが公開されていない。
