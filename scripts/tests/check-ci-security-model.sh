@@ -300,6 +300,11 @@ validate_exact_workflow_structure() {
       expected_root_fields="$(printf '%s\n' name on permissions concurrency jobs)"
       expected_jobs="$(printf '%s\n' preflight apply)"
       ;;
+    legacy-retirement)
+      expected_name="name: Retire Legacy PDCAI Origin"
+      expected_root_fields="$(printf '%s\n' name on permissions concurrency jobs)"
+      expected_jobs="$(printf '%s\n' preflight deploy)"
+      ;;
     *)
       violation "unknown workflow structure contract: ${contract}"
       return 1
@@ -335,6 +340,9 @@ validate_secret_workflow_exact_digest() {
       ;;
     terraform-apply)
       expected_digest="5ab3289be3c80cd7506c84a3a505100af05763bade1ec5f0faeb29a5cc2fae78"
+      ;;
+    legacy-retirement)
+      expected_digest="4d23f28d43c69fa25a3907353a887dabe5a0cbfd29e8aa4b04b2d3641eb5493d"
       ;;
     *) return 0 ;;
   esac
@@ -416,6 +424,7 @@ validate_json_parser_completion_contract() {
     fi
   done <<'JSON_PARSER_INVENTORY'
 deploy.yml|1
+retire-legacy-origin.yml|3
 terraform-apply.yml|2
 terraform-plan.yml|0
 JSON_PARSER_INVENTORY
@@ -425,7 +434,7 @@ validate_all_workflows() {
   local directory="$1"
   local expected_inventory
   local actual_inventory
-  expected_inventory="$(printf '%s\n' ci.yml deploy.yml terraform-apply.yml terraform-plan.yml)"
+  expected_inventory="$(printf '%s\n' ci.yml deploy.yml retire-legacy-origin.yml terraform-apply.yml terraform-plan.yml)"
   actual_inventory="$(
     find "${directory}" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -printf '%f\n' \
       | LC_ALL=C sort
@@ -446,6 +455,7 @@ validate_all_workflows() {
   done <<'WORKFLOW_CHECKOUT_INVENTORY'
 ci.yml|8|ci
 deploy.yml|1|deploy
+retire-legacy-origin.yml|1|legacy-retirement
 terraform-apply.yml|1|terraform-apply
 terraform-plan.yml|1|terraform-plan
 WORKFLOW_CHECKOUT_INVENTORY
@@ -920,7 +930,7 @@ validate_workflow_permissions_contract() {
   local filename
   local permissions_file
   local workflow_file
-  for filename in deploy.yml terraform-apply.yml terraform-plan.yml; do
+  for filename in deploy.yml retire-legacy-origin.yml terraform-apply.yml terraform-plan.yml; do
     workflow_file="${directory}/${filename}"
     permissions_file="${test_root}/${filename}-permissions.block"
     extract_root_mapping "${workflow_file}" permissions >"${permissions_file}" || {
@@ -1336,7 +1346,7 @@ new_workflow_set_fixture() {
   local directory="${test_root}/workflow-set-${name}"
   mkdir -- "${directory}"
   local filename
-  for filename in ci.yml deploy.yml terraform-apply.yml terraform-plan.yml; do
+  for filename in ci.yml deploy.yml retire-legacy-origin.yml terraform-apply.yml terraform-plan.yml; do
     cp -- "${workflow_dir}/${filename}" "${directory}/${filename}"
   done
   printf '%s\n' "${directory}"

@@ -27,6 +27,9 @@ importers:
       '@types/node':
         specifier: 24.13.3
         version: 24.13.3
+      fake-indexeddb:
+        specifier: 6.2.5
+        version: 6.2.5
       prettier:
         specifier: 3.7.4
         version: 3.7.4

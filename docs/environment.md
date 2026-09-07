@@ -171,6 +171,20 @@ TERRAFORM_APPLY_APPROVER
 
 GitHub Environment `staging-terraform-apply`はApply用R2 Read/Write secretの必須保管場所です。Deployment branchを `main`へ制限します。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateも設定します。Workflow preflightはactorと `TERRAFORM_APPLY_APPROVER`を照合し、不一致・未設定ではEnvironment credentialを使うApply jobへ進みません。
 
+## GitHub legacy origin retirement input
+
+旧`pdcai.matoruru.com`をretirement-only Workerへ切り替える専用owner gateです。Application / Terraform runtimeへ渡しません。
+
+Repository variable:
+
+```text
+LEGACY_RETIREMENT_APPROVER
+```
+
+- `LEGACY_RETIREMENT_APPROVER`: Product OwnerのB2判断を確認後、`Retire Legacy PDCAI Origin`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorと照合する。
+- Workflowは`staging` Environmentの既存`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`だけをdeployment stepへ渡す。Database、provider、Application runtime secretはretirement Workerへ渡さない。
+- Dispatch inputはcurrent mainの40文字lowercase commit SHAと、exact confirmation `RETIRE pdcai.matoruru.com WITHOUT RECOVERY`を必須とする。値はsecretではない。
+
 ## GitHub `staging` Environment
 
 Runtime/deployのexact required listは [`deploy.yml`](../.github/workflows/deploy.yml) の`Validate required deployment inputs`がenforceします。Post-deploy専用`STAGING_E2E_INVITE_TOKEN`はtraffic切替後の`./scripts/check-staging-critical.sh`が値を表示せず検証します。
