@@ -563,6 +563,8 @@ Goal v2 · Cycle 3
 
 Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。
 
+C選択中はGuideとC Textareaの間に、同じeditor stateが持つ現在CycleのPとDをread-only比較領域として常時表示する。P/Dを複製保存または追加取得せず、改行と長文をplain textで表示し、trim後に空なら未入力と文字で示す。PまたはDにBrowser Draft Recoveryの確認待ちがある場合は、Recovery本文を比較領域へ展開または採用せず「要確認」と文字表示し、対象Frameを選択して既存Recovery noticeへfocusできる操作を置く。DesktopはP/Dを2列、Mobile・320px幅・200% zoom相当では同じreading orderの縦配置とし、比較領域にnested scrollを作らない。Active / Completed / Canceledで同じ情報順を維持する。
+
 A Frameのcontrol順序:
 
 1. `アクションを生成`
@@ -4036,6 +4038,7 @@ Actions:
 - Mobile First。
 - content max widthは例`720px`。
 - Cycle Frame tabsはmobile bottom固定、desktopでも同じ情報構造。
+- CのP/D比較はdesktopで2列、狭幅とzoom時はP→Dの縦配置とし、内部scrollを作らない。
 - Goal card collectionは1列からresponsiveに拡張可能だが、MVPでdesktop専用layoutを作らない。
 - 翻訳後の長いlabelに備え、固定pixel widthや1行強制を避ける。
 
@@ -4048,6 +4051,7 @@ Actions:
 - Dialogはfocus trap、close時triggerへ戻す。
 - AI中Aは`readOnly` + `aria-readonly=true`。disabledにせずcopy/scroll可能。
 - ColorだけでGoal status / save state / version markerを表現しない。
+- CのP/D比較はvisible headingとP→D→Cのreading orderを持ち、Recovery待ちは色だけでなく文字とfocus可能な確認操作で示す。
 - Button disabled理由を近接textで示す。
 
 ---
