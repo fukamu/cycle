@@ -5362,8 +5362,13 @@ http_request_duration_ms{route}
 autosave_total{resource_type,result}
 autosave_duration_ms{resource_type}
 revision_conflict_total{resource_type}
-draft_recovery_total{resource_type,result}
 ```
+
+Browser Draft Recoveryは§28.6のFrontend behaviorと§48のFrontend unit / E2Eで保証する。Closed Betaでは`draft_recovery_total`をMinimum metricに含めず、件数・率・cohortを収集またはexportしない。Browser event / beacon、Backend ingest / metric、DB rollupを追加せず、User / Session / Goal / Cycle / Draft ID、HMAC pseudonym、本文、revision、timestamp、User-Agent、error detailをこの目的で新たに収集しない。専用dashboard、alert、query ownerも設けない。
+
+Account Delete / DSR対象となる新しいtelemetry recordを作らず、既存のBrowser Draft削除・tombstoneは§§41.10–41.11に従う。
+
+したがって、Draft Recoveryの観測dataがないことを発生0件または成功率100%と解釈しない。§28.5のBrowser Draft TTL 24時間はtelemetry retentionではない。将来、定量観測がProduct判断に必要になった場合は、Product question、分母、欠損許容、privacy、retention、削除、abuse対策、dashboard ownerを別Decisionで承認する。方式比較では、Browserから外部collectorへ直接送信せず、raw eventを永続化しないsame-origin aggregateを第一候補とする。
 
 ### Goal / Cycle
 
