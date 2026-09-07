@@ -13,12 +13,19 @@ export function PageLoading() {
 export function DraftRecoveryNotice({
   onRestore,
   onDiscard,
+  focusTargetId,
 }: {
   readonly onRestore: () => void;
   readonly onDiscard: () => void;
+  readonly focusTargetId?: string;
 }) {
   return (
-    <div className="draft-notice draft-notice--conflict" role="alert">
+    <div
+      className="draft-notice draft-notice--conflict"
+      id={focusTargetId}
+      role="alert"
+      tabIndex={focusTargetId ? -1 : undefined}
+    >
       <div>
         <strong>別の更新が見つかりました</strong>
         <p>

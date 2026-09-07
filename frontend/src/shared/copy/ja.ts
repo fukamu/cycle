@@ -38,6 +38,15 @@ export const frameCopy: Record<
   },
 };
 
+export const cycleCheckComparisonCopy = {
+  heading: "今回のPとDを比べる",
+  guide: "Pの期待とDの事実を見ながら、Cに分かったことを書きましょう。",
+  empty: "まだ入力されていません",
+  recoveryPending: "要確認",
+  recoveryGuide: "このフレームには、この端末に残った確認待ちの入力があります。",
+  reviewRecovery: (frameLabel: "P" | "D") => `${frameLabel}の入力を確認`,
+} as const;
+
 export const goalCopy = {
   guide:
     "これから良くしたいことや、目指したい状態を書いてみましょう。最初から完璧である必要はありません。",
