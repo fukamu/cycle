@@ -714,6 +714,7 @@ textarea[readonly] {
 }
 
 .frame-tabs button {
+  min-width: 0;
   min-height: 64px;
   display: grid;
   place-content: center;
@@ -737,14 +738,19 @@ textarea[readonly] {
   border-color: var(--brand-dark);
 }
 
-.frame-tabs span {
+.frame-tabs__label {
   font-size: 1.08rem;
   font-weight: var(--font-weight-bold);
 }
 
-.frame-tabs small {
+.frame-tabs__details {
+  min-width: 0;
   overflow-wrap: anywhere;
   font-size: var(--font-size-small);
+}
+
+.frame-tabs__recovery {
+  font-weight: var(--font-weight-bold);
 }
 
 .frame-title {
@@ -1407,7 +1413,8 @@ textarea[readonly] {
     border-radius: 10px;
   }
 
-  .frame-tabs small {
+  .frame-tabs__name,
+  .frame-tabs__separator {
     display: none;
   }
 
