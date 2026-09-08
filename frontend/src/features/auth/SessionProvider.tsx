@@ -18,6 +18,7 @@ import {
   cleanupExpiredBrowserDrafts,
   tombstoneDeletedGoalAndClearDrafts,
 } from "../../shared/drafts/browserDraftCache";
+import { clearSelectedCycleFrames } from "../../shared/preferences/selectedFramePreference";
 import { removeGoalFromCache } from "../goal-collection";
 import {
   type AcceptedGoalDeletionAdvisory,
@@ -139,6 +140,7 @@ function SessionBoundary({
 
   const handleUnboundIdentityAdvisory = useCallback(() => {
     unboundAdvisoryAbortController.abort();
+    clearSelectedCycleFrames();
     reloadApplication();
   }, [reloadApplication, unboundAdvisoryAbortController]);
 

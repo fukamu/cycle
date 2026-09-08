@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { Session } from "../../shared/api/schemas";
 import type { AutoSaveScopeRegistry } from "../../shared/autosave/AutoSaveScopeProvider";
 import { clearUserDrafts } from "../../shared/drafts/browserDraftCache";
+import { clearSelectedCycleFrames } from "../../shared/preferences/selectedFramePreference";
 import {
   createAccountDeletionAdvisory,
   type AccountDeletionAdvisory,
@@ -41,6 +42,7 @@ export function useAccountDeletionAdvisory({
     function startCleanup(deletedUserId: string): void {
       const attempt = (async () => {
         await autoSaveScopes.quiesce({ preserveDrafts: false });
+        clearSelectedCycleFrames();
         await clearUserDrafts(deletedUserId);
       })();
       cleanupAttemptRef.current = attempt;

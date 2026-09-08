@@ -16,6 +16,7 @@ import {
 } from "../features/goal-collection";
 import { getHome } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
+import { reconcileSelectedCycleFrames } from "../shared/preferences/selectedFramePreference";
 
 export function HomePage() {
   const session = useSession();
@@ -40,13 +41,22 @@ export function HomePage() {
   );
   const create = useGoalCreationDraftCommand(openCreationDraft);
   useEffect(() => {
-    if (query.data && progressingGoalsAreValid)
+    if (query.data && progressingGoalsAreValid) {
       cacheGoals(
         cache,
         userId,
         query.data.progressingGoals,
         query.dataUpdatedAt,
       );
+      reconcileSelectedCycleFrames(
+        query.data.progressingGoals.flatMap((goal) =>
+          goal.status === "active_cycle" &&
+          goal.currentWork?.kind === "active_cycle"
+            ? [goal.currentWork.cycleId]
+            : [],
+        ),
+      );
+    }
   }, [
     cache,
     progressingGoalsAreValid,

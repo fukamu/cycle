@@ -27,6 +27,10 @@ import {
 import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBoundary";
 import type { PostCommitSessionOwnershipToken } from "../shared/cleanup/postCommitCleanupContext";
 import { clearUserDrafts } from "../shared/drafts/browserDraftCache";
+import {
+  readSelectedCycleFrame,
+  rememberSelectedCycleFrame,
+} from "../shared/preferences/selectedFramePreference";
 import type { Session } from "../shared/api/schemas";
 import { SettingsPage } from "./SettingsPage";
 
@@ -94,6 +98,7 @@ const publishAccountDeletionAdvisory = vi.fn<(deletedUserId: string) => void>();
 
 describe("SettingsPage", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.mocked(deleteAccount).mockReset();
     vi.mocked(loginGoogle).mockReset();
     vi.mocked(upgradeGoogle).mockReset();
@@ -448,6 +453,8 @@ describe("SettingsPage", () => {
   });
 
   it("fences writers after deletion commits and clears only this user's drafts", async () => {
+    const selectedCycleId = "40000000-0000-7000-8000-000000000001";
+    rememberSelectedCycleFrame(selectedCycleId, "action");
     const persistence = deferredVoid();
     const events: string[] = [];
     let staleQueue!: AutoSaveScopeLease["queueBrowserOperation"];
@@ -491,6 +498,7 @@ describe("SettingsPage", () => {
     await waitFor(() =>
       expect(events).toEqual(["delete", "advisory", "persist-start"]),
     );
+    expect(readSelectedCycleFrame(selectedCycleId, "active")).toBe("plan");
     expect(deleteAccount).toHaveBeenCalledOnce();
     expect(clearUserDrafts).not.toHaveBeenCalled();
 

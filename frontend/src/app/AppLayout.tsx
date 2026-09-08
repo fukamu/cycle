@@ -11,6 +11,8 @@ import {
 } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 
+import { forgetSelectedCycleFrameFromWorkspacePath } from "../shared/preferences/selectedFramePreference";
+
 type RouteHeadingFocusRequest = Readonly<{
   getPendingGeneration: (pathname: string) => number | undefined;
   complete: (pathname: string, generation: number) => void;
@@ -162,7 +164,10 @@ export function AppLayout() {
           className="wordmark"
           to="/"
           aria-label="FUKAMU Cycle ホーム"
-          onClick={() => setOpen(false)}
+          onClick={() => {
+            forgetSelectedCycleFrameFromWorkspacePath(pathname);
+            setOpen(false);
+          }}
         >
           <span className="wordmark__name">FUKAMU</span>
           <span className="wordmark__suffix">Cycle</span>

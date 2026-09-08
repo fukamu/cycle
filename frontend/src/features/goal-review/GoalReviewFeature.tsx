@@ -51,6 +51,7 @@ import {
   usePostCommitCleanup,
 } from "../../shared/cleanup/postCommitCleanupContext";
 import { deleteBrowserDraft } from "../../shared/drafts/browserDraftCache";
+import { forgetSelectedCycleFrame } from "../../shared/preferences/selectedFramePreference";
 import {
   commandFingerprint,
   useCommandOperation,
@@ -270,6 +271,9 @@ function ReviewEditor({
       mountedGenerationRef.current = false;
     };
   }, []);
+  useLayoutEffect(() => {
+    forgetSelectedCycleFrame(triggerCycle.id);
+  }, [triggerCycle.id]);
   useLayoutEffect(() => onCommitted(review), [onCommitted, review]);
   const refinement = useGoalRefinement();
   const refineOperation = useCommandOperation();

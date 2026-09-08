@@ -24,6 +24,10 @@ import type {
   Session,
 } from "../shared/api/schemas";
 import { createGoalDraft, getHome } from "../shared/api/workspace";
+import {
+  readSelectedCycleFrame,
+  rememberSelectedCycleFrame,
+} from "../shared/preferences/selectedFramePreference";
 import { HomePage } from "./HomePage";
 
 vi.mock("../shared/api/workspace", () => ({
@@ -85,8 +89,38 @@ const thirdGoal = makeGoal({
 
 describe("HomePage progressing goal collection", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.mocked(createGoalDraft).mockReset();
     vi.mocked(getHome).mockReset();
+  });
+
+  it("reconciles selected Frames against the current Active Cycles", async () => {
+    rememberSelectedCycleFrame(firstGoal.currentWork.cycleId, "do");
+    rememberSelectedCycleFrame(
+      secondGoal.currentWork?.kind === "goal_review"
+        ? secondGoal.currentWork.triggerCycleId
+        : "",
+      "check",
+    );
+    rememberSelectedCycleFrame(thirdGoal.currentWork.cycleId, "action");
+    vi.mocked(getHome).mockResolvedValue({
+      progressingGoals: [firstGoal, secondGoal],
+      creationDraft: null,
+      canCreateGoalDraft: true,
+      progressingGoalLimit: 2,
+      canStartProgressingGoal: false,
+    });
+
+    renderHome();
+
+    expect(await screen.findByText("2 / 2")).toBeInTheDocument();
+    await waitFor(() => expect(window.localStorage.length).toBe(1));
+    expect(
+      readSelectedCycleFrame(firstGoal.currentWork.cycleId, "active"),
+    ).toBe("do");
+    expect(
+      readSelectedCycleFrame(thirdGoal.currentWork.cycleId, "active"),
+    ).toBe("plan");
   });
 
   it("renders two independently routed goal cards at the free limit", async () => {

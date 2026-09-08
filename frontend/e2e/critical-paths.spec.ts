@@ -346,6 +346,13 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(
     page.getByText("Goal v1 · Cycle 1 を完了しました"),
   ).toBeVisible();
+  expect(
+    await page.evaluate(() =>
+      Object.keys(localStorage).filter((key) =>
+        key.startsWith("fukamu-cycle-selected-frame-v1:"),
+      ),
+    ),
+  ).toEqual([]);
 
   await page.getByRole("button", { name: "AIで目標を整える" }).click();
   await expect(
@@ -394,6 +401,10 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     page.getByRole("heading", { level: 1, name: goalText }),
   ).toBeFocused();
   await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "P Plan" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await page.goto("/history");
   await page.getByRole("link", { name: new RegExp(goalText) }).click();
   await expect(
@@ -1269,8 +1280,13 @@ test("Home presents one clear next action for an active Cycle without horizontal
   await page.setViewportSize({ width: 320, height: 844 });
   await createProgressingGoal(page, goalText);
   const cyclePath = new URL(page.url()).pathname;
+  const doTab = page.getByRole("tab", { name: "D Do" });
+  await doTab.click();
+  await expect(doTab).toHaveAttribute("aria-selected", "true");
+  await page.reload();
+  await expect(doTab).toHaveAttribute("aria-selected", "true");
 
-  await page.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
+  await page.goto("/");
 
   const card = page.getByRole("article", { name: goalText });
   await expect(card).toBeVisible();
@@ -1307,6 +1323,21 @@ test("Home presents one clear next action for an active Cycle without horizontal
 
   await nextAction.click();
   await expect(page).toHaveURL(cyclePath);
+  await expect(doTab).toHaveAttribute("aria-selected", "true");
+
+  await page.goBack();
+  await expect(page.getByRole("article", { name: goalText })).toBeVisible();
+  await page.goForward();
+  await expect(page).toHaveURL(cyclePath);
+  await expect(doTab).toHaveAttribute("aria-selected", "true");
+
+  await page.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
+  const resetCard = page.getByRole("article", { name: goalText });
+  await resetCard.getByRole("link", { name: "Cycle 1を続ける" }).click();
+  await expect(page.getByRole("tab", { name: "P Plan" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
 test("Goal disabled guidance remains readable and associated at narrow widths", async ({

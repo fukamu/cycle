@@ -47,6 +47,10 @@ import {
   putBrowserDraft,
   tombstoneDeletedGoalAndClearDrafts,
 } from "../shared/drafts/browserDraftCache";
+import {
+  readSelectedCycleFrame,
+  rememberSelectedCycleFrame,
+} from "../shared/preferences/selectedFramePreference";
 import { GoalWorkspacePage } from "./GoalWorkspacePage";
 
 vi.mock("../shared/api/workspace", () => ({
@@ -166,6 +170,7 @@ const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
 
 describe("GoalWorkspacePage", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.clearAllMocks();
     vi.mocked(getGoal).mockResolvedValue({ goal });
     vi.mocked(getCycle).mockResolvedValue({ cycle });
@@ -2689,19 +2694,40 @@ describe("GoalWorkspacePage", () => {
     expect(doTab).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(doTab).toHaveFocus());
     expect(screen.getByRole("textbox", { name: "D — Do" })).toBeInTheDocument();
+    expect(readSelectedCycleFrame(cycle.id, "active")).toBe("do");
 
     fireEvent.keyDown(doTab, { key: "End" });
     const actionTab = screen.getByRole("tab", { name: "A Action" });
     expect(actionTab).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(actionTab).toHaveFocus());
+    expect(readSelectedCycleFrame(cycle.id, "active")).toBe("action");
 
     fireEvent.keyDown(actionTab, { key: "Home" });
     expect(planTab).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(planTab).toHaveFocus());
+    expect(readSelectedCycleFrame(cycle.id, "active")).toBe("plan");
 
     fireEvent.keyDown(planTab, { key: "ArrowLeft" });
     expect(actionTab).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(actionTab).toHaveFocus());
+    expect(readSelectedCycleFrame(cycle.id, "active")).toBe("action");
+  });
+
+  it("restores the selected Frame when the same Active Cycle remounts", async () => {
+    rememberSelectedCycleFrame(cycle.id, "check");
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+
+    renderPage(cache);
+
+    expect(await screen.findByRole("tab", { name: "C Check" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(
+      screen.getByRole("textbox", { name: "C — Check" }),
+    ).toBeInTheDocument();
   });
 
   it("keeps full tab names and marks an unselected recovery conflict", async () => {
@@ -2974,6 +3000,7 @@ describe("GoalWorkspacePage", () => {
   });
 
   it("synchronously fences one exact Goal advisory without echoing or deleting again", async () => {
+    rememberSelectedCycleFrame(cycle.id, "do");
     const cleanup = deferred<void>();
     vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockReturnValue(
       cleanup.promise,
@@ -2983,7 +3010,7 @@ describe("GoalWorkspacePage", () => {
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
     renderPage(cache, { goalDeletionAdvisory: advisory });
-    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    const editor = await screen.findByRole("textbox", { name: "D — Do" });
     expect(await screen.findByText("保存済み")).toBeInTheDocument();
     expect(advisory.subscribe).toHaveBeenCalledWith(
       session.user.id,
@@ -2999,6 +3026,7 @@ describe("GoalWorkspacePage", () => {
 
     act(() => advisory.dispatch(session.user.id, goal.id));
     expect(editor).toHaveAttribute("readonly");
+    expect(readSelectedCycleFrame(cycle.id, "active")).toBe("plan");
     await waitFor(() =>
       expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
         session.user.id,
@@ -3017,6 +3045,7 @@ describe("GoalWorkspacePage", () => {
   });
 
   it("retries Complete browser cleanup without resending Complete", async () => {
+    rememberSelectedCycleFrame(cycle.id, "action");
     vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
     vi.mocked(completeCycle).mockResolvedValue(goalReviewReplay);
     vi.mocked(deleteBrowserDraft)
@@ -3037,6 +3066,7 @@ describe("GoalWorkspacePage", () => {
     ).toBeInTheDocument();
     expect(completeCycle).toHaveBeenCalledOnce();
     expect(deleteBrowserDraft).toHaveBeenCalledOnce();
+    expect(readSelectedCycleFrame(cycle.id, "active")).toBe("plan");
 
     fireEvent.click(
       screen.getByRole("button", { name: "端末データの削除を再試行" }),
@@ -3055,6 +3085,7 @@ describe("GoalWorkspacePage", () => {
   });
 
   it("retries Delete browser cleanup without resending Delete", async () => {
+    rememberSelectedCycleFrame(cycle.id, "check");
     vi.mocked(deleteGoal).mockResolvedValue(undefined);
     vi.mocked(tombstoneDeletedGoalAndClearDrafts)
       .mockRejectedValueOnce(new Error("indexedDB unavailable"))
@@ -3065,7 +3096,7 @@ describe("GoalWorkspacePage", () => {
     });
     renderPage(cache, { goalDeletionAdvisory: advisory });
 
-    await screen.findByRole("textbox", { name: "P — Plan" });
+    await screen.findByRole("textbox", { name: "C — Check" });
     expect(await screen.findByText("保存済み")).toBeInTheDocument();
     fireEvent.click(screen.getByText("目標の操作"));
     fireEvent.click(screen.getByRole("button", { name: "目標を削除" }));
@@ -3081,6 +3112,7 @@ describe("GoalWorkspacePage", () => {
       ),
     ).toBeInTheDocument();
     expect(deleteGoal).toHaveBeenCalledOnce();
+    expect(readSelectedCycleFrame(cycle.id, "active")).toBe("plan");
     expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledOnce();
     expect(clearGoalDrafts).not.toHaveBeenCalled();
     expect(advisory.publish).toHaveBeenCalledOnce();
@@ -3114,6 +3146,7 @@ describe("GoalWorkspacePage", () => {
   });
 
   it("retries Terminate browser cleanup without resending Terminate", async () => {
+    rememberSelectedCycleFrame(cycle.id, "do");
     vi.mocked(terminateGoal).mockResolvedValue({
       goal: {
         ...goal,
@@ -3138,7 +3171,7 @@ describe("GoalWorkspacePage", () => {
     });
     renderPage(cache, { goalDeletionAdvisory: advisory });
 
-    await screen.findByRole("textbox", { name: "P — Plan" });
+    await screen.findByRole("textbox", { name: "D — Do" });
     expect(await screen.findByText("保存済み")).toBeInTheDocument();
     fireEvent.click(screen.getByText("目標の操作"));
     fireEvent.click(screen.getByRole("button", { name: "目標を終了" }));
@@ -3154,6 +3187,7 @@ describe("GoalWorkspacePage", () => {
       ),
     ).toBeInTheDocument();
     expect(terminateGoal).toHaveBeenCalledOnce();
+    expect(readSelectedCycleFrame(cycle.id, "active")).toBe("plan");
     expect(clearGoalDrafts).toHaveBeenCalledOnce();
 
     fireEvent.click(
