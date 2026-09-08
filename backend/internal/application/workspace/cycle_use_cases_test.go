@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -722,5 +723,92 @@ func TestGetCycleRejectsCanceledDetailWithoutCancellationReason(t *testing.T) {
 	_, err := useCases.GetCycle(context.Background(), cycleTestUserID, cycleTestGoalID, cycleTestCycleID1)
 	if !errors.Is(err, ErrCyclePersistenceInvariant) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateCycleViewPreviousCompletedActionContract(t *testing.T) {
+	now := cycleTestNow.UTC()
+	view := CycleView{
+		ID: cycleTestCycleID3, GoalID: cycleTestGoalID, SequenceNumber: 3, Status: cycle.StatusActive,
+		GoalVersion: GoalVersionView{
+			ID: cycleTestVersionID, VersionNumber: 2, Body: "goal", CreatedAt: now.Add(-time.Hour),
+		},
+		PreviousCompletedCycleAction: &PreviousCompletedCycleActionView{
+			CycleID: cycleTestCycleID2, CycleSequenceNumber: 2, GoalVersionNumber: 1, Action: "前回A",
+		},
+		StartedAt: now,
+	}
+	if err := validateCycleView(view, cycleTestGoalID, cycleTestCycleID3); err != nil {
+		t.Fatalf("valid active Cycle previous Action: %v", err)
+	}
+	atLimit := view
+	atLimitPrevious := *view.PreviousCompletedCycleAction
+	atLimitPrevious.Action = strings.Repeat("🌱", cycle.MaxFrameCodePoints)
+	atLimit.PreviousCompletedCycleAction = &atLimitPrevious
+	if err := validateCycleView(atLimit, cycleTestGoalID, cycleTestCycleID3); err != nil {
+		t.Fatalf("Action at code point limit: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*CycleView)
+	}{
+		{"missing", func(candidate *CycleView) { candidate.PreviousCompletedCycleAction = nil }},
+		{"same Cycle", func(candidate *CycleView) { candidate.PreviousCompletedCycleAction.CycleID = candidate.ID }},
+		{"invalid UUID", func(candidate *CycleView) { candidate.PreviousCompletedCycleAction.CycleID = "not-a-uuid" }},
+		{"wrong sequence", func(candidate *CycleView) { candidate.PreviousCompletedCycleAction.CycleSequenceNumber-- }},
+		{"zero Goal Version", func(candidate *CycleView) { candidate.PreviousCompletedCycleAction.GoalVersionNumber = 0 }},
+		{"future Goal Version", func(candidate *CycleView) { candidate.PreviousCompletedCycleAction.GoalVersionNumber = 3 }},
+		{"Goal Version more than one behind", func(candidate *CycleView) { candidate.GoalVersion.VersionNumber = 3 }},
+		{"blank Action", func(candidate *CycleView) { candidate.PreviousCompletedCycleAction.Action = " \n\t" }},
+		{"oversize Action", func(candidate *CycleView) {
+			candidate.PreviousCompletedCycleAction.Action = strings.Repeat("🌱", cycle.MaxFrameCodePoints+1)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := view
+			previous := *view.PreviousCompletedCycleAction
+			candidate.PreviousCompletedCycleAction = &previous
+			test.mutate(&candidate)
+			if err := validateCycleView(candidate, cycleTestGoalID, cycleTestCycleID3); !errors.Is(err, ErrCyclePersistenceInvariant) {
+				t.Fatalf("error = %v, want %v", err, ErrCyclePersistenceInvariant)
+			}
+		})
+	}
+}
+
+func TestValidateCycleViewPreviousCompletedActionIsNullForCycleOneAndTerminal(t *testing.T) {
+	now := cycleTestNow.UTC()
+	base := CycleView{
+		ID: cycleTestCycleID1, GoalID: cycleTestGoalID, SequenceNumber: 1, Status: cycle.StatusActive,
+		GoalVersion: GoalVersionView{
+			ID: cycleTestVersionID, VersionNumber: 1, Body: "goal", CreatedAt: now.Add(-time.Hour),
+		},
+		StartedAt: now,
+	}
+	if err := validateCycleView(base, cycleTestGoalID, cycleTestCycleID1); err != nil {
+		t.Fatalf("Cycle 1 null previous Action: %v", err)
+	}
+	base.PreviousCompletedCycleAction = &PreviousCompletedCycleActionView{
+		CycleID: cycleTestCycleID2, CycleSequenceNumber: 0, GoalVersionNumber: 1, Action: "A",
+	}
+	if err := validateCycleView(base, cycleTestGoalID, cycleTestCycleID1); !errors.Is(err, ErrCyclePersistenceInvariant) {
+		t.Fatalf("Cycle 1 populated previous Action error = %v", err)
+	}
+
+	completedAt := now.Add(time.Hour)
+	base.SequenceNumber = 2
+	base.Status = cycle.StatusCompleted
+	base.CompletedAt = &completedAt
+	base.PreviousCompletedCycleAction = nil
+	if err := validateCycleView(base, cycleTestGoalID, cycleTestCycleID1); err != nil {
+		t.Fatalf("terminal null previous Action: %v", err)
+	}
+	base.PreviousCompletedCycleAction = &PreviousCompletedCycleActionView{
+		CycleID: cycleTestCycleID2, CycleSequenceNumber: 1, GoalVersionNumber: 1, Action: "A",
+	}
+	if err := validateCycleView(base, cycleTestGoalID, cycleTestCycleID1); !errors.Is(err, ErrCyclePersistenceInvariant) {
+		t.Fatalf("terminal populated previous Action error = %v", err)
 	}
 }

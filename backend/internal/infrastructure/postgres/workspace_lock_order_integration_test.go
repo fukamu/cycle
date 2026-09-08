@@ -607,6 +607,10 @@ func TestWorkspaceStoreTerminatePreservesUserScopedReplayContract(t *testing.T) 
 	fixtures := progressingGoalFixtures()
 	first := startProgressingGoal(t, store, userID, fixtures[0], 2, now)
 	second := startProgressingGoal(t, store, userID, fixtures[1], 2, now.Add(time.Minute))
+	if first.Cycle.PreviousCompletedCycleAction != nil || second.Cycle.PreviousCompletedCycleAction != nil {
+		t.Fatalf("Cycle 1 Start previous Actions = %#v / %#v",
+			first.Cycle.PreviousCompletedCycleAction, second.Cycle.PreviousCompletedCycleAction)
+	}
 	cycleRevision := int64(0)
 	firstInput := workspace.TerminateInput{
 		UserID: userID, GoalID: fixtures[0].goalID,
@@ -619,13 +623,14 @@ func TestWorkspaceStoreTerminatePreservesUserScopedReplayContract(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Replayed || result.Goal.ID != fixtures[0].goalID || result.Goal.Status != goal.StatusEnded {
+	if result.Replayed || result.Goal.ID != fixtures[0].goalID || result.Goal.Status != goal.StatusEnded ||
+		result.CanceledCycle == nil || result.CanceledCycle.PreviousCompletedCycleAction != nil {
 		t.Fatalf("first terminate result = %#v", result)
 	}
 	replay, err := executeTerminateGoalUseCase(store, context.Background(), firstInput)
 	if err != nil || !replay.Replayed || replay.Goal.ID != fixtures[0].goalID || replay.Goal.Status != goal.StatusEnded ||
 		replay.CanceledCycle == nil || replay.CanceledCycle.ID != fixtures[0].cycleID ||
-		replay.CanceledCycle.Status != cycle.StatusCanceled {
+		replay.CanceledCycle.Status != cycle.StatusCanceled || replay.CanceledCycle.PreviousCompletedCycleAction != nil {
 		t.Fatalf("same-request terminate replay = %#v, error = %v", replay, err)
 	}
 	differentHash := firstInput

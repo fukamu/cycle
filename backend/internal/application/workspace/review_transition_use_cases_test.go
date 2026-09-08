@@ -286,6 +286,14 @@ func (tx *reviewTransitionTestTx) LoadCycleView(context.Context, string, string,
 			Body: tx.version.Body, CreatedAt: tx.version.CreatedAt,
 		},
 	}
+	if tx.cycle.Status == cycle.StatusActive && tx.cycle.SequenceNumber > 1 && tx.draft.ReviewCycleID != nil {
+		view.PreviousCompletedCycleAction = &PreviousCompletedCycleActionView{
+			CycleID:             *tx.draft.ReviewCycleID,
+			CycleSequenceNumber: tx.cycle.SequenceNumber - 1,
+			GoalVersionNumber:   1,
+			Action:              "前回A",
+		}
+	}
 	if tx.cycleViewOverride != nil {
 		view = tx.cycleViewOverride(view)
 	}
@@ -402,6 +410,13 @@ func TestContinueReviewRejectsCorruptFreshMaterialization(t *testing.T) {
 				view.Plan = "unexpected"
 				view.ContentRevision = 1
 				view.FrameRevisions.Plan = 1
+				return view
+			},
+		},
+		{
+			name: "predecessor does not match locked Review Cycle",
+			corruptCycle: func(view CycleView) CycleView {
+				view.PreviousCompletedCycleAction.CycleID = reviewTransitionTestCycle2ID
 				return view
 			},
 		},

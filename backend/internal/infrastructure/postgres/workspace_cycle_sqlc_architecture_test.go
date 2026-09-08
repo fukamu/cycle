@@ -172,6 +172,10 @@ func TestCycleSQLPreservesOwnerLockOrderingAndCASContracts(t *testing.T) {
 		"GetCycleView": {string(readContents), []string{
 			"join goals as g", "g.user_id = c.user_id", "left join goal_versions", "c.id = sqlc.arg(cycle_id)::uuid",
 			"c.goal_id = sqlc.arg(goal_id)::uuid", "c.user_id = sqlc.arg(user_id)::uuid",
+			"left join pdca_cycles as previous_cycle", "previous_cycle.user_id = c.user_id",
+			"previous_cycle.goal_id = c.goal_id", "previous_cycle.sequence_number = c.sequence_number - 1",
+			"previous_goal_version.user_id = previous_cycle.user_id",
+			"previous_goal_version.goal_id = previous_cycle.goal_id",
 		}},
 		"FindCompleteCycleReceipt": {string(transitionContents), []string{
 			"completion_operation_id = sqlc.arg(operation_id)::uuid", "user_id = sqlc.arg(user_id)::uuid",
@@ -230,6 +234,9 @@ func TestCycleSQLPreservesOwnerLockOrderingAndCASContracts(t *testing.T) {
 		if _, err = os.Stat(obsolete); !os.IsNotExist(err) {
 			t.Errorf("obsolete %s still exists or could not be checked: %v", obsolete, err)
 		}
+	}
+	if strings.Contains(strings.ToLower(string(readContents)), "previous_cycle.status = 'completed'") {
+		t.Fatal("GetCycleView must expose a non-completed exact predecessor to the mapper instead of collapsing it into missing")
 	}
 }
 

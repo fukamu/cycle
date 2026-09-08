@@ -3,6 +3,7 @@ package postgres
 import (
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -165,27 +166,74 @@ func cycleViewFromReadRow(row *db.GetCycleViewRow) (workspace.CycleView, error) 
 		row.CheckRevision < 0 || row.ActionRevision < 0 {
 		return workspace.CycleView{}, cyclePersistenceError("Cycle view identity, start timestamp, or revision is invalid")
 	}
+	previousAction, err := previousCompletedCycleActionFromSQLC(row, status)
+	if err != nil {
+		return workspace.CycleView{}, err
+	}
 	return workspace.CycleView{
-		ID:                 cycleID,
-		GoalID:             goalID,
-		SequenceNumber:     row.SequenceNumber,
-		Status:             status,
-		GoalVersion:        version,
-		StartedAt:          startedAt,
-		CompletedAt:        completedAt,
-		CanceledAt:         canceledAt,
-		CancellationReason: cancellationReason,
-		Plan:               row.Plan,
-		Do:                 row.DoText,
-		Check:              row.CheckText,
-		Action:             row.Action,
-		ContentRevision:    row.ContentRevision,
+		ID:                           cycleID,
+		GoalID:                       goalID,
+		SequenceNumber:               row.SequenceNumber,
+		Status:                       status,
+		GoalVersion:                  version,
+		PreviousCompletedCycleAction: previousAction,
+		StartedAt:                    startedAt,
+		CompletedAt:                  completedAt,
+		CanceledAt:                   canceledAt,
+		CancellationReason:           cancellationReason,
+		Plan:                         row.Plan,
+		Do:                           row.DoText,
+		Check:                        row.CheckText,
+		Action:                       row.Action,
+		ContentRevision:              row.ContentRevision,
 		FrameRevisions: workspace.FrameRevisions{
 			Plan:   row.PlanRevision,
 			Do:     row.DoRevision,
 			Check:  row.CheckRevision,
 			Action: row.ActionRevision,
 		},
+	}, nil
+}
+
+func previousCompletedCycleActionFromSQLC(
+	row *db.GetCycleViewRow,
+	status cycle.Status,
+) (*workspace.PreviousCompletedCycleActionView, error) {
+	if status != cycle.StatusActive {
+		return nil, nil
+	}
+	if row.SequenceNumber == 1 {
+		if row.PreviousCycleID.Valid || row.PreviousCycleSequenceNumber != nil || row.PreviousCycleStatus != nil ||
+			row.PreviousCycleAction != nil || row.PreviousGoalVersionNumber != nil {
+			return nil, cyclePersistenceError("first Cycle unexpectedly has a predecessor")
+		}
+		return nil, nil
+	}
+
+	cycleID := uuidString(row.PreviousCycleID)
+	if cycleID == "" || cycleID == uuidString(row.CycleID) || row.PreviousCycleSequenceNumber == nil || row.PreviousCycleStatus == nil ||
+		row.PreviousCycleAction == nil || row.PreviousGoalVersionNumber == nil {
+		return nil, cyclePersistenceError("active Cycle predecessor is missing or incomplete")
+	}
+	if *row.PreviousCycleSequenceNumber != row.SequenceNumber-1 {
+		return nil, cyclePersistenceError("active Cycle predecessor sequence is inconsistent")
+	}
+	if cycle.Status(*row.PreviousCycleStatus) != cycle.StatusCompleted {
+		return nil, cyclePersistenceError("active Cycle predecessor is not completed")
+	}
+	if *row.PreviousGoalVersionNumber <= 0 || row.GoalVersionNumber == nil ||
+		*row.PreviousGoalVersionNumber > *row.GoalVersionNumber ||
+		*row.PreviousGoalVersionNumber < *row.GoalVersionNumber-1 {
+		return nil, cyclePersistenceError("active Cycle predecessor Goal Version is invalid")
+	}
+	if cycle.IsBlank(*row.PreviousCycleAction) || utf8.RuneCountInString(*row.PreviousCycleAction) > cycle.MaxFrameCodePoints {
+		return nil, cyclePersistenceError("active Cycle predecessor Action is blank")
+	}
+	return &workspace.PreviousCompletedCycleActionView{
+		CycleID:             cycleID,
+		CycleSequenceNumber: *row.PreviousCycleSequenceNumber,
+		GoalVersionNumber:   *row.PreviousGoalVersionNumber,
+		Action:              *row.PreviousCycleAction,
 	}, nil
 }
 

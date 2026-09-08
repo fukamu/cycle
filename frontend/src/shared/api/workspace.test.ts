@@ -148,6 +148,72 @@ describe("goal-scoped workspace API", () => {
 
   it.each([
     {
+      label: "object",
+      sequenceNumber: 2,
+      goalVersionNumber: 2,
+      previousCompletedCycleAction: {
+        cycleId: "00000000-0000-7000-8000-000000000006",
+        cycleSequenceNumber: 1,
+        goalVersionNumber: 1,
+        action: "次は通知を切る\n30分集中する",
+      },
+    },
+    {
+      label: "null",
+      sequenceNumber: 1,
+      goalVersionNumber: 1,
+      previousCompletedCycleAction: null,
+    },
+  ])(
+    "keeps the pre-activation Cycle parser compatible with an additive $label previous Action",
+    async ({
+      sequenceNumber,
+      goalVersionNumber,
+      previousCompletedCycleAction,
+    }) => {
+      const response = {
+        cycle: {
+          id: cycleId,
+          goalId,
+          sequenceNumber,
+          status: "active",
+          goalVersion: {
+            id: "00000000-0000-7000-8000-000000000005",
+            versionNumber: goalVersionNumber,
+            body: "現在の目標",
+            createdAt: "2026-08-19T00:00:00Z",
+          },
+          previousCompletedCycleAction,
+          startedAt: "2026-08-20T00:00:00Z",
+          completedAt: null,
+          canceledAt: null,
+          cancellationReason: null,
+          plan: "計画",
+          do: "実行",
+          check: "評価",
+          action: "改善",
+          contentRevision: 4,
+          frameRevisions: { plan: 1, do: 1, check: 1, action: 1 },
+        },
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(authenticatedJSON(response)),
+      );
+
+      const parsed = await getCycle(lease, goalId, cycleId);
+
+      expect(parsed.cycle).toMatchObject({
+        id: cycleId,
+        sequenceNumber,
+        status: "active",
+      });
+      expect(parsed.cycle).not.toHaveProperty("previousCompletedCycleAction");
+    },
+  );
+
+  it.each([
+    {
       name: "goal draft load",
       invoke: (signal: AbortSignal) => getGoalDraft(lease, goalId, signal),
     },
