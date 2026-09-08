@@ -4130,6 +4130,7 @@ Actions:
 - ColorだけでGoal status / save state / version markerを表現しない。
 - CのP/D比較はvisible headingとP→D→Cのreading orderを持ち、Recovery待ちは色だけでなく文字とfocus可能な確認操作で示す。
 - Button disabled理由を近接textで示す。
+- SPA内で`pathname`が実際に変わった場合は、初回document loadを除き、Keyboard / screen readerが遷移先を識別できるよう、render済みのdestination `h1`へ一度だけprogrammatic focusを置く。Loading / Errorから同じ`pathname`の最終`h1`へ置換される場合とbrowser back / forwardも同じ対象とし、hashだけの遷移と同じ`pathname`内のFrame / tab / autosave / Dialog操作ではfocusを奪わない。
 
 ---
 

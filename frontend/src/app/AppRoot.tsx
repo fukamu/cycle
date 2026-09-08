@@ -10,6 +10,7 @@ import {
 import { SessionTransitionNoticeProvider } from "../features/auth/SessionTransitionNoticeProvider";
 import { App } from "./App";
 import { AppErrorBoundary } from "./AppErrorBoundary";
+import { RouteHeadingFocusProvider } from "./AppLayout";
 import { queryClient } from "./queryClient";
 
 type AppRootProps = {
@@ -29,15 +30,17 @@ export function AppRoot({
         <SessionTransitionNoticeProvider>
           <SessionProvider reloadApplication={reloadApplication}>
             <BrowserRouter>
-              <SessionPostCommitCleanupBoundary>
-                <SessionIdentityBoundary>
-                  <AccountDeletionProvider>
-                    <AppErrorBoundary onRouteModuleRetry={reloadApplication}>
-                      <App />
-                    </AppErrorBoundary>
-                  </AccountDeletionProvider>
-                </SessionIdentityBoundary>
-              </SessionPostCommitCleanupBoundary>
+              <RouteHeadingFocusProvider>
+                <SessionPostCommitCleanupBoundary>
+                  <SessionIdentityBoundary>
+                    <AccountDeletionProvider>
+                      <AppErrorBoundary onRouteModuleRetry={reloadApplication}>
+                        <App />
+                      </AppErrorBoundary>
+                    </AccountDeletionProvider>
+                  </SessionIdentityBoundary>
+                </SessionPostCommitCleanupBoundary>
+              </RouteHeadingFocusProvider>
             </BrowserRouter>
           </SessionProvider>
         </SessionTransitionNoticeProvider>

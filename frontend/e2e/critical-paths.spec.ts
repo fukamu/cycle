@@ -126,6 +126,9 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(goal).toHaveValue(goalText);
   await expect(page.getByText("保存済み")).toBeVisible();
   await page.getByRole("button", { name: "この目標で始める" }).click();
+  await expect(
+    page.getByRole("heading", { level: 1, name: goalText }),
+  ).toBeFocused();
   await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
   const planEditor = page.getByRole("textbox", { name: "P — Plan" });
   await expect(planEditor).not.toHaveAttribute("maxlength");
@@ -211,7 +214,9 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     .getByRole("dialog", { name: "サイクルを完了する前に確認" })
     .getByRole("button", { name: "サイクルを完了" })
     .click();
-  await expect(page.getByRole("heading", { name: goalText })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: goalText }),
+  ).toBeFocused();
   await expect(
     page.getByRole("button", { name: "この目標で次のサイクルへ" }),
   ).toBeVisible();
@@ -261,6 +266,9 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await page.getByRole("button", { name: "元の目標を維持" }).click();
 
   await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
+  await expect(
+    page.getByRole("heading", { level: 1, name: goalText }),
+  ).toBeFocused();
   await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
   await page.goto("/history");
   await page.getByRole("link", { name: new RegExp(goalText) }).click();
