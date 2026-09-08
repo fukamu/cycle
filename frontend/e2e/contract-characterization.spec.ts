@@ -362,7 +362,7 @@ test("cross-tab Google login fences a dirty NewGoal draft and preserves it for t
     });
 
     await sourceEditor.fill(sourceBody);
-    await expect(draftTab.getByText("未保存")).toBeVisible();
+    await expect(draftTab.getByText("未保存", { exact: true })).toBeVisible();
     await collision
       .getByRole("button", { name: "既存アカウントでログイン" })
       .click();
@@ -498,7 +498,7 @@ test("cross-tab account deletion fences the old editor and leaves only digest pr
     });
     await oldEditor.fill(deletedDraftBody);
     await expect(oldEditor).toHaveValue(deletedDraftBody);
-    await expect(receiver.getByText("未保存")).toBeVisible();
+    await expect(receiver.getByText("未保存", { exact: true })).toBeVisible();
     await expect
       .poll(() =>
         readStoredBrowserDraft(

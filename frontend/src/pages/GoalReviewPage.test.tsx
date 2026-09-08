@@ -438,6 +438,34 @@ describe("GoalReviewPage", () => {
     expect(screen.getByText("80 / 80")).toBeInTheDocument();
   });
 
+  it("explains disabled Review actions without blocking terminal actions", async () => {
+    const emptyReviewDraft = { ...reviewDraft, body: "\t\n\u3000" };
+    vi.mocked(getReview).mockResolvedValue({
+      ...review,
+      reviewDraft: emptyReviewDraft,
+    });
+
+    renderPage();
+    await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    const refine = screen.getByRole("button", { name: "AIで目標を整える" });
+    const continueAction = screen.getByRole("button", {
+      name: "この目標で次のサイクルへ",
+    });
+    const terminate = screen.getByRole("button", { name: "目標を終了" });
+    const guidance = screen.getByText(
+      "空白以外の文字を含む80文字以内で、次のサイクルの目標を入力してください。",
+    );
+
+    expect(refine).toBeDisabled();
+    expect(continueAction).toBeDisabled();
+    expect(refine).toHaveAttribute("aria-describedby", guidance.id);
+    expect(continueAction).toHaveAttribute("aria-describedby", guidance.id);
+    await waitFor(() => expect(terminate).toBeEnabled());
+    expect(terminate).not.toHaveAttribute("aria-describedby");
+  });
+
   it("keeps Review refinement separate until the user explicitly adopts it", async () => {
     renderPage();
     const editor = await screen.findByRole("textbox", {
@@ -899,10 +927,18 @@ describe("GoalReviewPage", () => {
     const remove = screen.getByRole("button", { name: "目標を削除" });
     expect(terminate).toBeDisabled();
     expect(remove).toBeDisabled();
+    const guidance = screen.getByText(
+      "この端末に残る入力を確認しています。完了するまでお待ちください。",
+    );
+    expect(terminate).toHaveAttribute("aria-describedby", guidance.id);
+    expect(remove).toHaveAttribute("aria-describedby", guidance.id);
 
     await act(async () => browserRead.resolve(null));
     expect(terminate).toBeEnabled();
     expect(remove).toBeEnabled();
+    expect(terminate).not.toHaveAttribute("aria-describedby");
+    expect(remove).not.toHaveAttribute("aria-describedby");
+    expect(guidance).not.toBeInTheDocument();
   });
 
   it("requires explicit Review Draft discard confirmation before terminating an unchanged review", async () => {
@@ -1023,6 +1059,24 @@ describe("GoalReviewPage", () => {
     );
     await waitFor(() => expect(continueReview).toHaveBeenCalledOnce());
 
+    const commandGuidance = screen.getByText(
+      "目標の操作を処理しています。完了するまでお待ちください。",
+    );
+    expect(screen.getAllByText(commandGuidance.textContent ?? "")).toHaveLength(
+      1,
+    );
+    for (const actionName of [
+      "AIで目標を整える",
+      "この目標で次のサイクルへ",
+      "目標を達成として終了",
+      "目標を終了",
+      "目標を削除",
+    ])
+      expect(screen.getByRole("button", { name: actionName })).toHaveAttribute(
+        "aria-describedby",
+        commandGuidance.id,
+      );
+
     expect(editor).toHaveAttribute("readonly");
     await user.type(editor, "command中の追記");
     expect(editor).toHaveValue(reviewDraft.body);
@@ -1076,6 +1130,25 @@ describe("GoalReviewPage", () => {
     expect(
       await screen.findByText("別の更新が見つかりました"),
     ).toBeInTheDocument();
+    const recoveryNotice = screen
+      .getByText("別の更新が見つかりました")
+      .closest<HTMLElement>('[role="alert"]');
+    expect(recoveryNotice).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "AIで目標を整える" }),
+    ).toHaveAttribute("aria-describedby", recoveryNotice?.id);
+    expect(
+      screen.getByRole("button", { name: "この目標で次のサイクルへ" }),
+    ).toHaveAttribute("aria-describedby", recoveryNotice?.id);
+    expect(screen.getByRole("button", { name: "目標を終了" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "目標を終了" }),
+    ).not.toHaveAttribute("aria-describedby");
+    expect(
+      screen.queryByText(
+        "入力を保存できていません。「再試行」で保存してから操作してください。",
+      ),
+    ).not.toBeInTheDocument();
     expect(editor).toHaveValue(localBody);
     expect(getReview).toHaveBeenCalledTimes(2);
     expect(putBrowserDraft).toHaveBeenCalledWith(
@@ -1630,7 +1703,25 @@ describe("GoalReviewPage", () => {
     const resolver = await screen.findByRole("link", {
       name: "現在のGoalを開いてください",
     });
+    const movedNotice = resolver.closest<HTMLElement>('[role="alert"]');
     expect(resolver).toHaveAttribute("href", "/goals/" + goal.id);
+    expect(movedNotice).not.toBeNull();
+    for (const actionName of [
+      "AIで目標を整える",
+      "この目標で次のサイクルへ",
+      "目標を達成として終了",
+      "目標を終了",
+      "目標を削除",
+    ])
+      expect(screen.getByRole("button", { name: actionName })).toHaveAttribute(
+        "aria-describedby",
+        movedNotice?.id,
+      );
+    expect(
+      screen.queryByText(
+        "入力を保存できていません。「再試行」で保存してから操作してください。",
+      ),
+    ).not.toBeInTheDocument();
     expect(editor).toHaveValue(localBody);
     expect(editor).toHaveAttribute("readonly");
     expect(

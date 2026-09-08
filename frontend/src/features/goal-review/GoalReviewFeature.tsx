@@ -44,7 +44,7 @@ import {
   SaveBadge,
 } from "../../shared/components/AsyncState";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
-import { frameCopy } from "../../shared/copy/ja";
+import { frameCopy, goalActionCopy } from "../../shared/copy/ja";
 import {
   type PostCommitRouteOwnershipToken,
   useCapturePostCommitRouteOwnership,
@@ -67,6 +67,10 @@ import {
   textDiffersAfterLineEndingNormalization,
 } from "../../shared/text/semantics";
 import { goalReviewQueryOptions } from "./goalReviewQueryOptions";
+import {
+  getGoalReviewActionControls,
+  type GoalReviewActionDisabledReason,
+} from "./actionControls";
 
 type ReviewConfirmation =
   | { readonly kind: "terminate"; readonly outcome: "achieved" | "ended" }
@@ -78,6 +82,31 @@ type ReviewCommandRecovery =
   | { readonly kind: "ready" }
   | { readonly kind: "failed" }
   | { readonly kind: "deleted" };
+
+function goalReviewActionGuidanceText(
+  reason: GoalReviewActionDisabledReason,
+): string | undefined {
+  switch (reason) {
+    case "command-pending":
+      return goalActionCopy.disabled.commandPending;
+    case "hydrating":
+      return goalActionCopy.disabled.hydrating;
+    case "save-dirty":
+      return goalActionCopy.disabled.saveDirty;
+    case "save-saving":
+      return goalActionCopy.disabled.saveSaving;
+    case "save-failed":
+      return goalActionCopy.disabled.saveFailed;
+    case "ai-running":
+      return goalActionCopy.disabled.aiRunning;
+    case "invalid-goal":
+      return goalActionCopy.disabled.reviewInvalid;
+    case "workspace-moved":
+    case "recovery-resolving":
+    case "recovery-choice":
+      return undefined;
+  }
+}
 
 function isGoalNotFound(error: unknown): error is APIError {
   return (
@@ -231,6 +260,7 @@ function ReviewEditor({
   const cache = useQueryClient();
   const runPostCommitCleanup = usePostCommitCleanup();
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
+  const actionGuidanceBaseId = useId();
   const markDeletedGoal = useStartGoalDeletionFence();
   const mountedGenerationRef = useRef(true);
   const deletedFenceStartedRef = useRef(false);
@@ -708,11 +738,42 @@ function ReviewEditor({
     editor.resolvingConflict ||
     Boolean(editor.recoveryConflict) ||
     workspaceIsMoved;
-  const terminalActionsBlocked =
-    editor.hydrating ||
-    workspaceIsMoved ||
-    refinement.state.kind === "running" ||
-    pending;
+  const actionControls = getGoalReviewActionControls({
+    valid,
+    saveState: editor.state,
+    aiRunning: refinement.state.kind === "running",
+    pending,
+    hydrating: editor.hydrating,
+    workspaceMoved: workspaceIsMoved,
+    recovery: editor.resolvingConflict
+      ? "resolving"
+      : editor.recoveryConflict
+        ? "choice"
+        : null,
+  });
+  const actionGuidanceId = (reason: GoalReviewActionDisabledReason): string => {
+    if (reason === "workspace-moved") return "goal-review-workspace-moved";
+    if (reason === "recovery-resolving")
+      return "goal-review-recovery-resolving";
+    if (reason === "recovery-choice") return "goal-review-recovery-choice";
+    return `${actionGuidanceBaseId}-${reason}`;
+  };
+  const actionDescribedBy = (
+    reason: GoalReviewActionDisabledReason | undefined,
+  ) => (reason ? actionGuidanceId(reason) : undefined);
+  const localActionGuidance = Array.from(
+    new Set(
+      Object.values(actionControls)
+        .map((control) => control.reason)
+        .filter(
+          (reason): reason is GoalReviewActionDisabledReason =>
+            reason !== undefined &&
+            reason !== "workspace-moved" &&
+            reason !== "recovery-resolving" &&
+            reason !== "recovery-choice",
+        ),
+    ),
+  );
   return (
     <main className="page review-page">
       <header className="goal-context">
@@ -737,17 +798,27 @@ function ReviewEditor({
       <section className="editor-card">
         {editor.recoveryConflict && (
           <DraftRecoveryNotice
+            focusTargetId="goal-review-recovery-choice"
             onRestore={editor.restoreRecovery}
             onDiscard={editor.discardRecovery}
           />
         )}
         {editor.resolvingConflict && (
-          <p className="draft-notice" role="status" aria-live="polite">
+          <p
+            className="draft-notice"
+            id="goal-review-recovery-resolving"
+            role="status"
+            aria-live="polite"
+          >
             別の更新を確認しています…
           </p>
         )}
         {commandRecovery?.kind === "deleted" && (
-          <div className="draft-notice draft-notice--conflict" role="alert">
+          <div
+            className="draft-notice draft-notice--conflict"
+            id="goal-review-workspace-moved"
+            role="alert"
+          >
             <p>このGoalはすでに削除されています。</p>
             <Link className="button button--primary" to="/">
               ホームへ戻る
@@ -755,7 +826,11 @@ function ReviewEditor({
           </div>
         )}
         {workspaceMovedHref && commandRecovery?.kind !== "deleted" && (
-          <div className="draft-notice" role="alert">
+          <div
+            className="draft-notice"
+            id="goal-review-workspace-moved"
+            role="alert"
+          >
             Reviewの作業場所は変わりました。入力内容はこの端末に保持されています。
             {commandRecovery?.kind === "loading" ? (
               <>現在のGoalを確認しています。</>
@@ -813,13 +888,8 @@ function ReviewEditor({
           <button
             className="button button--secondary"
             type="button"
-            disabled={
-              !valid ||
-              editor.state.kind !== "saved" ||
-              refinement.state.kind === "running" ||
-              workspaceIsMoved ||
-              pending
-            }
+            aria-describedby={actionDescribedBy(actionControls.refine.reason)}
+            disabled={!actionControls.refine.enabled}
             onClick={() => void requestRefine()}
           >
             {refinement.state.kind === "running"
@@ -829,18 +899,25 @@ function ReviewEditor({
           <button
             className="button button--primary"
             type="button"
-            disabled={
-              !valid ||
-              editor.state.kind !== "saved" ||
-              refinement.state.kind === "running" ||
-              workspaceIsMoved ||
-              pending
-            }
+            aria-describedby={actionDescribedBy(actionControls.continue.reason)}
+            disabled={!actionControls.continue.enabled}
             onClick={() => void nextCycle()}
           >
             この目標で次のサイクルへ
           </button>
         </div>
+        {localActionGuidance.map((reason) => (
+          <p
+            className="action-controls__guidance"
+            id={actionGuidanceId(reason)}
+            key={reason}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {goalReviewActionGuidanceText(reason)}
+          </p>
+        ))}
         <p className="next-cycle-note">
           {changed
             ? `変更した目標をGoal v${goal.currentVersion.versionNumber + 1}として保存し、Cycle ${goal.nextCycleSequenceNumber}を開始します`
@@ -865,7 +942,8 @@ function ReviewEditor({
         <div className="button-row">
           <button
             type="button"
-            disabled={terminalActionsBlocked}
+            aria-describedby={actionDescribedBy(actionControls.terminal.reason)}
+            disabled={!actionControls.terminal.enabled}
             onClick={() =>
               setConfirmation({ kind: "terminate", outcome: "achieved" })
             }
@@ -874,7 +952,8 @@ function ReviewEditor({
           </button>
           <button
             type="button"
-            disabled={terminalActionsBlocked}
+            aria-describedby={actionDescribedBy(actionControls.terminal.reason)}
+            disabled={!actionControls.terminal.enabled}
             onClick={() =>
               setConfirmation({ kind: "terminate", outcome: "ended" })
             }
@@ -884,7 +963,8 @@ function ReviewEditor({
           <button
             className="danger-link"
             type="button"
-            disabled={terminalActionsBlocked}
+            aria-describedby={actionDescribedBy(actionControls.terminal.reason)}
+            disabled={!actionControls.terminal.enabled}
             onClick={() => setConfirmation({ kind: "delete" })}
           >
             目標を削除

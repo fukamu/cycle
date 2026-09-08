@@ -90,6 +90,46 @@ function writeBrowserDraft(
   );
 }
 
+async function expectActionGuidanceAtNarrowWidths(
+  page: Page,
+  guidanceText: string,
+  actionNames: readonly string[],
+) {
+  const assertLayout = async () => {
+    const guidance = page.getByText(guidanceText, { exact: true });
+    await expect(guidance).toBeVisible();
+    const guidanceId = await guidance.getAttribute("id");
+    expect(guidanceId).toBeTruthy();
+    for (const name of actionNames) {
+      const action = page.getByRole("button", { name });
+      await expect(action).toBeVisible();
+      await expect(action).toHaveAttribute(
+        "aria-describedby",
+        guidanceId ?? "",
+      );
+    }
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(false);
+  };
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await assertLayout();
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await assertLayout();
+}
+
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
 }) => {
@@ -907,7 +947,7 @@ test("a hidden lifecycle checkpoint preserves an edit before either debounce", a
   }
   expect(recovered).toBe(true);
   await expect(restoredEditor).toHaveValue(body);
-  await expect(restored.getByText("未保存")).toBeVisible();
+  await expect(restored.getByText("未保存", { exact: true })).toBeVisible();
   expect(restoredPatchAttempts).toBe(0);
 
   const recoveredSave = restored.waitForResponse(
@@ -1183,6 +1223,47 @@ test("Home presents one clear next action for an active Cycle without horizontal
 
   await nextAction.click();
   await expect(page).toHaveURL(cyclePath);
+});
+
+test("Goal disabled guidance remains readable and associated at narrow widths", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "新しい目標を設定" }).click();
+
+  await expectActionGuidanceAtNarrowWidths(
+    page,
+    "空白以外の文字を含む80文字以内の目標を入力してください。",
+    ["AIで目標を整える", "この目標で始める"],
+  );
+
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await saveText(
+    page,
+    page.getByRole("textbox", { name: "あなたの目標" }),
+    "狭い画面でも案内を読みながら改善を続ける",
+    "/api/v1/goal-drafts/",
+  );
+  await page.getByRole("button", { name: "この目標で始める" }).click();
+  await completeCurrentCycle(page, "狭幅案内");
+
+  await saveText(
+    page,
+    page.getByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    }),
+    " \n\u3000",
+    "/review",
+  );
+  await expectActionGuidanceAtNarrowWidths(
+    page,
+    "空白以外の文字を含む80文字以内で、次のサイクルの目標を入力してください。",
+    ["AIで目標を整える", "この目標で次のサイクルへ"],
+  );
 });
 
 test("mobile long content stays in bounds and frame tabs support keyboard navigation", async ({
