@@ -86,6 +86,7 @@ import {
   getCycleEligibility,
 } from "./model/eligibility";
 import { CycleCheckComparison } from "./CycleCheckComparison";
+import { CycleCompletionSummary } from "./CycleCompletionSummary";
 
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
 type Values = Record<Frame, string>;
@@ -1047,6 +1048,15 @@ function CycleWorkspace({
     );
   }
 
+  function editFrameFromCompletionSummary(frame: Frame) {
+    setConfirmation(undefined);
+    selectFrame(frame);
+    window.setTimeout(
+      () => document.getElementById("cycle-frame-editor")?.focus(),
+      0,
+    );
+  }
+
   function handleTabKeyDown(
     event: ReactKeyboardEvent<HTMLButtonElement>,
     frame: Frame,
@@ -1870,15 +1880,23 @@ function CycleWorkspace({
       )}
       {confirmation?.kind === "complete-cycle" && (
         <ConfirmationDialog
-          title="サイクルを完了しますか？"
+          title="サイクルを完了する前に確認"
           confirmLabel="サイクルを完了"
+          size="wide"
+          describeContent={false}
           onCancel={() => setConfirmation(undefined)}
           onConfirm={() => {
             setConfirmation(undefined);
             void finish();
           }}
         >
-          <p>このサイクルを完了し、目標の見直しへ進みます。</p>
+          <CycleCompletionSummary
+            goalVersionNumber={cycle.goalVersion.versionNumber}
+            cycleSequenceNumber={cycle.sequenceNumber}
+            goalBody={cycle.goalVersion.body}
+            values={values}
+            onEdit={editFrameFromCompletionSummary}
+          />
         </ConfirmationDialog>
       )}
       {confirmation?.kind === "terminate" && (

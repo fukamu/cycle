@@ -6,6 +6,8 @@ type ConfirmationDialogProps = {
   readonly confirmLabel: string;
   readonly cancelLabel?: string;
   readonly confirmTone?: "default" | "danger";
+  readonly size?: "default" | "wide";
+  readonly describeContent?: boolean;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
 };
@@ -16,6 +18,8 @@ export function ConfirmationDialog({
   confirmLabel,
   cancelLabel = "キャンセル",
   confirmTone = "default",
+  size = "default",
+  describeContent = true,
   onConfirm,
   onCancel,
 }: ConfirmationDialogProps) {
@@ -50,10 +54,10 @@ export function ConfirmationDialog({
   return (
     <dialog
       ref={dialog}
-      className="confirmation-dialog"
+      className={`confirmation-dialog confirmation-dialog--${size}`}
       aria-modal="true"
       aria-labelledby={titleId}
-      aria-describedby={descriptionId}
+      aria-describedby={describeContent ? descriptionId : undefined}
       onCancel={(event) => {
         event.preventDefault();
         onCancel();
@@ -64,7 +68,10 @@ export function ConfirmationDialog({
     >
       <div className="confirmation-dialog__content">
         <h2 id={titleId}>{title}</h2>
-        <div id={descriptionId} className="confirmation-dialog__description">
+        <div
+          id={describeContent ? descriptionId : undefined}
+          className="confirmation-dialog__description"
+        >
           {children}
         </div>
         <div className="button-row confirmation-dialog__actions">
