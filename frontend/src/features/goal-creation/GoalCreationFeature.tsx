@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -32,7 +33,7 @@ import {
   SaveBadge,
 } from "../../shared/components/AsyncState";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
-import { goalCopy } from "../../shared/copy/ja";
+import { goalActionCopy, goalCopy } from "../../shared/copy/ja";
 import {
   commandFingerprint,
   useCommandOperation,
@@ -53,6 +54,36 @@ import {
   normalizeBoundedTextInput,
 } from "../../shared/text/semantics";
 import { useGoalCreationDraftCommand } from "./useGoalCreationDraftCommand";
+import {
+  getGoalCreationActionControls,
+  type GoalCreationActionDisabledReason,
+} from "./actionControls";
+
+function goalCreationActionGuidanceText(
+  reason: GoalCreationActionDisabledReason,
+): string | undefined {
+  switch (reason) {
+    case "command-pending":
+      return goalActionCopy.disabled.commandPending;
+    case "hydrating":
+      return goalActionCopy.disabled.hydrating;
+    case "save-dirty":
+      return goalActionCopy.disabled.saveDirty;
+    case "save-saving":
+      return goalActionCopy.disabled.saveSaving;
+    case "save-failed":
+      return goalActionCopy.disabled.saveFailed;
+    case "ai-running":
+      return goalActionCopy.disabled.aiRunning;
+    case "invalid-goal":
+      return goalActionCopy.disabled.creationInvalid;
+    case "scope-moved":
+    case "recovery-resolving":
+    case "recovery-choice":
+    case "progressing-goal-limit":
+      return undefined;
+  }
+}
 
 export function GoalCreationFeature({ home }: { readonly home: Home }) {
   const create = useGoalCreationDraftCommand();
@@ -103,6 +134,7 @@ function GoalDraftEditor({
   const cache = useQueryClient();
   const runPostCommitCleanup = usePostCommitCleanup();
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
+  const actionGuidanceBaseId = useId();
   const mountedGenerationRef = useRef(true);
   useLayoutEffect(() => {
     mountedGenerationRef.current = true;
@@ -325,12 +357,48 @@ function GoalDraftEditor({
       setPending(false);
     }
   }
-  const canStart =
-    valid &&
-    editor.state.kind === "saved" &&
-    refinement.state.kind !== "running" &&
-    home.canStartProgressingGoal &&
-    !pending;
+  const actionControls = getGoalCreationActionControls({
+    valid,
+    saveState: editor.state,
+    aiRunning: refinement.state.kind === "running",
+    pending,
+    canStartProgressingGoal: home.canStartProgressingGoal,
+    hydrating: editor.hydrating,
+    scopeMoved: Boolean(editor.scopeMovedHref),
+    recovery: editor.resolvingConflict
+      ? "resolving"
+      : editor.recoveryConflict
+        ? "choice"
+        : null,
+  });
+  const localActionGuidance = Array.from(
+    new Set(
+      Object.values(actionControls)
+        .map((control) => control.reason)
+        .filter(
+          (reason): reason is GoalCreationActionDisabledReason =>
+            reason !== undefined &&
+            reason !== "scope-moved" &&
+            reason !== "recovery-resolving" &&
+            reason !== "recovery-choice" &&
+            reason !== "progressing-goal-limit",
+        ),
+    ),
+  );
+  const actionGuidanceId = (
+    reason: GoalCreationActionDisabledReason,
+  ): string => {
+    if (reason === "scope-moved") return "goal-creation-scope-moved";
+    if (reason === "recovery-resolving")
+      return "goal-creation-recovery-resolving";
+    if (reason === "recovery-choice") return "goal-creation-recovery-choice";
+    if (reason === "progressing-goal-limit")
+      return "goal-creation-progressing-limit";
+    return `${actionGuidanceBaseId}-${reason}`;
+  };
+  const actionDescribedBy = (
+    reason: GoalCreationActionDisabledReason | undefined,
+  ) => (reason ? actionGuidanceId(reason) : undefined);
   const conflictPending = editor.revisionConflictActive;
   const conflictRetryBlocked =
     editor.resolvingConflict ||
@@ -346,17 +414,27 @@ function GoalDraftEditor({
       <section className="editor-card">
         {editor.recoveryConflict && (
           <DraftRecoveryNotice
+            focusTargetId="goal-creation-recovery-choice"
             onRestore={editor.restoreRecovery}
             onDiscard={editor.discardRecovery}
           />
         )}
         {editor.resolvingConflict && (
-          <p className="draft-notice" role="status" aria-live="polite">
+          <p
+            className="draft-notice"
+            id="goal-creation-recovery-resolving"
+            role="status"
+            aria-live="polite"
+          >
             別の更新を確認しています…
           </p>
         )}
         {editor.scopeMovedHref && (
-          <p className="draft-notice" role="alert">
+          <p
+            className="draft-notice"
+            id="goal-creation-scope-moved"
+            role="alert"
+          >
             この下書きの作業場所は変わりました。入力内容はこの端末に保持されています。
             必要なら本文をコピーしてから、
             <Link
@@ -406,12 +484,8 @@ function GoalDraftEditor({
           <button
             className="button button--secondary"
             type="button"
-            disabled={
-              !valid ||
-              editor.state.kind !== "saved" ||
-              refinement.state.kind === "running" ||
-              pending
-            }
+            aria-describedby={actionDescribedBy(actionControls.refine.reason)}
+            disabled={!actionControls.refine.enabled}
             onClick={() => void requestRefine()}
           >
             {refinement.state.kind === "running"
@@ -421,23 +495,35 @@ function GoalDraftEditor({
           <button
             className="button button--primary"
             type="button"
-            disabled={!canStart}
+            aria-describedby={actionDescribedBy(actionControls.start.reason)}
+            disabled={!actionControls.start.enabled}
             onClick={() => void start()}
           >
             この目標で始める
           </button>
         </div>
+        {localActionGuidance.map((reason) => (
+          <p
+            className="action-controls__guidance"
+            id={actionGuidanceId(reason)}
+            key={reason}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {goalCreationActionGuidanceText(reason)}
+          </p>
+        ))}
         {!home.canStartProgressingGoal && (
-          <p className="limit-notice">
+          <p className="limit-notice" id="goal-creation-progressing-limit">
             {goalCopy.limit(home.progressingGoalLimit)}
           </p>
         )}
         <button
           className="text-button danger-link"
           type="button"
-          disabled={
-            pending || editor.hydrating || Boolean(editor.scopeMovedHref)
-          }
+          aria-describedby={actionDescribedBy(actionControls.discard.reason)}
+          disabled={!actionControls.discard.enabled}
           onClick={() => setConfirmDiscard(true)}
         >
           下書きを破棄

@@ -94,6 +94,22 @@ export const goalCopy = {
     `取り組んでいる目標が上限の${progressingGoalLimit}件に達しています。この目標を始めるには、いずれかの目標を達成・終了・削除してください。`,
 } as const;
 
+export const goalActionCopy = {
+  disabled: {
+    commandPending: "目標の操作を処理しています。完了するまでお待ちください。",
+    hydrating:
+      "この端末に残る入力を確認しています。完了するまでお待ちください。",
+    saveDirty: "未保存の入力があります。保存済みになるまでお待ちください。",
+    saveSaving: "入力を保存しています。保存済みになるまでお待ちください。",
+    saveFailed:
+      "入力を保存できていません。「再試行」で保存してから操作してください。",
+    aiRunning: "目標を整理しています。完了するまでお待ちください。",
+    creationInvalid: "空白以外の文字を含む80文字以内の目標を入力してください。",
+    reviewInvalid:
+      "空白以外の文字を含む80文字以内で、次のサイクルの目標を入力してください。",
+  },
+} as const;
+
 export const statusLabel = {
   active_cycle: "進行中",
   goal_review: "目標の見直し中",
