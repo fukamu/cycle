@@ -896,15 +896,6 @@ function ReviewEditor({
               ? "AIが整理しています…"
               : "AIで目標を整える"}
           </button>
-          <button
-            className="button button--primary"
-            type="button"
-            aria-describedby={actionDescribedBy(actionControls.continue.reason)}
-            disabled={!actionControls.continue.enabled}
-            onClick={() => void nextCycle()}
-          >
-            この目標で次のサイクルへ
-          </button>
         </div>
         {localActionGuidance.map((reason) => (
           <p
@@ -918,22 +909,33 @@ function ReviewEditor({
             {goalReviewActionGuidanceText(reason)}
           </p>
         ))}
+        <GoalRefinementPanel
+          id="review"
+          state={refinement.state}
+          currentBody={editor.body}
+          saveState={editor.state}
+          pending={pending || workspaceIsMoved}
+          failureMessage="AIから提案を取得できませんでした。"
+          onDismiss={refinement.dismiss}
+          onAdopt={() => void adopt()}
+        />
         <p className="next-cycle-note">
           {changed
             ? `変更した目標をGoal v${goal.currentVersion.versionNumber + 1}として保存し、Cycle ${goal.nextCycleSequenceNumber}を開始します`
             : `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`}
         </p>
+        <div className="button-row">
+          <button
+            className="button button--primary"
+            type="button"
+            aria-describedby={actionDescribedBy(actionControls.continue.reason)}
+            disabled={!actionControls.continue.enabled}
+            onClick={() => void nextCycle()}
+          >
+            この目標で次のサイクルへ
+          </button>
+        </div>
       </section>
-      <GoalRefinementPanel
-        id="review"
-        state={refinement.state}
-        currentBody={editor.body}
-        saveState={editor.state}
-        pending={pending || workspaceIsMoved}
-        failureMessage="AIから提案を取得できませんでした。"
-        onDismiss={refinement.dismiss}
-        onAdopt={() => void adopt()}
-      />
       <section className="terminal-actions">
         <h2>この目標を終える</h2>
         {changed && (
