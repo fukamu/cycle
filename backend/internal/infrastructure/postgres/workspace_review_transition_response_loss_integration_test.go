@@ -39,6 +39,7 @@ func TestReviewTransitionContinueReplaysCurrentReviewAfterCreatedCycleCompleted(
 		continued.Cycle.Status != cycle.StatusActive {
 		t.Fatalf("fresh Continue = %#v", continued)
 	}
+	assertPreviousCompletedCycleAction(t, continued.Cycle, fixture.cycleID, 1, 1, "action")
 	for _, frame := range []cycle.Frame{cycle.FramePlan, cycle.FrameDo, cycle.FrameCheck, cycle.FrameAction} {
 		if _, err = executeCycleSaveUseCase(store, context.Background(), workspace.SaveFrameInput{
 			UserID: userID, GoalID: fixture.goalID, CycleID: continued.Cycle.ID,
@@ -57,7 +58,8 @@ func TestReviewTransitionContinueReplaysCurrentReviewAfterCreatedCycleCompleted(
 		t.Fatal(err)
 	}
 	if completed.Goal.Status != goal.StatusGoalReview ||
-		completed.CompletedCycle.Status != cycle.StatusCompleted {
+		completed.CompletedCycle.Status != cycle.StatusCompleted ||
+		completed.CompletedCycle.PreviousCompletedCycleAction != nil {
 		t.Fatalf("completed continued Cycle = %#v", completed)
 	}
 
@@ -92,7 +94,8 @@ func TestReviewTransitionContinueReplaysCurrentReviewAfterCreatedCycleCompleted(
 		!reflect.DeepEqual(replayed.Cycle, completed.CompletedCycle) ||
 		replayed.Goal.Status != goal.StatusGoalReview ||
 		replayed.Cycle.ID != continued.Cycle.ID ||
-		replayed.Cycle.Status != cycle.StatusCompleted {
+		replayed.Cycle.Status != cycle.StatusCompleted ||
+		replayed.Cycle.PreviousCompletedCycleAction != nil {
 		t.Fatalf("response-loss Continue replay = %#v, want Goal %#v and Cycle %#v",
 			replayed, completed.Goal, completed.CompletedCycle)
 	}

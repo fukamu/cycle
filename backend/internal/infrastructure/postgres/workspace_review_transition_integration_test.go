@@ -61,6 +61,7 @@ func TestReviewTransitionContinueDoubleTapAndReplay(t *testing.T) {
 		if call.result.Goal.ID != fixture.goalID || call.result.Cycle.ID != input.CycleID {
 			t.Fatalf("double-tap Continue result = %#v", call.result)
 		}
+		assertPreviousCompletedCycleAction(t, call.result.Cycle, fixture.cycleID, 1, 1, "action")
 		if call.result.Replayed {
 			replayed++
 		} else {
@@ -75,6 +76,7 @@ func TestReviewTransitionContinueDoubleTapAndReplay(t *testing.T) {
 	if err != nil || !replay.Replayed || replay.Cycle.ID != input.CycleID {
 		t.Fatalf("Continue replay = %#v, error = %v", replay, err)
 	}
+	assertPreviousCompletedCycleAction(t, replay.Cycle, fixture.cycleID, 1, 1, "action")
 	different := input
 	different.ExpectedDraftRevision++
 	if _, err = executeContinueReviewUseCase(store, context.Background(), different); !errors.Is(err, workspace.ErrIdempotencyKeyReused) {
@@ -89,6 +91,23 @@ func TestReviewTransitionContinueDoubleTapAndReplay(t *testing.T) {
 	}
 	if cycleCount != 1 || reviewDraftCount != 0 {
 		t.Fatalf("Continue persisted Cycle/Review Draft counts = %d/%d, want 1/0", cycleCount, reviewDraftCount)
+	}
+}
+
+func assertPreviousCompletedCycleAction(
+	t *testing.T,
+	view workspace.CycleView,
+	cycleID string,
+	sequenceNumber int32,
+	goalVersionNumber int32,
+	action string,
+) {
+	t.Helper()
+	previous := view.PreviousCompletedCycleAction
+	if previous == nil || previous.CycleID != cycleID ||
+		previous.CycleSequenceNumber != sequenceNumber ||
+		previous.GoalVersionNumber != goalVersionNumber || previous.Action != action {
+		t.Fatalf("previous completed Cycle Action = %#v", previous)
 	}
 }
 

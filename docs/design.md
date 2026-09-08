@@ -950,6 +950,10 @@ Frontend confirmationは、Draftに変更がある場合に次を明示する。
 - Completed / Canceledは個別update/delete/re-open不可。
 - Goal Aggregate Delete / Account Deleteだけが破壊的削除例外。
 
+Active Cycle `N > 1`のfull read modelは、同じUser・同じGoalの`sequenceNumber = N - 1`である直接の前CycleがCompletedである場合に限り、そのCycleのAを`previousCompletedCycleAction`として返す。Goal Versionが変わっていても直接の前後関係は変わらず、read modelは前CycleのGoal Version番号をAとともに保持するが、旧Goal本文は含めない。現在Cycleと前CycleのGoal Version番号の関係は§18.5の0 / +1遷移を正とする。
+
+Cycle 1およびCompleted / Canceled Cycleの`previousCompletedCycleAction`は`null`とする。Active Cycle `N > 1`で直接の前Cycleが存在しない、CanceledまたはCompleted以外である、sequenceが一致しない、Goal Versionを正しく解決できない、またはAが§14.5の文字semanticsに違反するかtrim後に空である場合はpersistence / domain invariant違反である。さらに古いCompleted Cycleへfallbackせず、欠落を`null`へ補正しない。このread projectionは現在CycleのP、Frame revision、Auto Save、Browser Draft、Recovery、AI Contextまたはstate transitionを変更しない。
+
 ## 14.6 Goal termination
 
 - `outcome=achieved|ended`を明示する。
@@ -1964,6 +1968,8 @@ Transaction:
 
 Version作成とCycle作成は同じTransaction。どちらかだけを残さない。
 
+このContinueの0 / +1遷移により、新Active Cycleが参照するGoal Version番号は、直接の前Completed Cycleが参照する番号と同じか1大きい値だけを許容する。Full Cycle readで現在Cycleから前Cycleを見る場合、前Cycleの番号は現在Cycleと同値または`current - 1`でなければならず、現在より未来の番号または2以上古い番号はpersistence / domain invariant違反である。
+
 Idempotencyは新Cycle `start_operation_id`で保証する。retry時にGoalが後続stateへ進んでいても次Cycleを重複作成せず、§20.4の現在Workspace Responseへ収束させる。
 
 ## 18.6 Goal termination
@@ -2651,7 +2657,8 @@ Response:
     "plan": "",
     "do": "",
     "check": "",
-    "action": ""
+    "action": "",
+    "previousCompletedCycleAction": null
   }
 }
 ```
@@ -2835,7 +2842,8 @@ Response:
     "sequenceNumber": 3,
     "status": "canceled",
     "cancellationReason": "goal_achieved",
-    "canceledAt": "2026-08-18T03:00:00Z"
+    "canceledAt": "2026-08-18T03:00:00Z",
+    "previousCompletedCycleAction": null
   }
 }
 ```
@@ -2918,7 +2926,8 @@ Response:
     "plan": "...",
     "do": "...",
     "check": "...",
-    "action": "..."
+    "action": "...",
+    "previousCompletedCycleAction": null
   }
 }
 ```
@@ -3134,12 +3143,20 @@ Response（本文変更あり）:
     "plan": "",
     "do": "",
     "check": "",
-    "action": ""
+    "action": "",
+    "previousCompletedCycleAction": {
+      "cycleId": "previous-cycle-uuid",
+      "cycleSequenceNumber": 3,
+      "goalVersionNumber": 2,
+      "action": "次回は通知を切って30分取り組む"
+    }
   }
 }
 ```
 
 本文が同じ場合`versionCreated=false`、current versionを参照する。
+
+Fresh Continueでは、同じTransaction内のshared full `CycleView` materializationを使用し、`previousCompletedCycleAction.cycleId`がlock済みReview Draftの`reviewCycleId`と一致することをApplicationで検証してからcommitする。Active Cycleを返す通常replayも同じread modelへ収束する。Response loss後のretry時点で作成済みCycleがすでにCompleted / Canceledなら、既存のcurrent-state replay semanticsに従ってterminal Cycleを返し、`previousCompletedCycleAction=null`とする。
 
 Errors:
 
@@ -3156,6 +3173,27 @@ Errors:
 ---
 
 # 24. Cycle API
+
+## 24.0 Shared full CycleView read model
+
+Start Goalの`cycle`、Cycle detailの`cycle`、Goal Reviewの`triggerCycle`、Cycle Completeの`completedCycle`、Goal Review Continueの`cycle`、Goal Terminateの`canceledCycle`は同じfull `CycleView` contractを使用する。これらのobjectは次のrequired nullable fieldを省略せずに返す。
+
+```json
+{
+  "previousCompletedCycleAction": {
+    "cycleId": "cycle-uuid",
+    "cycleSequenceNumber": 1,
+    "goalVersionNumber": 1,
+    "action": "次回は通知を切って30分取り組む"
+  }
+}
+```
+
+値の規則は§14.5を正とする。Cycle 1とterminal Cycleではfieldを明示的な`null`、Active Cycle `N > 1`では直接の前Completed Cycleを表すobjectとする。`cycleId`はUUID v7、`cycleSequenceNumber`と`goalVersionNumber`は正整数、`action`は§14.5の上限内かつtrim後非空である。Cycle list / historyのsummaryとFrame PATCH responseはこのfull read modelを使用せず、fieldを追加しない。
+
+Current Cycleと前Cycleは同じconsistent readで取得し、Current Cycleの`user_id + goal_id + cycle_id`と前Cycleの`user_id + goal_id + sequence_number`をすべてscopeする。Infrastructureはexact `N - 1`をLEFT JOINし、前Cycleのstatusを内部rowへ残してmapperでCompletedを検証する。CompletedをJOIN条件で除外してCanceledとmissingを同じNULLへ潰さず、さらに古いCycleへfallbackしない。Repository mapperとApplicationは§14.5のnull / object、sequence、status、A本文と§18.5のGoal Version遷移のinvariantを検証し、不可能なrowを公開可能な別状態へ補正しない。既存のowner非開示とGoal / Cycle mismatchの`404`正規化を維持し、前CycleのUser、Goalまたは旧Goal本文をResponseへ追加しない。
+
+このprojectionは既存のCycle read / transaction pathを拡張する。専用endpoint、DB column、index、migration、追加lockまたは独立した前Cyclequeryを設けない。
 
 ## 24.1 `GET /api/v1/goals/{goalId}/cycles`
 
@@ -3225,7 +3263,8 @@ Response:
       "do": 1,
       "check": 0,
       "action": 0
-    }
+    },
+    "previousCompletedCycleAction": null
   }
 }
 ```
@@ -3416,7 +3455,8 @@ Response:
     "id": "cycle-uuid",
     "sequenceNumber": 3,
     "status": "completed",
-    "completedAt": "2026-08-18T06:00:00Z"
+    "completedAt": "2026-08-18T06:00:00Z",
+    "previousCompletedCycleAction": null
   },
   "goal": {
     "id": "goal-uuid",
@@ -5081,6 +5121,8 @@ Database constraints
 - DomainはGoal/Cycle status、blank、length、transition等を検証する。
 - DBはFK、Unique、CHECK、partial uniqueで最後の防波堤を提供する。
 
+Shared full `CycleView`の`previousCompletedCycleAction`は、Repository mapperがSQL nullable tupleと前Cycle statusを失わずに解釈し、Applicationが§14.5のcurrent / predecessor関係と§18.5のGoal Version遷移を再検証する。Required fieldの欠落、Active Cycle `N > 1`の`null`、Cycle 1またはterminal Cycleのobject、direct sequence以外、non-Completed predecessor、解決不能なGoal Version、Goal Version遷移違反、invalid / blank Aはinvariant errorとし、別のCycleまたは空値で補完しない。
+
 ## 40.2 Character definition
 
 Goal / Frameの文字semanticsは§§14.1、14.5だけが所有し、Unicode code point数で判定する。
@@ -5120,6 +5162,8 @@ InfrastructureError
 ```
 
 HTTP mappingは§26のstable codeへ一元化する。
+
+`previousCompletedCycleAction`のpersistence / materialization invariant errorはClient入力errorまたは`404`へ変換せず、§40.6の`INTERNAL_ERROR`として本文を含めずに扱う。Owner外のGoal / Cycleとpath Goal mismatchだけは§§24.0、24.2の既存非開示contractへ従う。
 
 ## 40.4 Recoverable input rule
 
@@ -5808,6 +5852,8 @@ Playbook policyは`.fukamu/playbook/lock.json`のexact revisionとSHA-256、vend
 
 Pre-switch baselineまたはそのcleanup proofが失敗した場合はmigration、secret materialization、Application deployへ進まない。Migration失敗時はApplication deployを行わない。Backward-incompatible変更はExpand / Contractを使い、同一Deployで直前Application versionとの互換性を即座に破壊しない。
 
+Worker、Static Assets、Containerを同じDeployで更新しても、旧Containerのauthoritative drainが完了するまでは新Frontendと旧Backendが混在し得る。新Frontendが欠落を拒否するrequired response fieldを追加し、旧Frontendがunknown fieldを安全に無視できる場合は、Backend response contractのexpandとFrontend consumer activationを別candidateへ分ける。`previousCompletedCycleAction`のBackend expandでは、旧Frontendはこのunknown fieldを無視し、既存の表示と操作を維持する。先にBackend expandだけをdeployし、old-image drainと新fieldの全適用surfaceを検証したcheckpointの後でのみFrontendのrequired schema / UIを有効化する。Backend expand candidateだけではFrontend behaviorを有効化せず、新Frontendはfield欠落を`null`へ正規化して互換性問題を隠さない。Drainまたは全surfaceのcontractを証明できない場合はFrontend activation candidateのmerge / deployを停止する。
+
 ## 44.5 Health endpoints
 
 - `GET /healthz`: process到達確認。DB external call不要。
@@ -5970,7 +6016,7 @@ PostgreSQL固有のconstraint、deferred FK、row lock、transactionをSQLiteで
 |---|---|---|
 | Bootstrap、Session、Google、Account Delete | §§18.2、21、25、27、41.10 | Domain/Application、HTTP matrix、実DB concurrency、Frontend identity fence、E2E |
 | Goal Draft、Start、limit、Version | §§12、14、18.3、22 | Domain boundary、HTTP、real-DB rollback/concurrency、Frontend editor、E2E |
-| Cycle save、complete、Review、termination | §§13–14、18.4–18.6、23–24、28 | revision/transition unit、HTTP、real-DB replay/lock、autosave component、E2E |
+| Cycle save、complete、Review、termination、full Cycle predecessor read | §§13–14、18.4–18.6、23–24、28 | revision/transition/read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model unit、authz/API、real-DB cascade/CAS/cleanup、E2E |
 | AI prompt、schema、context、result | §§32–37 | typed fake、mock transport、semantic boundary、context-isolation query/application、Frontend adoption |
 | AI quota、cost、abuse | §§38–39 | real-DB quota/rate/budget/settlement/cleanup concurrency、failure and replay |
@@ -6005,6 +6051,8 @@ Anonymous create rate limitでは、UTC hour境界の両端包含、23.5時間�
 Stable CSRFでは、固定key / Session IDのbyte-level golden vectorによりscope文字列、NUL separator、lowercase UUID、paddingなしbase64urlとverifier式を固定する。同じSession / keyの同値性、Sessionまたはkey変更時の差、空・不正token拒否、legacy verifier収束、同一hashのidempotent保存、revoke / expiry raceをunit / repository testで検証する。Application unit testはstable側が一致する場合もlegacy verifier側のconstant-time比較を実行してからORすることをcomparator call countで固定する。HTTP integrationはbarrier同期した2件以上の`GET /session`が同じtokenを返し、各tokenによるunsafe Requestがともに成功すること、invalid token / Origin、revoked / expired /旧Sessionを拒否すること、Session rotation後は旧CSRFを拒否して新CSRFが成功することを検証する。Pepper rotation testはmaintenanceとold-instance drain後の単一active keyだけを対象とし、旧token拒否と新token成功を固定する。Rolloutのdeterministic testはlegacy / stable token、旧 / 新Application、旧 / 新key、expiry / revoke raceをexact-main CI evidenceで固定する。Live Stagingはlegacy Sessionを持つ同一Browser Context二tabをprocess memoryに保持したままDeploy / drainを待ち、candidate-only authoritative evidenceの後だけ、同時Session discoveryの同値、片tab reload後の両tab unsafe command / autosave、convergence後のlegacy token拒否、invalid token / Origin拒否、Account Delete後の401、advisory欠落時のauthoritative recoveryを検証する。TTL短縮、DB直接操作、test-only Production endpoint、pepper変更でlive caseを作らない。
 
 Read operationはcursor tamper、scope mismatch、ordering、pagination境界、cross-user非開示を適用可能な範囲で検証する。
+
+Shared full `CycleView`の`previousCompletedCycleAction`は、Cycle 1の`null`、Active Cycleのexact predecessor、§18.5に従う同一 / `current - 1`のGoal Version、terminalの`null`、missing / Canceled / non-Completed / sequence mismatch / futureまたは2以上gapのGoal Version / 解決不能なGoal Version / blank Aのinvariant error、cross-user / cross-Goal非開示をApplication、Repository mapper、実PostgreSQL、actual HTTPで検証する。Start、Cycle detail、Review trigger、Complete、Continue、Terminateの全full-Cycle surfaceでrequired nullable fieldを検証し、Cycle list / history summaryとFrame PATCH responseが変わらないことも固定する。Continueはfresh、同一operation replay、作成Cycleがterminalへ進んだ後のresponse-loss replay、materialization不整合時のrollback、lock済みReview Draftの`reviewCycleId`との一致を含める。
 
 ## 48.5 Critical E2E projection
 
@@ -6258,7 +6306,7 @@ MVP acceptanceは、各canonical ownerのContractと§48のverificationが同じ
 | Document authority / scope | §§0、2–3、50、52、54 | D、owner/legacy trace review |
 | Shared engineering method adoption | vendored Product Engineering Playbook、§§0、44.3、48、50、52、54 | offline hash/validator、empty override、38 rule trace、workflow/security fixtures、source-backed adoption evidence |
 | Bootstrap / Goal collection / Start | §§6、9、12、14、18.2–18.3、21–23 | Domain/API/real-DB concurrency、Frontend、E2E |
-| Version / Cycle / Review / terminal | §§12–14、18.4–18.6、23–24 | Domain/API/real-DB replay/rollback、Frontend、E2E |
+| Version / Cycle / Review / terminal | §§12–14、18.4–18.6、23–24 | Domain/full-Cycle API predecessor contract/real-DB scope・replay・rollback、Frontend、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model/authz/CAS/cleanup、E2E |
 | Autosave / recovery / identity isolation | §§20.1、27–28 | Frontend fake-timer/component、HTTP identity matrix、E2E |
 | AI behavior / context / quality | §§32–39、49 | typed fake、mock transport、context/privacy、Cost concurrency、quality gate |

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
@@ -491,7 +492,31 @@ func validateCycleView(view CycleView, goalID, cycleID string) error {
 	if err := validateCycleStatusTimes(view.Status, view.CompletedAt, view.CanceledAt, view.CancellationReason); err != nil {
 		return err
 	}
-	return validateCycleGoalVersion(view.GoalVersion)
+	if err := validateCycleGoalVersion(view.GoalVersion); err != nil {
+		return err
+	}
+	if err := validatePreviousCompletedCycleAction(view); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePreviousCompletedCycleAction(view CycleView) error {
+	if view.Status != cycle.StatusActive || view.SequenceNumber == 1 {
+		if view.PreviousCompletedCycleAction != nil {
+			return cycleInvariantError("Cycle must not expose a previous completed Action")
+		}
+		return nil
+	}
+	previous := view.PreviousCompletedCycleAction
+	if previous == nil || !identifier.IsCanonicalUUIDv7(previous.CycleID) || previous.CycleID == view.ID ||
+		previous.CycleSequenceNumber != view.SequenceNumber-1 || previous.GoalVersionNumber <= 0 ||
+		previous.GoalVersionNumber > view.GoalVersion.VersionNumber ||
+		previous.GoalVersionNumber < view.GoalVersion.VersionNumber-1 || cycle.IsBlank(previous.Action) ||
+		utf8.RuneCountInString(previous.Action) > cycle.MaxFrameCodePoints {
+		return cycleInvariantError("active Cycle previous completed Action is inconsistent")
+	}
+	return nil
 }
 
 func validateCycleSummaryStatusTimes(status cycle.Status, completedAt, canceledAt *time.Time) error {

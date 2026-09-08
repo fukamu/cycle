@@ -92,21 +92,29 @@ type DraftView struct {
 }
 
 type CycleView struct {
-	ID                 string                    `json:"id"`
-	GoalID             string                    `json:"goalId,omitempty"`
-	SequenceNumber     int32                     `json:"sequenceNumber"`
-	Status             cycle.Status              `json:"status"`
-	GoalVersion        GoalVersionView           `json:"goalVersion"`
-	StartedAt          time.Time                 `json:"startedAt"`
-	CompletedAt        *time.Time                `json:"completedAt"`
-	CanceledAt         *time.Time                `json:"canceledAt"`
-	CancellationReason *cycle.CancellationReason `json:"cancellationReason"`
-	Plan               string                    `json:"plan"`
-	Do                 string                    `json:"do"`
-	Check              string                    `json:"check"`
-	Action             string                    `json:"action"`
-	ContentRevision    int64                     `json:"contentRevision"`
-	FrameRevisions     FrameRevisions            `json:"frameRevisions"`
+	ID                           string                            `json:"id"`
+	GoalID                       string                            `json:"goalId,omitempty"`
+	SequenceNumber               int32                             `json:"sequenceNumber"`
+	Status                       cycle.Status                      `json:"status"`
+	GoalVersion                  GoalVersionView                   `json:"goalVersion"`
+	PreviousCompletedCycleAction *PreviousCompletedCycleActionView `json:"previousCompletedCycleAction"`
+	StartedAt                    time.Time                         `json:"startedAt"`
+	CompletedAt                  *time.Time                        `json:"completedAt"`
+	CanceledAt                   *time.Time                        `json:"canceledAt"`
+	CancellationReason           *cycle.CancellationReason         `json:"cancellationReason"`
+	Plan                         string                            `json:"plan"`
+	Do                           string                            `json:"do"`
+	Check                        string                            `json:"check"`
+	Action                       string                            `json:"action"`
+	ContentRevision              int64                             `json:"contentRevision"`
+	FrameRevisions               FrameRevisions                    `json:"frameRevisions"`
+}
+
+type PreviousCompletedCycleActionView struct {
+	CycleID             string `json:"cycleId"`
+	CycleSequenceNumber int32  `json:"cycleSequenceNumber"`
+	GoalVersionNumber   int32  `json:"goalVersionNumber"`
+	Action              string `json:"action"`
 }
 
 type FrameRevisions struct {

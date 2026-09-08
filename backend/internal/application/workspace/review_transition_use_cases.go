@@ -203,7 +203,12 @@ func (useCases *ReviewTransitionUseCases) ContinueReview(ctx context.Context, in
 			return reviewTransitionMaterializationError("continued Cycle", writeErr)
 		}
 		result.VersionCreated = continued.VersionCreated
-		return validateFreshContinueReviewResult(result, continued, input.ExpectedGoalRevision)
+		return validateFreshContinueReviewResult(
+			result,
+			continued,
+			input.ExpectedGoalRevision,
+			*draft.ReviewCycleID,
+		)
 	})
 	return result, err
 }
@@ -620,10 +625,17 @@ func partitionReviewUsages(generationIDs []string, usages []DraftUsageState, now
 	return retained, expired, nil
 }
 
-func validateFreshContinueReviewResult(result ContinueReviewResult, continued goal.ContinueResult, expectedGoalRevision int64) error {
+func validateFreshContinueReviewResult(
+	result ContinueReviewResult,
+	continued goal.ContinueResult,
+	expectedGoalRevision int64,
+	reviewCycleID string,
+) error {
 	if result.Replayed || result.VersionCreated != continued.VersionCreated ||
 		validateCycleView(result.Cycle, continued.Goal.ID, continued.Cycle.ID) != nil ||
 		result.Cycle.Status != cycle.StatusActive ||
+		result.Cycle.PreviousCompletedCycleAction == nil ||
+		result.Cycle.PreviousCompletedCycleAction.CycleID != reviewCycleID ||
 		result.Cycle.GoalVersion.ID != continued.Cycle.GoalVersionID ||
 		!goalVersionViewMatchesDomain(result.Cycle.GoalVersion, continued.Version) ||
 		result.Cycle.SequenceNumber != continued.Cycle.SequenceNumber ||
