@@ -59,6 +59,37 @@ async function readBrowserDraft(
   );
 }
 
+function writeBrowserDraft(
+  page: Page,
+  draft: StoredBrowserDraft,
+): Promise<void> {
+  return page.evaluate(
+    (record) =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open("fukamu-cycle-browser-drafts-v2");
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const database = open.result;
+          const transaction = database.transaction("drafts", "readwrite");
+          transaction.objectStore("drafts").put(record);
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          transaction.onerror = () => {
+            database.close();
+            reject(transaction.error);
+          };
+          transaction.onabort = () => {
+            database.close();
+            reject(transaction.error);
+          };
+        };
+      }),
+    draft,
+  );
+}
+
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
 }) => {
@@ -1262,6 +1293,94 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
         document.documentElement.clientWidth,
     ),
   ).toBe(false);
+
+  const session = await getSession(page);
+  const pathParts = new URL(page.url()).pathname.split("/");
+  const goalId = pathParts[2];
+  const cycleId = pathParts[4];
+  expect(goalId).toBeTruthy();
+  expect(cycleId).toBeTruthy();
+  const subjectKey = `cycle:${cycleId}:do`;
+  await writeBrowserDraft(page, {
+    key: `${session.user.id}:${subjectKey}`,
+    userId: session.user.id,
+    goalId: goalId ?? null,
+    subjectKey,
+    body: "この端末に残った確認待ちの長い実行内容".repeat(12),
+    baseRevision: 0,
+    updatedAt: new Date().toISOString(),
+  });
+  await page.reload();
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+
+  const frameTabs = page.getByRole("tablist", { name: "PDCAフレーム" });
+  const recoveryTab = page.getByRole("tab", { name: "D Do 要確認" });
+  await expect(page.getByRole("heading", { name: goalText })).toBeVisible();
+  await expect(frameTabs).toBeVisible();
+  await expect(recoveryTab).toHaveAttribute("aria-selected", "false");
+  await expect(recoveryTab.getByText("要確認", { exact: true })).toBeVisible();
+
+  const actionTab = page.getByRole("tab", { name: "A Action" });
+  await actionTab.click();
+  const actionEditor = page.getByRole("textbox", { name: "A — Action" });
+  const completeButton = page.getByRole("button", { name: "サイクルを完了" });
+  for (const control of [actionEditor, completeButton]) {
+    await control.scrollIntoViewIfNeeded();
+    await control.evaluate((element) => {
+      const tabs = document.querySelector<HTMLElement>(".frame-tabs");
+      if (!tabs) throw new Error("frame tabs are missing");
+      const overlap =
+        element.getBoundingClientRect().bottom -
+        tabs.getBoundingClientRect().top;
+      if (overlap > 0) window.scrollBy(0, overlap);
+    });
+    const geometry = await control.evaluate((element) => {
+      const controlRect = element.getBoundingClientRect();
+      const tabs = document.querySelector<HTMLElement>(".frame-tabs");
+      if (!tabs) throw new Error("frame tabs are missing");
+      const tabRect = tabs.getBoundingClientRect();
+      return {
+        top: controlRect.top,
+        bottom: controlRect.bottom,
+        height: controlRect.height,
+        tabTop: tabRect.top,
+        viewportHeight: window.innerHeight,
+      };
+    });
+    const diagnosis = `control geometry: ${JSON.stringify(geometry)}`;
+    expect(geometry.height, diagnosis).toBeGreaterThan(0);
+    expect(geometry.top, diagnosis).toBeGreaterThanOrEqual(-1);
+    expect(geometry.bottom, diagnosis).toBeLessThanOrEqual(
+      geometry.viewportHeight + 1,
+    );
+    expect(geometry.bottom, diagnosis).toBeLessThanOrEqual(geometry.tabTop + 1);
+  }
+
+  const mobileGeometry = await frameTabs.evaluate((element) => {
+    const tabs = element as HTMLElement;
+    const rect = tabs.getBoundingClientRect();
+    const style = window.getComputedStyle(tabs);
+    return {
+      documentOverflows:
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+      position: style.position,
+      bottom: style.bottom,
+      paddingBottom: Number.parseFloat(style.paddingBottom),
+      viewportBottom: window.innerHeight - rect.bottom,
+    };
+  });
+  expect(mobileGeometry).toMatchObject({
+    documentOverflows: false,
+    position: "fixed",
+    bottom: "0px",
+  });
+  expect(mobileGeometry.paddingBottom).toBeGreaterThanOrEqual(9);
+  expect(Math.abs(mobileGeometry.viewportBottom)).toBeLessThanOrEqual(1);
 });
 
 test("goal review termination discards an unversioned change explicitly", async ({
