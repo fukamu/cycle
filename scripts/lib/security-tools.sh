@@ -364,6 +364,7 @@ security_validate_text_inventory() {
           "Dockerfile",
           "_headers",
         ]);
+        const exactPaths = new Set([".fukamu/playbook/validate.py"]);
         const approvedSuffixes = [
           ".css",
           ".example",
@@ -405,7 +406,8 @@ security_validate_text_inventory() {
           }
           const basename = segments.at(-1);
           if (
-            !exactBasenames.has(basename) && !basename.endsWith(".Dockerfile") &&
+            !exactPaths.has(relativePath) && !exactBasenames.has(basename) &&
+            !basename.endsWith(".Dockerfile") &&
             !approvedSuffixes.some((suffix) => basename.endsWith(suffix))
           ) {
             throw new Error("unapproved text file type");

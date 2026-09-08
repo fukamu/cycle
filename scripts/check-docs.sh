@@ -33,4 +33,5 @@ assert_docs_config_snapshot_regular_file \
   "${candidate_root}" \
   "package.json" \
   "DOCUMENTATION_CANDIDATE_FILE_REQUIRED"
+bash "${candidate_root}/scripts/check-playbook-adoption.sh"
 node "${script_dir}/check-docs.mjs" "${candidate_root}"

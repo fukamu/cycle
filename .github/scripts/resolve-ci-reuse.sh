@@ -347,6 +347,7 @@ def controls_ci(pathname):
     return (
         pathname in exact_control_paths
         or pathname.startswith(".github/")
+        or pathname.startswith(".fukamu/playbook/")
         or pathname.startswith("config/")
         or pathname.startswith("scripts/")
         or basename in {

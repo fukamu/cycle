@@ -11,7 +11,7 @@
 
 ## 0.1 文書の権威
 
-Repositoryの`docs/design.md`へ配置される本書は、FUKAMU CycleのProduct Rule、UX、Domain、Database、API、Frontend、Backend、AI、Security、Operations、Testingに関する**唯一の規範文書**である。
+Repositoryの`docs/design.md`へ配置される本書は、FUKAMU Cycle固有のProduct Rule、UX、Domain、Database、API、Frontend、Backend、AI、Security、Operations、Testingに関する**唯一の規範文書**である。プロダクトを問わない進行・協業・実装・検証・releaseの方法は、固定revisionでvendoringした [FUKAMU Product Engineering Playbook](../.fukamu/playbook/PLAYBOOK.md) が所有する。本書とPlaybookは責任範囲を重ねず、PlaybookがCycle固有の意味、挙動、値、技術選定、検証commandを定義または上書きしない。
 
 実装者は本書だけを読んで、主要なProduct Ruleを追加推測せずにMVPを実装できなければならない。
 
@@ -20,6 +20,7 @@ Repositoryの`docs/design.md`へ配置される本書は、FUKAMU CycleのProduc
 - コード、Database Migration、API Schema、Prompt、Testが本書と矛盾する場合は本書を優先し、該当実装を修正する。
 - Product Rule、Architecture Constraint、Implementation Contractを変える必要がある場合は、コード変更より前、または同一Pull Request内で本書を更新する。
 - 本書だけでは一意に実装できない重大なProduct Ruleが見つかった場合、該当作業を停止してProduct Ownerへ確認し、推測で補完しない。
+- 共通方法の適用versionとvendored bytesは[lock](../.fukamu/playbook/lock.json)、期限付き例外は[overrides](../.fukamu/playbook/overrides.json)、全Playbook ruleからCycleのconsumerへのtraceは[config](../.fukamu/playbook/config.json)が所有する。v0.1.0のoverrideは空である。
 
 ## 0.2 本書が持つ三つの役割
 
@@ -32,6 +33,8 @@ Repositoryの`docs/design.md`へ配置される本書は、FUKAMU CycleのProduc
 | Implementation Contract | 実装者が検証可能な形で必ず守る契約 | API、DTO、DDL、Constraint、Transaction、Concurrency、Error Code、Test、Deployment Gate |
 
 三者は上下関係のある別仕様ではない。Product SpecificationをSoftware Designが構造化し、Implementation Contractが実装・検証可能な形で保証する。
+
+この三つはCycle固有contractの役割である。共通Playbookは作業方法だけを所有し、本書はPlaybookの一般規則を複製せず、Cycle固有の意味・値・境界・acceptanceを具体化する。
 
 - Software DesignまたはImplementation ContractによってProduct Ruleを緩和してはならない。
 - Product Ruleを変更する場合は、それを保証するDomain Model、Database、API、UI、AI、Security、Testingも同時に再評価する。
@@ -5761,6 +5764,8 @@ main pushでは、PR CIが実際に検証したmerge treeとmain commitのtree�
 
 External OpenAI / Google / Turnstileの実callを通常PR必須testにしない。Fake adapterを使い、limited contract testはStaging/manualで行う。
 
+Playbook policyは`.fukamu/playbook/lock.json`のexact revisionとSHA-256、vendored bundle / validator、空のoverride、全rule IDのrelation・正確なlocal section traceを通常CIでoffline検証する。専用workflowに加え、既存requiredのSecurity、documentation、configuration gateとstaged-tree commit gateの各経路から同じcandidateを検証し、一つのworkflowやgateの省略で迂回できないようにする。導入・更新時だけ、完全な中央repository cloneに対してGit graph hardening、repository-local署名helper設定の拒否、署名付きversion tagのrevisionと承認済み署名者fingerprintを確認し、中央commit・vendored bytes・lock hashの三者一致をcandidate validatorから独立して追加検証する。
+
 ## 44.4 Deploy sequence
 
 `Terraform Apply Staging`と`Deploy Staging`は別々のmanual approval boundaryとする。通常Deployはconfigured approverがexact-current-mainの成功Apply run IDを指定した場合だけ実行し、Apply成功から自動起動しない。Application recoveryは別modeとし、current main、同一SHAの成功CI、configured approver、exact confirmationを必須にする。Recoveryは通常releaseのApply gateを迂回する一般Deploy経路として使わない。
@@ -5912,6 +5917,8 @@ Rationaleを変更してもownerのContractが変わらない場合は本節だ�
 
 Testはcanonical ownerを検証するconsumerであり、Product Rule、API値、設定defaultの第二の定義場所にしない。期待値を変更するときはownerを先に更新し、同じ変更で該当Testを更新する。
 
+共通作業方法についてはvendored Playbookがcanonical ownerであり、Cycleのpolicy testはlock、override、owner trace、workflow/gate統合をenforcement mirrorとして検証する。Playbook固有ruleの意味をCycle testだけで追加または変更しない。
+
 ## 48.1 Test layers
 
 | Layer | Tool / style | Purpose |
@@ -5923,6 +5930,7 @@ Testはcanonical ownerを検証するconsumerであり、Product Rule、API値�
 | E2E | Playwright + fake provider | Public critical journeys |
 | Provider Contract | Mock transport / limited staging | Provider request、schema、usage、failure classification |
 | AI Quality Evaluation | Versioned Japanese fixture + human rubric | intent、grounding、invention、quality gate |
+| Governance / Policy | vendored validator + Cycle trace validator + negative fixtures | Playbook integrity、owner境界、required gateの迂回防止 |
 
 PostgreSQL固有のconstraint、deferred FK、row lock、transactionをSQLiteで代用しない。
 
@@ -5948,6 +5956,7 @@ PostgreSQL固有のconstraint、deferred FK、row lock、transactionをSQLiteで
 | Privacy / security / observability / Product KPI | §§27、41–42 | cross-user matrix、safe-log/attribute allowlist、metric/span export、survivor-only aggregateの実DB boundary / delete / privacy、security gate |
 | Typography / accessibility | §43 | token/lint、component/A11y、responsive browser journey |
 | Configuration / infrastructure | §§44–45、50–51 | config parity、negative fixtures、Terraform/Worker/container static checks、migration smoke |
+| Shared engineering methods / adoption integrity | vendored Product Engineering Playbook | offline hash/validator、empty override、rule trace、workflow/security positive + negative fixtures、導入・更新時source-backed verification |
 
 Exact test file名やcase IDはRepositoryのTest suiteをSourceとし、本書へ固定manifestを複製しない。
 
@@ -5998,6 +6007,7 @@ Exact scenario manifestはversioned Playwright suiteを正とし、同じjourney
 - Browser timezoneとnetwork stateを明示的に切り替えられる。
 - PostgreSQL integration/E2Eは空Databaseへ全Migrationを適用し、Production/共有DBを拒否するguardを通す。
 - Provider contractはlive credentialを必須にせず、AI品質評価だけを承認された隔離環境で実行する。
+- 通常のPlaybook policy gateはnetworkとcredentialへ依存せず、同じcandidate treeのvendored bytesだけで決定的に完了する。
 
 ---
 
@@ -6098,7 +6108,13 @@ AIによる自動graderだけを唯一の合否判定にしない。
 | Path | Classification | Reason |
 |---|---|---|
 | `docs/design.md` | **[固定Path]** | Product Specification / Software Design / Implementation Contractの唯一のNormative SoT |
-| `.github/workflows/` | **[固定Path]** | GitHub Actionsがworkflowを発見するplatform-defined root。個別file名は固定しない |
+| `.github/workflows/` | **[固定Path]** | GitHub Actionsがworkflowを発見するplatform-defined root。下記Playbook workflow以外の個別file名は固定しない |
+| `.fukamu/playbook/PLAYBOOK.md` | **[固定Path]** | 共通作業方法のvendored normative bundle。中央sourceの固定revisionとbyte一致させる |
+| `.fukamu/playbook/validate.py` | **[固定Path]** | 中央sourceとbyte一致するoffline consumer validator |
+| `.fukamu/playbook/lock.json` | **[固定Path]** | 採用version、40桁revision、bundle / validator pathとSHA-256 |
+| `.fukamu/playbook/overrides.json` | **[固定Path]** | Playbook例外の唯一のinventory。v0.1.0採用時は空 |
+| `.fukamu/playbook/config.json` | **[固定Path]** | Playbook/Cycle owner境界と全rule IDのlocal consumer trace |
+| `.github/workflows/playbook.yml` | **[固定Path]** | GitHub required check候補となる独立したoffline Playbook policy workflow |
 
 新しい固定Pathは、Platform discovery、Source-of-Truth、Build、Migration、Code Generation、DeploymentがPath自体へ依存し、Repositoryからの通常の発見では契約が一意にならない場合だけ追加する。
 
@@ -6107,6 +6123,8 @@ AIによる自動graderだけを唯一の合否判定にしない。
 Repositoryは、SoT documentation、Frontend、Backend、Database migration、typed/generated query、versioned prompt、AI evaluation、Infrastructure/Deployment、CI/CD、Test supportの論理責務を一意に持つ。物理Directory名、深さ、leaf file名は固定しない。
 
 ## 50.3 Physical organization rules
+
+Repository fileを変更する作業はPlaybook `PE-WRK-002`を正本として、最新の適切なbaseから作成した専用branchと専用git worktreeに分離する。これは共通作業方法のCycle consumerであり、Product behaviorを定義しない。
 
 1. 現在の詳細TreeはRepositoryそのものを確認し、本書へ複製しない。
 2. §§5、29–30、44の責務・依存・Tooling Contractを満たす既存構成は維持する。
@@ -6173,10 +6191,11 @@ Environment固有のDomain、capacity、provider availability/price、credential
 - Authentication、security、privacy、observability。
 - Architecture/public boundary、固定Path、build/generation/deploy contract。
 - Acceptanceまたはrequired verification。
+- PlaybookとCycle固有contractのowner境界、採用に必要な固定Path、required gateへの統合。
 
 ## 52.4 Changes that normally do not require updating this document
 
-公開Contractやownerの意味を変えないprivate helper、同一module内のfile整理、Test helper、内部algorithm最適化、patch dependency update、Environment実値の変更は本書更新を必須にしない。ただしSecurity、Data semantics、AI品質、SLO、Tooling Contractへ影響する場合は§52.3として扱う。
+公開Contractやownerの意味を変えないprivate helper、同一module内のfile整理、Test helper、内部algorithm最適化、patch dependency update、Environment実値の変更は本書更新を必須にしない。共通Playbookだけのversion更新も、Cycle固有contract、owner境界、固定Path、required verificationの意味を変えない場合は本書を変更せず、vendored bundle、validator、lock、override、config traceを同じatomic PRで更新する。ただしSecurity、Data semantics、AI品質、SLO、Tooling Contractへ影響する場合は§52.3として扱う。
 
 ## 52.5 Specification update procedure
 
@@ -6197,6 +6216,8 @@ Environment固有のDomain、capacity、provider availability/price、credential
 5. DDL/API/Prompt/Test等のenforcement mirrorと実装を同じ変更で更新する。
 6. §48の検証と§53のacceptance traceを通し、理由・影響・trade-off・実行結果を記録する。
 
+共通Playbook ruleを更新する場合は中央repositoryでその変更手続きとversionを確定した後、Cycle側で新しいexact revisionをreviewする。Cycle adoption更新はbundle、validator、lock、override、config trace、影響するlocal consumerとgateを同じPull Requestへ含め、通常offline検証に加えてsource-backed検証を完走する。中央`main`、floating tag、短縮SHAを採用根拠にしない。
+
 ## 52.6 Current-state document / history policy
 
 - 本書はChange Logではなく、常に現在のContractだけを表す。
@@ -6213,6 +6234,7 @@ MVP acceptanceは、各canonical ownerのContractと§48のverificationが同じ
 | Acceptance area | Canonical owner | Minimum evidence |
 |---|---|---|
 | Document authority / scope | §§0、2–3、50、52、54 | D、owner/legacy trace review |
+| Shared engineering method adoption | vendored Product Engineering Playbook、§§0、44.3、48、50、52、54 | offline hash/validator、empty override、38 rule trace、workflow/security fixtures、source-backed adoption evidence |
 | Bootstrap / Goal collection / Start | §§6、9、12、14、18.2–18.3、21–23 | Domain/API/real-DB concurrency、Frontend、E2E |
 | Version / Cycle / Review / terminal | §§12–14、18.4–18.6、23–24 | Domain/API/real-DB replay/rollback、Frontend、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model/authz/CAS/cleanup、E2E |
@@ -6231,18 +6253,21 @@ Release candidateはA、D、S、I、Q、Eおよびstaged-tree Cのうち計画�
 
 ## 54.1 Single-owner rules
 
-1. Normativeなbehavior、invariant、API value、configuration semanticsは、§54.2のcanonical owner一箇所だけで定義する。
-2. Summary、index、rationale、acceptance、test traceはownerを参照できるが、独自の数値、状態遷移、default、error mappingを定義しない。
-3. DDL、JSON Schema、API detail、Prompt、Testにsyntax上必要なliteralは**enforcement mirror**である。意味と変更起点はownerにあり、mirrorだけを変更してContractを変えない。
-4. 同じ用語の異なる側面は分離する。例として、§14はProduct text semantics、§16はDB enforcement、§20–26はwire shape、§48はverification obligationを所有する。
-5. Exact Environment key/default/sourceは§45が指定する運用inventoryだけが所有し、本書の他節はsemantic ownerを参照する。
-6. 実Testのfile名/case一覧とDependency patch versionはRepositoryが所有し、本書へ複製しない。
-7. ownerとconsumerが矛盾する場合はownerを正とし、consumerを同じ変更で修正する。owner自体を変える場合は§52に従う。
+1. プロダクトを問わない進行・協業・実装・検証・releaseの方法はvendored Product Engineering Playbookだけが所有し、本書はCycle固有のProduct / Application contractだけを所有する。専門文書はCycle固有procedureとEnvironment値を所有し、いずれも他ownerの意味を再定義しない。
+2. Normativeなbehavior、invariant、API value、configuration semanticsは、§54.2のcanonical owner一箇所だけで定義する。
+3. Summary、index、rationale、acceptance、test traceはownerを参照できるが、独自の数値、状態遷移、default、error mappingを定義しない。
+4. DDL、JSON Schema、API detail、Prompt、Testにsyntax上必要なliteralは**enforcement mirror**である。意味と変更起点はownerにあり、mirrorだけを変更してContractを変えない。
+5. 同じ用語の異なる側面は分離する。例として、§14はProduct text semantics、§16はDB enforcement、§20–26はwire shape、§48はverification obligationを所有する。
+6. Exact Environment key/default/sourceは§45が指定する運用inventoryだけが所有し、本書の他節はsemantic ownerを参照する。
+7. 実Testのfile名/case一覧とDependency patch versionはRepositoryが所有し、本書へ複製しない。
+8. ownerとconsumerが矛盾する場合はownerを正とし、consumerを同じ変更で修正する。owner自体を変える場合は§52に従う。
 
 ## 54.2 Canonical ownership index
 
 | Contract family | Canonical owner |
 |---|---|
+| Shared project/work/quality/security/data/release methods | vendored [FUKAMU Product Engineering Playbook](../.fukamu/playbook/PLAYBOOK.md) |
+| Playbook adoption identity / hashes、exception、rule-to-local trace | [lock](../.fukamu/playbook/lock.json)、[overrides](../.fukamu/playbook/overrides.json)、[config](../.fukamu/playbook/config.json) |
 | Authority、normativity、change control | §§0、52、54.1 |
 | Product purpose、UX、scope、terms | §§2、4 |
 | User flow、screen behavior、UI state | §§6、9、11 |
@@ -6263,7 +6288,7 @@ M31前のtop-level §0〜54を欠落なく次へ収束した。`Index`または`
 
 | 旧§ | Current disposition / canonical owner | Verification |
 |---:|---|---|
-| 0 | Authority / notation → §0、ownership → §54.1 | D |
+| 0 | Cycle固有contract authority / notation → §0、共通方法境界 / ownership → vendored Playbook、§54.1 | D、Playbook policy |
 | 1 | Executive summary → navigation-only §1 | D |
 | 2 | Product goals / UX / non-goals → §2 | F、E、D |
 | 3 | MVP scope duplication → trace-only §3、owner §2ほか | D |
@@ -6307,16 +6332,16 @@ M31前のtop-level §0〜54を欠落なく次へ収束した。`Index`または`
 | 41 | Security / privacy → §41 | authz/redaction/deletion tests、S |
 | 42 | Observability → §42 | metric/log/trace assertions |
 | 43 | Typography / i18n readiness → §43 | Frontend token/A11y/responsive tests |
-| 44 | Hosting / infrastructure / CI-CD → §44 | A、I、health/readiness/deploy checks |
+| 44 | Hosting / infrastructure / CI-CD → §44 | A、I、Playbook policy、health/readiness/deploy checks |
 | 45 | Duplicated config sample → semantic boundary §45、exact inventory `docs/environment.md` | config parity、A、I |
 | 46 | Duplicated technology table → trace-only §46、owners §§5、29–30、32、44 | manifests、A、I、D |
 | 47 | Repeated trade-off values → rationale-only §47、owner sections | owner review、D |
-| 48 | Repeated case manifest → verification policy/trace §48 | F、B、E、A、C |
+| 48 | Repeated case manifest → verification policy/trace §48 | F、B、E、A、C、Playbook policy/negative fixtures |
 | 49 | AI quality evaluation → §49 | versioned fixture + human gate |
-| 50 | Repository/path governance → §50 | architecture/static/generated drift、D、Q |
+| 50 | Repository/path governance → §50 | architecture/static/generated drift、D、Q、Playbook fixed-path integrity |
 | 51 | Obsolete phase/release checklist → current migration/release index §51、owners §§16、44 | migration、A、I、D |
-| 52 | Operational/change decisions → §52 | D、review |
-| 53 | Repeated acceptance checklist → evidence trace §53 | required milestone gates、C |
-| 54 | Repeated guardrails → ownership + complete legacy trace §54 | D、manual trace review |
+| 52 | Operational/change decisions → §52 | D、Playbook adoption/update review |
+| 53 | Repeated acceptance checklist → evidence trace §53 | required milestone gates、C、source-backed adoption evidence |
+| 54 | Repeated guardrails → ownership + complete legacy trace §54 | D、Playbook owner trace、manual trace review |
 
 Trace reviewは旧番号が0から54まで各一回存在し、各rowにcurrent owner/dispositionとverificationがあることを確認する。将来の変更では旧番号を増減せず、current owner indexと該当consumerを更新する。

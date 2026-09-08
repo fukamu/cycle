@@ -2,7 +2,7 @@
 
 FUKAMU Cycleは、目標（Goal）ごとにPDCA Cycleを重ね、Cycle完了後のGoal Reviewで目標を維持・更新・終了できるG-PDCAアプリです。Cloudflare WorkerがReact / Vite SPAをedge配信し、同一originのAPIをCloudflare Container上のGoへrouteします。Goal、immutable Goal Version、Cycle、Review DraftはPostgreSQLへ保存します。
 
-アプリケーション要件・仕様・設計の最上位Source of Truthは [`docs/design.md`](docs/design.md) です。このREADMEは概要と入口だけを所有し、手順や設定値は専門文書へ委譲します。
+Cycle固有のアプリケーション要件・仕様・設計の最上位Source of Truthは [`docs/design.md`](docs/design.md) です。プロダクトを問わない進行・協業・品質・安全・releaseの方法は、固定revisionの [FUKAMU Product Engineering Playbook](.fukamu/playbook/PLAYBOOK.md) が所有します。このREADMEは概要と入口だけを所有し、手順や設定値は専門文書へ委譲します。
 
 ## Quick start
 
@@ -18,6 +18,8 @@ Ready後に`http://localhost:8080`を開き、終了時はterminalでEnterを押
 
 | Theme | Source of Truth |
 |---|---|
+| Shared project / work / quality / security / release methods | [`.fukamu/playbook/PLAYBOOK.md`](.fukamu/playbook/PLAYBOOK.md) |
+| Adopted Playbook revision / local trace / overrides | [lock](.fukamu/playbook/lock.json) / [config](.fukamu/playbook/config.json) / [overrides](.fukamu/playbook/overrides.json) |
 | Product behavior / API / architecture / invariants | [`docs/design.md`](docs/design.md) |
 | Local setup / development / checks / codegen / AI evaluation / local troubleshooting | [`docs/development.md`](docs/development.md) |
 | Environment variables / scope / secret-public classification | [`docs/environment.md`](docs/environment.md) |

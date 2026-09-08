@@ -316,6 +316,11 @@ validate_exact_workflow_structure() {
       expected_root_fields="$(printf '%s\n' name on permissions concurrency jobs)"
       expected_jobs="plan"
       ;;
+    playbook)
+      expected_name="name: Playbook policy"
+      expected_root_fields="$(printf '%s\n' name on permissions jobs)"
+      expected_jobs="validate"
+      ;;
     terraform-apply)
       expected_name="name: Terraform Apply Staging"
       expected_root_fields="$(printf '%s\n' name on permissions concurrency jobs)"
@@ -999,11 +1004,51 @@ FAKE_GH
   fi
 }
 
+validate_playbook_workflow_contract() {
+  local file="$1"
+  local expected
+  expected="$(
+    cat <<'EOF'
+name: Playbook policy
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Validate vendored playbook and Cycle ownership trace
+        env:
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+          PYTHONSAFEPATH: "1"
+        run: |
+          node scripts/validate-playbook-config.mjs .
+          python3 .fukamu/playbook/validate.py --consumer .
+EOF
+  )"
+  require_nonblank_block "${file}" "${expected}" || {
+    violation "Playbook policy workflow must retain its exact offline validation contract"
+    return 1
+  }
+}
+
 validate_all_workflows() {
   local directory="$1"
   local expected_inventory
   local actual_inventory
-  expected_inventory="$(printf '%s\n' ci.yml deploy.yml retire-legacy-origin.yml terraform-apply.yml terraform-plan.yml)"
+  expected_inventory="$(printf '%s\n' ci.yml deploy.yml playbook.yml retire-legacy-origin.yml terraform-apply.yml terraform-plan.yml)"
   actual_inventory="$(
     find "${directory}" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -printf '%f\n' \
       | LC_ALL=C sort
@@ -1024,6 +1069,7 @@ validate_all_workflows() {
   done <<'WORKFLOW_CHECKOUT_INVENTORY'
 ci.yml|8|ci
 deploy.yml|1|deploy
+playbook.yml|1|playbook
 retire-legacy-origin.yml|1|legacy-retirement
 terraform-apply.yml|1|terraform-apply
 terraform-plan.yml|1|terraform-plan
@@ -1032,6 +1078,7 @@ WORKFLOW_CHECKOUT_INVENTORY
   validate_workflow_permissions_contract "${directory}" || return 1
   validate_terraform_r2_secret_sources "${directory}" || return 1
   validate_deploy_approval_gate "${directory}" || return 1
+  validate_playbook_workflow_contract "${directory}/playbook.yml" || return 1
 }
 
 validate_checkout_steps() {
@@ -1501,7 +1548,7 @@ validate_workflow_permissions_contract() {
   local filename
   local permissions_file
   local workflow_file
-  for filename in deploy.yml retire-legacy-origin.yml terraform-apply.yml terraform-plan.yml; do
+  for filename in deploy.yml playbook.yml retire-legacy-origin.yml terraform-apply.yml terraform-plan.yml; do
     workflow_file="${directory}/${filename}"
     permissions_file="${test_root}/${filename}-permissions.block"
     extract_root_mapping "${workflow_file}" permissions >"${permissions_file}" || {
@@ -1515,6 +1562,9 @@ validate_workflow_permissions_contract() {
     if [[ "${filename}" == "terraform-apply.yml" ]]; then
       require_nonblank_lines "${permissions_file}" \
         "  actions: write" \
+        "  contents: read" || return 1
+    elif [[ "${filename}" == "playbook.yml" ]]; then
+      require_nonblank_lines "${permissions_file}" \
         "  contents: read" || return 1
     else
       require_nonblank_lines "${permissions_file}" \
@@ -1917,7 +1967,7 @@ new_workflow_set_fixture() {
   local directory="${test_root}/workflow-set-${name}"
   mkdir -- "${directory}"
   local filename
-  for filename in ci.yml deploy.yml retire-legacy-origin.yml terraform-apply.yml terraform-plan.yml; do
+  for filename in ci.yml deploy.yml playbook.yml retire-legacy-origin.yml terraform-apply.yml terraform-plan.yml; do
     cp -- "${workflow_dir}/${filename}" "${directory}/${filename}"
   done
   printf '%s\n' "${directory}"
@@ -1949,6 +1999,46 @@ validate_all_workflows "${workflow_dir}" || fail "GitHub Actions workflows do no
 workflow_set="$(new_workflow_set_fixture unexpected-yaml-workflow)"
 cp -- "${workflow_set}/deploy.yml" "${workflow_set}/bypass.yaml"
 assert_invalid_workflow_set "unexpected .yaml workflow" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture missing-playbook-workflow)"
+unlink -- "${workflow_set}/playbook.yml"
+assert_invalid_workflow_set "missing Playbook policy workflow" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture renamed-playbook-workflow)"
+replace_line_once "${workflow_set}/playbook.yml" \
+  "name: Playbook policy" \
+  "name: Playbook policy renamed"
+assert_invalid_workflow_set "renamed Playbook policy workflow" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture playbook-permission-escalation)"
+replace_line_once "${workflow_set}/playbook.yml" \
+  "  contents: read" \
+  "  contents: write"
+assert_invalid_workflow_set "Playbook workflow permission escalation" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture playbook-self-hosted-runner)"
+replace_line_once "${workflow_set}/playbook.yml" \
+  "    runs-on: ubuntu-latest" \
+  "    runs-on: self-hosted"
+assert_invalid_workflow_set "Playbook workflow self-hosted runner" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture playbook-timeout-change)"
+replace_line_once "${workflow_set}/playbook.yml" \
+  "    timeout-minutes: 5" \
+  "    timeout-minutes: 60"
+assert_invalid_workflow_set "Playbook workflow timeout change" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture playbook-validator-bypass)"
+replace_line_once "${workflow_set}/playbook.yml" \
+  "          python3 .fukamu/playbook/validate.py --consumer ." \
+  "          true"
+assert_invalid_workflow_set "Playbook vendored validator bypass" "${workflow_set}"
+
+workflow_set="$(new_workflow_set_fixture playbook-trace-bypass)"
+replace_line_once "${workflow_set}/playbook.yml" \
+  "          node scripts/validate-playbook-config.mjs ." \
+  "          true"
+assert_invalid_workflow_set "Playbook Cycle trace validator bypass" "${workflow_set}"
 
 workflow_set="$(new_workflow_set_fixture renamed-deploy-workflow)"
 replace_line_once "${workflow_set}/deploy.yml" \

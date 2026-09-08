@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 1,
+  "adoptionMode": "normative",
+  "adoptionIssue": "https://github.com/fukamu/cycle/issues/75",
+  "sourceReviewBacklog": "https://github.com/fukamu/product-engineering-playbook/issues/3",
+  "ownership": {
+    "sharedMethods": ".fukamu/playbook/PLAYBOOK.md",
+    "cycleProductContract": "docs/design.md",
+    "repositoryInstructions": "AGENTS.md",
+    "localProcedureOwners": [
+      "docs/closed-beta-admission.md",
+      "docs/database.md",
+      "docs/development.md",
+      "docs/environment.md",
+      "docs/operations.md"
+    ]
+  },
+  "ruleMappings": [
+    {
+      "ruleId": "PE-SOT-001",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "AGENTS.md#Source of Truth",
+        "docs/design.md#0.1 文書の権威"
+      ]
+    },
+    {
+      "ruleId": "PE-SOT-002",
+      "relation": "local-stricter",
+      "localSections": [
+        "AGENTS.md#仕様変更と停止条件",
+        "docs/design.md#52. Change Control / Operational Decisions"
+      ]
+    },
+    {
+      "ruleId": "PE-SOT-003",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#52.6 Current-state document / history policy"
+      ]
+    },
+    {
+      "ruleId": "PE-SOT-004",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-PRJ-001",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-PRJ-002",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-PRJ-003",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-PRJ-004",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-PRJ-005",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-PRJ-006",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-WRK-001",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-WRK-002",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "AGENTS.md#FUKAMU Product Engineering Playbook",
+        "docs/design.md#50.3 Physical organization rules"
+      ]
+    },
+    {
+      "ruleId": "PE-WRK-003",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-WRK-004",
+      "relation": "direct-adoption",
+      "localSections": []
+    },
+    {
+      "ruleId": "PE-WRK-005",
+      "relation": "local-stricter",
+      "localSections": [
+        "AGENTS.md#Verification",
+        "docs/development.md#Commit前の必須gate"
+      ]
+    },
+    {
+      "ruleId": "PE-WRK-006",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "AGENTS.md#作業規則",
+        "docs/design.md#50.4 Generated code"
+      ]
+    },
+    {
+      "ruleId": "PE-TST-001",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#48. Testing Strategy",
+        "docs/development.md#品質チェック"
+      ]
+    },
+    {
+      "ruleId": "PE-TST-002",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#48. Testing Strategy"
+      ]
+    },
+    {
+      "ruleId": "PE-TST-003",
+      "relation": "local-stricter",
+      "localSections": [
+        "docs/design.md#48.2 Test determinism",
+        "docs/development.md#品質チェック"
+      ]
+    },
+    {
+      "ruleId": "PE-TST-004",
+      "relation": "local-stricter",
+      "localSections": [
+        "docs/design.md#48.2 Test determinism",
+        "docs/development.md#品質チェック"
+      ]
+    },
+    {
+      "ruleId": "PE-SEC-001",
+      "relation": "local-stricter",
+      "localSections": [
+        "AGENTS.md#作業規則",
+        "docs/development.md#品質チェック"
+      ]
+    },
+    {
+      "ruleId": "PE-SEC-002",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#41.7 Secret management",
+        "docs/design.md#44.3 CI"
+      ]
+    },
+    {
+      "ruleId": "PE-SEC-003",
+      "relation": "local-stricter",
+      "localSections": [
+        "docs/development.md#Supply-chain固定値の更新"
+      ]
+    },
+    {
+      "ruleId": "PE-SEC-004",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#42.1 Principles",
+        "docs/design.md#42.2 Structured log fields"
+      ]
+    },
+    {
+      "ruleId": "PE-DAT-001",
+      "relation": "local-stricter",
+      "localSections": [
+        "docs/database.md#Test DB",
+        "docs/design.md#41.2 Data isolation"
+      ]
+    },
+    {
+      "ruleId": "PE-DAT-002",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/database.md#Schema変更手順",
+        "docs/database.md#Staging / Production migration"
+      ]
+    },
+    {
+      "ruleId": "PE-DAT-003",
+      "relation": "local-stricter",
+      "localSections": [
+        "AGENTS.md#作業規則",
+        "docs/database.md#ローカルDB reset（破壊的）",
+        "docs/development.md#クリーンアップ"
+      ]
+    },
+    {
+      "ruleId": "PE-DAT-004",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#41.9 Goal Delete",
+        "docs/operations.md#Retention cleanup"
+      ]
+    },
+    {
+      "ruleId": "PE-REL-001",
+      "relation": "local-stricter",
+      "localSections": [
+        "docs/design.md#44.3 CI",
+        "docs/operations.md#Terraform Plan / approved Apply",
+        "docs/operations.md#Manual Staging Deploy approval"
+      ]
+    },
+    {
+      "ruleId": "PE-REL-002",
+      "relation": "local-stricter",
+      "localSections": [
+        "docs/operations.md#Terraform Plan / approved Apply"
+      ]
+    },
+    {
+      "ruleId": "PE-REL-003",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#44.5 Health endpoints",
+        "docs/operations.md#Post-deploy verification"
+      ]
+    },
+    {
+      "ruleId": "PE-REL-004",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/database.md#Destructive migration・rollback・backup",
+        "docs/design.md#44.7 Rollback",
+        "docs/operations.md#Rollback・recovery"
+      ]
+    },
+    {
+      "ruleId": "PE-OPS-001",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#52.2 Operational values",
+        "docs/operations.md#Production readiness・data"
+      ]
+    },
+    {
+      "ruleId": "PE-OPS-002",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/operations.md#Incident first response",
+        "docs/operations.md#Incident record"
+      ]
+    },
+    {
+      "ruleId": "PE-AIF-001",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#32.1 Positioning"
+      ]
+    },
+    {
+      "ruleId": "PE-AIF-002",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#33.4 Versioning",
+        "docs/development.md#AI quality evaluation"
+      ]
+    },
+    {
+      "ruleId": "PE-AIF-003",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#48.2 Test determinism",
+        "docs/development.md#AI quality evaluation"
+      ]
+    },
+    {
+      "ruleId": "PE-AIF-004",
+      "relation": "cycle-concretization",
+      "localSections": [
+        "docs/design.md#32.8 Failure behavior"
+      ]
+    }
+  ]
+}

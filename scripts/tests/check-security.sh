@@ -334,6 +334,19 @@ printf '%s\n' 'plain candidate text' >"${text_policy_fixture}/candidate/plain.tx
 security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
   || fail "approved candidate text fixture was rejected"
 
+mkdir -p -- "${text_policy_fixture}/candidate/.fukamu/playbook"
+printf '%s\n' '#!/usr/bin/env python3' \
+  >"${text_policy_fixture}/candidate/.fukamu/playbook/validate.py"
+security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
+  || fail "exact vendored Playbook validator path was rejected"
+printf '%s\n' '#!/usr/bin/env python3' \
+  >"${text_policy_fixture}/candidate/other.py"
+expect_failure \
+  "unapproved Python candidate path fixture" \
+  security_validate_candidate_text_files \
+  "${text_policy_fixture}/candidate"
+unlink -- "${text_policy_fixture}/candidate/other.py"
+
 printf 'binary\0content\n' >"${text_policy_fixture}/candidate/binary.txt"
 expect_failure \
   "NUL-containing candidate fixture" \
