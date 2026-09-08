@@ -300,6 +300,12 @@ function deletedGoalError(requestId: string) {
   return new APIError(404, "GOAL_NOT_FOUND", "deleted", requestId);
 }
 
+function expectBefore(first: Node, second: Node) {
+  expect(
+    first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).not.toBe(0);
+}
+
 describe("GoalReviewPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -466,6 +472,34 @@ describe("GoalReviewPage", () => {
     expect(terminate).not.toHaveAttribute("aria-describedby");
   });
 
+  it("orders idle Review actions after the Draft and Save state", async () => {
+    renderPage();
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    const saveStatus = await screen.findByText("保存済み");
+    const refine = screen.getByRole("button", { name: "AIで目標を整える" });
+    const note = screen.getByText(
+      `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`,
+    );
+    const continueAction = screen.getByRole("button", {
+      name: "この目標で次のサイクルへ",
+    });
+    const terminal = screen.getByRole("heading", {
+      level: 2,
+      name: "この目標を終える",
+    });
+
+    expectBefore(editor, saveStatus);
+    expectBefore(saveStatus, refine);
+    expectBefore(refine, note);
+    expectBefore(note, continueAction);
+    expectBefore(continueAction, terminal);
+    expect(refine).toBeEnabled();
+    expect(continueAction).toBeEnabled();
+    expect(screen.getByRole("button", { name: "目標を終了" })).toBeEnabled();
+  });
+
   it("keeps Review refinement separate until the user explicitly adopts it", async () => {
     renderPage();
     const editor = await screen.findByRole("textbox", {
@@ -481,7 +515,27 @@ describe("GoalReviewPage", () => {
     expect(adoptReview).not.toHaveBeenCalled();
     expect(saveReview).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "提案を採用" }));
+    const refine = screen.getByRole("button", { name: "AIで目標を整える" });
+    const suggestion = screen.getByRole("heading", { name: "AIからの提案" });
+    const adopt = screen.getByRole("button", { name: "提案を採用" });
+    const note = screen.getByText(
+      `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`,
+    );
+    const continueAction = screen.getByRole("button", {
+      name: "この目標で次のサイクルへ",
+    });
+    const terminal = screen.getByRole("heading", {
+      level: 2,
+      name: "この目標を終える",
+    });
+
+    expectBefore(refine, suggestion);
+    expectBefore(suggestion, adopt);
+    expectBefore(adopt, note);
+    expectBefore(note, continueAction);
+    expectBefore(continueAction, terminal);
+
+    fireEvent.click(adopt);
 
     await waitFor(() =>
       expect(adoptReview).toHaveBeenCalledWith(

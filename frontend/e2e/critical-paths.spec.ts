@@ -130,6 +130,89 @@ async function expectActionGuidanceAtNarrowWidths(
   await assertLayout();
 }
 
+async function expectReviewSuggestionAtNarrowWidths(page: Page) {
+  const assertLayout = async () => {
+    const refine = page.getByRole("button", { name: "AIで目標を整える" });
+    const comparison = page.getByRole("region", { name: "AIからの提案" });
+    const adopt = comparison.getByRole("button", { name: "提案を採用" });
+    const note = page.getByText(/目標を維持してCycle \d+を開始します/);
+    const continueAction = page.getByRole("button", {
+      name: "この目標で次のサイクルへ",
+    });
+    const terminal = page.getByRole("heading", {
+      level: 2,
+      name: "この目標を終える",
+    });
+
+    for (const element of [
+      refine,
+      comparison,
+      adopt,
+      note,
+      continueAction,
+      terminal,
+    ])
+      await expect(element).toBeVisible();
+
+    const layout = await page.locator("main.review-page").evaluate((main) => {
+      const buttons = Array.from(main.querySelectorAll("button"));
+      const button = (label: string) =>
+        buttons.find((candidate) => candidate.textContent?.trim() === label) ??
+        null;
+      const elements = [
+        button("AIで目標を整える"),
+        main.querySelector(".suggestion-panel"),
+        button("提案を採用"),
+        main.querySelector(".next-cycle-note"),
+        button("この目標で次のサイクルへ"),
+        main.querySelector(".terminal-actions"),
+      ];
+      const missing = elements
+        .map((element, index) => (element ? null : index))
+        .filter((index): index is number => index !== null);
+      return {
+        missing,
+        ordered:
+          missing.length === 0 &&
+          elements.slice(0, -1).every((element, index) => {
+            const following = elements[index + 1];
+            return Boolean(
+              element &&
+              following &&
+              element.compareDocumentPosition(following) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+            );
+          }),
+        documentOverflows:
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth,
+      };
+    });
+    expect(layout).toEqual({
+      missing: [],
+      ordered: true,
+      documentOverflows: false,
+    });
+  };
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await assertLayout();
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await assertLayout();
+
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
+}
+
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
 }) => {
@@ -274,6 +357,7 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     ),
   ).toHaveCount(0);
   await expect(page.getByRole("button", { name: "提案を採用" })).toBeEnabled();
+  await expectReviewSuggestionAtNarrowWidths(page);
   const reviewGoal = page.getByRole("textbox", {
     name: "次のサイクルで目指す目標",
   });
