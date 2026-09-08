@@ -555,7 +555,9 @@ describe("GoalWorkspacePage", () => {
       "aria-selected",
       "true",
     );
-    const editor = screen.getByRole("textbox", { name: "D — Do" });
+    const editor = screen.getByRole("textbox", {
+      name: "D — Do",
+    }) as HTMLTextAreaElement;
     await waitFor(() => expect(editor).toHaveFocus());
     expect(editor).toHaveValue("実行");
     expect(saveCycleFrame).not.toHaveBeenCalled();
@@ -620,9 +622,14 @@ describe("GoalWorkspacePage", () => {
       const cache = new QueryClient({
         defaultOptions: { queries: { retry: false, staleTime: Infinity } },
       });
-      renderPage(cache);
+      const advisory = createGoalDeletionAdvisoryHarness();
+      renderPage(cache, { goalDeletionAdvisory: advisory });
 
       await screen.findByText("読み取り専用");
+      fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+      expect(
+        screen.queryByRole("button", { name: "今の実行を記録" }),
+      ).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
 
       expect(
@@ -631,8 +638,308 @@ describe("GoalWorkspacePage", () => {
       for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
         expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
       }
+
+      act(() => advisory.dispatch(session.user.id, goal.id));
+      await screen.findByText("Goal cache削除済み");
+      expect(
+        screen.queryByRole("button", { name: "今の実行を記録" }),
+      ).not.toBeInTheDocument();
     },
   );
+
+  it("adds one browser-local D heading, focuses the end, and uses normal autosave", async () => {
+    mockEchoingCycleSave();
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    expect(
+      screen.queryByRole("button", { name: "今の実行を記録" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: /D\s*Do/ }));
+    const editor = screen.getByRole("textbox", {
+      name: "D — Do",
+    }) as HTMLTextAreaElement;
+    const add = screen.getByRole("button", { name: "今の実行を記録" });
+
+    expect(add).toHaveAttribute("aria-disabled", "false");
+    expect(add).toHaveAccessibleDescription(
+      "この端末の現在時刻をDに追加します。サーバーの基準時刻ではありません。",
+    );
+    fireEvent.click(add);
+    fireEvent.click(add);
+
+    const content = editor.value;
+    expect(content).toMatch(
+      /^【\d{4}\/\d{2}\/\d{2} \d{2}:\d{2} UTC[+-]\d{2}:\d{2}】\n$/,
+    );
+    expect(
+      screen.getByText("同じ日時の見出しはすでに追加されています。"),
+    ).toBeVisible();
+    await waitFor(() => expect(editor).toHaveFocus());
+    expect(editor.selectionStart).toBe(content.length);
+    expect(editor.selectionEnd).toBe(content.length);
+
+    await waitFor(() => expect(putBrowserDraft).toHaveBeenCalledOnce());
+    expect(putBrowserDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: session.user.id,
+        goalId: goal.id,
+        subjectKey: `cycle:${cycle.id}:do`,
+        body: content,
+        baseRevision: 0,
+      }),
+    );
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledOnce(), {
+      timeout: 2_000,
+    });
+    expect(saveCycleFrame).toHaveBeenCalledWith(
+      sessionLease,
+      goal.id,
+      cycle.id,
+      "do",
+      content,
+      0,
+      session.csrfToken,
+      expect.any(AbortSignal),
+    );
+    await waitFor(() => expect(screen.getByText("保存済み")).toBeVisible());
+  });
+
+  it("restores the exact pre-insert D through the same serialized save queue", async () => {
+    const first = deferred<Awaited<ReturnType<typeof saveCycleFrame>>>();
+    const startingCycle = { ...cycle, do: "実行\n末尾の空白 \t" };
+    vi.mocked(getCycle).mockResolvedValue({ cycle: startingCycle });
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(
+        async (_lease, _goalId, _cycleId, frame, body) => ({
+          cycleId: cycle.id,
+          frame,
+          content: body,
+          frameRevision: 2,
+          contentRevision: 2,
+          savedAt: "2026-09-08T00:02:00.000Z",
+        }),
+      );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    const editor = screen.getByRole("textbox", {
+      name: "D — Do",
+    }) as HTMLTextAreaElement;
+    fireEvent.click(screen.getByRole("button", { name: "今の実行を記録" }));
+    const inserted = editor.value;
+    expect(inserted.startsWith(`${startingCycle.do}\n\n【`)).toBe(true);
+    fireEvent.blur(editor);
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledOnce());
+    expect(
+      screen.getByRole("button", { name: "今の実行を記録" }),
+    ).toHaveAttribute("aria-disabled", "false");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "日時の追加を取り消す" }),
+    );
+    expect(editor).toHaveValue(startingCycle.do);
+    expect(
+      screen.queryByRole("button", { name: "日時の追加を取り消す" }),
+    ).not.toBeInTheDocument();
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+
+    await act(async () =>
+      first.resolve({
+        cycleId: cycle.id,
+        frame: "do",
+        content: inserted,
+        frameRevision: 1,
+        contentRevision: 1,
+        savedAt: "2026-09-08T00:01:00.000Z",
+      }),
+    );
+    await waitFor(() =>
+      expect(saveCycleFrame).toHaveBeenNthCalledWith(
+        2,
+        sessionLease,
+        goal.id,
+        cycle.id,
+        "do",
+        startingCycle.do,
+        1,
+        session.csrfToken,
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() => expect(editor).toHaveFocus());
+    expect(editor.selectionStart).toBe(startingCycle.do.length);
+    await waitFor(() => expect(screen.getByText("保存済み")).toBeVisible());
+  });
+
+  it("invalidates quick-entry Undo after manual D input", async () => {
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    const editor = screen.getByRole("textbox", { name: "D — Do" });
+    fireEvent.click(screen.getByRole("button", { name: "今の実行を記録" }));
+    expect(
+      screen.getByRole("button", { name: "日時の追加を取り消す" }),
+    ).toBeVisible();
+
+    fireEvent.change(editor, {
+      target: { value: `${(editor as HTMLTextAreaElement).value}事実` },
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "日時の追加を取り消す" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps D unchanged and explains the exact code-point shortage", async () => {
+    const fullD = "😀".repeat(200);
+    vi.mocked(getCycle).mockResolvedValue({ cycle: { ...cycle, do: fullD } });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    const editor = screen.getByRole("textbox", { name: "D — Do" });
+    fireEvent.click(screen.getByRole("button", { name: "今の実行を記録" }));
+
+    expect(editor).toHaveValue(fullD);
+    expect(
+      screen.getByText(
+        "追加後は231文字になるため、Dをあと31文字減らしてください（上限200文字）。",
+      ),
+    ).toBeVisible();
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+  });
+
+  it("blocks quick entry during D composition and enables it after confirmation", async () => {
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    const editor = screen.getByRole("textbox", { name: "D — Do" });
+    const add = screen.getByRole("button", { name: "今の実行を記録" });
+    fireEvent.compositionStart(editor);
+
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByText("文字の変換を確定してから追加してください。"),
+    ).toBeVisible();
+    fireEvent.pointerDown(add);
+    fireEvent.click(add);
+    expect(editor).toHaveValue("");
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(editor);
+    expect(add).toHaveAttribute("aria-disabled", "false");
+    fireEvent.click(add);
+    expect(editor).not.toHaveValue("");
+  });
+
+  it("blocks quick entry while D browser recovery needs a choice", async () => {
+    const recoveredBody = "この端末に残った実行";
+    vi.mocked(getBrowserDraft).mockImplementation(async (_userId, key) =>
+      key.endsWith(":do")
+        ? {
+            userId: session.user.id,
+            goalId: goal.id,
+            subjectKey: key,
+            body: recoveredBody,
+            baseRevision: 9,
+            updatedAt: "2026-09-08T00:00:00.000Z",
+          }
+        : null,
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /D\s*Do/ }));
+    await screen.findByText("別の更新が見つかりました");
+    const editor = screen.getByRole("textbox", { name: "D — Do" });
+    const add = screen.getByRole("button", { name: "今の実行を記録" });
+
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByText("確認待ちの入力を解決してから追加してください。"),
+    ).toBeVisible();
+    fireEvent.click(add);
+    expect(editor).toHaveValue(recoveredBody);
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+  });
+
+  it("uses a new D edit to resume the existing failed autosave path", async () => {
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockRejectedValueOnce(
+        new APIError(
+          409,
+          "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+          "save failed",
+          "60000000-0000-7000-8000-000000000051",
+        ),
+      )
+      .mockImplementationOnce(
+        async (_lease, _goalId, _cycleId, frame, body) => ({
+          cycleId: cycle.id,
+          frame,
+          content: body,
+          frameRevision: 1,
+          contentRevision: 1,
+          savedAt: "2026-09-08T00:01:00.000Z",
+        }),
+      );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    const editor = screen.getByRole("textbox", { name: "D — Do" });
+    fireEvent.change(editor, { target: { value: "保存に失敗した実行" } });
+    fireEvent.blur(editor);
+    expect(await screen.findByText("保存失敗")).toBeVisible();
+    const add = screen.getByRole("button", { name: "今の実行を記録" });
+    expect(add).toHaveAttribute("aria-disabled", "false");
+
+    fireEvent.click(add);
+
+    const content = (editor as HTMLTextAreaElement).value;
+    expect(content.startsWith("保存に失敗した実行\n\n【")).toBe(true);
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledTimes(2), {
+      timeout: 2_000,
+    });
+    expect(saveCycleFrame).toHaveBeenLastCalledWith(
+      sessionLease,
+      goal.id,
+      cycle.id,
+      "do",
+      content,
+      0,
+      session.csrfToken,
+      expect.any(AbortSignal),
+    );
+  });
 
   it("prioritizes recovery guidance over missing-frame guidance", async () => {
     vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
@@ -1810,6 +2117,18 @@ describe("GoalWorkspacePage", () => {
           ? `/goals/${goal.id}/review`
           : `/goals/${goal.id}/cycles/${currentCycleId}`,
       );
+      fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+      const movedDo = screen.getByRole("textbox", { name: "D — Do" });
+      const quickEntry = screen.getByRole("button", {
+        name: "今の実行を記録",
+      });
+      expect(quickEntry).toHaveAttribute("aria-disabled", "true");
+      expect(
+        screen.getByText("現在の作業を確認してから追加してください。"),
+      ).toBeVisible();
+      fireEvent.click(quickEntry);
+      expect(movedDo).toHaveValue(cycle.do);
+      expect(saveCycleFrame).toHaveBeenCalledOnce();
       fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
       for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
         expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
@@ -3869,6 +4188,23 @@ function cycleRevisionConflict() {
 
 function deletedGoalError(requestId: string) {
   return new APIError(404, "GOAL_NOT_FOUND", "deleted", requestId);
+}
+
+function mockEchoingCycleSave() {
+  let revision = 0;
+  vi.mocked(saveCycleFrame).mockImplementation(
+    async (_lease, _goalId, _cycleId, frame, body) => {
+      revision += 1;
+      return {
+        cycleId: cycle.id,
+        frame,
+        content: body,
+        frameRevision: revision,
+        contentRevision: revision,
+        savedAt: "2026-09-08T00:01:00.000Z",
+      };
+    },
+  );
 }
 
 function deferred<T>() {

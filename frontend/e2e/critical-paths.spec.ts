@@ -1177,6 +1177,40 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   await expect(doTab).toBeFocused();
   await expect(doTab).toHaveAttribute("aria-selected", "true");
 
+  const quickEntry = page.getByRole("button", { name: "今の実行を記録" });
+  await expect(quickEntry).toBeVisible();
+  await expect(
+    page.getByText(
+      "この端末の現在時刻をDに追加します。サーバーの基準時刻ではありません。",
+    ),
+  ).toBeVisible();
+  expect((await quickEntry.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await quickEntry.click();
+  const quickEntryEditor = page.getByRole("textbox", { name: "D — Do" });
+  await expect(quickEntryEditor).toHaveValue(
+    /^【\d{4}\/\d{2}\/\d{2} \d{2}:\d{2} UTC[+-]\d{2}:\d{2}】\n$/,
+  );
+  await expect(quickEntryEditor).toBeFocused();
+  expect(
+    await quickEntryEditor.evaluate((element) => {
+      const editor = element as HTMLTextAreaElement;
+      return (
+        editor.selectionStart === editor.value.length &&
+        editor.selectionEnd === editor.value.length
+      );
+    }),
+  ).toBe(true);
+  await page.getByRole("button", { name: "日時の追加を取り消す" }).click();
+  await expect(quickEntryEditor).toHaveValue("");
+  await expect(page.getByText("保存済み")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+
   await saveFrame(page, "D — Do", "実行".repeat(100), "P");
   await saveFrame(page, "P — Plan", "計画".repeat(100), "C");
   const comparison = page.getByRole("region", {

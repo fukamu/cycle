@@ -47,6 +47,26 @@ export const cycleCheckComparisonCopy = {
   reviewRecovery: (frameLabel: "P" | "D") => `${frameLabel}の入力を確認`,
 } as const;
 
+export const cycleDoQuickEntryCopy = {
+  action: "今の実行を記録",
+  description:
+    "この端末の現在時刻をDに追加します。サーバーの基準時刻ではありません。",
+  undo: "日時の追加を取り消す",
+  duplicate: "同じ日時の見出しはすでに追加されています。",
+  disabled: {
+    composition: "文字の変換を確定してから追加してください。",
+    recovery: "確認待ちの入力を解決してから追加してください。",
+    workspaceMoved: "現在の作業を確認してから追加してください。",
+    commandPending: "サイクルの操作が完了してから追加してください。",
+  },
+  tooLong: (
+    requiredCodePoints: number,
+    excessCodePoints: number,
+    maximumCodePoints: number,
+  ) =>
+    `追加後は${requiredCodePoints}文字になるため、Dをあと${excessCodePoints}文字減らしてください（上限${maximumCodePoints}文字）。`,
+} as const;
+
 export const cycleActionCopy = {
   disabled: {
     commandPending:
