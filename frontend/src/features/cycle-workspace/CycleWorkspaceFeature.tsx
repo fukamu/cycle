@@ -1790,24 +1790,38 @@ function CycleWorkspace({
         </p>
       </header>
       <div className="frame-tabs" role="tablist" aria-label="PDCAフレーム">
-        {frames.map((frame) => (
-          <button
-            key={frame}
-            id={`tab-${frame}`}
-            role="tab"
-            aria-selected={selected === frame}
-            aria-controls="frame-panel"
-            tabIndex={selected === frame ? 0 : -1}
-            onClick={() => selectFrame(frame)}
-            onKeyDown={(event) => handleTabKeyDown(event, frame)}
-          >
-            <span>{frameCopy[frame].label}</span>
-            <small>
-              {frameCopy[frame].name}
-              {recoveryConflicts.has(frame) ? " · 要確認" : ""}
-            </small>
-          </button>
-        ))}
+        {frames.map((frame) => {
+          const tabCopy = frameCopy[frame];
+          const recoveryPending = recoveryConflicts.has(frame);
+          return (
+            <button
+              key={frame}
+              id={`tab-${frame}`}
+              role="tab"
+              aria-label={`${tabCopy.label} ${tabCopy.name}${
+                recoveryPending ? " 要確認" : ""
+              }`}
+              aria-selected={selected === frame}
+              aria-controls="frame-panel"
+              tabIndex={selected === frame ? 0 : -1}
+              onClick={() => selectFrame(frame)}
+              onKeyDown={(event) => handleTabKeyDown(event, frame)}
+            >
+              <span className="frame-tabs__label" aria-hidden="true">
+                {tabCopy.label}
+              </span>
+              <small className="frame-tabs__details" aria-hidden="true">
+                <span className="frame-tabs__name">{tabCopy.name}</span>
+                {recoveryPending && (
+                  <>
+                    <span className="frame-tabs__separator"> · </span>
+                    <span className="frame-tabs__recovery">要確認</span>
+                  </>
+                )}
+              </small>
+            </button>
+          );
+        })}
       </div>
       <section
         id="frame-panel"

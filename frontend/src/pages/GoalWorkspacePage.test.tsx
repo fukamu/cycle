@@ -2689,6 +2689,51 @@ describe("GoalWorkspacePage", () => {
     expect(doTab).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(doTab).toHaveFocus());
     expect(screen.getByRole("textbox", { name: "D — Do" })).toBeInTheDocument();
+
+    fireEvent.keyDown(doTab, { key: "End" });
+    const actionTab = screen.getByRole("tab", { name: "A Action" });
+    expect(actionTab).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(actionTab).toHaveFocus());
+
+    fireEvent.keyDown(actionTab, { key: "Home" });
+    expect(planTab).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(planTab).toHaveFocus());
+
+    fireEvent.keyDown(planTab, { key: "ArrowLeft" });
+    expect(actionTab).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(actionTab).toHaveFocus());
+  });
+
+  it("keeps full tab names and marks an unselected recovery conflict", async () => {
+    vi.mocked(getBrowserDraft).mockImplementation(async (_userId, key) =>
+      key.endsWith(":do")
+        ? {
+            userId: session.user.id,
+            goalId: goal.id,
+            subjectKey: key,
+            body: "この端末に残った実行",
+            baseRevision: 9,
+            updatedAt: "2026-09-08T00:00:00.000Z",
+          }
+        : null,
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const recoveryTab = await screen.findByRole("tab", {
+      name: "D Do 要確認",
+    });
+
+    expect(screen.getByRole("tab", { name: "P Plan" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("tab", { name: "C Check" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "A Action" })).toBeInTheDocument();
+    expect(recoveryTab).toHaveAttribute("aria-selected", "false");
+    expect(within(recoveryTab).getByText("要確認")).toBeVisible();
   });
 
   it("preserves Action and re-enables refinement after AI failure", async () => {
