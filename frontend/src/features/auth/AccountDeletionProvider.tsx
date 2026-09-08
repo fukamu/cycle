@@ -3,6 +3,7 @@ import { useCallback, useRef, type PropsWithChildren } from "react";
 import { deleteAccount } from "../../shared/api/account";
 import { usePostCommitCleanup } from "../../shared/cleanup/postCommitCleanupContext";
 import { clearUserDrafts } from "../../shared/drafts/browserDraftCache";
+import { clearSelectedCycleFrames } from "../../shared/preferences/selectedFramePreference";
 import {
   AccountDeletionContext,
   usePublishAccountDeletionAdvisory,
@@ -39,6 +40,7 @@ export function AccountDeletionProvider({
           { isCurrent: () => sessionOwnership.isCurrent() },
           async () => {
             await deleteAccount(lease, currentSession.csrfToken);
+            clearSelectedCycleFrames();
             publishAccountDeletion(currentSession.user.id);
             return true as const;
           },
@@ -50,6 +52,7 @@ export function AccountDeletionProvider({
           expectedUserId: currentSession.user.id,
           sessionOwnership,
           cleanup: async () => {
+            clearSelectedCycleFrames();
             await clearUserDrafts(currentSession.user.id);
             publishAccountDeletion(currentSession.user.id);
           },

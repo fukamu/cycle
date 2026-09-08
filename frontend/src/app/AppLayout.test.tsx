@@ -17,6 +17,10 @@ import {
   usePostCommitCleanup,
   type PostCommitSessionOperationRunner,
 } from "../shared/cleanup/postCommitCleanupContext";
+import {
+  readSelectedCycleFrame,
+  rememberSelectedCycleFrame,
+} from "../shared/preferences/selectedFramePreference";
 import { AppLayout, RouteHeadingFocusProvider } from "./AppLayout";
 
 function SamePathPage() {
@@ -252,6 +256,43 @@ const runCurrentSessionOperation: PostCommitSessionOperationRunner = async (
 ) => operation(() => true);
 
 describe("AppLayout", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("resets only the displayed Cycle when the Header logo opens Home", async () => {
+    const currentCycleId = "40000000-0000-7000-8000-000000000001";
+    const otherCycleId = "40000000-0000-7000-8000-000000000002";
+    rememberSelectedCycleFrame(currentCycleId, "do");
+    rememberSelectedCycleFrame(otherCycleId, "check");
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          `/goals/20000000-0000-7000-8000-000000000001/cycles/${currentCycleId}`,
+        ]}
+      >
+        <RouteHeadingFocusProvider>
+          <Routes>
+            <Route element={<AppLayout />}>
+              <Route path="/" element={<p>ホーム本文</p>} />
+              <Route
+                path="/goals/:goalId/cycles/:cycleId"
+                element={<p>Cycle本文</p>}
+              />
+            </Route>
+          </Routes>
+        </RouteHeadingFocusProvider>
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(
+      screen.getByRole("link", { name: "FUKAMU Cycle ホーム" }),
+    );
+
+    expect(await screen.findByText("ホーム本文")).toBeInTheDocument();
+    expect(readSelectedCycleFrame(currentCycleId, "active")).toBe("plan");
+    expect(readSelectedCycleFrame(otherCycleId, "active")).toBe("check");
+  });
+
   it("opens an accessible menu with goal history and settings", async () => {
     const user = userEvent.setup();
     render(

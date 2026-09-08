@@ -12,6 +12,7 @@ import { flushSync } from "react-dom";
 import type { Session } from "../../shared/api/schemas";
 import type { SessionRecoverySubscription } from "../../shared/api/sessionRecoveryEvents";
 import type { AutoSaveScopeRegistry } from "../../shared/autosave/AutoSaveScopeProvider";
+import { clearSelectedCycleFrames } from "../../shared/preferences/selectedFramePreference";
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
 import type {
   PublishSession,
@@ -142,7 +143,13 @@ export function useSessionPublicationController({
         queryClient.removeQueries({ queryKey: oldUserQueryRoot });
       }
       queryClient.getMutationCache().clear();
-      return commitPublishedSession(nextSession, false, publicationIsCurrent);
+      const committed = commitPublishedSession(
+        nextSession,
+        false,
+        publicationIsCurrent,
+      );
+      if (committed) clearSelectedCycleFrames();
+      return committed;
     },
     [
       autoSaveScopes,

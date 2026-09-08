@@ -100,6 +100,11 @@ import {
   createDoQuickEntry,
   formatDoQuickEntryHeader,
 } from "./model/doQuickEntry";
+import {
+  forgetSelectedCycleFrame,
+  readSelectedCycleFrame,
+  rememberSelectedCycleFrame,
+} from "../../shared/preferences/selectedFramePreference";
 
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
 type Values = Record<Frame, string>;
@@ -320,7 +325,9 @@ function CycleWorkspace({
     check: initial.check,
     action: initial.action,
   });
-  const [selected, setSelected] = useState<Frame>("plan");
+  const [selected, setSelected] = useState<Frame>(() =>
+    readSelectedCycleFrame(initial.id, initial.status),
+  );
   const [recoveryConflicts, setRecoveryConflicts] = useState<
     ReadonlyMap<Frame, BrowserDraft>
   >(new Map());
@@ -704,6 +711,7 @@ function CycleWorkspace({
           canonicalCycle.id !== cycle.id ||
           canonicalCycle.status !== "active"
         ) {
+          forgetSelectedCycleFrame(cycle.id);
           const nextMovedWorkspace: MovedWorkspace = {
             currentWorkspace: canonicalWorkspace,
           };
@@ -1082,6 +1090,7 @@ function CycleWorkspace({
   }
 
   function selectFrame(frame: Frame) {
+    if (editable) rememberSelectedCycleFrame(cycle.id, frame);
     if (frame === selected) return;
     flush(selected);
     if (selected === "do") {
@@ -1295,12 +1304,13 @@ function CycleWorkspace({
   const fenceDeletedGoalEditor = useCallback(() => {
     if (deletedFenceStartedRef.current) return;
     deletedFenceStartedRef.current = true;
+    forgetSelectedCycleFrame(cycle.id);
     commandRecoveryEpochRef.current += 1;
     freezeCycleWorkspace(
       { currentWorkspace: null, href: "/", recovery: "deleted" },
       { preserveUnsaved: false },
     );
-  }, [freezeCycleWorkspace]);
+  }, [cycle.id, freezeCycleWorkspace]);
   useGoalDeletionEditorFence(fenceDeletedGoalEditor);
   markDeletedGoalRef.current = markDeletedGoal;
 
@@ -1329,6 +1339,9 @@ function CycleWorkspace({
           return;
         const canonicalGoal = cacheGoal(cache, userId, latestGoal.goal);
         const currentWorkspace = canonicalGoal.currentWork;
+        let currentCycleStillActive =
+          currentWorkspace?.kind === "active_cycle" &&
+          currentWorkspace.cycleId === cycle.id;
         if (currentWorkspace?.kind === "active_cycle") {
           const latestCycle = await getCycle(
             sessionLease,
@@ -1338,6 +1351,8 @@ function CycleWorkspace({
           );
           if (!isActivePage() || commandRecoveryEpochRef.current !== epoch)
             return;
+          currentCycleStillActive =
+            currentCycleStillActive && latestCycle.cycle.status === "active";
           cache.setQueryData<{ readonly cycle: Cycle }>(
             userQueryKeys.cycle(userId, goal.id, currentWorkspace.cycleId),
             (current) => ({
@@ -1351,6 +1366,7 @@ function CycleWorkspace({
         });
         if (!isActivePage() || commandRecoveryEpochRef.current !== epoch)
           return;
+        if (!currentCycleStillActive) forgetSelectedCycleFrame(cycle.id);
         const ready: MovedWorkspace = {
           currentWorkspace,
           href: `/goals/${goal.id}`,
@@ -1384,6 +1400,7 @@ function CycleWorkspace({
     [
       cache,
       captureRouteOwnership,
+      cycle.id,
       goal.id,
       isActivePage,
       markDeletedGoal,
@@ -1402,6 +1419,7 @@ function CycleWorkspace({
     else if (command === "terminate") terminateOperation.abandon();
     else deleteOperation.abandon();
     if (isGoalNotFound(cause)) {
+      forgetSelectedCycleFrame(cycle.id);
       markDeletedGoal(routeOwnership);
       return true;
     }
@@ -1598,6 +1616,11 @@ function CycleWorkspace({
             },
           ),
       );
+      const currentCycleStillActive =
+        !("goal" in result) &&
+        result.currentWorkspace?.kind === "active_cycle" &&
+        result.currentWorkspace.cycleId === cycle.id;
+      if (!currentCycleStillActive) forgetSelectedCycleFrame(cycle.id);
       if (!isActivePage()) return;
       void runPostCommitCleanup({
         expectedUserId: userId,
@@ -1680,6 +1703,7 @@ function CycleWorkspace({
             { id: cycle.id, revision: expectedContentRevision },
           ),
       );
+      forgetSelectedCycleFrame(cycle.id);
       if (!isActivePage()) return;
       void runPostCommitCleanup({
         expectedUserId: userId,
@@ -1727,6 +1751,7 @@ function CycleWorkspace({
             csrfToken: session.csrfToken,
           }),
       );
+      forgetSelectedCycleFrame(cycle.id);
       markDeletedGoal(routeOwnership);
     } catch (cause) {
       if (isGoalNotFound(cause)) {

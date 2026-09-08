@@ -4055,11 +4055,13 @@ Frontend routingだけに依存せず、各APIもstatus invariantを検証する
 
 ## 29.6 Selected Frame persistence
 
-Active Cycleで選択中のP/D/C/Aは`localStorage`へ`cycleId + frame`だけ保存してよい。本文は保存しない。
+Active Cycleで選択中のP/D/C/Aは、versioned prefixとCycle IDから成るCycle別`localStorage` keyへ、Frameだけをvalueとして保存してよい。複数のProgressing Goalを往復した場合も、same Active Cycleごとに選択Frameを復元する。Goal本文、P/D/C/A本文、User ID、Goal ID、timestamp、revision、telemetryは保存しない。
 
-- same Active Cycle時だけ復元。
-- new Cycle / invalid valueではP。
-- Header logoからGoal workspaceへ戻る場合はPを選択。
+- same Active Cycleかつ有効なP/D/C/Aだけ復元する。new Cycle、Completed / Canceled Cycle、invalid / malformed value、storage利用不能時はPを選択する。
+- Header logoからHomeへ戻る場合は、表示中Active Cycleのkeyを削除し、次のGoal workspace表示ではPを選択する。browser back / forwardと通常の同一Cycle再訪では削除しない。
+- Cycle完了、Goal終了・削除では該当Cycleのkeyを削除する。Account削除またはUser切替では全selected Frame keyを削除する。
+- Home取得成功時は、そのUserのcurrent Active Cycle ID集合に含まれないkeyを削除する。これにより別tab・別端末でCycleがterminal化したstale keyも次のHome表示へ収束させる。
+- TTLやidentity metadataは追加しない。read / write / remove / reconciliation失敗はFrame移動、Cycle / Goal / Accountの確定処理を妨げず、次回はPへのfallbackまたは再reconciliationとする。
 
 ## 29.7 Goal Refine UX
 
