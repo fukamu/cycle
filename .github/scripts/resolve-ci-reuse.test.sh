@@ -647,6 +647,11 @@ assert_fallback deleted_head_control_plane valid control valid valid none none p
 assert_head_pulls_not_called
 for control_path in \
   .github/workflows/ci.yml \
+  .fukamu/playbook/PLAYBOOK.md \
+  .fukamu/playbook/config.json \
+  .fukamu/playbook/lock.json \
+  .fukamu/playbook/overrides.json \
+  .fukamu/playbook/validate.py \
   cloudflare/src/config/deployment-contract.test.mjs \
   .gitattributes \
   scripts/check-security.sh \

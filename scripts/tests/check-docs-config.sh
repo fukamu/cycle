@@ -47,16 +47,84 @@ assert_last_failure_excludes() {
 
 copy_gate_scripts() {
   local fixture="$1"
-  mkdir -p -- "${fixture}/scripts/lib"
+  mkdir -p -- "${fixture}/scripts/lib" "${fixture}/scripts/tests"
   cp -- "${repo_root}/.gitignore" "${fixture}/.gitignore"
   cp -- "${repo_root}/scripts/lib/common.sh" "${fixture}/scripts/lib/common.sh"
+  cp -- "${repo_root}/scripts/lib/security-tools.sh" "${fixture}/scripts/lib/security-tools.sh"
   cp -- \
     "${repo_root}/scripts/lib/docs-config-candidate-snapshot.sh" \
     "${fixture}/scripts/lib/docs-config-candidate-snapshot.sh"
   cp -- "${repo_root}/scripts/check-docs.sh" "${fixture}/scripts/check-docs.sh"
   cp -- "${repo_root}/scripts/check-docs.mjs" "${fixture}/scripts/check-docs.mjs"
   cp -- "${repo_root}/scripts/check-config-parity.sh" "${fixture}/scripts/check-config-parity.sh"
-  chmod +x "${fixture}/scripts/check-docs.sh" "${fixture}/scripts/check-config-parity.sh"
+  cp -- "${repo_root}/scripts/check-security.sh" "${fixture}/scripts/check-security.sh"
+  cp -- "${repo_root}/scripts/tests/run.sh" "${fixture}/scripts/tests/run.sh"
+  cp -- \
+    "${repo_root}/scripts/check-playbook-adoption.sh" \
+    "${repo_root}/scripts/validate-playbook-config.mjs" \
+    "${fixture}/scripts/"
+  chmod +x \
+    "${fixture}/scripts/check-docs.sh" \
+    "${fixture}/scripts/check-config-parity.sh" \
+    "${fixture}/scripts/check-playbook-adoption.sh" \
+    "${fixture}/scripts/validate-playbook-config.mjs"
+}
+
+install_playbook_fixture() {
+  local fixture="$1"
+  local target
+  mkdir -p -- "${fixture}/.fukamu/playbook" "${fixture}/.github/workflows" "${fixture}/docs"
+  cp -- \
+    "${repo_root}/.fukamu/playbook/PLAYBOOK.md" \
+    "${repo_root}/.fukamu/playbook/config.json" \
+    "${repo_root}/.fukamu/playbook/lock.json" \
+    "${repo_root}/.fukamu/playbook/overrides.json" \
+    "${repo_root}/.fukamu/playbook/validate.py" \
+    "${fixture}/.fukamu/playbook/"
+  node -e '
+    const fs = require("node:fs");
+    const path = process.argv[1];
+    const config = JSON.parse(fs.readFileSync(path, "utf8"));
+    config.ruleMappings = config.ruleMappings.map(({ ruleId }) => ({
+      ruleId,
+      relation: "direct-adoption",
+      localSections: [],
+    }));
+    fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+  ' "${fixture}/.fukamu/playbook/config.json"
+  cp -- \
+    "${repo_root}/.github/workflows/playbook.yml" \
+    "${fixture}/.github/workflows/playbook.yml"
+  if [[ ! -f "${fixture}/AGENTS.md" ]]; then
+    printf '%s\n' \
+      '# Fixture repository instructions' \
+      '.fukamu/playbook/PLAYBOOK.md .fukamu/playbook/config.json .fukamu/playbook/lock.json .fukamu/playbook/overrides.json PE-WRK-002' \
+      >"${fixture}/AGENTS.md"
+  fi
+  if [[ ! -f "${fixture}/README.md" ]]; then
+    printf '%s\n' \
+      '# Fixture' \
+      '[Playbook](.fukamu/playbook/PLAYBOOK.md) [config](.fukamu/playbook/config.json) [lock](.fukamu/playbook/lock.json) [overrides](.fukamu/playbook/overrides.json)' \
+      >"${fixture}/README.md"
+  fi
+  for target in \
+    'docs/closed-beta-admission.md' \
+    'docs/database.md' \
+    'docs/design.md' \
+    'docs/development.md' \
+    'docs/environment.md' \
+    'docs/operations.md'; do
+    if [[ ! -f "${fixture}/${target}" ]]; then
+      if [[ "${target}" == 'docs/design.md' ]]; then
+        printf '%s\n' \
+          '# Fixture docs/design.md' \
+          '.fukamu/playbook/PLAYBOOK.md PE-WRK-002' \
+          >"${fixture}/${target}"
+      else
+        printf '# Fixture %s\n' "${target}" >"${fixture}/${target}"
+      fi
+    fi
+  done
 }
 
 initialize_candidate_fixture() {
@@ -168,8 +236,18 @@ new_docs_fixture() {
   printf '%s\n' \
     '# Repository instructions' \
     '' \
-    '## 仕様変更と停止条件' >"${fixture}/AGENTS.md"
+    '## 仕様変更と停止条件' \
+    '' \
+    '.fukamu/playbook/PLAYBOOK.md .fukamu/playbook/config.json .fukamu/playbook/lock.json .fukamu/playbook/overrides.json PE-WRK-002' \
+    >"${fixture}/AGENTS.md"
   write_valid_design_trace "${fixture}"
+  printf '%s\n' \
+    '[Playbook](.fukamu/playbook/PLAYBOOK.md)' \
+    '[config](.fukamu/playbook/config.json)' \
+    '[lock](.fukamu/playbook/lock.json)' \
+    '[overrides](.fukamu/playbook/overrides.json)' \
+    >>"${fixture}/README.md"
+  install_playbook_fixture "${fixture}"
   initialize_candidate_fixture "${fixture}"
   printf '%s\n' "${fixture}"
 }
@@ -180,6 +258,7 @@ write_valid_design_trace() {
   # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
   printf '%s\n' \
     '# Design fixture' \
+    '.fukamu/playbook/PLAYBOOK.md PE-WRK-002' \
     '' \
     '## 0.1 文書の権威' \
     '' \
@@ -220,7 +299,10 @@ enable_operational_documentation_topology() {
   printf '%s\n' \
     '# Repository instructions' \
     '' \
-    '## 仕様変更と停止条件' >"${fixture}/AGENTS.md"
+    '## 仕様変更と停止条件' \
+    '' \
+    '.fukamu/playbook/PLAYBOOK.md .fukamu/playbook/config.json .fukamu/playbook/lock.json .fukamu/playbook/overrides.json PE-WRK-002' \
+    >"${fixture}/AGENTS.md"
   write_valid_design_trace "${fixture}"
   for target in \
     'docs/closed-beta-admission.md' \
@@ -669,7 +751,9 @@ test_docs_gate() {
     || fail "documentation gate rejected a complete legacy design trace"
 
   fixture="$(new_docs_fixture missing-design-trace)"
-  printf '%s\n' '# Design fixture without a trace' \
+  printf '%s\n' \
+    '# Design fixture without a trace' \
+    '.fukamu/playbook/PLAYBOOK.md PE-WRK-002' \
     >"${fixture}/docs/design.md"
   assert_failure_contains "missing design legacy trace" \
     "DESIGN_LEGACY_TRACE_MISSING" \
@@ -748,6 +832,7 @@ new_config_fixture() {
     "${repo_root}/scripts/write-staging-rollout-evidence.mjs" \
     "${fixture}/scripts/"
   cp -- "${repo_root}/scripts/validate-deploy-inputs.mjs" "${fixture}/scripts/validate-deploy-inputs.mjs"
+  install_playbook_fixture "${fixture}"
   initialize_candidate_fixture "${fixture}"
   printf '%s\n' "${fixture}"
 }

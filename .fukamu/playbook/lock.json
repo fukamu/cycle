@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "source": "fukamu/product-engineering-playbook",
+  "version": "0.1.0",
+  "revision": "670dce251dc72b45c647950c15466b3570e0071a",
+  "tagSignerFingerprint": "021197A6B3877512E7B708CA8538108E74DEE186",
+  "bundlePath": ".fukamu/playbook/PLAYBOOK.md",
+  "bundleSha256": "af29392a61da4bee622b7eb2cbe22c741cf0d4b846424afe359b5e001b654e5d",
+  "validatorPath": ".fukamu/playbook/validate.py",
+  "validatorSha256": "940668f021442a3fcb27a3db932da4f96aa35fab3ed00c5e3dfc67c934eab6b8"
+}

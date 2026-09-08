@@ -1,6 +1,6 @@
 # ローカル開発
 
-この文書はローカル開発手順の Source of Truth です。アプリケーション要件・仕様・設計は [`design.md`](design.md) が上位です。環境変数の全項目は [`environment.md`](environment.md)、DB固有の運用は [`database.md`](database.md) を参照してください。
+この文書はCycle固有のローカル開発手順の Source of Truth です。共通の作業方法は [FUKAMU Product Engineering Playbook](../.fukamu/playbook/PLAYBOOK.md)、アプリケーション要件・仕様・設計は [`design.md`](design.md) が上位です。環境変数の全項目は [`environment.md`](environment.md)、DB固有の運用は [`database.md`](database.md) を参照してください。
 
 ## 前提環境
 
@@ -31,6 +31,24 @@ GitHub Actionsの外部Actionは完全な40文字commit SHAと同じ行のsemant
 `.github/dependabot.yml`はGitHub Actionsを月曜、Dockerfileを火曜、Docker Composeを水曜の05:00（Asia/Tokyo）に週次確認します。GitHub ActionsとDocker Composeはecosystemごとの全version updateを1つのPRへまとめます。Dockerfile imageはgroupingせず、dependency単位のversion update PRとして1件ずつreviewします。各ecosystemの`open-pull-requests-limit: 1`はversion updateの同時open上限であり、別枠のsecurity updateを抑止しません。PRではupstream release/tagと変更履歴を確認し、ActionのSHAとversion comment、またはimageのtagとdigestを同じ変更で更新して全gateを通します。障害時も固定自体を外さず、直前に確認済みのSHAまたはtag/digest組へreviewed commitで戻します。
 
 `docker://`形式のActionはDependabotの更新対象外です。Actionlintのrelease確認、workflow参照、`scripts/lib/tool-images.sh`の対応値は手動で同じPRへ更新し、policy fixtureとsecurity gateでdriftを拒否します。
+
+## Product Engineering Playbookの検証・更新
+
+共通の作業方法は [vendored Playbook](../.fukamu/playbook/PLAYBOOK.md)、採用revision・署名者fingerprint・hashは [lock](../.fukamu/playbook/lock.json)、Cycleのowner境界と全rule traceは [config](../.fukamu/playbook/config.json)、期限付き例外は [overrides](../.fukamu/playbook/overrides.json) が所有します。`config.json`は各ruleを、local再定義を持たない`direct-adoption`、Cycle固有の手順・値へ具体化する`cycle-concretization`、Playbookより厳しい制約を加える`local-stricter`のいずれかへ分類し、後二者では実在する正確なMarkdown headingを示します。通常のlocal / CI gateは外部repositoryへ接続せず、次で同じcandidateのvendored bytes、empty overrides、trace、workflowと既存required gateへの配線を検証します。
+
+```bash
+./scripts/check-playbook-adoption.sh
+```
+
+Playbookの導入・更新時は通常checkに加え、中央repositoryをpartial/shallow optionなしで新しい一時directoryへcloneし、source-backed modeを実行します。このmodeはself-containedなGit object graph、approved origin、repository-localな署名helper設定の不在、署名付きversion tagから40桁revisionへの解決、承認済み署名者fingerprintを確認します。さらに中央commitのblobを新しい一時fileへ`trusted_git show`で取り出し、candidate validatorへ委譲せず、中央・vendored `PLAYBOOK.md` / `validate.py`・lock hashの三者一致をfail closedで確認します。既存の不明なclone、working repository内のdirectory、`--depth`、`--filter`を使いません。
+
+```bash
+git clone https://github.com/fukamu/product-engineering-playbook.git /tmp/fukamu-product-engineering-playbook-v0.1.0
+./scripts/check-playbook-adoption.sh \
+  --source-repository /tmp/fukamu-product-engineering-playbook-v0.1.0
+```
+
+更新PRでは、中央diffとrule IDの追加・変更・削除をreviewし、vendored bundle、validator、lock、overrides、config trace、影響するCycle consumerを同じ変更へ含めます。中央`main`、floating tag、短縮SHAをlockへ入れません。共通方法とCycle固有contractのowner境界またはrequired verificationが変わる場合は、先に[`design.md` §52](design.md#52-change-control--operational-decisions)の仕様変更手順へ戻ります。
 
 ## Dockerによるローカル実機確認
 
@@ -251,7 +269,7 @@ CI全体の既定権限は`contents: read`だけです。GitHub APIで再利用�
 
 Manual Terraform PlanとDeployはAPI応答のschemaと非paginationをfail-closedに確認し、同一repository・main・commitのexactな`CI` workflow path/nameを持つcompleted/success `push` runだけを受け入れます。PR run、forkの`main` branch、別workflow、曖昧または101件以上の応答は成功CIとして扱いません。
 
-直接push、複数・不明な関連PR、空のrun関連PRをhead commitから対象PRへ一意に補強できない場合、base更新後にPR CIを再実行せずmergeした場合、API障害・schemaや件数の曖昧さ、artifact欠落・期限切れ・重複・破損、job不一致、tree不一致では再利用せず、mainで全CIを実行します。PRの変更fileを100件以内で全件照合できない場合もfallbackします。また`.github/`、`scripts/`、package/workspace manifestとlockfile、test・lint・build設定、secret scanやconfiguration gateのpolicy fileなどCIの信頼境界自体を変更したPRは、attestationがあっても再利用せずmainの新しい制御面で全CIを実行します。そのためresolver自身を変更したmerge直後はfull CIが正しく、再利用経路の実運用確認は後続の非control-plane PRで行います。高速化のためにこのfail-safe fallbackやtree完全一致を緩和してはいけません。
+直接push、複数・不明な関連PR、空のrun関連PRをhead commitから対象PRへ一意に補強できない場合、base更新後にPR CIを再実行せずmergeした場合、API障害・schemaや件数の曖昧さ、artifact欠落・期限切れ・重複・破損、job不一致、tree不一致では再利用せず、mainで全CIを実行します。PRの変更fileを100件以内で全件照合できない場合もfallbackします。また`.github/`、`.fukamu/playbook/`、`scripts/`、package/workspace manifestとlockfile、test・lint・build設定、secret scanやconfiguration gateのpolicy fileなどCIの信頼境界自体を変更したPRは、attestationがあっても再利用せずmainの新しい制御面で全CIを実行します。そのためresolver自身を変更したmerge直後はfull CIが正しく、再利用経路の実運用確認は後続の非control-plane PRで行います。高速化のためにこのfail-safe fallbackやtree完全一致を緩和してはいけません。
 
 ## 開発時troubleshooting
 

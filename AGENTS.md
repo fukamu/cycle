@@ -2,9 +2,24 @@
 
 このfileはrepository全体に適用します。
 
+## FUKAMU Product Engineering Playbook
+
+Repositoryを変更する前に、このfileを入口として次の順に確認します。
+
+1. [vendored Product Engineering Playbook](.fukamu/playbook/PLAYBOOK.md)
+2. [local override一覧](.fukamu/playbook/overrides.json)
+3. [adoption lock](.fukamu/playbook/lock.json)と[local trace config](.fukamu/playbook/config.json)
+4. 下記のCycle固有Source of Truth
+
+採用version、40桁revision、署名者fingerprint、vendored bytesのSHA-256は[lock](.fukamu/playbook/lock.json)、全rule IDからCycleの既存consumerへのrelation・正確なsection traceとowner境界は[config](.fukamu/playbook/config.json)に固定します。Playbookはプロダクトを問わない進行・協業・品質・安全・releaseの方法を所有し、`docs/design.md`はCycle固有のProduct / Application contract、専門文書はCycle固有のprocedureとEnvironment値を所有します。`overrides.json`は空であり、Cycleはv0.1.0を例外なく採用します。
+
+Vendored `PLAYBOOK.md`と`validate.py`を手編集しません。更新時は同じ中央source revisionから両方を置換し、lock、overrides、config trace、影響するlocal consumerを同じPull Requestで整合し、[`docs/development.md`](docs/development.md#product-engineering-playbookの検証更新)のsource-backed検証を完走します。
+
+Playbookの`PE-WRK-002`に従い、git repositoryのfileを変更する作業は、最新の適切なbaseから作成した作業専用branchと作業専用git worktreeで行います。共有checkout、`main`、他processのworktreeを直接変更しません。
+
 ## Source of Truth
 
-アプリケーション要件・仕様・設計の最上位Source of Truthは [`docs/design.md`](docs/design.md) です。実装都合で仕様を変更してはいけません。
+Cycle固有のアプリケーション要件・仕様・設計の最上位Source of Truthは [`docs/design.md`](docs/design.md) です。実装都合で仕様を変更してはいけません。共通の作業方法は上記Playbookを正とし、Cycle固有contractと責任範囲を重ねません。
 
 | テーマ                                              | 参照先                                                       |
 | --------------------------------------------------- | ------------------------------------------------------------ |
@@ -32,13 +47,10 @@
 - 既存仕様の意味を変える恒久的な仕様変更は、Product Ownerが理由・影響・選択肢を明示して承認した場合に限り、`docs/design.md`のcanonical ownerをcodeより前または同一Pull Requestで更新できる。承認前は該当変更を停止する。
 - 既存仕様の意味を変えない整合修正は、他sectionと矛盾せず、影響範囲を確認できる場合だけ`docs/design.md`を更新できる。
 - 実装に合わせるため、矛盾を隠すため、または不明確な仕様を推測で確定するために `docs/design.md` を変更しない。
-- 既存仕様同士の矛盾、既存仕様への違反、security/data retention/auth/permission/production上の重要な判断不能、影響範囲不明を発見したら、該当する実装・script・config・文書変更を停止する。
-- 停止時は `docs/design.md` も変更せず、関連仕様、問題、影響、停止した変更、user判断が必要な選択肢を具体的に報告する。
-- 安全に独立して進められる無関係な作業まで停止する必要はない。
 
 ## 作業規則
 
-- 作業開始時に`git status`と関連code/config/test/docsを確認し、userの未commit変更を削除・上書き・混入しない。
+- すべてのrepository変更で`PE-WRK-002`の専用branch / worktree境界を維持する。
 - Secret、credential、private key、production dataをcommit・log・文書・test fixtureへ入れない。Clientへ出せるのは明示された`VITE_`公開値だけ。
 - `.env`をBackendが暗黙loadする前提にしない。Local Bashでは `source ./scripts/import-env.sh` を使う。
 - 通常cleanとdata削除を分離する。`scripts/clean.sh`へDB、Docker volume、environment file、browser dataの削除を追加しない。
@@ -63,4 +75,4 @@
 
 Host tool不足で一部checkを実行できない場合は、実行できたcheck、未実行のcheck、理由を明記してください。ただし、Commit前の必須gateを完走できない場合はcommitしてはいけません。Data消失やproduction変更を伴う操作をvalidationのために実行してはいけません。
 
-Commit前に`./scripts/check-before-commit.sh`を完走し、成功後はindexとworking treeを変えずにcommitします。変更した場合は全gateを再実行します。加えてSecret/旧仕様の混入を確認し、意味のある単位でcommitします。Force pushや既存履歴の書き換えを行いません。詳細は[`docs/development.md`](docs/development.md)を参照します。
+Commit前に`./scripts/check-before-commit.sh`を完走し、成功後はindexとworking treeを変えずにcommitします。変更した場合は全gateを再実行します。加えてSecret/旧仕様の混入を確認し、意味のある単位でcommitします。詳細は[`docs/development.md`](docs/development.md)を参照します。

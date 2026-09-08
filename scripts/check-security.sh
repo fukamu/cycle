@@ -165,6 +165,14 @@ if ! security_run_gitleaks_normalized_text "${repo_root}" history "${gitleaks_co
   die "Normalized history secret scan failed or found a secret; raw scanner metadata is suppressed."
 fi
 
+# The playbook validator is candidate-controlled executable code, so run it
+# only after every history/staged/candidate secret view has passed. Its default
+# mode is entirely local and receives no credential or source repository.
+printf '%s\n' "[security] Vendored Product Engineering Playbook (offline)"
+if ! bash "${snapshot_root}/scripts/check-playbook-adoption.sh"; then
+  die "Vendored Playbook, lock, empty overrides, owner trace, or workflow contract is invalid."
+fi
+
 printf '%s\n' "[security] Immutable workflow and container supply chain"
 if ! security_run_supply_chain_policy "${snapshot_root}"; then
   die "Supply-chain policy rejected a mutable, inconsistent, or unreviewed Action/image/update configuration."
