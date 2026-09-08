@@ -580,6 +580,10 @@ A Frameのcontrol順序:
 3. AI / Save status
 4. `サイクルを完了`
 
+`サイクルを完了`では、完了処理を送信する前にApplication内Dialogを開く。titleは`サイクルを完了する前に確認`とし、`Goal v{V} · Cycle {N}`、Cycleが参照するImmutable Goal Version本文、P / D / C / Aのlabelと保存済み全文、`完了後はP/D/C/Aを編集できません。目標の見直しへ進みます。`という警告、`キャンセル`、最終確定Action `サイクルを完了`をこの順序で省略せず表示する。
+
+P / D / C / Aにはそれぞれ`編集`を表示する。選択するとDialogを閉じ、対象Frameを選択してTextareaへfocusする。CancelまたはEscapeでは本文、Browser Draft、Auto Save queue、revisionを変更せず、通常のCancelでは`サイクルを完了`へfocusを戻す。長文は改行を維持して省略せず、summary内にnested scrollを作らない。Dialog全体だけをviewport内でscroll可能にする。完了APIを呼ぶのは最終確定Actionだけとし、既存の二重送信防止、response loss時の同一operation replay、失敗時の入力保持を維持する。
+
 Goal action menu:
 
 - `目標を達成として終了`
