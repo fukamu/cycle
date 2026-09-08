@@ -574,6 +574,10 @@ Goal v2 · Cycle 3
 
 Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。
 
+Active CycleのD選択中だけ、明示操作`今の実行を記録`を表示する。操作時点のBrowser local date/timeを`【YYYY/MM/DD HH:mm UTC±HH:MM】`というplain-text見出しにし、Dが空なら見出しと末尾改行、非空なら既存本文を1字も変更せず、空行区切り、見出し、末尾改行の順で追記する。追記後はD Textareaの末尾へfocusする。同じ見出しを追加した直後の連続操作はno-opとし、`日時の追加を取り消す`では追記直前の本文へexactに戻す。追記後にDを手入力した時点で、その追記に対するUndoは無効にする。
+
+追記後の本文が§14.5の200 code pointsを超える場合は本文を変更せず、追加後に必要なcode point数と減らす必要があるcode point数を近接textで示す。DのIME composition中、DのBrowser Draft Recovery確認待ち、workspace移動後、またはCycle command処理中は追記せず、理由を近接textで示す。dirty / saving / failedを含むAuto Save stateでは操作自体を止めず、追記とUndoを通常のD入力と同じ§28のCycle Auto Save queue、Browser Draft Cache、Retry経路で扱う。専用の保存経路は設けない。Completed / Canceled CycleおよびP / C / Aでは操作を表示しない。
+
 C選択中はGuideとC Textareaの間に、同じeditor stateが持つ現在CycleのPとDをread-only比較領域として常時表示する。P/Dを複製保存または追加取得せず、改行と長文をplain textで表示し、trim後に空なら未入力と文字で示す。PまたはDにBrowser Draft Recoveryの確認待ちがある場合は、Recovery本文を比較領域へ展開または採用せず「要確認」と文字表示し、対象Frameを選択して既存Recovery noticeへfocusできる操作を置く。DesktopはP/Dを2列、Mobile・320px幅・200% zoom相当では同じreading orderの縦配置とし、比較領域にnested scrollを作らない。Active / Completed / Canceledで同じ情報順を維持する。
 
 A Frameのcontrol順序:
@@ -610,6 +614,23 @@ Placeholder: `例：今週は毎朝、最重要タスクを1つ決め、メー�
 Guide: `実際に何をしましたか？回数・時間・起きたこと・予定との違いなど、確認できる事実を記録しましょう。`
 
 Placeholder: `例：5日中4日はメールを開く前に着手した。3日は30分取り組めたが、1日は15分で中断した。残る1日はメール対応を先に始めた。`
+
+Quick entry action: `今の実行を記録`
+
+Quick entry explanation: `この端末の現在時刻をDに追加します。サーバーの基準時刻ではありません。`
+
+Quick entry undo: `日時の追加を取り消す`
+
+Repeated entry: `同じ日時の見出しはすでに追加されています。`
+
+Character limit: `追加後は{required}文字になるため、Dをあと{excess}文字減らしてください（上限200文字）。`
+
+Unavailable reason:
+
+- IME composition: `文字の変換を確定してから追加してください。`
+- Browser Draft Recovery: `確認待ちの入力を解決してから追加してください。`
+- Workspace moved: `現在の作業を確認してから追加してください。`
+- Cycle command pending: `サイクルの操作が完了してから追加してください。`
 
 ### C — Check
 
@@ -2088,6 +2109,7 @@ Request identityとcanonical provider inputを同じColumnへ保存しない。P
 - Backend / DB: UTC `TIMESTAMPTZ`。
 - API: RFC 3339 UTC string。
 - Frontend: Browser local timezoneで表示。
+- Dの日時付きクイック追記はDomain timestampではなくUserが明示操作でD本文へ追加するplain textである。操作時点のBrowser local date/timeと`Date.getTimezoneOffset()`に対応する数値UTC offsetを使用し、DST等でoffsetが変わる地域ではその瞬間のoffsetを記録する。Server canonical timeへの補正、後からの再計算、timezone名への変換は行わない。
 - Active Cycle: `YYYY/MM/DD 〜`。
 - Completed / Canceled: 同日なら単一日、別日なら`開始 〜 終了`。
 - AI rolling quota: timezone非依存の`now - configured window`。

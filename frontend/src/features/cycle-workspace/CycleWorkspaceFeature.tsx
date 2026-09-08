@@ -1,5 +1,6 @@
 import {
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useId,
@@ -56,7 +57,11 @@ import {
   usePostCommitCleanup,
 } from "../../shared/cleanup/postCommitCleanupContext";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
-import { cycleActionCopy, frameCopy } from "../../shared/copy/ja";
+import {
+  cycleActionCopy,
+  cycleDoQuickEntryCopy,
+  frameCopy,
+} from "../../shared/copy/ja";
 import {
   type BrowserDraft,
   clearGoalDrafts,
@@ -87,6 +92,14 @@ import {
 } from "./model/eligibility";
 import { CycleCheckComparison } from "./CycleCheckComparison";
 import { CycleCompletionSummary } from "./CycleCompletionSummary";
+import {
+  DoQuickEntryControls,
+  type DoQuickEntryFeedback,
+} from "./DoQuickEntryControls";
+import {
+  createDoQuickEntry,
+  formatDoQuickEntryHeader,
+} from "./model/doQuickEntry";
 
 const frames: readonly Frame[] = ["plan", "do", "check", "action"];
 type Values = Record<Frame, string>;
@@ -98,6 +111,11 @@ type PersistedFrameSnapshot = {
 type CycleRevisionConflict = {
   readonly failedSnapshot: string;
   readonly baseRevision: number;
+};
+type DoQuickEntryUndo = {
+  readonly before: string;
+  readonly after: string;
+  readonly header: string;
 };
 type MovedWorkspace = {
   readonly currentWorkspace: CurrentWork | null;
@@ -290,6 +308,7 @@ function CycleWorkspace({
   const markDeletedGoal = useStartGoalDeletionFence();
   const runGoalDeletionFencedRequest = useRunGoalDeletionFencedRequest();
   const cycle = initial;
+  const initiallyEditableRef = useRef(initial.status === "active");
   const generateOperation = useCommandOperation();
   const refineOperation = useCommandOperation();
   const completeOperation = useCommandOperation();
@@ -315,6 +334,10 @@ function CycleWorkspace({
   const [pendingAction, setPendingAction] = useState(false);
   const [confirmation, setConfirmation] = useState<WorkspaceConfirmation>();
   const [error, setError] = useState<string>();
+  const [doQuickEntryUndo, setDoQuickEntryUndo] = useState<DoQuickEntryUndo>();
+  const [doQuickEntryFeedback, setDoQuickEntryFeedback] =
+    useState<DoQuickEntryFeedback>();
+  const [isDoComposing, setIsDoComposing] = useState(false);
   const actionGuidanceId = useId();
   const scopeRegistry = useAutoSaveScopeRegistry();
   const scopeKey = ["cycle", userId, goal.id, cycle.id].join(":");
@@ -337,6 +360,9 @@ function CycleWorkspace({
   const mountedRef = useRef(true);
   const cacheDisabledRef = useRef(false);
   const pendingActionRef = useRef(false);
+  const doQuickEntryUndoRef = useRef<DoQuickEntryUndo | undefined>(undefined);
+  const isDoComposingRef = useRef(false);
+  const frameEditorRef = useRef<HTMLTextAreaElement>(null);
   const deferredHydrationEditsRef = useRef(new Map<Frame, string>());
   const browserBaseRevisionsRef = useRef(new Map<Frame, number>());
   const editedFramesRef = useRef(new Set<Frame>());
@@ -1006,6 +1032,26 @@ function CycleWorkspace({
     return () => window.removeEventListener("online", handleOnline);
   }, [coordinator, recoverCycleRevisionConflict]);
 
+  useEffect(() => {
+    const undo = doQuickEntryUndoRef.current;
+    if (!undo || (!movedWorkspace && values.do === undo.after)) return;
+    doQuickEntryUndoRef.current = undefined;
+    setDoQuickEntryUndo(undefined);
+  }, [movedWorkspace, values.do]);
+
+  function applyFrameValue(frame: Frame, value: string) {
+    editedFramesRef.current.add(frame);
+    valuesRef.current = { ...valuesRef.current, [frame]: value };
+    setValues(valuesRef.current);
+    coordinator.edit(frame, value);
+  }
+
+  function clearDoQuickEntryUndo() {
+    if (!doQuickEntryUndoRef.current) return;
+    doQuickEntryUndoRef.current = undefined;
+    setDoQuickEntryUndo(undefined);
+  }
+
   function change(frame: Frame, value: string) {
     if (
       movedWorkspaceRef.current ||
@@ -1018,10 +1064,11 @@ function CycleWorkspace({
       FRAME_TEXT_MAX_CODE_POINTS,
     );
     if (normalizedValue === null) return;
-    editedFramesRef.current.add(frame);
-    valuesRef.current = { ...valuesRef.current, [frame]: normalizedValue };
-    setValues(valuesRef.current);
-    coordinator.edit(frame, normalizedValue);
+    if (frame === "do") {
+      clearDoQuickEntryUndo();
+      setDoQuickEntryFeedback(undefined);
+    }
+    applyFrameValue(frame, normalizedValue);
   }
 
   function flush(frame: Frame) {
@@ -1037,7 +1084,98 @@ function CycleWorkspace({
   function selectFrame(frame: Frame) {
     if (frame === selected) return;
     flush(selected);
+    if (selected === "do") {
+      isDoComposingRef.current = false;
+      setIsDoComposing(false);
+      setDoQuickEntryFeedback(undefined);
+    }
     setSelected(frame);
+  }
+
+  function focusDoEditorAtEnd(content: string) {
+    window.setTimeout(() => {
+      if (
+        document.getElementById("tab-do")?.getAttribute("aria-selected") !==
+        "true"
+      )
+        return;
+      const editor = frameEditorRef.current;
+      if (!editor || editor.value !== content) return;
+      editor.focus();
+      editor.setSelectionRange(content.length, content.length);
+    }, 0);
+  }
+
+  function handleAddDoQuickEntry() {
+    if (
+      movedWorkspaceRef.current ||
+      conflictsRef.current.has("do") ||
+      pendingActionRef.current ||
+      isDoComposingRef.current
+    )
+      return;
+
+    const currentContent = valuesRef.current.do;
+    const localDate = new Date();
+    const header = formatDoQuickEntryHeader(localDate);
+    const previousInsertion = doQuickEntryUndoRef.current;
+    if (
+      previousInsertion?.header === header &&
+      previousInsertion.after === currentContent
+    ) {
+      setDoQuickEntryFeedback({
+        kind: "status",
+        message: cycleDoQuickEntryCopy.duplicate,
+      });
+      return;
+    }
+
+    const result = createDoQuickEntry(currentContent, localDate);
+    if (result.kind === "too-long") {
+      setDoQuickEntryFeedback({
+        kind: "error",
+        message: cycleDoQuickEntryCopy.tooLong(
+          result.requiredCodePoints,
+          result.excessCodePoints,
+          FRAME_TEXT_MAX_CODE_POINTS,
+        ),
+      });
+      return;
+    }
+
+    const undo: DoQuickEntryUndo = {
+      before: currentContent,
+      after: result.content,
+      header: result.header,
+    };
+    applyFrameValue("do", result.content);
+    doQuickEntryUndoRef.current = undo;
+    setDoQuickEntryUndo(undo);
+    setDoQuickEntryFeedback(undefined);
+    focusDoEditorAtEnd(result.content);
+  }
+
+  function handleAddDoQuickEntryPointerDown(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    event.preventDefault();
+  }
+
+  function handleUndoDoQuickEntry() {
+    const undo = doQuickEntryUndoRef.current;
+    if (
+      !undo ||
+      undo.after !== valuesRef.current.do ||
+      movedWorkspaceRef.current ||
+      conflictsRef.current.has("do") ||
+      pendingActionRef.current ||
+      isDoComposingRef.current
+    )
+      return;
+    applyFrameValue("do", undo.before);
+    clearDoQuickEntryUndo();
+    setDoQuickEntryFeedback(undefined);
+    focusDoEditorAtEnd(undo.before);
   }
 
   function reviewFrameRecovery(frame: "plan" | "do") {
@@ -1604,6 +1742,15 @@ function CycleWorkspace({
   const copy = frameCopy[selected];
   const selectedConflict = recoveryConflicts.get(selected);
   const workspaceMoved = movedWorkspace !== undefined;
+  const doQuickEntryDisabledReason = workspaceMoved
+    ? cycleDoQuickEntryCopy.disabled.workspaceMoved
+    : recoveryConflicts.has("do")
+      ? cycleDoQuickEntryCopy.disabled.recovery
+      : isDoComposing
+        ? cycleDoQuickEntryCopy.disabled.composition
+        : pendingAction
+          ? cycleDoQuickEntryCopy.disabled.commandPending
+          : undefined;
   const comparisonFrames = ["plan", "do"] as const;
   const comparisonRecoveryPending = new Set(
     comparisonFrames.filter((frame) => recoveryConflicts.has(frame)),
@@ -1736,7 +1883,23 @@ function CycleWorkspace({
             onReviewRecovery={reviewFrameRecovery}
           />
         )}
+        {(editable || (workspaceMoved && initiallyEditableRef.current)) &&
+          selected === "do" && (
+            <DoQuickEntryControls
+              disabledReason={doQuickEntryDisabledReason}
+              feedback={doQuickEntryFeedback}
+              canUndo={Boolean(
+                !doQuickEntryDisabledReason &&
+                doQuickEntryUndo &&
+                doQuickEntryUndo.after === values.do,
+              )}
+              onAdd={handleAddDoQuickEntry}
+              onAddPointerDown={handleAddDoQuickEntryPointerDown}
+              onUndo={handleUndoDoQuickEntry}
+            />
+          )}
         <textarea
+          ref={frameEditorRef}
           id="cycle-frame-editor"
           aria-label={`${copy.label} — ${copy.name}`}
           aria-describedby="cycle-frame-guide"
@@ -1757,6 +1920,16 @@ function CycleWorkspace({
             (selected === "action" && aiState !== "idle")
           }
           onChange={(event) => change(selected, event.target.value)}
+          onCompositionStart={() => {
+            if (selected !== "do") return;
+            isDoComposingRef.current = true;
+            setIsDoComposing(true);
+          }}
+          onCompositionEnd={() => {
+            if (!isDoComposingRef.current) return;
+            isDoComposingRef.current = false;
+            setIsDoComposing(false);
+          }}
           onBlur={() => flush(selected)}
         />
         <div className="editor-meta">

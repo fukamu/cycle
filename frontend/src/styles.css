@@ -507,6 +507,54 @@ button:disabled {
   width: fit-content;
 }
 
+.do-quick-entry {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--brand-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.do-quick-entry__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.do-quick-entry__add[aria-disabled="true"] {
+  cursor: not-allowed;
+  box-shadow: none;
+  opacity: 0.48;
+}
+
+.do-quick-entry__add[aria-disabled="true"]:hover {
+  background: white;
+  border-color: var(--line-strong);
+}
+
+.do-quick-entry__description,
+.do-quick-entry__status {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: var(--font-size-small);
+}
+
+.do-quick-entry__status--error {
+  color: var(--danger);
+}
+
+.do-quick-entry__status:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .text-button,
 .danger-link {
   padding: 6px 0;
@@ -1327,6 +1375,7 @@ textarea[readonly] {
 
   .button-row > .button,
   .action-controls__ai > .button,
+  .do-quick-entry__actions > .button,
   .action-controls__complete {
     flex: 1 1 100%;
     width: 100%;
