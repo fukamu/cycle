@@ -631,9 +631,19 @@ describe("GoalWorkspacePage", () => {
       renderPage(cache, { goalDeletionAdvisory: advisory });
 
       await screen.findByText("読み取り専用");
+      expect(
+        screen.queryByRole("button", { name: "D — Doへ進む" }),
+      ).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
       expect(
         screen.queryByRole("button", { name: "今の実行を記録" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "C — Checkへ進む" }),
+      ).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("tab", { name: /C\s*Check/ }));
+      expect(
+        screen.queryByRole("button", { name: "A — Actionへ進む" }),
       ).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
 
@@ -1373,9 +1383,13 @@ describe("GoalWorkspacePage", () => {
     expect(saveCycleFrame).toHaveBeenCalledTimes(saveCallsBeforeRejection);
     expect(putBrowserDraft).toHaveBeenCalledTimes(cacheCallsBeforeRejection);
 
-    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    fireEvent.click(screen.getByRole("button", { name: "D — Doへ進む" }));
 
     expect(feedback).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /D\s*Do/ })).toHaveFocus(),
+    );
+    expect(saveCycleFrame).toHaveBeenCalledTimes(saveCallsBeforeRejection + 1);
   });
 
   it("shows the saved frame after leaving and returning within cache stale time", async () => {
@@ -1850,6 +1864,9 @@ describe("GoalWorkspacePage", () => {
     ).toBeInTheDocument();
     expect(editor).toHaveValue("この端末の計画");
     expect(editor).toHaveAttribute("readonly");
+    expect(
+      screen.queryByRole("button", { name: "D — Doへ進む" }),
+    ).not.toBeInTheDocument();
     expect(getGoal).toHaveBeenCalledTimes(2);
     expect(getCycle).toHaveBeenCalledTimes(2);
     await waitFor(() =>
@@ -1874,6 +1891,7 @@ describe("GoalWorkspacePage", () => {
       screen.getByRole("button", { name: "この端末の入力を復元" }),
     );
     expect(editor).not.toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "D — Doへ進む" })).toBeEnabled();
 
     await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledTimes(2));
     expect(saveCycleFrame).toHaveBeenLastCalledWith(
@@ -2734,6 +2752,87 @@ describe("GoalWorkspacePage", () => {
     expect(readSelectedCycleFrame(cycle.id, "active")).toBe("action");
   });
 
+  it("offers focused next-frame guidance through P, D, and C without gating A", async () => {
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    for (const step of [
+      {
+        action: "D — Doへ進む",
+        frame: "do",
+        tab: /D\s*Do/,
+        textbox: "D — Do",
+      },
+      {
+        action: "C — Checkへ進む",
+        frame: "check",
+        tab: /C\s*Check/,
+        textbox: "C — Check",
+      },
+      {
+        action: "A — Actionへ進む",
+        frame: "action",
+        tab: /A\s*Action/,
+        textbox: "A — Action",
+      },
+    ] as const) {
+      const action = screen.getByRole("button", { name: step.action });
+      expect(action).toBeEnabled();
+      fireEvent.click(action);
+
+      const tab = screen.getByRole("tab", { name: step.tab });
+      expect(tab).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => expect(tab).toHaveFocus());
+      expect(
+        screen.getByRole("textbox", { name: step.textbox }),
+      ).toBeInTheDocument();
+      expect(readSelectedCycleFrame(cycle.id, "active")).toBe(step.frame);
+    }
+
+    for (const name of ["D — Doへ進む", "C — Checkへ進む", "A — Actionへ進む"])
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+  });
+
+  it("keeps next-frame guidance available while a save is dirty, saving, or failed", async () => {
+    const save = deferred<Awaited<ReturnType<typeof saveCycleFrame>>>();
+    vi.mocked(saveCycleFrame).mockReset().mockReturnValueOnce(save.promise);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    const editor = screen.getByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: "保存を待たずに進む計画" } });
+    expect(screen.getByText("未保存")).toBeVisible();
+
+    const goToDo = screen.getByRole("button", { name: "D — Doへ進む" });
+    expect(goToDo).toBeEnabled();
+    fireEvent.click(goToDo);
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledOnce());
+    expect(screen.getByRole("textbox", { name: "D — Do" })).toBeVisible();
+    expect(screen.getByText("保存中")).toBeVisible();
+
+    const goToCheck = screen.getByRole("button", {
+      name: "C — Checkへ進む",
+    });
+    expect(goToCheck).toBeEnabled();
+    fireEvent.click(goToCheck);
+    expect(screen.getByRole("textbox", { name: "C — Check" })).toBeVisible();
+
+    await act(async () => save.reject(new Error("offline")));
+    expect(await screen.findByText("保存失敗")).toBeVisible();
+    const goToAction = screen.getByRole("button", {
+      name: "A — Actionへ進む",
+    });
+    expect(goToAction).toBeEnabled();
+    fireEvent.click(goToAction);
+    expect(screen.getByRole("textbox", { name: "A — Action" })).toBeVisible();
+  });
+
   it("restores the selected Frame when the same Active Cycle remounts", async () => {
     rememberSelectedCycleFrame(cycle.id, "check");
     const cache = new QueryClient({
@@ -2781,6 +2880,7 @@ describe("GoalWorkspacePage", () => {
     expect(screen.getByRole("tab", { name: "A Action" })).toBeInTheDocument();
     expect(recoveryTab).toHaveAttribute("aria-selected", "false");
     expect(within(recoveryTab).getByText("要確認")).toBeVisible();
+    expect(screen.getByRole("button", { name: "D — Doへ進む" })).toBeEnabled();
   });
 
   it("preserves Action and re-enables refinement after AI failure", async () => {

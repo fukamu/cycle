@@ -1425,10 +1425,28 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
     ),
   ).toBe(false);
 
-  const planTab = page.getByRole("tab", { name: /^P/ });
   const doTab = page.getByRole("tab", { name: /^D/ });
-  await planTab.focus();
+  const nextDo = page.getByRole("button", { name: "D — Doへ進む" });
+  await expect(nextDo).toBeVisible();
+  expect((await nextDo.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  expect(
+    await nextDo.evaluate((element) => ({
+      followsEditorMeta:
+        element.parentElement?.previousElementSibling?.classList.contains(
+          "editor-meta",
+        ),
+      position: window.getComputedStyle(element).position,
+    })),
+  ).toEqual({ followsEditorMeta: true, position: "static" });
+  await nextDo.focus();
+  await page.keyboard.press("Enter");
+  await expect(doTab).toBeFocused();
+  await expect(doTab).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("ArrowRight");
+  const checkTab = page.getByRole("tab", { name: /^C/ });
+  await expect(checkTab).toBeFocused();
+  await expect(checkTab).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowLeft");
   await expect(doTab).toBeFocused();
   await expect(doTab).toHaveAttribute("aria-selected", "true");
 
@@ -1549,7 +1567,12 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   await expect(recoveryTab.getByText("要確認", { exact: true })).toBeVisible();
 
   const actionTab = page.getByRole("tab", { name: "A Action" });
-  await actionTab.click();
+  const nextAction = page.getByRole("button", { name: "A — Actionへ進む" });
+  await expect(nextAction).toBeVisible();
+  expect((await nextAction.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await nextAction.click();
+  await expect(actionTab).toBeFocused();
+  await expect(actionTab).toHaveAttribute("aria-selected", "true");
   const actionEditor = page.getByRole("textbox", { name: "A — Action" });
   const completeButton = page.getByRole("button", { name: "サイクルを完了" });
   for (const control of [actionEditor, completeButton]) {

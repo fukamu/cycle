@@ -60,6 +60,7 @@ import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
 import {
   cycleActionCopy,
   cycleDoQuickEntryCopy,
+  cycleNextFrameCopy,
   frameCopy,
 } from "../../shared/copy/ja";
 import {
@@ -1102,6 +1103,14 @@ function CycleWorkspace({
     setSelected(frame);
   }
 
+  function continueToFrame(frame: Frame) {
+    selectFrame(frame);
+    window.setTimeout(
+      () => document.getElementById(`tab-${frame}`)?.focus(),
+      0,
+    );
+  }
+
   function focusDoEditorAtEnd(content: string) {
     window.setTimeout(() => {
       if (
@@ -1774,6 +1783,8 @@ function CycleWorkspace({
     Boolean(selectedConflict) ||
     pendingAction ||
     (selected === "action" && aiState !== "idle");
+  const nextFrame =
+    selected === "action" ? undefined : cycleNextFrameCopy[selected];
   const boundedInput = useBoundedTextInput({
     value: values[selected],
     maximumCodePoints: FRAME_TEXT_MAX_CODE_POINTS,
@@ -1998,6 +2009,17 @@ function CycleWorkspace({
             {boundedInput.count} / {FRAME_TEXT_MAX_CODE_POINTS}
           </span>
         </div>
+        {editable && !frameEditorReadOnly && nextFrame && (
+          <div className="button-row cycle-next-frame">
+            <button
+              className="button button--primary"
+              type="button"
+              onClick={() => continueToFrame(nextFrame.frame)}
+            >
+              {nextFrame.label}
+            </button>
+          </div>
+        )}
         {editable && !workspaceMoved && selected === "action" && (
           <div className="action-controls">
             <div className="action-controls__ai">

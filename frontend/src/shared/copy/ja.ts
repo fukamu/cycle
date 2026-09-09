@@ -38,6 +38,15 @@ export const frameCopy: Record<
   },
 };
 
+export const cycleNextFrameCopy = {
+  plan: { frame: "do", label: "D — Doへ進む" },
+  do: { frame: "check", label: "C — Checkへ進む" },
+  check: { frame: "action", label: "A — Actionへ進む" },
+} as const satisfies Record<
+  Exclude<Frame, "action">,
+  { readonly frame: Frame; readonly label: string }
+>;
+
 export const cycleCheckComparisonCopy = {
   heading: "今回のPとDを比べる",
   guide: "Pの期待とDの事実を見ながら、Cに分かったことを書きましょう。",

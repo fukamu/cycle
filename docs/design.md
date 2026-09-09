@@ -575,6 +575,8 @@ Goal v2 · Cycle 3
 
 Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 
+Active Cycleの編集可能なP / D / Cでは、Textarea、文字数feedback、Auto Save state / counterの後に、それぞれ`D — Doへ進む`、`C — Checkへ進む`、`A — Actionへ進む`というinline CTAを通常のscroll flowで表示する。CTAは既存のFrame選択経路で次のFrameを選択し、選択後は遷移先Tabへfocusする。入力が空、dirty / saving / failedを含むAuto Save state、または保存処理中であることを理由に無効化せず、保存完了を待たない。既存のflush、Auto Save queue、Browser Draft Cache、選択Frameの端末保存、自由なTab移動は変更しない。A、Completed / Canceled Cycle、選択中FrameのBrowser Draft Recoveryの確認待ち、workspace移動後、Cycle command処理中などTextareaがread-onlyとなる状態では表示しない。固定・sticky配置や、入力完了を強制するwizard / validation gateにはしない。
+
 Active CycleのD選択中だけ、明示操作`今の実行を記録`を表示する。操作時点のBrowser local date/timeを`【YYYY/MM/DD HH:mm UTC±HH:MM】`というplain-text見出しにし、Dが空なら見出しと末尾改行、非空なら既存本文を1字も変更せず、空行区切り、見出し、末尾改行の順で追記する。追記後はD Textareaの末尾へfocusする。同じ見出しを追加した直後の連続操作はno-opとし、`日時の追加を取り消す`では追記直前の本文へexactに戻す。追記後にDを手入力した時点で、その追記に対するUndoは無効にする。
 
 追記後の本文が§14.5の200 code pointsを超える場合は本文を変更せず、追加後に必要なcode point数と減らす必要があるcode point数を近接textで示す。DのIME composition中、DのBrowser Draft Recovery確認待ち、workspace移動後、またはCycle command処理中は追記せず、理由を近接textで示す。dirty / saving / failedを含むAuto Save stateでは操作自体を止めず、追記とUndoを通常のD入力と同じ§28のCycle Auto Save queue、Browser Draft Cache、Retry経路で扱う。専用の保存経路は設けない。Completed / Canceled CycleおよびP / C / Aでは操作を表示しない。
