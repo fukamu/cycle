@@ -942,25 +942,36 @@ function ReviewEditor({
           onDismiss={refinement.dismiss}
           onAdopt={() => void adopt()}
         />
-        <p className="next-cycle-note">
-          {changed
-            ? `変更した目標をGoal v${goal.currentVersion.versionNumber + 1}として保存し、Cycle ${goal.nextCycleSequenceNumber}を開始します`
-            : `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`}
-        </p>
-        <div className="button-row">
-          <button
-            className="button button--primary"
-            type="button"
-            aria-describedby={actionDescribedBy(actionControls.continue.reason)}
-            disabled={!actionControls.continue.enabled}
-            onClick={() => void nextCycle()}
-          >
-            この目標で次のサイクルへ
-          </button>
-        </div>
+        <section
+          className="next-cycle-actions"
+          aria-labelledby="goal-review-next-cycle-heading"
+        >
+          <h2 id="goal-review-next-cycle-heading">次のサイクルへ進む</h2>
+          <p className="next-cycle-note">
+            {changed
+              ? `変更した目標をGoal v${goal.currentVersion.versionNumber + 1}として保存し、Cycle ${goal.nextCycleSequenceNumber}を開始します`
+              : `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`}
+          </p>
+          <div className="button-row">
+            <button
+              className="button button--primary"
+              type="button"
+              aria-describedby={actionDescribedBy(
+                actionControls.continue.reason,
+              )}
+              disabled={!actionControls.continue.enabled}
+              onClick={() => void nextCycle()}
+            >
+              この目標で次のサイクルへ
+            </button>
+          </div>
+        </section>
       </section>
-      <section className="terminal-actions">
-        <h2>この目標を終える</h2>
+      <section
+        className="terminal-actions"
+        aria-labelledby="goal-review-terminal-heading"
+      >
+        <h2 id="goal-review-terminal-heading">この目標を終える</h2>
         {changed && (
           <p>次のサイクルを開始しない場合、現在の変更案は保存されません。</p>
         )}

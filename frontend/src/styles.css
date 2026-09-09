@@ -953,6 +953,20 @@ textarea[readonly] {
   white-space: pre-wrap;
 }
 
+.next-cycle-actions {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.next-cycle-actions h2 {
+  margin: 0;
+  color: var(--brand-deep);
+  font-size: 1.05rem;
+}
+
 .terminal-actions {
   margin-top: 22px;
   box-shadow: none;

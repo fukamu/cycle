@@ -660,6 +660,11 @@ Route: `/goals/:goalId/review`
 5. Goal Refine controls / suggestion comparison。
 6. Outcome controls。
 
+Outcome controlsは次の2つの見出し付きsectionを、この順で表示する。
+
+1. `次のサイクルへ進む`: Draft本文がCurrent Versionと同じか異なるかを示す既存noteとPrimary actionを含む。
+2. `この目標を終える`: 達成・終了・削除のterminal actionsを含む。
+
 Primary action: `この目標で次のサイクルへ`。
 
 - Draft本文がCurrent Versionと同じ: `目標を維持してCycle {N+1}を開始します`。

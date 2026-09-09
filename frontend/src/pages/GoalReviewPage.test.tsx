@@ -487,32 +487,53 @@ describe("GoalReviewPage", () => {
     expect(terminate).not.toHaveAttribute("aria-describedby");
   });
 
-  it("orders idle Review actions after the Draft and Save state", async () => {
+  it("groups idle Review outcomes into ordered labelled sections", async () => {
     renderPage();
     const editor = await screen.findByRole("textbox", {
       name: "次のサイクルで目指す目標",
     });
     const saveStatus = await screen.findByText("保存済み");
     const refine = screen.getByRole("button", { name: "AIで目標を整える" });
-    const note = screen.getByText(
+    const nextCycleHeading = screen.getByRole("heading", {
+      level: 2,
+      name: "次のサイクルへ進む",
+    });
+    const nextCycleSection = screen.getByRole("region", {
+      name: "次のサイクルへ進む",
+    });
+    const note = within(nextCycleSection).getByText(
       `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`,
     );
-    const continueAction = screen.getByRole("button", {
+    const continueAction = within(nextCycleSection).getByRole("button", {
       name: "この目標で次のサイクルへ",
     });
-    const terminal = screen.getByRole("heading", {
+    const terminalHeading = screen.getByRole("heading", {
       level: 2,
+      name: "この目標を終える",
+    });
+    const terminalSection = screen.getByRole("region", {
       name: "この目標を終える",
     });
 
     expectBefore(editor, saveStatus);
     expectBefore(saveStatus, refine);
-    expectBefore(refine, note);
+    expectBefore(refine, nextCycleHeading);
+    expectBefore(nextCycleHeading, note);
     expectBefore(note, continueAction);
-    expectBefore(continueAction, terminal);
+    expectBefore(continueAction, terminalHeading);
     expect(refine).toBeEnabled();
     expect(continueAction).toBeEnabled();
-    expect(screen.getByRole("button", { name: "目標を終了" })).toBeEnabled();
+    expect(
+      within(terminalSection).getByRole("button", {
+        name: "目標を達成として終了",
+      }),
+    ).toBeEnabled();
+    expect(
+      within(terminalSection).getByRole("button", { name: "目標を終了" }),
+    ).toBeEnabled();
+    expect(
+      within(terminalSection).getByRole("button", { name: "目標を削除" }),
+    ).toBeEnabled();
   });
 
   it("keeps Review refinement separate until the user explicitly adopts it", async () => {
@@ -533,6 +554,10 @@ describe("GoalReviewPage", () => {
     const refine = screen.getByRole("button", { name: "AIで目標を整える" });
     const suggestion = screen.getByRole("heading", { name: "AIからの提案" });
     const adopt = screen.getByRole("button", { name: "提案を採用" });
+    const nextCycleHeading = screen.getByRole("heading", {
+      level: 2,
+      name: "次のサイクルへ進む",
+    });
     const note = screen.getByText(
       `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`,
     );
@@ -546,7 +571,8 @@ describe("GoalReviewPage", () => {
 
     expectBefore(refine, suggestion);
     expectBefore(suggestion, adopt);
-    expectBefore(adopt, note);
+    expectBefore(adopt, nextCycleHeading);
+    expectBefore(nextCycleHeading, note);
     expectBefore(note, continueAction);
     expectBefore(continueAction, terminal);
 

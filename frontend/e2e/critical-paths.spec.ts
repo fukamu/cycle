@@ -135,11 +135,23 @@ async function expectReviewSuggestionAtNarrowWidths(page: Page) {
     const refine = page.getByRole("button", { name: "AIで目標を整える" });
     const comparison = page.getByRole("region", { name: "AIからの提案" });
     const adopt = comparison.getByRole("button", { name: "提案を採用" });
-    const note = page.getByText(/目標を維持してCycle \d+を開始します/);
-    const continueAction = page.getByRole("button", {
+    const nextCycleSection = page.getByRole("region", {
+      name: "次のサイクルへ進む",
+    });
+    const nextCycleHeading = nextCycleSection.getByRole("heading", {
+      level: 2,
+      name: "次のサイクルへ進む",
+    });
+    const note = nextCycleSection.getByText(
+      /目標を維持してCycle \d+を開始します/,
+    );
+    const continueAction = nextCycleSection.getByRole("button", {
       name: "この目標で次のサイクルへ",
     });
-    const terminal = page.getByRole("heading", {
+    const terminalSection = page.getByRole("region", {
+      name: "この目標を終える",
+    });
+    const terminalHeading = terminalSection.getByRole("heading", {
       level: 2,
       name: "この目標を終える",
     });
@@ -148,9 +160,10 @@ async function expectReviewSuggestionAtNarrowWidths(page: Page) {
       refine,
       comparison,
       adopt,
+      nextCycleHeading,
       note,
       continueAction,
-      terminal,
+      terminalHeading,
     ])
       await expect(element).toBeVisible();
 
@@ -163,6 +176,7 @@ async function expectReviewSuggestionAtNarrowWidths(page: Page) {
         button("AIで目標を整える"),
         main.querySelector(".suggestion-panel"),
         button("提案を採用"),
+        main.querySelector(".next-cycle-actions h2"),
         main.querySelector(".next-cycle-note"),
         button("この目標で次のサイクルへ"),
         main.querySelector(".terminal-actions"),
@@ -210,6 +224,25 @@ async function expectReviewSuggestionAtNarrowWidths(page: Page) {
   await page.evaluate(() =>
     document.documentElement.style.removeProperty("zoom"),
   );
+  await page.setViewportSize({ width: 320, height: 844 });
+
+  const editor = page.getByRole("textbox", {
+    name: "次のサイクルで目指す目標",
+  });
+  await editor.focus();
+  for (const action of [
+    "AIで目標を整える",
+    "元の目標を維持",
+    "提案を採用",
+    "この目標で次のサイクルへ",
+    "目標を達成として終了",
+    "目標を終了",
+    "目標を削除",
+  ]) {
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: action })).toBeFocused();
+  }
+
   await page.setViewportSize({ width: 1280, height: 720 });
 }
 
