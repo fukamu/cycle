@@ -146,23 +146,47 @@ export function AppLayout() {
 
   useEffect(() => {
     if (!open) return;
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeMenu(true);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeMenu(true);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = [
+        trigger.current,
+        ...Array.from(menu.current?.querySelectorAll<HTMLElement>("a") ?? []),
+      ].filter((element): element is HTMLElement => element !== null);
+      if (!focusable.length) return;
+
+      const currentIndex = focusable.indexOf(
+        document.activeElement as HTMLElement,
+      );
+      const nextIndex =
+        currentIndex === -1
+          ? event.shiftKey
+            ? focusable.length - 1
+            : 0
+          : (currentIndex + (event.shiftKey ? -1 : 1) + focusable.length) %
+            focusable.length;
+      event.preventDefault();
+      focusable[nextIndex]?.focus();
     };
-    document.addEventListener("keydown", close);
+    document.addEventListener("keydown", handleKeyDown);
     menu.current?.querySelector<HTMLElement>("a")?.focus();
-    return () => document.removeEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [closeMenu, open]);
 
   return (
     <div className="app-shell">
-      <a className="skip-link" href="#main-content">
+      <a className="skip-link" href="#main-content" inert={open || undefined}>
         本文へ移動
       </a>
       <header className="app-header">
         <Link
           className="wordmark"
           to="/"
+          inert={open || undefined}
           aria-label="FUKAMU Cycle ホーム"
           onClick={() => {
             forgetSelectedCycleFrameFromWorkspacePath(pathname);
@@ -193,7 +217,8 @@ export function AppLayout() {
           <button
             className="drawer-backdrop"
             type="button"
-            aria-label="メニューを閉じる"
+            aria-hidden="true"
+            tabIndex={-1}
             onClick={() => closeMenu(true)}
           />
           <nav
@@ -203,16 +228,27 @@ export function AppLayout() {
             aria-label="メインメニュー"
           >
             <p className="drawer__label">メニュー</p>
-            <Link to="/history" onClick={() => setOpen(false)}>
+            <Link
+              to="/history"
+              onClick={() => closeMenu(pathname === "/history")}
+            >
               目標の履歴
             </Link>
-            <Link to="/settings" onClick={() => setOpen(false)}>
+            <Link
+              to="/settings"
+              onClick={() => closeMenu(pathname === "/settings")}
+            >
               設定
             </Link>
           </nav>
         </>
       )}
-      <div ref={mainContent} id="main-content" tabIndex={-1}>
+      <div
+        ref={mainContent}
+        id="main-content"
+        tabIndex={-1}
+        inert={open || undefined}
+      >
         <Outlet />
       </div>
     </div>

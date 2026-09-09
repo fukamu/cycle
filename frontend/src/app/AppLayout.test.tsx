@@ -301,12 +301,34 @@ describe("AppLayout", () => {
           <Routes>
             <Route element={<AppLayout />}>
               <Route index element={<p>ホーム本文</p>} />
+              <Route
+                path="history"
+                element={
+                  <main>
+                    <h1>目標の履歴</h1>
+                  </main>
+                }
+              />
+              <Route
+                path="settings"
+                element={
+                  <main>
+                    <h1>設定</h1>
+                  </main>
+                }
+              />
             </Route>
           </Routes>
         </RouteHeadingFocusProvider>
       </MemoryRouter>,
     );
     expect(screen.queryByText("MENU")).not.toBeInTheDocument();
+    const skipLink = screen.getByRole("link", { name: "本文へ移動" });
+    const wordmark = screen.getByRole("link", {
+      name: "FUKAMU Cycle ホーム",
+    });
+    const mainContent = document.getElementById("main-content");
+    expect(mainContent).not.toBeNull();
     const trigger = screen.getByRole("button", { name: "メニューを開く" });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     await user.click(trigger);
@@ -323,6 +345,28 @@ describe("AppLayout", () => {
       "href",
       "/settings",
     );
+    const history = screen.getByRole("link", { name: "目標の履歴" });
+    const settings = screen.getByRole("link", { name: "設定" });
+    await waitFor(() => expect(history).toHaveFocus());
+    expect(skipLink).toHaveAttribute("inert");
+    expect(wordmark).toHaveAttribute("inert");
+    expect(mainContent).toHaveAttribute("inert");
+    const backdrop =
+      document.querySelector<HTMLButtonElement>(".drawer-backdrop");
+    expect(backdrop).not.toBeNull();
+    expect(backdrop).toHaveAttribute("aria-hidden", "true");
+    expect(backdrop).toHaveAttribute("tabindex", "-1");
+
+    await user.tab({ shift: true });
+    expect(trigger).toHaveFocus();
+    await user.tab();
+    expect(history).toHaveFocus();
+    await user.tab();
+    expect(settings).toHaveFocus();
+    await user.tab();
+    expect(trigger).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(settings).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(
@@ -333,6 +377,43 @@ describe("AppLayout", () => {
         screen.getByRole("button", { name: "メニューを開く" }),
       ).toHaveFocus(),
     );
+    expect(skipLink).not.toHaveAttribute("inert");
+    expect(wordmark).not.toHaveAttribute("inert");
+    expect(mainContent).not.toHaveAttribute("inert");
+
+    await user.click(trigger);
+    const pointerBackdrop =
+      document.querySelector<HTMLButtonElement>(".drawer-backdrop");
+    expect(pointerBackdrop).not.toBeNull();
+    await user.click(pointerBackdrop!);
+    await waitFor(() => expect(trigger).toHaveFocus());
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("link", { name: "目標の履歴" }));
+    const destination = await screen.findByRole("heading", {
+      level: 1,
+      name: "目標の履歴",
+    });
+    await waitFor(() => expect(destination).toHaveFocus());
+    expect(mainContent).not.toHaveAttribute("inert");
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("link", { name: "目標の履歴" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(destination).not.toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("link", { name: "設定" }));
+    const settingsDestination = await screen.findByRole("heading", {
+      level: 1,
+      name: "設定",
+    });
+    await waitFor(() => expect(settingsDestination).toHaveFocus());
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("link", { name: "設定" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(settingsDestination).not.toHaveFocus();
   });
 
   it.each([
