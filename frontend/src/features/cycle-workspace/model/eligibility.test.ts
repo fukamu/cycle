@@ -3,6 +3,7 @@ import type { AutoSaveState } from "../../../shared/autosave/autoSaveCoordinator
 import {
   getCycleActionControls,
   getCycleEligibility,
+  getCycleGoalActionGuidance,
   type CycleActionContext,
   type FrameValues,
 } from "./eligibility";
@@ -193,5 +194,74 @@ describe("cycle workspace eligibility", () => {
 
     expect(controls.generate.enabled).toBe(false);
     expect(controls.guidance?.reason.kind).toBe(reason);
+  });
+
+  it("associates a pending command with every Goal action", () => {
+    expect(
+      getCycleGoalActionGuidance(
+        { kind: "failed", errorCode: "NETWORK_ERROR" },
+        "generating",
+        { ...activeContext, pendingAction: true },
+      ),
+    ).toEqual({
+      reason: { kind: "command-pending" },
+      commands: ["achieve", "end", "delete"],
+    });
+  });
+
+  it.each([
+    [{ kind: "dirty" }, "save-dirty"],
+    [{ kind: "saving" }, "save-saving"],
+    [{ kind: "failed", errorCode: "NETWORK_ERROR" }, "save-failed"],
+  ] as const)(
+    "associates Goal termination guidance with autosave state %s without gating Delete",
+    (saveState, reason) => {
+      expect(
+        getCycleGoalActionGuidance(saveState, "idle", activeContext),
+      ).toEqual({
+        reason: { kind: reason },
+        commands: ["achieve", "end"],
+      });
+    },
+  );
+
+  it.each([
+    ["generating", "ai-generating"],
+    ["refining", "ai-refining"],
+  ] as const)(
+    "associates Goal termination guidance with AI state %s without gating Delete",
+    (aiState, reason) => {
+      expect(
+        getCycleGoalActionGuidance({ kind: "saved" }, aiState, activeContext),
+      ).toEqual({
+        reason: { kind: reason },
+        commands: ["achieve", "end"],
+      });
+    },
+  );
+
+  it("returns no Goal action guidance for saved input while AI is idle", () => {
+    expect(
+      getCycleGoalActionGuidance({ kind: "saved" }, "idle", activeContext),
+    ).toBeNull();
+  });
+
+  it("explains a failed save through recovery without treating recovery as a new gate", () => {
+    expect(
+      getCycleGoalActionGuidance(
+        { kind: "failed", errorCode: "REVISION_CONFLICT" },
+        "idle",
+        { ...activeContext, recoveryPending: true },
+      ),
+    ).toEqual({
+      reason: { kind: "recovery-pending" },
+      commands: ["achieve", "end"],
+    });
+    expect(
+      getCycleGoalActionGuidance({ kind: "saved" }, "idle", {
+        ...activeContext,
+        recoveryPending: true,
+      }),
+    ).toBeNull();
   });
 });

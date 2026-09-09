@@ -1527,6 +1527,113 @@ test("Goal disabled guidance remains readable and associated at narrow widths", 
   );
 });
 
+test("Active Cycle Goal guidance stays nearby and usable at narrow widths", async ({
+  page,
+}) => {
+  await createProgressingGoal(page, "保存状態から次の操作を判断できる目標");
+
+  let releaseSave!: () => void;
+  const saveRelease = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
+  let markSaveStarted!: () => void;
+  const saveStarted = new Promise<void>((resolve) => {
+    markSaveStarted = resolve;
+  });
+  let firstSave = true;
+  await page.route("**/api/v1/goals/*/cycles/*/frames/plan", async (route) => {
+    if (route.request().method() === "PATCH" && firstSave) {
+      firstSave = false;
+      markSaveStarted();
+      await saveRelease;
+    }
+    await route.continue();
+  });
+
+  const plan = page.getByRole("textbox", { name: "P — Plan" });
+  await plan.fill("保存完了を待つ計画");
+  await plan.blur();
+  await saveStarted;
+  await page.getByText("目標の操作").click();
+
+  const goalActions = page.locator(".goal-actions");
+  const guidance = goalActions.locator(".goal-actions__guidance");
+  const achieve = goalActions.getByRole("button", {
+    name: "目標を達成として終了",
+  });
+  const end = goalActions.getByRole("button", { name: "目標を終了" });
+  const remove = goalActions.getByRole("button", { name: "目標を削除" });
+  const assertLayout = async () => {
+    await expect(guidance).toBeVisible();
+    await expect(guidance).toHaveText(
+      "目標を達成・終了するには、入力の保存完了をお待ちください。",
+    );
+    const guidanceId = await guidance.getAttribute("id");
+    expect(guidanceId).toBeTruthy();
+    await expect(achieve).toBeDisabled();
+    await expect(end).toBeDisabled();
+    await expect(achieve).toHaveAttribute("aria-describedby", guidanceId ?? "");
+    await expect(end).toHaveAttribute("aria-describedby", guidanceId ?? "");
+    await expect(remove).toBeEnabled();
+    await expect(remove).not.toHaveAttribute("aria-describedby");
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(false);
+  };
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await assertLayout();
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await assertLayout();
+
+  expect(
+    await goalActions.evaluate((element) => {
+      const nodes = [
+        element.querySelector("summary"),
+        element.querySelector(".goal-actions__guidance"),
+        ...element.querySelectorAll("button"),
+      ];
+      return nodes.slice(0, -1).every((node, index) => {
+        const following = nodes[index + 1];
+        return Boolean(
+          node &&
+          following &&
+          node.compareDocumentPosition(following) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+      });
+    }),
+  ).toBe(true);
+
+  const summary = goalActions.locator("summary");
+  await summary.focus();
+  await page.keyboard.press("Tab");
+  await expect(remove).toBeFocused();
+
+  releaseSave();
+  await expect(page.getByText("保存済み")).toBeVisible();
+  await expect(guidance).toHaveText("");
+  await expect(achieve).toBeEnabled();
+  await expect(end).toBeEnabled();
+  await expect(remove).toBeEnabled();
+
+  await summary.focus();
+  await page.keyboard.press("Tab");
+  await expect(achieve).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(end).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(remove).toBeFocused();
+});
+
 test("mobile long content stays in bounds and frame tabs support keyboard navigation", async ({
   page,
 }) => {

@@ -60,6 +60,7 @@ import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
 import {
   cycleActionCopy,
   cycleDoQuickEntryCopy,
+  cycleGoalActionCopy,
   cycleNextFrameCopy,
   frameCopy,
 } from "../../shared/copy/ja";
@@ -88,8 +89,10 @@ import {
 } from "../../shared/text/semantics";
 import {
   type CycleActionDisabledReason,
+  type CycleGoalActionDisabledReason,
   getCycleActionControls,
   getCycleEligibility,
+  getCycleGoalActionGuidance,
 } from "./model/eligibility";
 import { CycleCheckComparison } from "./CycleCheckComparison";
 import { CycleCompletionSummary } from "./CycleCompletionSummary";
@@ -153,6 +156,27 @@ function cycleActionGuidanceText(reason: CycleActionDisabledReason): string {
         : cycleActionCopy.disabled.missingPlanDoCheck(
             reason.frames.map((frame) => frameCopy[frame].label),
           );
+  }
+}
+
+function cycleGoalActionGuidanceText(
+  reason: CycleGoalActionDisabledReason,
+): string {
+  switch (reason.kind) {
+    case "command-pending":
+      return cycleGoalActionCopy.disabled.commandPending;
+    case "recovery-pending":
+      return cycleGoalActionCopy.disabled.recoveryPending;
+    case "save-dirty":
+      return cycleGoalActionCopy.disabled.saveDirty;
+    case "save-saving":
+      return cycleGoalActionCopy.disabled.saveSaving;
+    case "save-failed":
+      return cycleGoalActionCopy.disabled.saveFailed;
+    case "ai-generating":
+      return cycleGoalActionCopy.disabled.aiGenerating;
+    case "ai-refining":
+      return cycleGoalActionCopy.disabled.aiRefining;
   }
 }
 
@@ -347,6 +371,7 @@ function CycleWorkspace({
     useState<DoQuickEntryFeedback>();
   const [isDoComposing, setIsDoComposing] = useState(false);
   const actionGuidanceId = useId();
+  const goalActionGuidanceId = useId();
   const textLimitFeedbackId = useId();
   const scopeRegistry = useAutoSaveScopeRegistry();
   const scopeKey = ["cycle", userId, goal.id, cycle.id].join(":");
@@ -1829,6 +1854,18 @@ function CycleWorkspace({
     : "";
   const actionDescribedBy = (command: "generate" | "refine" | "complete") =>
     actionGuidance?.commands.includes(command) ? actionGuidanceId : undefined;
+  const goalActionGuidance = getCycleGoalActionGuidance(saveState, aiState, {
+    pendingAction,
+    recoveryPending:
+      recoveryConflicts.size > 0 || cycleRevisionConflictsRef.current.size > 0,
+  });
+  const goalActionGuidanceText = goalActionGuidance
+    ? cycleGoalActionGuidanceText(goalActionGuidance.reason)
+    : "";
+  const goalActionDescribedBy = (command: "achieve" | "end" | "delete") =>
+    goalActionGuidance?.commands.includes(command)
+      ? goalActionGuidanceId
+      : undefined;
   const end = cycle.completedAt ?? cycle.canceledAt;
   return (
     <main className="page editor-page">
@@ -2079,9 +2116,19 @@ function CycleWorkspace({
       {editable && !workspaceMoved && (
         <details className="goal-actions">
           <summary>目標の操作</summary>
+          <p
+            className="goal-actions__guidance"
+            id={goalActionGuidanceId}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {goalActionGuidanceText}
+          </p>
           <div className="button-row">
             <button
               type="button"
+              aria-describedby={goalActionDescribedBy("achieve")}
               disabled={
                 !commandsAvailable || !eligibility.canTerminateActiveGoal
               }
@@ -2093,6 +2140,7 @@ function CycleWorkspace({
             </button>
             <button
               type="button"
+              aria-describedby={goalActionDescribedBy("end")}
               disabled={
                 !commandsAvailable || !eligibility.canTerminateActiveGoal
               }
@@ -2105,6 +2153,7 @@ function CycleWorkspace({
             <button
               className="danger-link"
               type="button"
+              aria-describedby={goalActionDescribedBy("delete")}
               disabled={pendingAction}
               onClick={() => setConfirmation({ kind: "delete" })}
             >

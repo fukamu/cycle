@@ -104,6 +104,23 @@ export const cycleActionCopy = {
   },
 } as const;
 
+export const cycleGoalActionCopy = {
+  disabled: {
+    commandPending: "現在の操作を処理しています。完了するまでお待ちください。",
+    recoveryPending:
+      "目標を達成・終了するには、「要確認」のフレームを開き、使用する内容を選んでください。",
+    saveDirty:
+      "目標を達成・終了するには、入力が保存済みになるまでお待ちください。",
+    saveSaving: "目標を達成・終了するには、入力の保存完了をお待ちください。",
+    saveFailed:
+      "目標を達成・終了するには、「再試行」で入力を保存してください。",
+    aiGenerating:
+      "目標を達成・終了するには、アクションの生成完了をお待ちください。",
+    aiRefining:
+      "目標を達成・終了するには、アクションの推敲完了をお待ちください。",
+  },
+} as const;
+
 export const goalCopy = {
   guide:
     "これから良くしたいことや、目指したい状態を書いてみましょう。最初から完璧である必要はありません。",

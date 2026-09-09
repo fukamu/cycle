@@ -7,6 +7,22 @@ export type ActionAIStateKind = "idle" | "generating" | "refining";
 
 export type CycleActionCommand = "generate" | "refine" | "complete";
 
+export type CycleGoalActionCommand = "achieve" | "end" | "delete";
+
+export type CycleGoalActionDisabledReason =
+  | { readonly kind: "command-pending" }
+  | { readonly kind: "recovery-pending" }
+  | { readonly kind: "save-dirty" }
+  | { readonly kind: "save-saving" }
+  | { readonly kind: "save-failed" }
+  | { readonly kind: "ai-generating" }
+  | { readonly kind: "ai-refining" };
+
+export type CycleGoalActionGuidance = {
+  readonly reason: CycleGoalActionDisabledReason;
+  readonly commands: readonly CycleGoalActionCommand[];
+};
+
 export type CycleActionDisabledReason =
   | { readonly kind: "command-pending" }
   | { readonly kind: "recovery-pending" }
@@ -49,6 +65,8 @@ export type CycleEligibility = {
 
 const allActionCommands = ["generate", "refine", "complete"] as const;
 const actionRequiredCommands = ["refine", "complete"] as const;
+const allGoalActionCommands = ["achieve", "end", "delete"] as const;
+const terminalGoalActionCommands = ["achieve", "end"] as const;
 const planDoCheckFrames = ["plan", "do", "check"] as const;
 
 function blockedControls(
@@ -108,6 +126,35 @@ export function getCycleActionControls(
         }
       : null,
   };
+}
+
+export function getCycleGoalActionGuidance(
+  saveState: AutoSaveState,
+  aiState: ActionAIStateKind,
+  context: CycleActionContext,
+): CycleGoalActionGuidance | null {
+  if (context.pendingAction)
+    return {
+      reason: { kind: "command-pending" },
+      commands: allGoalActionCommands,
+    };
+
+  const reason: CycleGoalActionDisabledReason | null =
+    saveState.kind === "dirty"
+      ? { kind: "save-dirty" }
+      : saveState.kind === "saving"
+        ? { kind: "save-saving" }
+        : saveState.kind === "failed"
+          ? context.recoveryPending
+            ? { kind: "recovery-pending" }
+            : { kind: "save-failed" }
+          : aiState === "generating"
+            ? { kind: "ai-generating" }
+            : aiState === "refining"
+              ? { kind: "ai-refining" }
+              : null;
+
+  return reason ? { reason, commands: terminalGoalActionCommands } : null;
 }
 
 export function getCycleEligibility(
