@@ -1,6 +1,6 @@
 # ローカル開発
 
-この文書はCycle固有のローカル開発手順の Source of Truth です。共通の作業方法は [FUKAMU Product Engineering Playbook](../.fukamu/playbook/PLAYBOOK.md)、アプリケーション要件・仕様・設計は [`design.md`](design.md) が上位です。環境変数の全項目は [`environment.md`](environment.md)、DB固有の運用は [`database.md`](database.md) を参照してください。
+この文書はCycle固有のローカル開発・検証手順とユーザビリティ調査手順の Source of Truth です。共通の作業方法は [FUKAMU Product Engineering Playbook](../.fukamu/playbook/PLAYBOOK.md)、アプリケーション要件・仕様・設計は [`design.md`](design.md) が上位です。環境変数の全項目は [`environment.md`](environment.md)、DB固有の運用は [`database.md`](database.md) を参照してください。
 
 ## 前提環境
 
@@ -74,6 +74,249 @@ Terminalを解放したまま起動する場合は`--detached`を使い、終了
 ```
 
 このprofileは`APP_ENV=development`、空の`OPENAI_API_KEY`、無効なTurnstile、未設定のGoogle Client IDで起動します。Telemetryはin-memory exporterを使い、`OTEL_EXPORTER_OTLP_ENDPOINT`と`OTEL_EXPORTER_OTLP_HEADERS`を設定せず、外部collectorへ送信しません。AIは決定的なFake Adapterを使用し、Google連携以外のGoal/Cycle/Review操作を外部credentialなしで確認できます。これは手動の実機確認環境であり、format、lint、typecheck、unit/integration test、E2E、Terraform、Wranglerの品質checkを代替しません。
+
+## 初回Cycleユーザビリティ調査
+
+このsectionは、初回Goal作成からCycle 1完了、Goal Review、Cycle 2開始までのmoderated usability researchについて、task script、準備、個人を特定しない観察、集計の唯一の手順ownerです。Product behaviorとprivacy invariantは[`design.md`](design.md) §§2、6、9、29.10–29.11、41–42、48、調査の承認・進捗・判断は[Issue #46](https://github.com/fukamu/cycle/issues/46)が所有します。この手順や調査findingはProduct仕様を上書きしません。Findingを採用する場合は、別のDelivery変更としてcanonical ownerを先に更新します。
+
+Issue本文やコメントに残る過去のscript、rubric、templateは判断履歴です。実行時はこのsectionだけを現行kitとして使い、Issueへ同じ定義をcopyしません。
+
+### Current authorization boundary
+
+現在、自律実行できる範囲は次だけです。
+
+- Exactなlocal revisionとsynthetic scenarioだけを使うdesk-based walkthrough。
+- T1–T7、moderator checklist、screener / consent文案、観察schema、aggregate templateの更新。
+- Product Ownerを実参加者数へ含めないlocal synthetic moderator dry-run。
+- 個人を特定しないaggregateの形式確認。
+
+次は承認済み範囲に含まれません。
+
+- 実参加者の募集、補償、consent取得、session実施。
+- 実在するGoal / P / D / C / A、氏名、email、Application User / Session ID、IP、raw logの収集。
+- Audio、video、screen recording、逐語録の収集または保存。
+- Raw note、contact情報、consent recordへのCodexまたは外部AIのaccess。
+- Private research storageの新設、Production / Staging telemetry、Google、外部AI、Cloudflareの使用。
+- Penpot #35との比較、§42.4のProduction baseline計測、findingを根拠にした実装またはProject Priority変更。
+
+### Human session開始前の未決事項と停止条件
+
+次はProduct Ownerが明示的に決め、Issue #46へ承認証跡を残すまで`TBD`です。推奨案はprivacy-minimizingな開始点であり、決定値ではありません。一項目でも`TBD`、矛盾、または実行者が確認できない状態なら、募集、consent取得、実参加者sessionを開始しません。
+
+| Decision | Privacy-minimizing recommendation | Current status / unblock evidence |
+|---|---|---|
+| Participant条件と人数 | 自ら同意できる成人、日本語taskを読める人に限定し、PDCA経験だけを`未経験 / ときどき / 継続`の粗いbucketで混ぜる。Issueの目安は5名程度 | `TBD` — 条件、除外条件、人数のProduct Owner承認 |
+| 募集経路と補償 | 公開募集を広げず、approved ownerが一つの経路で個別連絡する。補償有無・額・支払手段は研究dataから分離する | `TBD` — 経路、文面、補償、担当者のProduct Owner承認 |
+| Research roles | 一人のresearch owner、moderator、privacy reviewerを明示し、兼務を記録する | `TBD` — 各roleの氏名または責任主体のProduct Owner承認 |
+| Consentと撤回窓口 | 下記文案を承認し、開始前に同意を得る。匿名集計前の撤回窓口と期限を一つだけ示す | `TBD` — consent version、取得方法、窓口、撤回期限のProduct Owner承認 |
+| Private保存先とaccess | Contact mapping、consent、coded observationを別のaccess-controlled storeに分け、必要なhumanだけへ最小権限を付ける。新設は別承認とする | `TBD` — exact location、各閲覧者、backup有無のProduct Owner承認 |
+| Retention / deletion | 保存期間を必要最小限にし、開始前にexact calendar date、削除owner、backupの扱い、削除確認方法を通知する | `TBD` — exact deletion date、削除owner、backupの扱い、削除確認方法のProduct Owner承認 |
+| 実行environment | Localの空で破棄可能なDB、fresh browser、Fake AIを第一案とし、Production data / telemetryを使わない | `TBD` — `local / staging / production`のProduct Owner承認。Production値を推測しない |
+| #35 / #45の扱い | 初回現行UIの理解確認から分離し、#35比較と#45 Production baselineをこのstudyから外す | `TBD` — de-scopeまたは別study化のProduct Owner承認 |
+
+人対象sessionでは、参加撤回、実内容の入力、recording開始、未承認storeへの保存、閲覧者の不一致、外部request、target SHA / browser / viewport / start state不一致、Application error、データ漏えい疑いのいずれかで直ちに停止します。値を再掲せずresearch ownerへ連絡し、安全を確認できるまで再開しません。Technical failureでtaskを続けられない場合も`N`へ推測で変換せず、session全体を`stopped_technical`、全taskを`not_scored`として集計対象から外します。
+
+### Screener proposal
+
+Screenerは候補者を広くprofileするものではなく、承認済み条件に必要な最小項目だけにします。次の文案はProduct Owner承認前には配布しません。
+
+1. 自ら参加に同意できる成人ですか。`yes / no`（成人限定を採用する場合だけ使用）
+2. 日本語で表示されるWeb Applicationのtaskを読んで操作できますか。`yes / no`
+3. 過去12か月のPDCAまたは類似する振り返りの経験に最も近いものを選んでください。`未経験 / ときどき / 継続`
+4. 承認されたbrowser / deviceと時間で参加できますか。`yes / no`
+5. 実生活の情報ではなく、用意された架空scenarioだけを入力することに同意できますか。`yes / no`
+
+氏名、email等の連絡先はscreener回答sheetへ入れず、recruitment ownerだけが扱うcontact storeでsession codeへ対応付けます。年齢、生年月日、性別、住所、勤務先、健康状態、実際のGoal、自由記述の経歴は収集しません。Accessibility上の調整依頼がある場合はrecruitment連絡として扱い、research noteへ転記しません。
+
+### Consent draft
+
+次の`[...]`をProduct Owner承認済みの値で埋め、privacy reviewerが空欄と不整合がないことを確認するまで使用しません。
+
+> この調査は、FUKAMU Cycleで用意された架空の目標を作り、1回のCycleと見直しを進める際の分かりやすさを確認するものです。参加は任意です。理由を示さず質問を飛ばしたり、いつでも中止したりできます。実在する仕事、健康、家庭、人生の内容は入力せず、提示された架空scenarioだけを使用してください。音声、映像、画面を録音・録画せず、逐語録も作りません。Moderatorはtaskの完遂状況、1分単位へ丸めた所要時間、選んだ操作、neutral promptの有無、個人を特定しない一文への言い換えだけを記録します。Contact情報と観察記録は別に保存し、Codexその他の外部AIへ渡しません。個人別記録を閲覧できるのは[research owner / moderator / reviewer]です。匿名集計にはtaskごとの人数とfindingの言い換えだけを使い、GitHubへ個人別の行を載せません。匿名集計前の[exact withdrawal deadline]までは[withdrawal contact]へ撤回を申し出られます。匿名集計後は個別結果を識別して除外できない場合があります。保存先は[private location]、個人別記録の削除日は[exact deletion date]、削除担当は[deletion owner]です。
+
+Consent recordに残せるのは`consent_version`、`session_code`、`accepted / declined`、取得日だけです。氏名や署名が法的・運用上必要か、取得日より細かい時刻が必要かはProduct Ownerが別途決めます。Declineまたはwithdrawalは理由を尋ねず、観察sheetを作成または継続しません。
+
+### Data separationとaccess boundary
+
+| Store | Allowed data | Prohibited data / access | Lifecycle |
+|---|---|---|---|
+| Contact mapping | 連絡に必要な最小情報、randomな`session_code` | Task outcome、観察、GitHub、Codex、外部AI | Recruitment ownerだけ。approved deletion dateまで |
+| Consent record | `consent_version`、`session_code`、accept / decline、必要なら取得日 | Goal本文、発言、操作path、Codex、外部AI | Approved human rolesだけ。retentionは開始前に確定 |
+| Coded observation | 下記allowlistのsession-level codeと一文のparaphrase | Contact、氏名、email、実User Content、逐語発言、recording、exact event timestamp、Codex、外部AI | Approved private storeだけ。aggregate確認後、exact deletion dateに削除 |
+| Aggregate evidence | Overall `n / N`、task outcome count、分単位のsummary、top finding | Session code、個人別row、経験bucket別のsmall subgroup、raw note、quote | Privacy review後だけGitHub / PR / Issueへ掲載可 |
+
+Session codeは連番、email fragment、Application IDを使わず、contact storeのhuman ownerがrandomに発行します。Raw noteとは、匿名化前後を問わず個別sessionに結び付く観察を指します。Codexはraw noteを閲覧、変換、要約、移送しません。Codexへ渡せるのはprivacy reviewerが公開可能と判断したaggregateだけです。
+
+### Preflight
+
+Moderatorとreviewerはsessionまたはsynthetic dry-runごとに次を埋め、開始前に読み合わせます。`Target UI baseline`はこのkitを更新した時点のexact mainであり、UI変更後はtaskとbaselineを再reviewします。Runtime欄にplaceholder、短縮SHA、`latest`、browser majorだけを残したまま開始しません。
+
+| Field | Required value for this kit / recording rule |
+|---|---|
+| Study / script version | `cycle-first-loop-v1` |
+| Target UI baseline | `1c646b07f4c4560ac904c15ac73b88c2f7c44d4a` |
+| Checked-out revision | `git rev-parse HEAD`の40文字SHA。Target UI baselineとUI差分がないことを確認 |
+| Browser | `Chromium <full version>`を実行時に記録。Extensionなしのfresh context |
+| Desktop viewport | `1280 × 844` CSS px、zoom `100%` |
+| Mobile viewport | `390 × 844` CSS px、zoom `100%`。T7だけで使用 |
+| Application | `./scripts/local-app.sh`が表示する`http://localhost:<port>`のisolated local app |
+| Data | Emptyで破棄可能なlocal DB、新しいanonymous User、fresh storage。実User / Production dataなし |
+| External boundaries | Google未設定、OpenAI keyなし、Fake AI、in-memory telemetry、外部requestなし |
+| Start state T1 | Homeの「まだ進行中の目標はありません。」が表示され、creation draftなし |
+| Start state T2–T6 | 直前Taskの成功状態。Taskをskipした状態から開始しない |
+| Start state T7 | T6後のGoal v1 / Cycle 2、Pが選択済み、Frame本文は空 |
+| Timing | Stopwatchは相対経過だけ。Absolute start/end timestampを記録せず、task終了時に分単位へ切り上げる |
+| Stop condition | 前sectionの停止条件、browser console error、記録したApplication originとsame-originではないrequest、target差分のいずれか |
+
+実参加者sessionでは、この表に加えて全Product Owner決定、consent acceptance、session code、moderator / reviewerを確認します。Synthetic dry-runではpersonを参加者として数えず、contact / consent storeを作りません。
+
+### Synthetic scenario
+
+全taskで次の同じ架空scenarioだけを使用します。参加者自身のGoalや具体的な事情へ置き換えません。
+
+> 平日の午前に最重要作業へ集中したい。今週はメールを開く前に通知を切って30分取り組み、5日中3日は午前中に主要作業を終える。実際には5日中4日着手し、3日は30分継続して午前中に完了した。1日は15分で中断し、残る1日はメールを先に開いた。次回は通知offを継続し、中断時の再開時刻も記録する。
+
+### T1–T7 task scriptと§42.4 mapping
+
+Moderatorは`Prompt`だけを読み、`Success state`にあるUI名称や操作を先に教えません。`§42.4 relation`は概念上の接続であり、この調査dataをProduct KPIへ投入する指示ではありません。
+
+| Task | Participant prompt | Success state | Primary observation | §42.4 relation |
+|---|---|---|---|---|
+| T1 Goal start | Homeから、架空scenarioの改善目標を設定して最初の取り組みを始めてください。AIは使わないでください | 「Goal v1 · Cycle 1」、Pが選択される | 「新しい目標を設定」の発見、80文字feedback、保存待ち、manual path、遷移後heading | ActivationのFirst Goal startに対応。ただし48時間windowを測らない |
+| T2 Plan | 今回試すことと、うまくいったと判断する条件を記録して、次の記録へ進んでください | P保存後、Dが選択される | Pの意味、guideと「D — Doへ進む」の発見、tabとの選択 | Funnelの中間qualitative evidence。独立KPI stageではない |
+| T3 Do | 架空scenarioで実際に起きた事実を記録して、次へ進んでください | D保存後、Cが選択される | 計画と事実の区別、任意の「今の実行を記録」、CへのCTA、保存feedback | Funnelの中間qualitative evidence。実日時をstudy dataにしない |
+| T4 Check | 計画と実際を比べ、分かったことを記録して、次へ進んでください | C保存後、Aが選択される | 「今回のPとDを比べる」、縦scroll、比較からCを書く流れ、AへのCTA | Funnelの中間qualitative evidence。独立KPI stageではない |
+| T5 Action / complete | 次回に続けること・変えることを書き、このCycleを確定してください。AIは使わないでください | Confirmationで全Frameを確認し、Goal Reviewへ到達 | Aの意味、disabled guidance、全Frame summaryと編集導線、完了後編集不可warningの理解、Goal Review上のread-only summary、dialog判断 | First Goal funnelのCycle 1 completedに対応。所要時間は168時間KPIではない |
+| T6 Review / Cycle 2 | 直前の結果を振り返り、目標文は変えずに次の取り組みを開始してください。実行前に、続ける場合と終える場合の違いを説明してください | 「次のサイクルへ進む」から「この目標で次のサイクルへ」を実行し、「Goal v1 · Cycle 2」、Pへ到達 | 直前Cycle summary、Review goal、next / terminal sectionの区別、primary action、結果の予測 | Review decision=`next_cycle`とMeaningful loopに対応。Terminalは理解だけを観察し実行しない |
+| T7 Mobile orientation | Mobile表示で現在地を説明し、入力を変えずにP / D / C / Aを一巡してPへ戻ってください。次にHome、履歴、設定の行き方を確認してください | 横scrollなく全tabpanelへ到達し、Home linkと履歴・設定linkを特定し、Drawerを閉じてCycle 2のPへ戻る | `P Plan`等のaccessible name、bottom tabs、focus、Home導線、Drawer内の履歴・設定導線、focus循環と背景無効化。Software keyboard遮蔽は対応実機だけで観察し、それ以外は`not_assessed` | KPI非該当。Mobile / accessibility guardrail evidence |
+
+T1、T5、T6の所要時間はmoderated task timeであり、Application DBのUser作成、Goal作成、Cycle完了、Review decisionのevent間隔ではありません。`kpireport`へsession sampleを入れず、48h / 168hの達成率、Production baseline、retention、小標本のProduct傾向として表現しません。
+
+### Moderator checklist
+
+開始前:
+
+- Preflightを二者確認し、target SHA、full browser version、両viewport、empty start state、localhost-onlyを固定する。
+- Human sessionなら全`TBD`の承認証跡、role、consent、private store、access、exact deletion dateを確認する。Synthetic dry-runならhuman studyとして扱わない。
+- Recording機能、transcription、browser sync、extensionをoffにし、実User Contentを入力しないことを伝える。
+- Stopwatchはtask単位の相対時間だけを表示し、絶対時刻や画面captureを保存しない。
+- Observation sheetはallowlist列だけにし、free-form transcript欄を作らない。
+
+実施中:
+
+- T1から順にPromptを一度だけ読み、button名、P/D/C/Aの答え、成功pathを教えない。
+- 参加者が停止を宣言するか60秒操作がないときだけ、「次に何をしようと思っていますか？」を1回使う。それ以外の誘導はせず、2回目の支援が必要なら`N`とする。
+- Sessionが停止せずTaskを終えた場合だけ`I / R / A / N`、切り上げた分数、prompt数、closed codeを記録する。Sessionが停止した場合は全taskを`not_scored`とし、集計のoutcome countとdurationから除外する。発言は引用せず、一文で一般化してparaphraseする。
+- T5の確定前に、全Frameを確認できるか、編集へ戻った後に再び完了できるかを観察する。
+- T6の実行前にnext / terminalの結果説明を聞き、terminal action自体は実行しない。T6後はCycle 2へ本文を追加しない。
+- T7は`390 × 844`へ切り替え、内容を編集しない。Keyboardだけの確認ではPointer、Touch、screen reader、software keyboard遮蔽の成功を推測せず、実施していないinteraction modeを`not_assessed`とする。
+- Consent撤回または停止条件に該当したら即時停止し、理由を問い詰めず、recordの扱いをapproved procedureへ渡す。
+
+終了後:
+
+- Session-level sheetからcontact、実本文、quote、exact timestamp、DOM selector、raw ID、uniqueな経歴がないことをhuman reviewerが確認する。
+- Moderatorとreviewerだけでseverity、friction code、paraphraseを確認する。Codexへsheetを渡さない。
+- Approved minimumを満たすまでindividual patternをIssueへ逐次掲載せず、overall aggregateだけを作る。
+- Aggregate承認後、deletion ownerがexact dateにprivate recordを削除し、値を含まない完了記録だけを残す。
+
+### Coded session-level observation schema
+
+次の列だけをsession-level coded observationへ使用します。`session_code`を含む全行は匿名化済みaggregateではなくraw noteとして扱います。
+
+停止sessionでは、停止を検知したTaskのrowだけを残して`outcome=not_scored`とし、Task固有の観察値は`not_assessed`にします。未開始・完了済みを含む他Taskのrowは作成または保持しません。Withdrawal時は停止rowも含めて全観察rowを削除します。
+
+| Field | Type / allowed values | Rule |
+|---|---|---|
+| `study_version` | `cycle-first-loop-v1` | Script変更時は新version。過去rowを上書きしない |
+| `target_sha` | 40文字lowercase Git SHA | Preflightのexact value |
+| `browser` | family + full version | User-Agent全文は保存しない |
+| `viewport` | `1280x844` / `390x844` | T1–T6 / T7 |
+| `session_code` | random opaque code | Contact storeだけが対応表を持つ。公開しない |
+| `experience_bucket` | `none / occasional / continuous` | Approved screener回答だけ。subgroup公開しない |
+| `session_status` | `completed / stopped_technical / stopped_boundary / stopped_privacy` | `completed`以外は全taskを`not_scored`として集計から除外。Withdrawal時はrow自体を削除する |
+| `task_id` | `T1`–`T7` | 1行1task |
+| `outcome` | `I / R / A / N / not_scored` | `I`支援なし、`R`誤経路から自己回復、`A`1回のneutral prompt後完遂、`N`Application上で未完遂。停止sessionだけ`not_scored` |
+| `duration_minutes` | 0以上の整数 / `not_assessed` | 相対時間をtask終了時に分単位へ切り上げる。時刻を保存しない |
+| `prompt_count` | `0 / 1 / not_assessed` | 2回目が必要なら実施せず`N` |
+| `first_path` | `expected / alternate / backtrack / none / not_assessed` | SelectorやURL履歴を保存しない |
+| `comprehension` | `clear / partial / incorrect / not_assessed` | 自分の言葉で結果を説明できたか |
+| `friction_code` | `F-XX / none / not_assessed` | 一つの意味に固定。新codeはreviewerと定義する |
+| `severity` | `S0 / S1 / S2 / S3 / not_assessed` | `S3`完遂不能・誤った不可逆操作・入力喪失risk、`S2`支援必須・反復誤経路、`S1`自己回復できる明確な迷い、`S0`阻害なし |
+| `recovery` | `self / neutral_prompt / none / not_needed / not_assessed` | 観察した経路だけ |
+| `paraphrase` | 個人を特定しない一文 / `not_assessed` | Quote、実内容、固有名詞、珍しい属性を禁止 |
+| `stop_reason` | `none / personal_content / recording / boundary_mismatch / technical / privacy` | 停止時も詳細を書かない。Withdrawal時はrowを残さない |
+
+列を追加する場合は、Product question、必要性、access、retention、aggregateへの用途をprivacy reviewerが確認し、開始前にschema versionを上げます。Free-text transcript、absolute timestamp、pointer座標、full navigation log、screenshot、screen recordingは追加しません。
+
+### Aggregate template
+
+Human reviewerはprivate rowから次の形だけを作り、privacy review後にIssueへ貼れます。Placeholderのままなら未完了であり、Codexはprivate rowから埋めません。
+
+```markdown
+## First Cycle usability aggregate
+
+- Study / script: cycle-first-loop-v1
+- Target SHA: <40-character SHA>
+- Browser: <family and full version>
+- Viewports: 1280x844 / 390x844 CSS px at 100%
+- Sessions included: <N>; excluded/stopped: <aggregate count only; not in task counts or duration>
+- Evidence limit: moderated synthetic-scenario sample; Production behaviorへ一般化しない
+- Privacy review: <human reviewer> / <completed date only>
+
+| Task | I | R | A | N | Duration, rounded minutes |
+|---|---:|---:|---:|---:|---|
+| T1 | <n> | <n> | <n> | <n> | median <n> |
+| T2 | <n> | <n> | <n> | <n> | median <n> |
+| T3 | <n> | <n> | <n> | <n> | median <n> |
+| T4 | <n> | <n> | <n> | <n> | median <n> |
+| T5 | <n> | <n> | <n> | <n> | median <n> |
+| T6 | <n> | <n> | <n> | <n> | median <n> |
+| T7 | <n> | <n> | <n> | <n> | median <n> |
+
+### F-XX: <short finding>
+
+- Stage / viewport: <Tn> / <desktop|mobile>
+- Observed pattern: <n / N overall; no subgroup>
+- Outcome impact: <aggregate I / R / A / N>
+- Severity: <S0–S3>
+- Expected understanding / action: <canonical reference>
+- Observed pattern: <aggregate paraphrase, no quote or session detail>
+- Recovery: <aggregate self / neutral prompt / none>
+- User impact: <one sentence>
+- Evidence limits: <sample and environment>
+- Proposed decision: <Adopt / Hold / Reject, pending Product Owner review>
+- Follow-up: <separate Delivery Issue or none>
+- Privacy check: no session code, contact, raw content, quote, timestamp, ID, or recording
+```
+
+Top findingはseverity、観察人数、Core Loopへの影響を別々に示し、単純な合計scoreで自動順位付けしません。経験bucket別の少人数結果、個人別duration、最小・最大値、session順序は公開しません。Adopt / Hold / RejectとProject Priority変更はProduct Owner review後だけ確定します。
+
+### Local synthetic moderator dry-run
+
+このdry-runは調査kitとmoderator handoffを検証するrehearsalであり、Issue #46の実参加者数、finding、baselineへ数えません。Product Ownerが操作役でもparticipantには数えず、`N=0`のままです。実参加者のふりをした推測結果を作りません。
+
+1. `git status --short --branch`と`git rev-parse HEAD`を確認し、PreflightのTarget UI baselineからUI差分がないことをreviewする。
+2. [`Dockerによるローカル実機確認`](#dockerによるローカル実機確認)に従い、空のtmpfs DB、Fake AI、in-memory telemetryでappを起動する。Google / OpenAI / OTLP credentialを設定しない。
+3. Fresh browser contextを作り、NetworkでPreflightに記録したApplication originへのsame-origin requestだけであることを確認する。異なるoriginへのrequestがあれば停止する。
+4. ModeratorはSynthetic scenarioとT1–T7のPromptだけを読み、内部のrehearsal operatorが成功状態まで操作する。60秒待たずneutral promptのtimer / wordingだけをsimulateし、誘導にならないか確認する。
+5. `session_code=SYNTHETIC`のmemory上のsample rowで全allowlist列、outcome code、severity、stop reason、aggregate変換を確認する。File、Issue、clipboard、external AIへraw rowを保存しない。
+6. T1–T6は`1280 × 844`、T7は`390 × 844`で、heading focus、next-frame CTA、P/D comparison、completion summary、Goal Reviewの二section、bottom tabs、Drawer focus containmentを確認する。Pointer / Keyboard / screen readerを実施していない場合は結果を代用しない。
+7. Failureがあれば`script / environment / application / privacy`のclosed classと影響Taskだけを残し、Product findingにしない。Script修正後はversionとTarget UI baselineを再確認する。
+8. Local appを専用の`--down`で終了する。Production、Cloudflare、Google、外部AI、§42.4 `kpireport`を実行しない。
+
+Dry-run完了証跡に残せるのはstudy version、exact SHA、browser full version、viewport、実施したinteraction mode、Taskごとのkit `pass / revise`、外部request `0`、人対象session `0`だけです。制御surfaceからbrowser full versionまたはNetwork一覧を取得できない場合は、その項目を`not_assessed`、kitを`revise`とし、取得可能なbrowserでの再実行条件だけを残します。`not_assessed`のまま人対象sessionを開始しません。Synthetic operatorの個別行や架空findingは残しません。
+
+### 準備sliceとIssue全体の完了条件
+
+Preparation sliceは、次を同じcandidateで満たしたときだけ完了です。
+
+- Exact mainに対してT1–T7と現行UI label / success stateが一致する。
+- §42.4との概念mappingと、KPIへ研究sampleを混ぜない境界が明記される。
+- Moderator、screener、consent、data separation、observation schema、aggregate、preflight、synthetic dry-runが一つのownerへ揃う。
+- Synthetic dry-runが`pass`、または`revise`のblockerと再実行条件が記録される。
+- Applicableなdocumentation checkとcommit前gateが同じstaged treeで成功する。
+
+Preparation sliceの完了はIssue #46の完了ではありません。Issue全体は、全`TBD`がProduct Owner承認済みになり、承認された人数で実参加者sessionを終え、human privacy reviewerがaggregateと上位3摩擦を確認し、Product OwnerがAdopt / Hold / Reject、Project Priority、#35 / #45の扱いを決めるまでcloseしません。ここで採用した変更は別Delivery Issueで実装・検証します。
 
 ## 初回セットアップ
 

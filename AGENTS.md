@@ -26,7 +26,7 @@ Cycle固有のアプリケーション要件・仕様・設計の最上位Source
 | テーマ                                              | 参照先                                                       |
 | --------------------------------------------------- | ------------------------------------------------------------ |
 | Repository入口                                      | [`README.md`](README.md)                                     |
-| Local development / checks / AI evaluation / clean  | [`docs/development.md`](docs/development.md)                 |
+| Local development / checks / research / clean        | [`docs/development.md`](docs/development.md)                 |
 | Environment variables                               | [`docs/environment.md`](docs/environment.md)                 |
 | Database / Migration                                 | [`docs/database.md`](docs/database.md)                       |
 | Cloud deployment / operations / troubleshooting     | [`docs/operations.md`](docs/operations.md)                   |
