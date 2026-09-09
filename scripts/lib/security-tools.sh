@@ -836,6 +836,9 @@ security_validate_node_audit_policy() {
           "  esbuild: true",
           "  workerd: true",
           "",
+          "overrides:",
+          "  \x22miniflare@5.20260811.1-alpha>sharp\x22: 0.35.4",
+          "",
         ].join("\n");
         if (fs.readFileSync("/workspace/pnpm-workspace.yaml", "utf8") !== expectedWorkspacePolicy) {
           process.exit(1);
@@ -857,6 +860,9 @@ security_validate_node_audit_policy() {
           "  autoInstallPeers: true",
           "  excludeLinksFromLockfile: false",
           "",
+          "overrides:",
+          "  miniflare@5.20260811.1-alpha>sharp: 0.35.4",
+          "",
           "importers:",
           "",
         ].join("\n");
@@ -869,6 +875,7 @@ security_validate_node_audit_policy() {
           JSON.stringify([
             "lockfileVersion: \x279.0\x27",
             "settings:",
+            "overrides:",
             "importers:",
             "packages:",
             "snapshots:",
@@ -947,6 +954,13 @@ security_validate_node_audit_policy() {
             JSON.stringify(["esbuild", "workerd"]) ||
           config.allowBuilds.esbuild !== true ||
           config.allowBuilds.workerd !== true
+        ) {
+          process.exit(1);
+        }
+        if (
+          !exactObject(config.overrides, {
+            "miniflare@5.20260811.1-alpha>sharp": "0.35.4",
+          })
         ) {
           process.exit(1);
         }
@@ -1108,7 +1122,7 @@ security_validate_node_audit_policy() {
   # Node runtime before pnpm can inspect packageManager/devEngines or select a
   # different executable. The trusted config exercises the same single policy
   # implementation used to validate pnpm's eventual effective configuration.
-  if ! printf '%s\n' '{"registry":"https://registry.npmjs.org/","packages":["frontend","cloudflare"],"allowBuilds":{"esbuild":true,"workerd":true},"managePackageManagerVersions":false}' >"${config_report}"; then
+  if ! printf '%s\n' '{"registry":"https://registry.npmjs.org/","packages":["frontend","cloudflare"],"allowBuilds":{"esbuild":true,"workerd":true},"overrides":{"miniflare@5.20260811.1-alpha>sharp":"0.35.4"},"managePackageManagerVersions":false}' >"${config_report}"; then
     return 1
   fi
   if ! "${validate_command[@]}" >/dev/null 2>/dev/null; then

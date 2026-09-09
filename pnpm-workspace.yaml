@@ -5,3 +5,6 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: true
+
+overrides:
+  "miniflare@5.20260811.1-alpha>sharp": 0.35.4
