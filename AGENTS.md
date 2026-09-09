@@ -17,6 +17,8 @@ Vendored `PLAYBOOK.md`と`validate.py`を手編集しません。更新時は同
 
 Playbookの`PE-WRK-002`に従い、git repositoryのfileを変更する作業は、最新の適切なbaseから作成した作業専用branchと作業専用git worktreeで行います。共有checkout、`main`、他processのworktreeを直接変更しません。
 
+複数作業の変更範囲、仕様owner、依存関係が十分に独立している場合は、各作業を開始する時点の最新`main`からそれぞれ専用branch / worktreeを作成し、先行Pull Requestのmergeを待たずに並行してよいものとします。後から`main`が進んだ場合は、各Pull Requestのmerge前に最新`main`との差分と意味上の競合を確認し、必要な統合・競合解消後に適用されるgateを再実行します。変更範囲または仕様判断が重なる作業や、先行作業の結果へ依存する作業は並行着手せず、先行作業を統合した最新`main`から開始します。共有済み履歴のrebase / force pushは`PE-WRK-004`に従い行いません。
+
 ## Source of Truth
 
 Cycle固有のアプリケーション要件・仕様・設計の最上位Source of Truthは [`docs/design.md`](docs/design.md) です。実装都合で仕様を変更してはいけません。共通の作業方法は上記Playbookを正とし、Cycle固有contractと責任範囲を重ねません。
