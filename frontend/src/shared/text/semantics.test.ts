@@ -1,5 +1,6 @@
 import {
   codePointCount,
+  evaluateBoundedTextInput,
   FRAME_TEXT_MAX_CODE_POINTS,
   GOAL_TEXT_MAX_CODE_POINTS,
   hasNonWhitespace,
@@ -38,6 +39,21 @@ describe("text semantics", () => {
     expect(normalizeBoundedTextInput(input, 80)).toBe(
       "\t一行目\n二行目\n三行目 \t",
     );
+  });
+
+  it("reports the normalized required and excess code-point counts", () => {
+    expect(evaluateBoundedTextInput("a\r\n😀", 3)).toEqual({
+      kind: "accepted",
+      value: "a\n😀",
+      requiredCodePoints: 3,
+      maximumCodePoints: 3,
+    });
+    expect(evaluateBoundedTextInput("e\u0301😀", 2)).toEqual({
+      kind: "rejected",
+      requiredCodePoints: 3,
+      maximumCodePoints: 2,
+      excessCodePoints: 1,
+    });
   });
 
   it("compares normalized line endings exactly without trimming", () => {

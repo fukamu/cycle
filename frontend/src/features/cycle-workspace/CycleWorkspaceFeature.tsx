@@ -74,12 +74,12 @@ import {
   commandFingerprint,
   useCommandOperation,
 } from "../../shared/hooks/useCommandOperation";
+import { useBoundedTextInput } from "../../shared/hooks/useBoundedTextInput";
 import {
   formatActivePeriod,
   formatCompletedPeriod,
 } from "../../shared/date/format";
 import {
-  codePointCount,
   FRAME_TEXT_MAX_CODE_POINTS,
   hasNonWhitespace,
   normalizeBoundedTextInput,
@@ -346,6 +346,7 @@ function CycleWorkspace({
     useState<DoQuickEntryFeedback>();
   const [isDoComposing, setIsDoComposing] = useState(false);
   const actionGuidanceId = useId();
+  const textLimitFeedbackId = useId();
   const scopeRegistry = useAutoSaveScopeRegistry();
   const scopeKey = ["cycle", userId, goal.id, cycle.id].join(":");
   const lease = useMemo(
@@ -1767,6 +1768,24 @@ function CycleWorkspace({
   const copy = frameCopy[selected];
   const selectedConflict = recoveryConflicts.get(selected);
   const workspaceMoved = movedWorkspace !== undefined;
+  const frameEditorReadOnly =
+    workspaceMoved ||
+    !editable ||
+    Boolean(selectedConflict) ||
+    pendingAction ||
+    (selected === "action" && aiState !== "idle");
+  const boundedInput = useBoundedTextInput({
+    value: values[selected],
+    maximumCodePoints: FRAME_TEXT_MAX_CODE_POINTS,
+    scopeKey: `${cycle.id}:${selected}`,
+    readOnly: frameEditorReadOnly,
+    onAccept: (value) => change(selected, value),
+    onCompositionChange: (composing) => {
+      if (selected !== "do") return;
+      isDoComposingRef.current = composing;
+      setIsDoComposing(composing);
+    },
+  });
   const doQuickEntryDisabledReason = workspaceMoved
     ? cycleDoQuickEntryCopy.disabled.workspaceMoved
     : recoveryConflicts.has("do")
@@ -1941,36 +1960,31 @@ function CycleWorkspace({
           ref={frameEditorRef}
           id="cycle-frame-editor"
           aria-label={`${copy.label} — ${copy.name}`}
-          aria-describedby="cycle-frame-guide"
-          aria-readonly={
-            workspaceMoved ||
-            !editable ||
-            Boolean(selectedConflict) ||
-            pendingAction ||
-            (selected === "action" && aiState !== "idle")
+          aria-describedby={
+            boundedInput.feedback
+              ? `cycle-frame-guide ${textLimitFeedbackId}`
+              : "cycle-frame-guide"
           }
-          value={values[selected]}
+          aria-readonly={frameEditorReadOnly}
+          value={boundedInput.value}
           placeholder={copy.placeholder}
-          readOnly={
-            workspaceMoved ||
-            !editable ||
-            Boolean(selectedConflict) ||
-            pendingAction ||
-            (selected === "action" && aiState !== "idle")
-          }
-          onChange={(event) => change(selected, event.target.value)}
-          onCompositionStart={() => {
-            if (selected !== "do") return;
-            isDoComposingRef.current = true;
-            setIsDoComposing(true);
-          }}
-          onCompositionEnd={() => {
-            if (!isDoComposingRef.current) return;
-            isDoComposingRef.current = false;
-            setIsDoComposing(false);
-          }}
+          readOnly={frameEditorReadOnly}
+          onChange={boundedInput.onChange}
+          onCompositionStart={boundedInput.onCompositionStart}
+          onCompositionEnd={boundedInput.onCompositionEnd}
           onBlur={() => flush(selected)}
         />
+        {boundedInput.feedback && (
+          <p
+            className="text-limit-feedback"
+            id={textLimitFeedbackId}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {boundedInput.feedback}
+          </p>
+        )}
         <div className="editor-meta">
           {editable && !workspaceMoved && selected !== "action" ? (
             <SaveBadge
@@ -1981,7 +1995,7 @@ function CycleWorkspace({
             <span className="read-only-badge">読み取り専用</span>
           ) : null}
           <span>
-            {codePointCount(values[selected])} / {FRAME_TEXT_MAX_CODE_POINTS}
+            {boundedInput.count} / {FRAME_TEXT_MAX_CODE_POINTS}
           </span>
         </div>
         {editable && !workspaceMoved && selected === "action" && (

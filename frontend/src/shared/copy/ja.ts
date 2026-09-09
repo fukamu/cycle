@@ -67,6 +67,15 @@ export const cycleDoQuickEntryCopy = {
     `追加後は${requiredCodePoints}文字になるため、Dをあと${excessCodePoints}文字減らしてください（上限${maximumCodePoints}文字）。`,
 } as const;
 
+export const textLimitCopy = {
+  rejected: (
+    requiredCodePoints: number,
+    maximumCodePoints: number,
+    excessCodePoints: number,
+  ) =>
+    `入力後は${requiredCodePoints}文字になるため反映できませんでした。上限${maximumCodePoints}文字まで、入力内容をあと${excessCodePoints}文字減らしてください。`,
+} as const;
+
 export const cycleActionCopy = {
   disabled: {
     commandPending:

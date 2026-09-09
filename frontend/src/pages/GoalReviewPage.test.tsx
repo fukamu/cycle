@@ -423,7 +423,7 @@ describe("GoalReviewPage", () => {
     expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
   });
 
-  it("accepts 80 non-BMP review code points and rejects the 81st", async () => {
+  it("accepts 80 non-BMP review code points and explains the atomic rejection of the 81st", async () => {
     renderPage();
     const editor = await screen.findByRole("textbox", {
       name: "次のサイクルで目指す目標",
@@ -435,6 +435,9 @@ describe("GoalReviewPage", () => {
 
     expect(editor).toHaveValue(eightyCodePoints);
     expect(screen.getByText("80 / 80")).toBeInTheDocument();
+    const saveCallsBeforeRejection = vi.mocked(saveReview).mock.calls.length;
+    const cacheCallsBeforeRejection =
+      vi.mocked(putBrowserDraft).mock.calls.length;
 
     fireEvent.change(editor, {
       target: { value: `${eightyCodePoints}😀` },
@@ -442,6 +445,18 @@ describe("GoalReviewPage", () => {
 
     expect(editor).toHaveValue(eightyCodePoints);
     expect(screen.getByText("80 / 80")).toBeInTheDocument();
+    const feedback = screen.getByText(
+      "入力後は81文字になるため反映できませんでした。上限80文字まで、入力内容をあと1文字減らしてください。",
+    );
+    expect(feedback).toHaveAttribute("role", "status");
+    expect(editor).toHaveAttribute("aria-describedby", feedback.id);
+    expect(saveReview).toHaveBeenCalledTimes(saveCallsBeforeRejection);
+    expect(putBrowserDraft).toHaveBeenCalledTimes(cacheCallsBeforeRejection);
+
+    fireEvent.change(editor, { target: { value: "次の有効な見直し" } });
+
+    expect(editor).toHaveValue("次の有効な見直し");
+    expect(feedback).not.toBeInTheDocument();
   });
 
   it("explains disabled Review actions without blocking terminal actions", async () => {

@@ -56,6 +56,7 @@ import {
   commandFingerprint,
   useCommandOperation,
 } from "../../shared/hooks/useCommandOperation";
+import { useBoundedTextInput } from "../../shared/hooks/useBoundedTextInput";
 import {
   type DraftLatestResolution,
   useDraftAutoSave,
@@ -64,7 +65,6 @@ import {
   codePointCount,
   GOAL_TEXT_MAX_CODE_POINTS,
   hasNonWhitespace,
-  normalizeBoundedTextInput,
   textDiffersAfterLineEndingNormalization,
 } from "../../shared/text/semantics";
 import { goalReviewQueryOptions } from "./goalReviewQueryOptions";
@@ -262,6 +262,7 @@ function ReviewEditor({
   const runPostCommitCleanup = usePostCommitCleanup();
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const actionGuidanceBaseId = useId();
+  const textLimitFeedbackId = useId();
   const markDeletedGoal = useStartGoalDeletionFence();
   const mountedGenerationRef = useRef(true);
   const deletedFenceStartedRef = useRef(false);
@@ -394,6 +395,15 @@ function ReviewEditor({
   const workspaceMovedHref =
     editorScopeMovedHref ?? (workspaceMoved ? `/goals/${goal.id}` : null);
   const workspaceIsMoved = workspaceMovedHref !== null;
+  const editorReadOnly =
+    editor.revisionConflictActive || workspaceIsMoved || pending;
+  const boundedInput = useBoundedTextInput({
+    value: editor.body,
+    maximumCodePoints: GOAL_TEXT_MAX_CODE_POINTS,
+    scopeKey: subjectKey,
+    readOnly: editorReadOnly,
+    onAccept: editor.setBody,
+  });
   useLayoutEffect(() => {
     if (!workspaceMoved || editorHydrating || editorScopeMovedHref) return;
     setConfirmation(undefined);
@@ -737,7 +747,6 @@ function ReviewEditor({
   }
   const valid =
     hasNonWhitespace(editor.body) && count <= GOAL_TEXT_MAX_CODE_POINTS;
-  const conflictPending = editor.revisionConflictActive;
   const conflictRetryBlocked =
     editor.resolvingConflict ||
     Boolean(editor.recoveryConflict) ||
@@ -864,17 +873,27 @@ function ReviewEditor({
         <label htmlFor="review-goal">次のサイクルで目指す目標</label>
         <textarea
           id="review-goal"
-          value={editor.body}
-          readOnly={conflictPending || workspaceIsMoved || pending}
-          onChange={(event) => {
-            const body = normalizeBoundedTextInput(
-              event.target.value,
-              GOAL_TEXT_MAX_CODE_POINTS,
-            );
-            if (body !== null) editor.setBody(body);
-          }}
+          aria-describedby={
+            boundedInput.feedback ? textLimitFeedbackId : undefined
+          }
+          value={boundedInput.value}
+          readOnly={editorReadOnly}
+          onChange={boundedInput.onChange}
+          onCompositionStart={boundedInput.onCompositionStart}
+          onCompositionEnd={boundedInput.onCompositionEnd}
           onBlur={editor.flush}
         />
+        {boundedInput.feedback && (
+          <p
+            className="text-limit-feedback"
+            id={textLimitFeedbackId}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {boundedInput.feedback}
+          </p>
+        )}
         <div className="editor-meta">
           {workspaceMovedHref && commandRecovery ? (
             <span className="read-only-badge">読み取り専用</span>
@@ -885,7 +904,7 @@ function ReviewEditor({
             />
           )}
           <span>
-            {count} / {GOAL_TEXT_MAX_CODE_POINTS}
+            {boundedInput.count} / {GOAL_TEXT_MAX_CODE_POINTS}
           </span>
         </div>
         <div className="button-row">
