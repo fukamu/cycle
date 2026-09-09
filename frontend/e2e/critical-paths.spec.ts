@@ -745,6 +745,64 @@ test("a failed Settings route chunk recovers through a full-page retry", async (
   expect(settingsChunkRequests).toBe(2);
 });
 
+test("a failed Google Identity script recovers through an explicit in-page retry", async ({
+  page,
+}) => {
+  const googleIdentityScriptURL = "https://accounts.google.com/gsi/client";
+  const fakeGoogleButtonName = "テスト用Google Accountで続行";
+  let scriptRequests = 0;
+  await page.route(googleIdentityScriptURL, async (route) => {
+    scriptRequests += 1;
+    if (scriptRequests === 1) {
+      await route.abort("connectionfailed");
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/javascript",
+      body: `
+        window.google = {
+          accounts: {
+            id: {
+              initialize() {},
+              renderButton(parent) {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.textContent = "${fakeGoogleButtonName}";
+                button.setAttribute("aria-label", "${fakeGoogleButtonName}");
+                parent.replaceChildren(button);
+              },
+            },
+          },
+        };
+      `,
+    });
+  });
+
+  await page.goto("/settings");
+
+  await expect(page.getByRole("heading", { name: "設定" })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(
+    "Google認証を読み込めませんでした",
+  );
+  expect(scriptRequests).toBe(1);
+  await expect(
+    page.locator('script[data-fukamu-cycle-google-identity="true"]'),
+  ).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Google認証を再読み込み" }).click();
+
+  await expect(
+    page.getByRole("button", { name: fakeGoogleButtonName }),
+  ).toBeVisible();
+  expect(scriptRequests).toBe(2);
+  await expect(
+    page.locator('script[data-fukamu-cycle-google-identity="true"]'),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Google認証を再読み込み" }),
+  ).toHaveCount(0);
+});
+
 test("cycle completion reuses its operation after committed response loss and converges to the current workspace", async ({
   page,
 }) => {

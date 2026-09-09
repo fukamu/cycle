@@ -30,12 +30,18 @@ export function GoogleIdentityButton({
   readonly disabled?: boolean;
 }) {
   const parent = useRef<HTMLDivElement>(null);
+  const onCredentialRef = useRef(onCredential);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "failed">(
     "loading",
   );
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const clientId = import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID as
     | string
     | undefined;
+
+  useEffect(() => {
+    onCredentialRef.current = onCredential;
+  }, [onCredential]);
 
   useEffect(() => {
     if (!clientId) return;
@@ -49,7 +55,8 @@ export function GoogleIdentityButton({
         accounts.id.initialize({
           client_id: clientId,
           callback: (response) => {
-            if (response.credential) onCredential(response.credential);
+            if (response.credential)
+              onCredentialRef.current(response.credential);
           },
         });
         parent.current.replaceChildren();
@@ -68,7 +75,7 @@ export function GoogleIdentityButton({
     return () => {
       active = false;
     };
-  }, [clientId, onCredential]);
+  }, [clientId, loadAttempt]);
 
   if (!clientId) {
     return (
@@ -77,9 +84,22 @@ export function GoogleIdentityButton({
   }
   if (loadState === "failed") {
     return (
-      <p className="inline-error" role="alert">
-        Google認証を読み込めませんでした。
-      </p>
+      <div className="google-identity__error">
+        <p className="inline-error" role="alert">
+          Google認証を読み込めませんでした。通信状態を確認して、もう一度読み込んでください。
+        </p>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={disabled}
+          onClick={() => {
+            setLoadState("loading");
+            setLoadAttempt((current) => current + 1);
+          }}
+        >
+          Google認証を再読み込み
+        </button>
+      </div>
     );
   }
   return (
@@ -104,12 +124,27 @@ export function GoogleIdentityButton({
 
 function loadGoogleIdentity(): Promise<void> {
   if (window.google?.accounts !== undefined) return Promise.resolve();
-  googleScriptPromise ??= new Promise<void>((resolve, reject) => {
+  if (googleScriptPromise !== undefined) return googleScriptPromise;
+
+  let ownedScript: HTMLScriptElement | undefined;
+  const attempt = new Promise<void>((resolve, reject) => {
     const script = document.createElement("script");
+    ownedScript = script;
     script.src = "https://accounts.google.com/gsi/client";
     script.async = true;
     script.defer = true;
-    script.addEventListener("load", () => resolve(), { once: true });
+    script.dataset.fukamuCycleGoogleIdentity = "true";
+    script.addEventListener(
+      "load",
+      () => {
+        if (window.google?.accounts === undefined) {
+          reject(new Error("Google Identity unavailable"));
+          return;
+        }
+        resolve();
+      },
+      { once: true },
+    );
     script.addEventListener(
       "error",
       () => reject(new Error("Google Identity load failed")),
@@ -117,5 +152,11 @@ function loadGoogleIdentity(): Promise<void> {
     );
     document.head.append(script);
   });
-  return googleScriptPromise;
+  googleScriptPromise = attempt;
+  void attempt.catch(() => {
+    if (googleScriptPromise !== attempt) return;
+    googleScriptPromise = undefined;
+    ownedScript?.remove();
+  });
+  return attempt;
 }

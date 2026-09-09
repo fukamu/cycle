@@ -1247,6 +1247,16 @@ textarea[readonly] {
   display: none;
 }
 
+.google-identity__error {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.google-identity__error p {
+  margin: 0;
+}
+
 .danger-zone {
   margin-top: 22px;
   box-shadow: none;
