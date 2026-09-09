@@ -1294,6 +1294,9 @@ valid_pnpm_workspace_policy=(
   'allowBuilds:'
   '  esbuild: true'
   '  workerd: true'
+  ''
+  'overrides:'
+  '  "miniflare@5.20260811.1-alpha>sharp": 0.35.4'
 )
 printf '%s\n' "${valid_pnpm_workspace_policy[@]}" >"${pnpm_policy_fixture}/pnpm-workspace.yaml"
 valid_pnpm_lock_policy=(
@@ -1303,6 +1306,9 @@ valid_pnpm_lock_policy=(
   '  autoInstallPeers: true'
   '  excludeLinksFromLockfile: false'
   ''
+  'overrides:'
+  '  miniflare@5.20260811.1-alpha>sharp: 0.35.4'
+  ''
   'importers:'
   ''
   'packages:'
@@ -1311,6 +1317,26 @@ valid_pnpm_lock_policy=(
 )
 cp -- "${repo_root}/pnpm-lock.yaml" "${pnpm_policy_fixture}/pnpm-lock.yaml"
 security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-valid.log" || fail "valid pnpm audit policy was rejected"
+printf '%s\n' "${valid_pnpm_workspace_policy[@]/0.35.4/0.35.3}" >"${pnpm_policy_fixture}/pnpm-workspace.yaml"
+expect_failure "pnpm stale reviewed override" security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-stale-override.log"
+printf '%s\n' "${valid_pnpm_workspace_policy[@]/0.35.4/^0.35.4}" >"${pnpm_policy_fixture}/pnpm-workspace.yaml"
+expect_failure "pnpm floating reviewed override" security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-floating-override.log"
+printf '%s\n' "${valid_pnpm_workspace_policy[@]}" '  unreviewed-package: 1.0.0' >"${pnpm_policy_fixture}/pnpm-workspace.yaml"
+expect_failure "pnpm unreviewed override" security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-unreviewed-override.log"
+printf '%s\n' "${valid_pnpm_workspace_policy[@]}" >"${pnpm_policy_fixture}/pnpm-workspace.yaml"
+cp -- "${repo_root}/pnpm-lock.yaml" "${pnpm_policy_fixture}/pnpm-lock.yaml"
+sed -i "/^overrides:$/,+2d" "${pnpm_policy_fixture}/pnpm-lock.yaml"
+expect_failure "pnpm missing lockfile override" security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-lock-missing-override.log"
+cp -- "${repo_root}/pnpm-lock.yaml" "${pnpm_policy_fixture}/pnpm-lock.yaml"
+sed -i 's/>sharp: 0.35.4/>sharp: 0.35.3/' "${pnpm_policy_fixture}/pnpm-lock.yaml"
+expect_failure "pnpm stale lockfile override" security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-lock-stale-override.log"
+cp -- "${repo_root}/pnpm-lock.yaml" "${pnpm_policy_fixture}/pnpm-lock.yaml"
+sed -i 's/>sharp: 0.35.4/>sharp: ^0.35.4/' "${pnpm_policy_fixture}/pnpm-lock.yaml"
+expect_failure "pnpm floating lockfile override" security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-lock-floating-override.log"
+cp -- "${repo_root}/pnpm-lock.yaml" "${pnpm_policy_fixture}/pnpm-lock.yaml"
+sed -i "/^overrides:$/a\\  unreviewed-package: 1.0.0" "${pnpm_policy_fixture}/pnpm-lock.yaml"
+expect_failure "pnpm unreviewed lockfile override" security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-lock-unreviewed-override.log"
+cp -- "${repo_root}/pnpm-lock.yaml" "${pnpm_policy_fixture}/pnpm-lock.yaml"
 printf '%s\n' '{"name":"pnpm-policy-fixture","private":true}' >"${pnpm_policy_fixture}/package.json"
 expect_failure "missing root packageManager" security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-package-manager-missing.log"
 printf '%s\n' '{"name":"pnpm-policy-fixture","private":true,"packageManager":"pnpm@11"}' >"${pnpm_policy_fixture}/package.json"
@@ -1476,7 +1502,7 @@ printf '%s\n' '{"name":"frontend-fixture","private":true,"scripts":{"prepare":"t
 expect_failure "workspace project install lifecycle" security_validate_node_audit_policy "${pnpm_policy_fixture}" "${output_root}" "${output_root}/pnpm-policy-workspace-lifecycle.log"
 [[ ! -e "${pnpm_policy_fixture}/lifecycle-executed" ]] || fail "workspace project lifecycle executed before policy rejection"
 cp -- "${repo_root}/frontend/package.json" "${pnpm_policy_fixture}/frontend/package.json"
-pass "pnpm audit rejects untrusted runtime selection, workspace identity/script changes, suppressions, hooks, patches, and non-registry sources"
+pass "pnpm audit allows only the reviewed exact override and rejects untrusted runtime selection, workspace identity/script changes, suppressions, hooks, patches, and non-registry sources"
 
 secret_fixture="${test_root}/secret"
 mkdir -p -- "${secret_fixture}"
