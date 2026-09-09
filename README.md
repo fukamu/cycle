@@ -21,7 +21,7 @@ Ready後に`http://localhost:8080`を開き、終了時はterminalでEnterを押
 | Shared project / work / quality / security / release methods | [`.fukamu/playbook/PLAYBOOK.md`](.fukamu/playbook/PLAYBOOK.md) |
 | Adopted Playbook revision / local trace / overrides | [lock](.fukamu/playbook/lock.json) / [config](.fukamu/playbook/config.json) / [overrides](.fukamu/playbook/overrides.json) |
 | Product behavior / API / architecture / invariants | [`docs/design.md`](docs/design.md) |
-| Local setup / development / checks / codegen / AI evaluation / local troubleshooting | [`docs/development.md`](docs/development.md) |
+| Local setup / development / checks / codegen / AI evaluation / usability research / local troubleshooting | [`docs/development.md`](docs/development.md) |
 | Environment variables / scope / secret-public classification | [`docs/environment.md`](docs/environment.md) |
 | Database / Migration / reset / data safety / DB troubleshooting | [`docs/database.md`](docs/database.md) |
 | Terraform / deployment / monitoring / incident / rollback / production troubleshooting | [`docs/operations.md`](docs/operations.md) |
