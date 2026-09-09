@@ -651,6 +651,16 @@ textarea[readonly] {
   border-radius: 10px;
 }
 
+.text-limit-feedback {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid #f2bac4;
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+
 .limit-notice,
 .next-cycle-note {
   margin: 0;

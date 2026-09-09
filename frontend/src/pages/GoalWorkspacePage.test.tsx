@@ -853,8 +853,14 @@ describe("GoalWorkspacePage", () => {
     expect(editor).toHaveValue("");
     expect(saveCycleFrame).not.toHaveBeenCalled();
 
+    fireEvent.change(editor, { target: { value: "変換中" } });
+    expect(editor).toHaveValue("変換中");
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+    expect(putBrowserDraft).not.toHaveBeenCalled();
+
     fireEvent.compositionEnd(editor);
     expect(add).toHaveAttribute("aria-disabled", "false");
+    expect(editor).toHaveValue("変換中");
     fireEvent.click(add);
     expect(editor).not.toHaveValue("");
   });
@@ -1335,7 +1341,7 @@ describe("GoalWorkspacePage", () => {
     expect(await screen.findByText("保存済み")).toBeInTheDocument();
   });
 
-  it("accepts 200 non-BMP code points and rejects the 201st", async () => {
+  it("accepts 200 non-BMP code points and explains the atomic rejection of the 201st", async () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
@@ -1348,6 +1354,10 @@ describe("GoalWorkspacePage", () => {
 
     expect(editor).toHaveValue(twoHundredCodePoints);
     expect(screen.getByText("200 / 200")).toBeInTheDocument();
+    const saveCallsBeforeRejection =
+      vi.mocked(saveCycleFrame).mock.calls.length;
+    const cacheCallsBeforeRejection =
+      vi.mocked(putBrowserDraft).mock.calls.length;
 
     fireEvent.change(editor, {
       target: { value: `${twoHundredCodePoints}😀` },
@@ -1355,6 +1365,17 @@ describe("GoalWorkspacePage", () => {
 
     expect(editor).toHaveValue(twoHundredCodePoints);
     expect(screen.getByText("200 / 200")).toBeInTheDocument();
+    const feedback = screen.getByText(
+      "入力後は201文字になるため反映できませんでした。上限200文字まで、入力内容をあと1文字減らしてください。",
+    );
+    expect(feedback).toHaveAttribute("role", "status");
+    expect(editor.getAttribute("aria-describedby")).toContain(feedback.id);
+    expect(saveCycleFrame).toHaveBeenCalledTimes(saveCallsBeforeRejection);
+    expect(putBrowserDraft).toHaveBeenCalledTimes(cacheCallsBeforeRejection);
+
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+
+    expect(feedback).not.toBeInTheDocument();
   });
 
   it("shows the saved frame after leaving and returning within cache stale time", async () => {

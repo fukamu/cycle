@@ -228,7 +228,13 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(page.getByText("80 / 80")).toBeVisible();
   await goal.fill(`${maximumGoal}😀`);
   await expect(goal).toHaveValue(maximumGoal);
+  await expect(
+    page.getByText(
+      "入力後は81文字になるため反映できませんでした。上限80文字まで、入力内容をあと1文字減らしてください。",
+    ),
+  ).toBeVisible();
   await saveText(page, goal, goalText, "/api/v1/goal-drafts/");
+  await expect(page.getByText(/反映できませんでした/)).toHaveCount(0);
   await page.getByRole("button", { name: "AIで目標を整える" }).click();
   await expect(
     page.getByRole("heading", { name: "AIからの提案" }),
@@ -262,6 +268,11 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(page.getByText("200 / 200")).toBeVisible();
   await planEditor.fill(`${maximumFrame}😀`);
   await expect(planEditor).toHaveValue(maximumFrame);
+  await expect(
+    page.getByText(
+      "入力後は201文字になるため反映できませんでした。上限200文字まで、入力内容をあと1文字減らしてください。",
+    ),
+  ).toBeVisible();
 
   await saveFrame(
     page,
@@ -269,6 +280,7 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     "朝に最重要タスクを決めて30分取り組む",
     "D",
   );
+  await expect(page.getByText(/反映できませんでした/)).toHaveCount(0);
   await saveFrame(page, "D — Do", "5日中4日、朝に取り組んだ", "C");
   const checkComparison = page.getByRole("region", {
     name: "今回のPとDを比べる",
@@ -368,7 +380,15 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   const reviewGoal = page.getByRole("textbox", {
     name: "次のサイクルで目指す目標",
   });
+  await reviewGoal.fill(`${maximumGoal}😀`);
+  await expect(reviewGoal).toHaveValue(goalText);
+  await expect(
+    page.getByText(
+      "入力後は81文字になるため反映できませんでした。上限80文字まで、入力内容をあと1文字減らしてください。",
+    ),
+  ).toBeVisible();
   await saveText(page, reviewGoal, "一時的に変更した目標", "/review");
+  await expect(page.getByText(/反映できませんでした/)).toHaveCount(0);
   await expect(
     page.getByText(
       "提案後に下書きが変更されたため、この提案は採用できません。",

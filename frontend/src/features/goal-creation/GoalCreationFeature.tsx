@@ -34,6 +34,7 @@ import {
 } from "../../shared/components/AsyncState";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
 import { goalActionCopy, goalCopy } from "../../shared/copy/ja";
+import { useBoundedTextInput } from "../../shared/hooks/useBoundedTextInput";
 import {
   commandFingerprint,
   useCommandOperation,
@@ -51,7 +52,6 @@ import {
   codePointCount,
   GOAL_TEXT_MAX_CODE_POINTS,
   hasNonWhitespace,
-  normalizeBoundedTextInput,
 } from "../../shared/text/semantics";
 import { useGoalCreationDraftCommand } from "./useGoalCreationDraftCommand";
 import {
@@ -135,6 +135,7 @@ function GoalDraftEditor({
   const runPostCommitCleanup = usePostCommitCleanup();
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const actionGuidanceBaseId = useId();
+  const textLimitFeedbackId = useId();
   const mountedGenerationRef = useRef(true);
   useLayoutEffect(() => {
     mountedGenerationRef.current = true;
@@ -209,6 +210,15 @@ function GoalDraftEditor({
     loadLatest,
     acceptLatest,
     scopeMovedOnError,
+  });
+  const editorReadOnly =
+    editor.revisionConflictActive || Boolean(editor.scopeMovedHref) || pending;
+  const boundedInput = useBoundedTextInput({
+    value: editor.body,
+    maximumCodePoints: GOAL_TEXT_MAX_CODE_POINTS,
+    scopeKey: subjectKey,
+    readOnly: editorReadOnly,
+    onAccept: editor.setBody,
   });
   const count = codePointCount(editor.body);
   const valid =
@@ -399,7 +409,6 @@ function GoalDraftEditor({
   const actionDescribedBy = (
     reason: GoalCreationActionDisabledReason | undefined,
   ) => (reason ? actionGuidanceId(reason) : undefined);
-  const conflictPending = editor.revisionConflictActive;
   const conflictRetryBlocked =
     editor.resolvingConflict ||
     Boolean(editor.recoveryConflict) ||
@@ -450,21 +459,30 @@ function GoalDraftEditor({
         <label htmlFor="goal-body">あなたの目標</label>
         <textarea
           id="goal-body"
-          aria-describedby="goal-editor-guide"
-          value={editor.body}
-          placeholder={goalCopy.placeholder}
-          readOnly={
-            conflictPending || Boolean(editor.scopeMovedHref) || pending
+          aria-describedby={
+            boundedInput.feedback
+              ? `goal-editor-guide ${textLimitFeedbackId}`
+              : "goal-editor-guide"
           }
-          onChange={(event) => {
-            const body = normalizeBoundedTextInput(
-              event.target.value,
-              GOAL_TEXT_MAX_CODE_POINTS,
-            );
-            if (body !== null) editor.setBody(body);
-          }}
+          value={boundedInput.value}
+          placeholder={goalCopy.placeholder}
+          readOnly={editorReadOnly}
+          onChange={boundedInput.onChange}
+          onCompositionStart={boundedInput.onCompositionStart}
+          onCompositionEnd={boundedInput.onCompositionEnd}
           onBlur={editor.flush}
         />
+        {boundedInput.feedback && (
+          <p
+            className="text-limit-feedback"
+            id={textLimitFeedbackId}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {boundedInput.feedback}
+          </p>
+        )}
         <div className="editor-meta">
           <SaveBadge
             state={editor.state}
@@ -472,12 +490,12 @@ function GoalDraftEditor({
           />
           <span
             className={
-              count > GOAL_TEXT_MAX_CODE_POINTS
+              boundedInput.count > GOAL_TEXT_MAX_CODE_POINTS
                 ? "counter counter--error"
                 : "counter"
             }
           >
-            {count} / {GOAL_TEXT_MAX_CODE_POINTS}
+            {boundedInput.count} / {GOAL_TEXT_MAX_CODE_POINTS}
           </span>
         </div>
         <div className="button-row">

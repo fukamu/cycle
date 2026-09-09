@@ -538,6 +538,7 @@ Route: `/goals/new`
 - Guide: `これから良くしたいことや、目指したい状態を書いてみましょう。最初から完璧である必要はありません。`
 - Placeholder: `例：仕事の優先順位を整理し、平日に余裕を持てるようになりたい。`
 - Character counter: `現在のcode point数 / §14.1の上限`。
+- Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 - Save state: `保存中` / `保存済み` / `保存失敗`。
 - Controls: `AIで目標を整える` / `この目標で始める` / `下書きを破棄`。
 
@@ -572,7 +573,7 @@ Goal v2 · Cycle 3
 2026/08/18 〜
 ```
 
-Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。
+Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 
 Active CycleのD選択中だけ、明示操作`今の実行を記録`を表示する。操作時点のBrowser local date/timeを`【YYYY/MM/DD HH:mm UTC±HH:MM】`というplain-text見出しにし、Dが空なら見出しと末尾改行、非空なら既存本文を1字も変更せず、空行区切り、見出し、末尾改行の順で追記する。追記後はD Textareaの末尾へfocusする。同じ見出しを追加した直後の連続操作はno-opとし、`日時の追加を取り消す`では追記直前の本文へexactに戻す。追記後にDを手入力した時点で、その追記に対するUndoは無効にする。
 
@@ -652,7 +653,7 @@ Route: `/goals/:goalId/review`
 
 1. Current Goal Version。
 2. 直前Completed CycleのP/D/C/A summary。折りたたみ可能だが、C/Aを確認しやすくする。
-3. Goal Review Draft Textarea。
+3. Goal Review Draft Textarea。文字数超過時は§40.2の共通入力feedbackに従う。
 4. Save state。
 5. Goal Refine controls / suggestion comparison。
 6. Outcome controls。
@@ -5135,6 +5136,10 @@ Goal / Frameの文字semanticsは§§14.1、14.5だけが所有し、Unicode cod
 - PostgreSQL: `char_length(value)`
 
 Grapheme clusterと完全一致しないtrade-offはあるが、Frontend / Backend / DBの一貫性を優先する。
+
+Goal Creation、Goal Review、Active CycleのP/D/C/A Textareaでは、改行正規化後の候補が上限を超えた場合に現在値を一切変更せず、Auto Save APIとBrowser Draft Cacheへ送らない。Textarea近傍のlive statusで`入力後は{required}文字になるため反映できませんでした。上限{maximum}文字まで、入力内容をあと{excess}文字減らしてください。`と示し、次の上限内編集、Draft / Goal / Frame切替、またはRead-only化で消す。貼り付けや選択範囲置換も同じatomic rejectionとし、substring切断、`maxlength`、上限超過値の一時保持は行わない。
+
+IME composition中の中間値は画面上の変換操作だけに保持し、文字数超過feedback、Auto Save API、Browser Draft Cacheを発生させない。`compositionend`の確定候補を改行正規化後に一度だけ判定し、上限内なら通常の編集として反映し、超過なら直前の確定値へ戻して同じfeedbackを示す。Dの`今の実行を記録`がcomposition中に使えない理由は§9.7の専用文言を維持し、文字数超過feedbackと混同しない。
 
 ## 40.3 Error classes
 
