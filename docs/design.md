@@ -4136,6 +4136,7 @@ Actions:
 - P/D/C/AはWAI-ARIA tabs pattern。
 - Save / AI / Errorは`aria-live`。
 - Dialogはfocus trap、close時triggerへ戻す。
+- Header Drawerを開いた直後は最初のmenu linkへfocusし、開いている間のTab / Shift+Tabはmenu triggerとDrawer内linkだけを循環する。Skip link、wordmark、main contentはnative `inert`でKeyboard・Pointer・支援技術の操作対象外とし、BackdropはPointerで閉じられるがTab順とAccessibility Treeには含めない。Escape、menu trigger、Backdropで閉じた場合は`inert`を解除してtriggerへfocusを戻す。Drawer linkで`pathname`が実際に変わる場合はtriggerへ戻さず、この節のdestination `h1` focusを適用する。同じ`pathname`のlinkを選択した場合はtriggerへfocusを戻す。
 - AI中Aは`readOnly` + `aria-readonly=true`。disabledにせずcopy/scroll可能。
 - ColorだけでGoal status / save state / version markerを表現しない。
 - CのP/D比較はvisible headingとP→D→Cのreading orderを持ち、Recovery待ちは色だけでなく文字とfocus可能な確認操作で示す。

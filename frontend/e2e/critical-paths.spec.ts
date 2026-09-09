@@ -246,6 +246,99 @@ async function expectReviewSuggestionAtNarrowWidths(page: Page) {
   await page.setViewportSize({ width: 1280, height: 720 });
 }
 
+test("header drawer contains focus and deactivates the background", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await page.goto("/");
+
+  const menuButton = page.locator(".menu-button");
+  const skipLink = page.locator(".skip-link");
+  const wordmark = page.locator(".wordmark");
+  const mainContent = page.locator("#main-content");
+  const backgroundAction = page.getByRole("button", {
+    name: "新しい目標を設定",
+  });
+  await expect(backgroundAction).toBeVisible();
+  expect((await menuButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+
+  await menuButton.click();
+  const drawer = page.getByRole("navigation", { name: "メインメニュー" });
+  const desktopLayout = await drawer.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      documentOverflows:
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+      insideViewport: rect.left >= 0 && rect.right <= window.innerWidth,
+    };
+  });
+  expect(desktopLayout).toEqual({
+    documentOverflows: false,
+    insideViewport: true,
+  });
+  await page.keyboard.press("Escape");
+  await expect(menuButton).toBeFocused();
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  expect((await menuButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+
+  await menuButton.click();
+  await expect(menuButton).toHaveAccessibleName("メニューを閉じる");
+  const history = page.getByRole("link", { name: "目標の履歴" });
+  const settings = page.getByRole("link", { name: "設定" });
+  await expect(history).toBeFocused();
+  expect(
+    await page.evaluate(() => ({
+      main: document.querySelector<HTMLElement>("#main-content")?.inert,
+      skipLink: document.querySelector<HTMLElement>(".skip-link")?.inert,
+      wordmark: document.querySelector<HTMLElement>(".wordmark")?.inert,
+    })),
+  ).toEqual({ main: true, skipLink: true, wordmark: true });
+  const backdrop = page.locator(".drawer-backdrop");
+  await expect(backdrop).toHaveAttribute("aria-hidden", "true");
+  await expect(backdrop).toHaveAttribute("tabindex", "-1");
+
+  await page.keyboard.press("Shift+Tab");
+  await expect(menuButton).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(history).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(settings).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(menuButton).toBeFocused();
+  await backgroundAction.evaluate((element) => element.focus());
+  await expect(menuButton).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(menuButton).toHaveAccessibleName("メニューを開く");
+  await expect(menuButton).toBeFocused();
+  await expect(skipLink).not.toHaveAttribute("inert", "");
+  await expect(wordmark).not.toHaveAttribute("inert", "");
+  await expect(mainContent).not.toHaveAttribute("inert", "");
+
+  await menuButton.click();
+  await backdrop.click({ position: { x: 8, y: 8 } });
+  await expect(menuButton).toHaveAccessibleName("メニューを開く");
+  await expect(menuButton).toBeFocused();
+
+  await menuButton.click();
+  await history.click();
+  const destination = page.getByRole("heading", {
+    level: 1,
+    name: "目標の履歴",
+  });
+  await expect(destination).toBeFocused();
+  await expect(mainContent).not.toHaveAttribute("inert", "");
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+});
+
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
 }) => {
