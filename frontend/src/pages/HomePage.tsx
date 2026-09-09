@@ -17,6 +17,7 @@ import {
 import { getHome } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
 import { reconcileSelectedCycleFrames } from "../shared/preferences/selectedFramePreference";
+import { hasNonWhitespace } from "../shared/text/semantics";
 
 export function HomePage() {
   const session = useSession();
@@ -99,7 +100,11 @@ export function HomePage() {
         <section className="draft-card">
           <p className="eyebrow">DRAFT</p>
           <h2>目標の設定を続ける</h2>
-          <p>{home.creationDraft.body || "まだ本文はありません。"}</p>
+          <p className="draft-card__preview">
+            {hasNonWhitespace(home.creationDraft.body)
+              ? home.creationDraft.body
+              : "まだ本文はありません。"}
+          </p>
           <Link className="button button--primary" to="/goals/new">
             下書きを開く
           </Link>

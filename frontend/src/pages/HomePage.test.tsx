@@ -321,6 +321,50 @@ describe("HomePage progressing goal collection", () => {
       cache.getQueryData<Home>(userQueryKeys.home(session.user.id)),
     ).toEqual(emptyHome);
   });
+
+  it.each([
+    ["an empty body", ""],
+    ["a space-only body", " \t\u3000"],
+    ["a newline-only body", "\n\n"],
+  ])("shows the empty preview for %s", async (_case, body) => {
+    vi.mocked(getHome).mockResolvedValue({
+      progressingGoals: [],
+      creationDraft: { ...existingCreationDraft, body },
+      canCreateGoalDraft: false,
+      progressingGoalLimit: 2,
+      canStartProgressingGoal: true,
+    });
+
+    renderHome();
+
+    const preview = await screen.findByText("まだ本文はありません。");
+    expect(preview).toHaveClass("draft-card__preview");
+    expect(screen.getByRole("link", { name: "下書きを開く" })).toHaveAttribute(
+      "href",
+      "/goals/new",
+    );
+  });
+
+  it("keeps a non-empty multiline Draft unchanged in the preview", async () => {
+    const body = "一行目の目標\n  二行目は先頭の空白も保持する";
+    vi.mocked(getHome).mockResolvedValue({
+      progressingGoals: [],
+      creationDraft: { ...existingCreationDraft, body },
+      canCreateGoalDraft: false,
+      progressingGoalLimit: 2,
+      canStartProgressingGoal: true,
+    });
+
+    renderHome();
+
+    const heading = await screen.findByRole("heading", {
+      name: "目標の設定を続ける",
+    });
+    const preview = heading
+      .closest("section")
+      ?.querySelector(".draft-card__preview");
+    expect(preview?.textContent).toBe(body);
+  });
 });
 
 function deferred<T>() {
