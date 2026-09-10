@@ -104,10 +104,10 @@ async function expectActionGuidanceAtNarrowWidths(
     for (const name of actionNames) {
       const action = page.getByRole("button", { name });
       await expect(action).toBeVisible();
-      await expect(action).toHaveAttribute(
-        "aria-describedby",
-        guidanceId ?? "",
-      );
+      await expect(action).toHaveAttribute("aria-describedby", /\S+/);
+      expect(
+        (await action.getAttribute("aria-describedby"))?.split(/\s+/),
+      ).toContain(guidanceId);
     }
     expect(
       await page.evaluate(
@@ -131,8 +131,34 @@ async function expectActionGuidanceAtNarrowWidths(
   await assertLayout();
 }
 
-async function expectReviewSuggestionAtNarrowWidths(page: Page) {
+async function expectReviewSuggestionAtNarrowWidths(
+  page: Page,
+  content: {
+    readonly currentGoal: string;
+    readonly plan: string;
+    readonly do: string;
+    readonly check: string;
+    readonly action: string;
+  },
+) {
   const assertLayout = async () => {
+    const decisionContext = page.getByRole("region", { name: "判断の材料" });
+    const currentGoal = page.locator(".goal-context h1");
+    const checkHeading = decisionContext.getByRole("heading", {
+      name: "直前のC — 分かったこと",
+    });
+    const actionHeading = decisionContext.getByRole("heading", {
+      name: "直前のA — 次に続ける・変えること",
+    });
+    const learningCards = decisionContext.locator(
+      ".review-decision-context__learning article",
+    );
+    const checkBody = learningCards.nth(0).locator("p");
+    const actionBody = learningCards.nth(1).locator("p");
+    const planAndDo = decisionContext.locator("details.cycle-summary");
+    const planAndDoSummary = planAndDo.locator("summary");
+    const planBody = planAndDo.locator(":scope > div").nth(0).locator("p");
+    const doBody = planAndDo.locator(":scope > div").nth(1).locator("p");
     const refine = page.getByRole("button", { name: "AIで目標を整える" });
     const comparison = page.getByRole("region", { name: "AIからの提案" });
     const adopt = comparison.getByRole("button", { name: "提案を採用" });
@@ -144,7 +170,7 @@ async function expectReviewSuggestionAtNarrowWidths(page: Page) {
       name: "次のサイクルへ進む",
     });
     const note = nextCycleSection.getByText(
-      /目標を維持してCycle \d+を開始します/,
+      /現在のGoal v\d+を維持し、新しいGoal Versionは作成せず、Cycle \d+を開始します/,
     );
     const continueAction = nextCycleSection.getByRole("button", {
       name: "この目標で次のサイクルへ",
@@ -156,8 +182,15 @@ async function expectReviewSuggestionAtNarrowWidths(page: Page) {
       level: 2,
       name: "この目標を終える",
     });
+    const achieve = terminalSection.getByRole("button", {
+      name: "目標を達成として終了",
+    });
+    const end = terminalSection.getByRole("button", { name: "目標を終了" });
 
     for (const element of [
+      currentGoal,
+      checkHeading,
+      actionHeading,
       refine,
       comparison,
       adopt,
@@ -165,8 +198,53 @@ async function expectReviewSuggestionAtNarrowWidths(page: Page) {
       note,
       continueAction,
       terminalHeading,
+      achieve,
+      end,
     ])
       await expect(element).toBeVisible();
+    for (const [element, expectedText] of [
+      [currentGoal, content.currentGoal],
+      [checkBody, content.check],
+      [actionBody, content.action],
+    ] as const) {
+      await expect(element).toHaveText(expectedText);
+      expect(
+        await element.evaluate((node) => ({
+          text: node.textContent,
+          whiteSpace: window.getComputedStyle(node).whiteSpace,
+        })),
+      ).toEqual({ text: expectedText, whiteSpace: "pre-wrap" });
+    }
+    if ((await planAndDo.getAttribute("open")) === null)
+      await planAndDoSummary.press("Enter");
+    await expect(planBody).toHaveText(content.plan);
+    await expect(doBody).toHaveText(content.do);
+    for (const [element, expectedText] of [
+      [planBody, content.plan],
+      [doBody, content.do],
+    ] as const) {
+      expect(
+        await element.evaluate((node) => ({
+          text: node.textContent,
+          whiteSpace: window.getComputedStyle(node).whiteSpace,
+        })),
+      ).toEqual({ text: expectedText, whiteSpace: "pre-wrap" });
+    }
+    await planAndDoSummary.press("Enter");
+    await expect(planBody).toBeHidden();
+    await expect(doBody).toBeHidden();
+    await planAndDoSummary.press("Enter");
+    await expect(planBody).toBeVisible();
+    await expect(doBody).toBeVisible();
+    await expect(continueAction).toHaveAccessibleDescription(
+      /新しいGoal Versionは作成せず、Cycle \d+を開始します/,
+    );
+    await expect(achieve).toHaveAccessibleDescription(
+      /目標を達成した状態として記録して、ここで取り組みを終えます/,
+    );
+    await expect(end).toHaveAccessibleDescription(
+      /目標を達成したとはせず、ここで取り組みを終えます/,
+    );
 
     const layout = await page.locator("main.review-page").evaluate((main) => {
       const buttons = Array.from(main.querySelectorAll("button"));
@@ -181,6 +259,8 @@ async function expectReviewSuggestionAtNarrowWidths(page: Page) {
         main.querySelector(".next-cycle-note"),
         button("この目標で次のサイクルへ"),
         main.querySelector(".terminal-actions"),
+        button("目標を達成として終了"),
+        button("目標を終了"),
       ];
       const missing = elements
         .map((element, index) => (element ? null : index))
@@ -529,7 +609,14 @@ test("History loads another page explicitly from the keyboard at narrow widths",
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
 }) => {
-  const goalText = "平日は主要業務を18時までに終えたい";
+  const reviewNarrowContent = {
+    currentGoal: `現在目標-${"UNBROKEN".repeat(7)}\n改行後の目標`,
+    plan: `計画-${"PLANWITHOUTBREAK".repeat(10)}\n改行後の計画`,
+    do: `実行-${"DOWITHOUTBREAK".repeat(11)}\n改行後の実行`,
+    check: `確認-${"CHECKWITHOUTBREAK".repeat(10)}\n改行後の学び`,
+    action: `改善-${"ACTIONWITHOUTBREAK".repeat(9)}\n改行後の次の一歩`,
+  } as const;
+  const goalText = reviewNarrowContent.currentGoal;
   await page.goto("/");
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
   const goal = page.getByRole("textbox", { name: "あなたの目標" });
@@ -587,24 +674,17 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     ),
   ).toBeVisible();
 
-  await saveFrame(
-    page,
-    "P — Plan",
-    "朝に最重要タスクを決めて30分取り組む",
-    "D",
-  );
+  await saveFrame(page, "P — Plan", reviewNarrowContent.plan, "D");
   await expect(page.getByText(/反映できませんでした/)).toHaveCount(0);
-  await saveFrame(page, "D — Do", "5日中4日、朝に取り組んだ", "C");
+  await saveFrame(page, "D — Do", reviewNarrowContent.do, "C");
   const checkComparison = page.getByRole("region", {
     name: "今回のPとDを比べる",
   });
   await expect(checkComparison).toBeVisible();
   await expect(
-    checkComparison.getByText("朝に最重要タスクを決めて30分取り組む"),
+    checkComparison.getByText(reviewNarrowContent.plan),
   ).toBeVisible();
-  await expect(
-    checkComparison.getByText("5日中4日、朝に取り組んだ"),
-  ).toBeVisible();
+  await expect(checkComparison.getByText(reviewNarrowContent.do)).toBeVisible();
   expect(
     await checkComparison
       .locator(".cycle-check-comparison__grid")
@@ -612,11 +692,13 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
         window.getComputedStyle(element).gridTemplateColumns.split(" "),
       ),
   ).toHaveLength(2);
-  await saveFrame(page, "C — Check", "3日は午前中に完了できた", "A");
+  await saveFrame(page, "C — Check", reviewNarrowContent.check, "A");
   await page.getByRole("button", { name: "アクションを生成" }).click();
   const actionEditor = page.getByRole("textbox", { name: "A — Action" });
   await expect(actionEditor).not.toHaveValue("");
   const generatedAction = await actionEditor.inputValue();
+  expect(generatedAction).not.toBe("");
+  await saveFrame(page, "A — Action", reviewNarrowContent.action, "A");
   await page.getByRole("button", { name: "サイクルを完了" }).click();
   const completionDialog = page.getByRole("dialog", {
     name: "サイクルを完了する前に確認",
@@ -625,10 +707,10 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(completionDialog.getByText("Goal v1 · Cycle 1")).toBeVisible();
   for (const content of [
     goalText,
-    "朝に最重要タスクを決めて30分取り組む",
-    "5日中4日、朝に取り組んだ",
-    "3日は午前中に完了できた",
-    generatedAction,
+    reviewNarrowContent.plan,
+    reviewNarrowContent.do,
+    reviewNarrowContent.check,
+    reviewNarrowContent.action,
   ])
     await expect(
       completionDialog.getByText(content, { exact: true }),
@@ -655,7 +737,7 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await completionDialog.getByRole("button", { name: "Dを編集" }).click();
   const doEditor = page.getByRole("textbox", { name: "D — Do" });
   await expect(doEditor).toBeFocused();
-  await expect(doEditor).toHaveValue("5日中4日、朝に取り組んだ");
+  await expect(doEditor).toHaveValue(reviewNarrowContent.do);
   await page.getByRole("tab", { name: /A\s*Action/ }).click();
   await page.getByRole("button", { name: "サイクルを完了" }).click();
   await page
@@ -689,7 +771,7 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     ),
   ).toHaveCount(0);
   await expect(page.getByRole("button", { name: "提案を採用" })).toBeEnabled();
-  await expectReviewSuggestionAtNarrowWidths(page);
+  await expectReviewSuggestionAtNarrowWidths(page, reviewNarrowContent);
   const reviewGoal = page.getByRole("textbox", {
     name: "次のサイクルで目指す目標",
   });
@@ -739,7 +821,9 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     "true",
   );
   await page.goto("/history");
-  await page.getByRole("link", { name: new RegExp(goalText) }).click();
+  await page
+    .getByRole("link", { name: new RegExp(goalText.replace("\n", "\\s+")) })
+    .click();
   await expect(
     page.locator('[data-version-number="1"]').getByText("GOAL V1"),
   ).toBeVisible();
@@ -2220,25 +2304,49 @@ test("goal review termination discards an unversioned change explicitly", async 
     name: "次のサイクルで目指す目標",
   });
   await review.fill("次のCycleだけで試したかった変更案");
+  const terminalSection = page.getByRole("region", {
+    name: "この目標を終える",
+  });
+  await expect(terminalSection).toContainText(
+    "変更中の目標案は破棄し、Goal v2は作成しません。現在のGoal v1のまま終了し、Cycle 2も開始しません。",
+  );
+  await expect(
+    terminalSection.getByRole("button", { name: "目標を達成として終了" }),
+  ).toHaveAccessibleDescription(/この目標はあとから再開できません/);
   await page.getByRole("button", { name: "目標を達成として終了" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText(
-    "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません",
+    "このReview下書きは、別のタブで保存された変更も含めて破棄され、Goal v2として保存されません",
+  );
+  await expect(dialog).toContainText(
+    "現在のGoal v1のまま終了し、Cycle 2は開始されません",
+  );
+  await expect(dialog).toContainText(
+    "目標を達成した状態として記録して、ここで取り組みを終えます",
+  );
+  await expect(dialog).toContainText(
+    "どちらの操作も取り消せず、この目標はあとから再開できません",
   );
   await dialog.getByRole("button", { name: "目標を達成" }).click();
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });
 
-test("goal review termination explicitly covers cross-tab changes without local edits", async ({
+test("unchanged goal review warns that remote draft changes are discarded", async ({
   page,
 }) => {
   await createAndCompleteGoal(page);
   await page.getByRole("button", { name: "目標を終了" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText(
-    "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません",
+    "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionは作成しません",
   );
-  await expect(dialog).toContainText("現在の目標のまま終了します");
+  await expect(dialog).not.toContainText("Goal v2として保存されません");
+  await expect(dialog).toContainText(
+    "現在のGoal v1のまま終了し、Cycle 2は開始されません",
+  );
+  await expect(dialog).toContainText(
+    "目標を達成したとはせず、ここで取り組みを終えます",
+  );
   await dialog.getByRole("button", { name: "目標を終了" }).click();
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });

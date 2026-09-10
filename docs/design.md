@@ -653,10 +653,10 @@ Route: `/goals/:goalId/review`
 
 表示順序:
 
-1. Current Goal Version。
-2. 直前Completed CycleのP/D/C/A summary。折りたたみ可能だが、C/Aを確認しやすくする。
+1. `現在の目標`とCurrent Goal Version番号。
+2. `判断の材料`として、直前Completed CycleのCを`分かったこと`、Aを`次に続ける・変えること`として常時表示する。P/Dも同じ場所から折りたたみ表示で確認でき、decisionのために別tabやrouteへの往復を要求しない。
 3. Goal Review Draft Textarea。文字数超過時は§40.2の共通入力feedbackに従う。
-4. Save state。
+4. Review DraftがCurrent Versionと同一か変更案かを示す説明とSave state。この説明はTextareaへ関連付け、同一の場合は現在のVersionを維持すること、変更案は次Cycleを開始する場合だけ次のVersionとして保存されることを示す。
 5. Goal Refine controls / suggestion comparison。
 6. Outcome controls。
 
@@ -667,15 +667,19 @@ Outcome controlsは次の2つの見出し付きsectionを、この順で表示�
 
 Primary action: `この目標で次のサイクルへ`。
 
-- Draft本文がCurrent Versionと同じ: `目標を維持してCycle {N+1}を開始します`。
-- 異なる: `変更した目標をGoal v{V+1}として保存し、Cycle {N+1}を開始します`。
+- Draft本文がCurrent Versionと同じ: `現在のGoal v{V}を維持し、新しいGoal Versionは作成せず、Cycle {N+1}を開始します。`。
+- 異なる: `変更案をGoal v{V+1}として保存し、Cycle {N+1}を開始します。`。
 
 Terminal actions:
 
 - `目標を達成として終了`
 - `目標を終了`
 
-Draftが変更されている場合、confirmationへ次を明示する。
+Terminal sectionは実行前に、Review Draftを破棄して新しいGoal Versionを作らず、Current Goal VersionのままCycle `{N+1}`を開始しないことを示す。Draftが変更案なら、作成されないVersion番号`{V+1}`も明示する。達成は`目標を達成した状態として記録して取り組みを終える`、終了は`達成とはせず、ここで取り組みを終える`選択として区別し、どちらも取り消せず、同じGoalを再開できないことを各actionの説明へ含める。
+
+達成・終了buttonは同じ§11.5のterminal eligibilityを使い、説明とdisabled理由の両方を`aria-describedby`で関連付ける。Primary action、達成、終了、削除のlabel、state transition、enabled条件は変更しない。削除は4つのReview outcomeとは分離して表示し、§23.4の既存confirmationを維持する。
+
+達成・終了confirmationは、選択したoutcomeの違い、次のCycle番号、Goal Versionを作成しないこと、Current Goal Versionのまま終了すること、Review Draftの破棄、取り消し・再Open不可を再掲する。DraftがCurrent Versionと同じ場合は存在しない`{V+1}`を候補として示さず、`新しいGoal Versionは作成しません`と示す。Draftが変更されている場合だけ、作成しないVersion番号`{V+1}`とともに次も明示する。
 
 ```text
 この変更案は、次のサイクルを開始しないため保存されません。
@@ -4094,7 +4098,9 @@ AIからの提案
 
 ## 29.8 Goal Review terminal UX
 
-Review Draftがcurrent versionと異なる状態で達成/終了を選んだ場合、Dialogに次を含める。
+達成/終了の各buttonは、§9.8の選択固有説明、共通のterminal結果、適用中のdisabled理由を支援技術から取得できるようにする。Confirmation Dialogは選択したoutcomeの意味に加え、Review Draftの破棄、Current Goal Version、Goal Versionを作成しないこと、開始しない次Cycle番号、取り消し・再Open不可を§9.8どおり再掲する。作成しない次Version番号はDraftが変更案の場合だけ示す。
+
+Review Draftがcurrent versionと異なる状態では、Dialogに次の意味を含める。
 
 > 編集中の目標案は、次のサイクルを開始しないため新しい目標バージョンとして保存されません。現在の目標のまま終了します。
 
