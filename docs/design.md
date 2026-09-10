@@ -573,7 +573,7 @@ Goal v2 · Cycle 3
 2026/08/18 〜
 ```
 
-Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
+Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Completed / Canceledで選択中Frameが空文字またはUnicode whitespaceだけの場合は編集用Placeholderを表示せず、Textareaの近接textとaccessible descriptionで`未入力`と示す。Active Cycleの通常編集およびAI、Browser Draft Recovery、workspace移動、command処理による一時Read-onlyでは編集用Placeholderを維持し、`未入力`を表示しない。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 
 Active Cycleの編集可能なP / D / Cでは、Textarea、文字数feedback、Auto Save state / counterの後に、それぞれ`D — Doへ進む`、`C — Checkへ進む`、`A — Actionへ進む`というinline CTAを通常のscroll flowで表示する。CTAは既存のFrame選択経路で次のFrameを選択し、選択後は遷移先Tabへfocusする。入力が空、dirty / saving / failedを含むAuto Save state、または保存処理中であることを理由に無効化せず、保存完了を待たない。既存のflush、Auto Save queue、Browser Draft Cache、選択Frameの端末保存、自由なTab移動は変更しない。A、Completed / Canceled Cycle、選択中FrameのBrowser Draft Recoveryの確認待ち、workspace移動後、Cycle command処理中などTextareaがread-onlyとなる状態では表示しない。固定・sticky配置や、入力完了を強制するwizard / validation gateにはしない。
 
