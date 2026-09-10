@@ -112,6 +112,11 @@ func requestJSONContractFor(destination any) (requestJSONContract, bool) {
 		return requestJSONContract{required: []string{"operationId", "expectedGoalRevision", "expectedDraftRevision"}}, true
 	case *saveFrameRequest:
 		return requestJSONContract{required: []string{"content", "expectedFrameRevision"}}, true
+	case *changeReviewScheduleRequest:
+		return requestJSONContract{
+			required:        []string{"action", "expectedReviewScheduleRevision"},
+			optionalNonNull: []string{"reviewDate"},
+		}, true
 	case *actionGenerateRequest:
 		return requestJSONContract{required: []string{"expectedContentRevision", "confirmReplace"}}, true
 	case *actionRefineRequest:
@@ -161,6 +166,12 @@ func isValidRequestBody(destination any) bool {
 			input.ExpectedGoalRevision >= 0 && input.ExpectedDraftRevision >= 0
 	case *saveFrameRequest:
 		return input != nil && input.ExpectedFrameRevision >= 0
+	case *changeReviewScheduleRequest:
+		if input == nil || input.ExpectedReviewScheduleRevision < 0 {
+			return false
+		}
+		_, err := input.target()
+		return err == nil
 	case *actionGenerateRequest:
 		return input != nil && input.ExpectedContentRevision >= 0
 	case *actionRefineRequest:

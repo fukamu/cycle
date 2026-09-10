@@ -11,6 +11,7 @@ const MaxFrameCodePoints = 200
 
 var (
 	ErrInvalidFrame       = errors.New("invalid PDCA frame")
+	ErrInvalidReviewDate  = errors.New("invalid review date")
 	ErrFrameTextTooLong   = errors.New("frame text is too long")
 	ErrForbiddenCharacter = errors.New("text contains a forbidden character")
 	ErrCycleNotActive     = errors.New("cycle is not active")
@@ -53,30 +54,34 @@ type Revisions struct {
 	Action  int64
 }
 
+type ReviewDate string
+
 type PDCACycle struct {
-	ID                    string
-	UserID                string
-	GoalID                string
-	GoalVersionID         string
-	SequenceNumber        int32
-	Status                Status
-	StartedAt             time.Time
-	CompletedAt           *time.Time
-	CanceledAt            *time.Time
-	CancellationReason    *CancellationReason
-	Plan                  string
-	Do                    string
-	Check                 string
-	Action                string
-	Revisions             Revisions
-	ActionLastAIRevision  *int64
-	ActionModifiedAfterAI bool
-	StartOperationID      string
-	StartRequestHash      string
-	CompletionOperationID *string
-	CompletionRequestHash *string
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                     string
+	UserID                 string
+	GoalID                 string
+	GoalVersionID          string
+	SequenceNumber         int32
+	Status                 Status
+	StartedAt              time.Time
+	CompletedAt            *time.Time
+	CanceledAt             *time.Time
+	CancellationReason     *CancellationReason
+	Plan                   string
+	Do                     string
+	Check                  string
+	Action                 string
+	Revisions              Revisions
+	ReviewDate             *ReviewDate
+	ReviewScheduleRevision int64
+	ActionLastAIRevision   *int64
+	ActionModifiedAfterAI  bool
+	StartOperationID       string
+	StartRequestHash       string
+	CompletionOperationID  *string
+	CompletionRequestHash  *string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 type SaveFrameResult struct {
@@ -85,6 +90,11 @@ type SaveFrameResult struct {
 	Content string
 	NoOp    bool
 	SavedAt time.Time
+}
+
+type ChangeReviewScheduleResult struct {
+	Cycle PDCACycle
+	NoOp  bool
 }
 
 func New(id, userID, goalID, goalVersionID string, sequence int32, operationID, requestHash string, now time.Time) PDCACycle {
@@ -105,6 +115,69 @@ func ParseFrame(value string) (Frame, error) {
 		}
 	}
 	return "", ErrInvalidFrame
+}
+
+func ParseReviewDate(value string) (ReviewDate, error) {
+	if len(value) != len("2006-01-02") {
+		return "", ErrInvalidReviewDate
+	}
+	for index, character := range value {
+		if index == 4 || index == 7 {
+			if character != '-' {
+				return "", ErrInvalidReviewDate
+			}
+			continue
+		}
+		if character < '0' || character > '9' {
+			return "", ErrInvalidReviewDate
+		}
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil || parsed.Year() < 1 || parsed.Year() > 9999 || parsed.Format("2006-01-02") != value {
+		return "", ErrInvalidReviewDate
+	}
+	return ReviewDate(value), nil
+}
+
+func ChangeReviewSchedule(
+	current PDCACycle,
+	target *ReviewDate,
+	expectedRevision int64,
+) (ChangeReviewScheduleResult, error) {
+	if current.Status != StatusActive {
+		return ChangeReviewScheduleResult{}, ErrCycleNotActive
+	}
+	if current.ReviewScheduleRevision < 0 || expectedRevision < 0 {
+		return ChangeReviewScheduleResult{}, ErrRevisionConflict
+	}
+	if current.ReviewDate != nil {
+		if _, err := ParseReviewDate(string(*current.ReviewDate)); err != nil {
+			return ChangeReviewScheduleResult{}, err
+		}
+	}
+	if target != nil {
+		parsed, err := ParseReviewDate(string(*target))
+		if err != nil {
+			return ChangeReviewScheduleResult{}, err
+		}
+		target = &parsed
+	}
+	if reviewScheduleTargetsEqual(current.ReviewDate, target) {
+		return ChangeReviewScheduleResult{Cycle: current, NoOp: true}, nil
+	}
+	if current.ReviewScheduleRevision != expectedRevision {
+		return ChangeReviewScheduleResult{}, ErrRevisionConflict
+	}
+	current.ReviewDate = target
+	current.ReviewScheduleRevision++
+	return ChangeReviewScheduleResult{Cycle: current}, nil
+}
+
+func reviewScheduleTargetsEqual(current, target *ReviewDate) bool {
+	if current == nil || target == nil {
+		return current == nil && target == nil
+	}
+	return *current == *target
 }
 
 func NormalizeAndValidateText(value string) (string, error) {

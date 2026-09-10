@@ -196,6 +196,7 @@ type cycleTestTx struct {
 	aiErr       error
 
 	saveRows     int64
+	scheduleRows int64
 	completeRows int64
 	draftRows    int64
 	goalRows     int64
@@ -204,6 +205,8 @@ type cycleTestTx struct {
 	savedFrame             cycle.Frame
 	savedCycle             cycle.PDCACycle
 	saveExpectedRevision   int64
+	savedSchedule          cycle.PDCACycle
+	scheduleExpected       int64
 	completedCycle         cycle.PDCACycle
 	completeExpected       int64
 	insertedDraft          goal.Draft
@@ -259,6 +262,16 @@ func (tx *cycleTestTx) SaveCycleFrameCAS(_ context.Context, saved cycle.PDCACycl
 	tx.trace = append(tx.trace, "save")
 	tx.savedCycle, tx.savedFrame, tx.saveExpectedRevision = saved, frame, expected
 	return tx.saveRows, tx.writeErr
+}
+
+func (tx *cycleTestTx) SaveCycleReviewScheduleCAS(
+	_ context.Context,
+	saved cycle.PDCACycle,
+	expected int64,
+) (int64, error) {
+	tx.trace = append(tx.trace, "save-schedule")
+	tx.savedSchedule, tx.scheduleExpected = saved, expected
+	return tx.scheduleRows, tx.writeErr
 }
 
 func (tx *cycleTestTx) CompleteCycleCAS(_ context.Context, completed cycle.PDCACycle, expected int64) (int64, error) {
@@ -321,7 +334,7 @@ func cycleCommandFixture() (*cycleTestTx, *cycleUseCaseTestClock, *cycleUseCaseT
 			ID: versionID, UserID: cycleTestUserID, GoalID: goalID, VersionNumber: 2,
 			Body: "goal body", CreatedAt: versionView.CreatedAt,
 		},
-		saveRows: 1, completeRows: 1, draftRows: 1, goalRows: 1,
+		saveRows: 1, scheduleRows: 1, completeRows: 1, draftRows: 1, goalRows: 1,
 		cycleView: CycleView{
 			ID: cycleID, GoalID: goalID, SequenceNumber: 3, Status: cycle.StatusCompleted,
 			GoalVersion: versionView, StartedAt: startedAt, CompletedAt: &completedAt,
@@ -376,6 +389,148 @@ func TestSaveFrameOwnsGoalCycleOrderAndStaleSameContentNoOp(t *testing.T) {
 	if result.FrameRevision != 8 || result.ContentRevision != 11 || !result.SavedAt.Equal(tx.current.UpdatedAt) ||
 		result.Content != "same body" || clock.calls != 1 || uow.committed != 1 {
 		t.Fatalf("no-op result = %#v, clock=%d, uow=%#v", result, clock.calls, uow)
+	}
+}
+
+func TestChangeReviewScheduleOwnsTaggedCASAndResponseLossConvergence(t *testing.T) {
+	date, err := cycle.ParseReviewDate("2026-09-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("set materializes full Cycle without changing content revision", func(t *testing.T) {
+		tx, clock, ids, _ := cycleCommandFixture()
+		tx.current.SequenceNumber = 1
+		tx.cycleView = activeReviewScheduleCycleView(tx, &date, 1)
+		useCases := NewCycleUseCases(nil, &cycleTestUOW{tx: tx}, clock, ids, CycleUseCaseSettings{})
+
+		result, changeErr := useCases.ChangeReviewSchedule(context.Background(), ChangeReviewScheduleInput{
+			UserID: cycleTestUserID, GoalID: cycleTestGoalID, CycleID: cycleTestCycleID1,
+			ReviewDate: &date, ExpectedReviewScheduleRevision: 0,
+		})
+		if changeErr != nil {
+			t.Fatal(changeErr)
+		}
+		if !reflect.DeepEqual(tx.trace, []string{"goal", "cycle", "save-schedule", "load-cycle"}) {
+			t.Fatalf("trace = %#v", tx.trace)
+		}
+		if tx.savedSchedule.ReviewDate == nil || *tx.savedSchedule.ReviewDate != date ||
+			tx.savedSchedule.ReviewScheduleRevision != 1 || tx.scheduleExpected != 0 ||
+			tx.savedSchedule.Revisions != tx.current.Revisions {
+			t.Fatalf("saved schedule = %#v, expected = %d", tx.savedSchedule, tx.scheduleExpected)
+		}
+		if result.Cycle.ReviewDate == nil || *result.Cycle.ReviewDate != date ||
+			result.Cycle.ReviewScheduleRevision != 1 || result.Cycle.ContentRevision != tx.current.Revisions.Content {
+			t.Fatalf("result = %#v", result)
+		}
+		if clock.calls != 0 {
+			t.Fatalf("review schedule unexpectedly used Instant clock %d times", clock.calls)
+		}
+	})
+
+	t.Run("stale same target after response loss is a no-op", func(t *testing.T) {
+		tx, clock, ids, _ := cycleCommandFixture()
+		tx.current.SequenceNumber = 1
+		tx.current.ReviewDate = &date
+		tx.current.ReviewScheduleRevision = 1
+		tx.cycleView = activeReviewScheduleCycleView(tx, &date, 1)
+		useCases := NewCycleUseCases(nil, &cycleTestUOW{tx: tx}, clock, ids, CycleUseCaseSettings{})
+		_, changeErr := useCases.ChangeReviewSchedule(context.Background(), ChangeReviewScheduleInput{
+			UserID: cycleTestUserID, GoalID: cycleTestGoalID, CycleID: cycleTestCycleID1,
+			ReviewDate: &date, ExpectedReviewScheduleRevision: 0,
+		})
+		if changeErr != nil || !reflect.DeepEqual(tx.trace, []string{"goal", "cycle", "load-cycle"}) {
+			t.Fatalf("same-target result error = %v, trace = %#v", changeErr, tx.trace)
+		}
+	})
+
+	t.Run("stale different target conflicts before persistence", func(t *testing.T) {
+		tx, clock, ids, _ := cycleCommandFixture()
+		tx.current.ReviewDate = &date
+		tx.current.ReviewScheduleRevision = 1
+		different, _ := cycle.ParseReviewDate("2026-10-01")
+		uow := &cycleTestUOW{tx: tx}
+		useCases := NewCycleUseCases(nil, uow, clock, ids, CycleUseCaseSettings{})
+		_, changeErr := useCases.ChangeReviewSchedule(context.Background(), ChangeReviewScheduleInput{
+			UserID: cycleTestUserID, GoalID: cycleTestGoalID, CycleID: cycleTestCycleID1,
+			ReviewDate: &different, ExpectedReviewScheduleRevision: 0,
+		})
+		if !errors.Is(changeErr, cycle.ErrRevisionConflict) || uow.rolledBack != 1 ||
+			!reflect.DeepEqual(tx.trace, []string{"goal", "cycle"}) {
+			t.Fatalf("different-target error = %v, rollback = %d, trace = %#v", changeErr, uow.rolledBack, tx.trace)
+		}
+	})
+
+	t.Run("write failures and zero-row CAS roll back", func(t *testing.T) {
+		writerErr := errors.New("schedule storage unavailable")
+		materializationErr := errors.New("schedule materialization unavailable")
+		tests := []struct {
+			name      string
+			configure func(*cycleTestTx)
+			wantError error
+			wantTrace []string
+		}{
+			{
+				name: "writer error",
+				configure: func(tx *cycleTestTx) {
+					tx.writeErr = writerErr
+				},
+				wantError: writerErr,
+				wantTrace: []string{"goal", "cycle", "save-schedule"},
+			},
+			{
+				name: "zero rows",
+				configure: func(tx *cycleTestTx) {
+					tx.scheduleRows = 0
+				},
+				wantError: ErrCyclePersistenceInvariant,
+				wantTrace: []string{"goal", "cycle", "save-schedule"},
+			},
+			{
+				name: "post-write materialization",
+				configure: func(tx *cycleTestTx) {
+					tx.materializationLoadErr = materializationErr
+				},
+				wantError: materializationErr,
+				wantTrace: []string{"goal", "cycle", "save-schedule", "load-cycle"},
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				tx, clock, ids, _ := cycleCommandFixture()
+				tx.current.SequenceNumber = 1
+				test.configure(tx)
+				uow := &cycleTestUOW{tx: tx}
+				useCases := NewCycleUseCases(nil, uow, clock, ids, CycleUseCaseSettings{})
+				_, changeErr := useCases.ChangeReviewSchedule(context.Background(), ChangeReviewScheduleInput{
+					UserID: cycleTestUserID, GoalID: cycleTestGoalID, CycleID: cycleTestCycleID1,
+					ReviewDate: &date, ExpectedReviewScheduleRevision: 0,
+				})
+				if !errors.Is(changeErr, test.wantError) {
+					t.Fatalf("error = %v, want %v", changeErr, test.wantError)
+				}
+				if uow.rolledBack != 1 || uow.committed != 0 || !reflect.DeepEqual(tx.trace, test.wantTrace) {
+					t.Fatalf("uow/trace = %#v / %#v, want rollback / %#v", uow, tx.trace, test.wantTrace)
+				}
+			})
+		}
+	})
+}
+
+func activeReviewScheduleCycleView(tx *cycleTestTx, reviewDate *cycle.ReviewDate, revision int64) CycleView {
+	return CycleView{
+		ID: tx.current.ID, GoalID: tx.current.GoalID, SequenceNumber: 1, Status: cycle.StatusActive,
+		GoalVersion: GoalVersionView{
+			ID: tx.current.GoalVersionID, VersionNumber: 1, Body: "goal body",
+			CreatedAt: cycleTestNow.UTC().Add(-24 * time.Hour),
+		},
+		StartedAt: tx.current.StartedAt,
+		Plan:      tx.current.Plan, Do: tx.current.Do, Check: tx.current.Check, Action: tx.current.Action,
+		ContentRevision: tx.current.Revisions.Content,
+		FrameRevisions: FrameRevisions{
+			Plan: tx.current.Revisions.Plan, Do: tx.current.Revisions.Do,
+			Check: tx.current.Revisions.Check, Action: tx.current.Revisions.Action,
+		},
+		ReviewDate: reviewDate, ReviewScheduleRevision: revision,
 	}
 }
 
@@ -506,6 +661,7 @@ func TestCompleteCycleReplayDoesNotDependOnIDOrClock(t *testing.T) {
 	tx.goalView.Revision = 7
 	tx.goalView.CurrentWork = &CurrentWorkView{
 		Kind: "active_cycle", CycleID: cycleTestCycleID2, CycleSequenceNumber: 4,
+		ReviewSchedule: &ReviewScheduleView{},
 	}
 	tx.draftView = nil
 	uow := &cycleTestUOW{tx: tx}

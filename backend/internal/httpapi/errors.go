@@ -26,19 +26,20 @@ type apiError struct {
 }
 
 var (
-	errSessionRefreshFailed      = errors.New("session refresh failed")
-	errSessionIdentityChanged    = errors.New("authenticated session identity changed")
-	errAccountUpgradeFailed      = errors.New("account upgrade failed")
-	errGoogleLoginFailed         = errors.New("google login failed")
-	errGoalDraftSaveFailed       = errors.New("goal draft save failed")
-	errGoalDraftDeleteFailed     = errors.New("goal draft delete failed")
-	errGoalStartFailed           = errors.New("goal start failed")
-	errFrameSaveFailed           = errors.New("frame save failed")
-	errCycleCompletionFailed     = errors.New("cycle completion failed")
-	errGoalReviewDraftSaveFailed = errors.New("goal review draft save failed")
-	errGoalReviewContinueFailed  = errors.New("goal review continue failed")
-	errGoalTerminationFailed     = errors.New("goal termination failed")
-	errGoalDeleteFailed          = errors.New("goal delete failed")
+	errSessionRefreshFailed       = errors.New("session refresh failed")
+	errSessionIdentityChanged     = errors.New("authenticated session identity changed")
+	errAccountUpgradeFailed       = errors.New("account upgrade failed")
+	errGoogleLoginFailed          = errors.New("google login failed")
+	errGoalDraftSaveFailed        = errors.New("goal draft save failed")
+	errGoalDraftDeleteFailed      = errors.New("goal draft delete failed")
+	errGoalStartFailed            = errors.New("goal start failed")
+	errFrameSaveFailed            = errors.New("frame save failed")
+	errReviewScheduleUpdateFailed = errors.New("review schedule update failed")
+	errCycleCompletionFailed      = errors.New("cycle completion failed")
+	errGoalReviewDraftSaveFailed  = errors.New("goal review draft save failed")
+	errGoalReviewContinueFailed   = errors.New("goal review continue failed")
+	errGoalTerminationFailed      = errors.New("goal termination failed")
+	errGoalDeleteFailed           = errors.New("goal delete failed")
 )
 
 func (server *api) writeError(writer http.ResponseWriter, request *http.Request, err error, details map[string]any) {
@@ -91,6 +92,8 @@ func classifyError(err error) (int, string, string) {
 		return 400, "GOAL_TEXT_TOO_LONG", "目標は80文字以内で入力してください。"
 	case errors.Is(err, cycle.ErrFrameTextTooLong):
 		return 400, "FRAME_TEXT_TOO_LONG", "各項目は200文字以内で入力してください。"
+	case errors.Is(err, cycle.ErrInvalidReviewDate):
+		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
 	case errors.Is(err, goal.ErrForbiddenCharacter), errors.Is(err, cycle.ErrForbiddenCharacter), errors.Is(err, cycle.ErrInvalidFrame):
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
 	case errors.Is(err, workspace.ErrGoalDraftNotFound):
@@ -189,6 +192,8 @@ func classifyError(err error) (int, string, string) {
 		return 500, "GOAL_START_FAILED", "目標を開始できませんでした。下書きは維持されています。"
 	case errors.Is(err, errFrameSaveFailed):
 		return 500, "FRAME_SAVE_FAILED", "入力内容を保存できませんでした。"
+	case errors.Is(err, errReviewScheduleUpdateFailed):
+		return 500, "REVIEW_SCHEDULE_UPDATE_FAILED", "見直す日を更新できませんでした。"
 	case errors.Is(err, errCycleCompletionFailed):
 		return 500, "CYCLE_COMPLETION_FAILED", "サイクルを完了できませんでした。"
 	case errors.Is(err, errGoalReviewDraftSaveFailed):

@@ -47,6 +47,7 @@ type CycleTx interface {
 	LoadCurrentGoalVersion(context.Context, string, string, int32) (goal.Version, error)
 	HasRunningCycleGeneration(context.Context, string, string, string) (bool, error)
 	SaveCycleFrameCAS(context.Context, cycle.PDCACycle, cycle.Frame, int64) (int64, error)
+	SaveCycleReviewScheduleCAS(context.Context, cycle.PDCACycle, int64) (int64, error)
 	CompleteCycleCAS(context.Context, cycle.PDCACycle, int64) (int64, error)
 	InsertReviewDraft(context.Context, goal.Draft) (int64, error)
 	EnterGoalReviewCAS(context.Context, goal.Goal, int64) (int64, error)

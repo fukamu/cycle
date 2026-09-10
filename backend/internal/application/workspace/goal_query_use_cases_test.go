@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
@@ -60,6 +61,7 @@ func activeGoalQueryView(id string) GoalView {
 			Kind:                "active_cycle",
 			CycleID:             goalQueryTestCycleID,
 			CycleSequenceNumber: 1,
+			ReviewSchedule:      &ReviewScheduleView{},
 		},
 	}
 }
@@ -258,13 +260,14 @@ func TestGoalQueryUseCasesEnforceCurrentWorkUnion(t *testing.T) {
 		}
 	}
 
+	invalidReviewDate := cycle.ReviewDate("invalid")
 	invalid := []GoalView{
 		{ID: goalQueryTestGoalID1, Status: goal.StatusActiveCycle},
 		{
 			ID: goalQueryTestGoalID1, Status: goal.StatusActiveCycle,
 			CurrentWork: &CurrentWorkView{
 				Kind: "active_cycle", CycleID: goalQueryTestCycleID, CycleSequenceNumber: 1,
-				ReviewDraftID: goalQueryTestDraftID,
+				ReviewSchedule: &ReviewScheduleView{}, ReviewDraftID: goalQueryTestDraftID,
 			},
 		},
 		{
@@ -278,6 +281,30 @@ func TestGoalQueryUseCasesEnforceCurrentWorkUnion(t *testing.T) {
 		{
 			ID: goalQueryTestGoalID1, Status: goal.StatusEnded,
 			CurrentWork: &CurrentWorkView{Kind: "active_cycle", CycleID: goalQueryTestCycleID, CycleSequenceNumber: 1},
+		},
+		{
+			ID: goalQueryTestGoalID1, Status: goal.StatusActiveCycle,
+			CurrentWork: &CurrentWorkView{
+				Kind: "active_cycle", CycleID: goalQueryTestCycleID, CycleSequenceNumber: 1,
+			},
+		},
+		{
+			ID: goalQueryTestGoalID1, Status: goal.StatusActiveCycle,
+			CurrentWork: &CurrentWorkView{
+				Kind: "active_cycle", CycleID: goalQueryTestCycleID, CycleSequenceNumber: 1,
+				ReviewSchedule: &ReviewScheduleView{
+					ReviewDate:             &invalidReviewDate,
+					ReviewScheduleRevision: 1,
+				},
+			},
+		},
+		{
+			ID: goalQueryTestGoalID1, Status: goal.StatusGoalReview,
+			CurrentWork: &CurrentWorkView{
+				Kind: "goal_review", ReviewDraftID: goalQueryTestDraftID,
+				TriggerCycleID: goalQueryTestCycleID, TriggerCycleSequenceNumber: 1,
+				ReviewSchedule: &ReviewScheduleView{},
+			},
 		},
 		{ID: goalQueryTestGoalID1, Status: goal.Status("unknown")},
 	}

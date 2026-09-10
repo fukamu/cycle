@@ -110,6 +110,8 @@ SELECT
     )::integer AS cycle_count,
     active_cycle.id AS active_cycle_id,
     active_cycle.sequence_number AS active_cycle_sequence_number,
+    active_review_schedule.review_date AS active_cycle_review_date,
+    COALESCE(active_review_schedule.review_schedule_revision, 0)::bigint AS active_cycle_review_schedule_revision,
     review_draft.id AS review_draft_id,
     trigger_cycle.id AS trigger_cycle_id,
     trigger_cycle.sequence_number AS trigger_cycle_sequence_number,
@@ -131,6 +133,8 @@ LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
    AND active_cycle.status = 'active'
+LEFT JOIN pdca_cycle_review_schedules active_review_schedule
+    ON active_review_schedule.cycle_id = active_cycle.id
 LEFT JOIN goal_drafts review_draft
     ON review_draft.user_id = g.user_id
    AND review_draft.goal_id = g.id
@@ -149,24 +153,26 @@ type GetGoalViewParams struct {
 }
 
 type GetGoalViewRow struct {
-	GoalID                     pgtype.UUID
-	GoalStatus                 string
-	GoalRevision               int64
-	NextCycleSequenceNumber    int32
-	GoalCreatedAt              pgtype.Timestamptz
-	GoalTerminalAt             pgtype.Timestamptz
-	CurrentVersionID           pgtype.UUID
-	CurrentVersionNumber       *int32
-	CurrentVersionBody         *string
-	CurrentVersionCreatedAt    pgtype.Timestamptz
-	CycleCount                 int32
-	ActiveCycleID              pgtype.UUID
-	ActiveCycleSequenceNumber  *int32
-	ReviewDraftID              pgtype.UUID
-	TriggerCycleID             pgtype.UUID
-	TriggerCycleSequenceNumber *int32
-	Category                   int16
-	SortTime                   pgtype.Timestamptz
+	GoalID                            pgtype.UUID
+	GoalStatus                        string
+	GoalRevision                      int64
+	NextCycleSequenceNumber           int32
+	GoalCreatedAt                     pgtype.Timestamptz
+	GoalTerminalAt                    pgtype.Timestamptz
+	CurrentVersionID                  pgtype.UUID
+	CurrentVersionNumber              *int32
+	CurrentVersionBody                *string
+	CurrentVersionCreatedAt           pgtype.Timestamptz
+	CycleCount                        int32
+	ActiveCycleID                     pgtype.UUID
+	ActiveCycleSequenceNumber         *int32
+	ActiveCycleReviewDate             pgtype.Date
+	ActiveCycleReviewScheduleRevision int64
+	ReviewDraftID                     pgtype.UUID
+	TriggerCycleID                    pgtype.UUID
+	TriggerCycleSequenceNumber        *int32
+	Category                          int16
+	SortTime                          pgtype.Timestamptz
 }
 
 func (q *Queries) GetGoalView(ctx context.Context, arg GetGoalViewParams) (*GetGoalViewRow, error) {
@@ -186,6 +192,8 @@ func (q *Queries) GetGoalView(ctx context.Context, arg GetGoalViewParams) (*GetG
 		&i.CycleCount,
 		&i.ActiveCycleID,
 		&i.ActiveCycleSequenceNumber,
+		&i.ActiveCycleReviewDate,
+		&i.ActiveCycleReviewScheduleRevision,
 		&i.ReviewDraftID,
 		&i.TriggerCycleID,
 		&i.TriggerCycleSequenceNumber,
@@ -247,6 +255,8 @@ SELECT
     )::integer AS cycle_count,
     active_cycle.id AS active_cycle_id,
     active_cycle.sequence_number AS active_cycle_sequence_number,
+    active_review_schedule.review_date AS active_cycle_review_date,
+    COALESCE(active_review_schedule.review_schedule_revision, 0)::bigint AS active_cycle_review_schedule_revision,
     review_draft.id AS review_draft_id,
     trigger_cycle.id AS trigger_cycle_id,
     trigger_cycle.sequence_number AS trigger_cycle_sequence_number,
@@ -268,6 +278,8 @@ LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
    AND active_cycle.status = 'active'
+LEFT JOIN pdca_cycle_review_schedules active_review_schedule
+    ON active_review_schedule.cycle_id = active_cycle.id
 LEFT JOIN goal_drafts review_draft
     ON review_draft.user_id = g.user_id
    AND review_draft.goal_id = g.id
@@ -315,24 +327,26 @@ type ListGoalViewsParams struct {
 }
 
 type ListGoalViewsRow struct {
-	GoalID                     pgtype.UUID
-	GoalStatus                 string
-	GoalRevision               int64
-	NextCycleSequenceNumber    int32
-	GoalCreatedAt              pgtype.Timestamptz
-	GoalTerminalAt             pgtype.Timestamptz
-	CurrentVersionID           pgtype.UUID
-	CurrentVersionNumber       *int32
-	CurrentVersionBody         *string
-	CurrentVersionCreatedAt    pgtype.Timestamptz
-	CycleCount                 int32
-	ActiveCycleID              pgtype.UUID
-	ActiveCycleSequenceNumber  *int32
-	ReviewDraftID              pgtype.UUID
-	TriggerCycleID             pgtype.UUID
-	TriggerCycleSequenceNumber *int32
-	Category                   int16
-	SortTime                   pgtype.Timestamptz
+	GoalID                            pgtype.UUID
+	GoalStatus                        string
+	GoalRevision                      int64
+	NextCycleSequenceNumber           int32
+	GoalCreatedAt                     pgtype.Timestamptz
+	GoalTerminalAt                    pgtype.Timestamptz
+	CurrentVersionID                  pgtype.UUID
+	CurrentVersionNumber              *int32
+	CurrentVersionBody                *string
+	CurrentVersionCreatedAt           pgtype.Timestamptz
+	CycleCount                        int32
+	ActiveCycleID                     pgtype.UUID
+	ActiveCycleSequenceNumber         *int32
+	ActiveCycleReviewDate             pgtype.Date
+	ActiveCycleReviewScheduleRevision int64
+	ReviewDraftID                     pgtype.UUID
+	TriggerCycleID                    pgtype.UUID
+	TriggerCycleSequenceNumber        *int32
+	Category                          int16
+	SortTime                          pgtype.Timestamptz
 }
 
 func (q *Queries) ListGoalViews(ctx context.Context, arg ListGoalViewsParams) ([]*ListGoalViewsRow, error) {
@@ -365,6 +379,8 @@ func (q *Queries) ListGoalViews(ctx context.Context, arg ListGoalViewsParams) ([
 			&i.CycleCount,
 			&i.ActiveCycleID,
 			&i.ActiveCycleSequenceNumber,
+			&i.ActiveCycleReviewDate,
+			&i.ActiveCycleReviewScheduleRevision,
 			&i.ReviewDraftID,
 			&i.TriggerCycleID,
 			&i.TriggerCycleSequenceNumber,
@@ -400,6 +416,8 @@ SELECT
     )::integer AS cycle_count,
     active_cycle.id AS active_cycle_id,
     active_cycle.sequence_number AS active_cycle_sequence_number,
+    active_review_schedule.review_date AS active_cycle_review_date,
+    COALESCE(active_review_schedule.review_schedule_revision, 0)::bigint AS active_cycle_review_schedule_revision,
     review_draft.id AS review_draft_id,
     trigger_cycle.id AS trigger_cycle_id,
     trigger_cycle.sequence_number AS trigger_cycle_sequence_number,
@@ -421,6 +439,8 @@ LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
    AND active_cycle.status = 'active'
+LEFT JOIN pdca_cycle_review_schedules active_review_schedule
+    ON active_review_schedule.cycle_id = active_cycle.id
 LEFT JOIN goal_drafts review_draft
     ON review_draft.user_id = g.user_id
    AND review_draft.goal_id = g.id
@@ -435,24 +455,26 @@ ORDER BY g.created_at ASC, g.id ASC
 `
 
 type ListHomeGoalViewsRow struct {
-	GoalID                     pgtype.UUID
-	GoalStatus                 string
-	GoalRevision               int64
-	NextCycleSequenceNumber    int32
-	GoalCreatedAt              pgtype.Timestamptz
-	GoalTerminalAt             pgtype.Timestamptz
-	CurrentVersionID           pgtype.UUID
-	CurrentVersionNumber       *int32
-	CurrentVersionBody         *string
-	CurrentVersionCreatedAt    pgtype.Timestamptz
-	CycleCount                 int32
-	ActiveCycleID              pgtype.UUID
-	ActiveCycleSequenceNumber  *int32
-	ReviewDraftID              pgtype.UUID
-	TriggerCycleID             pgtype.UUID
-	TriggerCycleSequenceNumber *int32
-	Category                   int16
-	SortTime                   pgtype.Timestamptz
+	GoalID                            pgtype.UUID
+	GoalStatus                        string
+	GoalRevision                      int64
+	NextCycleSequenceNumber           int32
+	GoalCreatedAt                     pgtype.Timestamptz
+	GoalTerminalAt                    pgtype.Timestamptz
+	CurrentVersionID                  pgtype.UUID
+	CurrentVersionNumber              *int32
+	CurrentVersionBody                *string
+	CurrentVersionCreatedAt           pgtype.Timestamptz
+	CycleCount                        int32
+	ActiveCycleID                     pgtype.UUID
+	ActiveCycleSequenceNumber         *int32
+	ActiveCycleReviewDate             pgtype.Date
+	ActiveCycleReviewScheduleRevision int64
+	ReviewDraftID                     pgtype.UUID
+	TriggerCycleID                    pgtype.UUID
+	TriggerCycleSequenceNumber        *int32
+	Category                          int16
+	SortTime                          pgtype.Timestamptz
 }
 
 func (q *Queries) ListHomeGoalViews(ctx context.Context, userID pgtype.UUID) ([]*ListHomeGoalViewsRow, error) {
@@ -478,6 +500,8 @@ func (q *Queries) ListHomeGoalViews(ctx context.Context, userID pgtype.UUID) ([]
 			&i.CycleCount,
 			&i.ActiveCycleID,
 			&i.ActiveCycleSequenceNumber,
+			&i.ActiveCycleReviewDate,
+			&i.ActiveCycleReviewScheduleRevision,
 			&i.ReviewDraftID,
 			&i.TriggerCycleID,
 			&i.TriggerCycleSequenceNumber,

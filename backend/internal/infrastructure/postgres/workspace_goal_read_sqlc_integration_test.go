@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 )
 
@@ -150,6 +151,10 @@ func TestGoalReadModelsPreserveOwnerScopedDraftAndCurrentWork(t *testing.T) {
 	seedGoalQueryUser(t, pool, ownerID, now)
 	seedGoalQueryUser(t, pool, outsiderID, now)
 	seedGoalQueryFixture(t, pool, ownerID, active, now)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO pdca_cycle_review_schedules
+(cycle_id,review_date,review_schedule_revision) VALUES($1,DATE '2026-09-30',7)`, active.cycleID); err != nil {
+		t.Fatal(err)
+	}
 	seedGoalReadReviewFixture(t, pool, ownerID, review, now.Add(-23*time.Hour), now)
 	seedGoalQueryFixture(t, pool, outsiderID, outsider, now)
 	if _, err := pool.Exec(context.Background(), `INSERT INTO goal_drafts
@@ -168,12 +173,15 @@ VALUES($1,$2,'creation',$3,4,$4,$4),($5,$6,'creation','outsider draft',0,$4,$4)`
 		t.Fatalf("owner Home Goal order = %#v", home.ProgressingGoals)
 	}
 	if current := home.ProgressingGoals[0].CurrentWork; current == nil || current.Kind != "active_cycle" ||
-		current.CycleID != active.cycleID || current.CycleSequenceNumber != 1 {
+		current.CycleID != active.cycleID || current.CycleSequenceNumber != 1 || current.ReviewSchedule == nil ||
+		current.ReviewSchedule.ReviewDate == nil ||
+		*current.ReviewSchedule.ReviewDate != cycle.ReviewDate("2026-09-30") ||
+		current.ReviewSchedule.ReviewScheduleRevision != 7 {
 		t.Fatalf("active currentWork = %#v", current)
 	}
 	if current := home.ProgressingGoals[1].CurrentWork; current == nil || current.Kind != "goal_review" ||
 		current.ReviewDraftID != review.reviewDraftID || current.TriggerCycleID != review.cycleID ||
-		current.TriggerCycleSequenceNumber != 1 {
+		current.TriggerCycleSequenceNumber != 1 || current.ReviewSchedule != nil {
 		t.Fatalf("review currentWork = %#v", current)
 	}
 	if home.CreationDraft == nil || home.CreationDraft.ID != ownerCreationDraftID || home.CreationDraft.Body != "owner draft" ||

@@ -95,7 +95,25 @@ func (transaction *workspaceCycleTx) LockCycle(
 	if err != nil {
 		return cycle.PDCACycle{}, err
 	}
-	return cycleFromSQLC(row)
+	current, err := cycleFromSQLC(row)
+	if err != nil {
+		return cycle.PDCACycle{}, err
+	}
+	schedule, err := transaction.queries.GetCycleReviewSchedule(ctx, mustUUID(cycleID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return current, nil
+	}
+	if err != nil {
+		return cycle.PDCACycle{}, err
+	}
+	current.ReviewDate, current.ReviewScheduleRevision, err = cycleReviewScheduleFromSQLC(
+		schedule.ReviewDate,
+		schedule.ReviewScheduleRevision,
+	)
+	if err != nil {
+		return cycle.PDCACycle{}, err
+	}
+	return current, nil
 }
 
 func (transaction *workspaceCycleTx) LoadCurrentGoalVersion(
@@ -227,6 +245,29 @@ func (transaction *workspaceCycleTx) SaveCycleFrameCAS(
 	default:
 		return 0, cycle.ErrInvalidFrame
 	}
+}
+
+func (transaction *workspaceCycleTx) SaveCycleReviewScheduleCAS(
+	ctx context.Context,
+	current cycle.PDCACycle,
+	expectedReviewScheduleRevision int64,
+) (int64, error) {
+	if current.ReviewScheduleRevision != expectedReviewScheduleRevision+1 {
+		return 0, fmt.Errorf("%w: saved Cycle review schedule revision is inconsistent", workspace.ErrCyclePersistenceInvariant)
+	}
+	reviewDate, err := cycleReviewDateParam(current.ReviewDate)
+	if err != nil {
+		return 0, fmt.Errorf("%w: saved Cycle review date is invalid", workspace.ErrCyclePersistenceInvariant)
+	}
+	return transaction.queries.SaveCycleReviewScheduleCAS(
+		ctx,
+		db.SaveCycleReviewScheduleCASParams{
+			CycleID:                        mustUUID(current.ID),
+			ReviewDate:                     reviewDate,
+			ReviewScheduleRevision:         current.ReviewScheduleRevision,
+			ExpectedReviewScheduleRevision: expectedReviewScheduleRevision,
+		},
+	)
 }
 
 func (transaction *workspaceCycleTx) CompleteCycleCAS(

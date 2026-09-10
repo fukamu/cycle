@@ -441,6 +441,7 @@ Hamburger Menu:
 Homeは`progressingGoals: GoalView[]`をCollectionとして扱う。Freeでは0〜2件だが、型・API・Componentを固定長にしない。Goalの現在作業は専用summaryで重複表現せず、§23.2の`GoalView.currentWork`を使う。
 
 - `progressingGoals`はGoalの作成日時が古い順（`created_at ASC, id ASC`）で返し、Goalの更新によってCard位置を変えない。
+- `currentWork.kind=active_cycle`は`reviewSchedule`を必ず含み、未設定を`reviewDate=null`、`reviewScheduleRevision=0`で表す。見直す日の変更でHomeの安定したGoal順序を変えない。`goal_review`では`reviewSchedule`を含めない。
 - Progressing Goal 0件: Creation Draftがあれば「目標の設定を続ける」、なければ「新しい目標を設定」。
 - Progressing Goal 1〜2件: GoalごとにCardを表示する。Creation Draftがある場合はDraft Cardも別に表示する。
 - Open Creation Draftがなければ、Progressing Goal上限到達中でもDraft作成自体は可能とする。Creation DraftはGoal Entityではなく、Progressing Goalではないためである。
@@ -474,6 +475,7 @@ Cycle 3を振り返り、目標を続けるか決めましょう。
 ```
 
 - `currentWork.kind=active_cycle`: `Cycle {cycleSequenceNumber} 実行中`、`P/D/C/Aの記録を続けましょう。`、`Cycle {cycleSequenceNumber}を続ける`を表示し、Active Cycle routeへ遷移する。
+- Active Cycleに見直す日が設定されている場合は、その`YYYY-MM-DD`と、Browser local calendar dateとの比較で導出したToday / Upcoming / Overdueを色だけに依存しないtextで表示する。日付変更時もCardの位置を変えない。
 - `currentWork.kind=goal_review`: `目標の見直し中`、`Cycle {triggerCycleSequenceNumber}を振り返り、目標を続けるか決めましょう。`、`目標を見直す`を表示し、Goal Review routeへ遷移する。
 - Goal本文はCardのheadingとし、改行を維持しながら長い文字列を折り返す。CTAは44px以上のtouch targetとし、Collection順と同じ安定したfocus順を維持する。320px幅および200% text zoomで横scrollを発生させない。
 
@@ -574,6 +576,8 @@ Goal v2 · Cycle 3
 ```
 
 Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Completed / Canceledで選択中Frameが空文字またはUnicode whitespaceだけの場合は編集用Placeholderを表示せず、Textareaの近接textとaccessible descriptionで`未入力`と示す。Active Cycleの通常編集およびAI、Browser Draft Recovery、workspace移動、command処理による一時Read-onlyでは編集用Placeholderを維持し、`未入力`を表示しない。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
+
+Active Cycleでは任意の`見直す日`を`YYYY-MM-DD`のcalendar dateとして表示し、未設定、設定/変更、明示Clearを区別する。設定/変更とClearはFrame Auto Saveへ混ぜず、各操作を明示確定してから送る。設定済み日はBrowser local calendar dateとの比較からToday / Upcoming / Overdueをtextで併記し、timezone/offsetを日付値へ保存しない。Completed / Canceledでは確定時点の値をRead-onlyで表示し、変更controlを出さない。
 
 Active CycleのPまたはD選択中は、Guideの後、Textareaの前に任意のbuilt-in templateを3件表示する。各templateは名称、用途、実際に挿入する全文preview、明示操作`{template名}を挿入`を選択前から示す。現在Frameが空文字またはUnicode whitespaceだけの場合だけ、明示操作で既存本文全体をpreviewどおり置き換え、同じTextarea入力・Auto Save経路へ渡して末尾へfocusする。挿入直後は`テンプレートの挿入を取り消す`を提供し、その後はtemplate IDや選択情報を持たないplain textとして自由に編集できる。
 
@@ -947,7 +951,7 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> active: Goal開始またはGoal Review確定
-    active --> active: Auto Save / Action AI適用
+    active --> active: Auto Save / Action AI適用 / 見直す日の設定・変更・解除
     active --> completed: P/D/C/A入力済みでCycle完了
     active --> canceled: Goal達成または終了
     completed --> [*]
@@ -1030,6 +1034,8 @@ Frontend confirmationは、Draftに変更がある場合に次を明示する。
 P/D built-in templateは§9.7のplain textをActive Cycleの現在Frameへ入力するだけであり、Cycle、Frame、Browser Draft Cache、API、DB、telemetryへtemplate IDや選択情報を保持しない。挿入後の本文は手入力と区別せず、この節の文字semanticsと上限を適用する。
 
 Active Cycle `N > 1`のfull read modelは、同じUser・同じGoalの`sequenceNumber = N - 1`である直接の前CycleがCompletedである場合に限り、そのCycleのAを`previousCompletedCycleAction`として返す。Goal Versionが変わっていても直接の前後関係は変わらず、read modelは前CycleのGoal Version番号をAとともに保持するが、旧Goal本文は含めない。現在Cycleと前CycleのGoal Version番号の関係は§18.5の0 / +1遷移を正とする。
+
+Cycleの`reviewDate`は任意のGregorian calendar dateで、許容範囲は`0001-01-01`〜`9999-12-31`、wire/storage表現はexact `YYYY-MM-DD` / PostgreSQL `DATE`とする。Instant、timezone、offsetへ変換しない。`reviewScheduleRevision`はP/D/C/Aの`contentRevision`およびFrame revisionから独立した非負int64で、新Cycleと既存Cycleの初期値はunset / 0とする。Active Cycleの明示set/change/clearでtargetが変わる場合だけ+1し、同じtargetへのresponse-loss retryはstale expected revisionでもno-op success、stale revisionから異なるtargetへの変更はconflictとする。Completed / Canceledでは値とrevisionを凍結し、次Cycleへ継承しない。Date変更はFrame Auto Save、Browser Draft、AI context/invalidationを発生させない。
 
 Cycle 1およびCompleted / Canceled Cycleの`previousCompletedCycleAction`は`null`とする。Active Cycle `N > 1`で直接の前Cycleが存在しない、CanceledまたはCompleted以外である、sequenceが一致しない、Goal Versionを正しく解決できない、またはAが§14.5の文字semanticsに違反するかtrim後に空である場合はpersistence / domain invariant違反である。さらに古いCompleted Cycleへfallbackせず、欠落を`null`へ補正しない。このread projectionは現在CycleのP、Frame revision、Auto Save、Browser Draft、Recovery、AI Contextまたはstate transitionを変更しない。
 
@@ -1181,6 +1187,8 @@ Update / individual delete operationは定義しない。Goal Aggregate Delete�
 | doRevision | int64 | Yes | Do saveで+1 |
 | checkRevision | int64 | Yes | Check saveで+1 |
 | actionRevision | int64 | Yes | User A save / Action AI applyで+1 |
+| reviewDate | LocalDate | No | `0001-01-01`〜`9999-12-31`のexact calendar date |
+| reviewScheduleRevision | int64 | Yes | 初期0、見直す日のtarget変更ごと+1。content revisionと独立 |
 | actionLastAIAppliedContentRevision | int64 | No | AI適用直後revision |
 | actionUserModifiedAfterAI | bool | Yes | AI後にUserがA編集したか |
 | startOperationId | UUID | Yes | Initial / Review continue idempotency |
@@ -1474,6 +1482,22 @@ CREATE INDEX idx_pdca_cycles_goal_history
     ON pdca_cycles(goal_id, sequence_number DESC, id DESC)
     WHERE status IN ('completed','canceled');
 
+CREATE TABLE pdca_cycle_review_schedules (
+    cycle_id UUID PRIMARY KEY REFERENCES pdca_cycles(id) ON DELETE CASCADE,
+    review_date DATE NULL,
+    review_schedule_revision BIGINT NOT NULL CHECK (review_schedule_revision >= 0),
+    CHECK (
+      review_date IS NULL
+      OR review_date BETWEEN DATE '0001-01-01' AND DATE '9999-12-31'
+    ),
+    CHECK (review_schedule_revision > 0 OR review_date IS NULL)
+);
+
+-- row不在はlogical unset / revision 0。最初のtarget変更でrowを作り、
+-- Clear後もNULL dateと増加済みrevisionを持つrowを維持する。
+-- pdca_cycles自体へcolumnを追加せず、migration-first期間の旧Applicationが
+-- LockCycleForTransitionのSELECT c.*を固定shapeでScanできるようにする。
+
 CREATE TABLE goal_drafts (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1735,6 +1759,7 @@ DB constraintだけでは完全に表現できない次のInvariantはApplicatio
 - Goal `active_cycle`にはActive Cycleが exactly 1。
 - Goal `goal_review`にはActive Cycle 0、Review Draft exactly 1。
 - Terminal GoalにはActive Cycle 0、Review Draft 0。
+- Review schedule row不在はlogical `reviewDate=null` / `reviewScheduleRevision=0`であり、rowが存在する場合は同じCycleに属してrevisionは非負、dateがnon-nullならrevisionは1以上とする。Cycle / Goal / Account削除ではschedule rowもcascade削除する。
 - Review Draftの`review_cycle_id`は同一GoalのCompleted Cycleで、`base_goal_version_id`はReview開始時のCurrent Versionである。
 - Creation DraftをTargetとするGoal Refineは`goal_id/goal_version_id`がnone、Review DraftをTargetとするGoal RefineはDraftと同じ`goal_id/base_goal_version_id`を持つ。
 - AIGeneration `context_cycle_ids`はすべて同一User・同一Goalに属する。
@@ -1774,6 +1799,7 @@ erDiagram
     GOAL_VERSIONS ||--o{ PDCA_CYCLES : referenced_by
     GOAL_DRAFTS ||--o{ AI_GENERATIONS : refined_from
     PDCA_CYCLES ||--o{ AI_GENERATIONS : action_ai
+    PDCA_CYCLES ||--o| PDCA_CYCLE_REVIEW_SCHEDULES : schedules
 
     USERS {
       uuid id PK
@@ -1817,6 +1843,11 @@ erDiagram
       text check_text
       text action
       bigint content_revision
+    }
+    PDCA_CYCLE_REVIEW_SCHEDULES {
+      uuid cycle_id PK,FK
+      date review_date
+      bigint review_schedule_revision
     }
     AI_GENERATIONS {
       uuid id PK
@@ -2145,6 +2176,7 @@ Concurrent operation:
 | Goal + Version1 + Cycle1 | partial creation | single Tx | all or none |
 | Cycle Auto Save same Frame | stale overwrite | per-frame revision CAS | old write rejected |
 | Cycle Auto Save different Frames | needless conflict | per-frame revisions | independent save可能 |
+| Cycle review schedule set / clear | stale overwrite、response-loss retry | Goal→Cycle lock + independent schedule revision CAS + same-target no-op | content revisionと独立し、different targetだけconflict |
 | Goal Draft Auto Save | stale overwrite | draft revision CAS | old write rejected |
 | Goal Refine double execution | duplicate AI | running partial unique + idempotency | subjectごとmax1 |
 | Goal suggestion adoption | edited Draft overwrite | generation sourceText comparison + current draft revision CAS | stale adoption rejected、同一本文への復元は許可 |
@@ -2194,6 +2226,7 @@ Request identityとcanonical provider inputを同じColumnへ保存しない。P
 - Backend / DB: UTC `TIMESTAMPTZ`。
 - API: RFC 3339 UTC string。
 - Frontend: Browser local timezoneで表示。
+- Cycleの`reviewDate`だけはInstantではなくLocalDateであり、DB `DATE` / API exact `YYYY-MM-DD`を維持する。Today / Upcoming / Overdueは表示時のBrowser local calendar dateと比較して導出し、device timezoneやclockの変更で分類だけが変わっても保存値は変えない。
 - Dの日時付きクイック追記はDomain timestampではなくUserが明示操作でD本文へ追加するplain textである。操作時点のBrowser local date/timeと`Date.getTimezoneOffset()`に対応する数値UTC offsetを使用し、DST等でoffsetが変わる地域ではその瞬間のoffsetを記録する。Server canonical timeへの補正、後からの再計算、timezone名への変換は行わない。
 - Active Cycle: `YYYY/MM/DD 〜`。
 - Completed / Canceled: 同日なら単一日、別日なら`開始 〜 終了`。
@@ -2439,7 +2472,11 @@ Response:
       "currentWork": {
         "kind": "active_cycle",
         "cycleId": "cycle-uuid",
-        "cycleSequenceNumber": 3
+        "cycleSequenceNumber": 3,
+        "reviewSchedule": {
+          "reviewDate": "2026-08-25",
+          "reviewScheduleRevision": 2
+        }
       },
       "nextCycleSequenceNumber": 4,
       "cycleCount": 3,
@@ -2459,6 +2496,7 @@ Response:
 - `creationDraft`はownerのopen creation draft。
 - `canCreateGoalDraft`はopen Creation Draftが存在しないことから算出する。Creation DraftはProgressing Goal上限へ算入しない。
 - `canStartProgressingGoal`はEntitlementと現在のProgressing Goal数から算出し、Goal開始可否を表す。
+- `currentWork.kind=active_cycle`の`reviewSchedule`はrequiredで、未設定でも`{"reviewDate":null,"reviewScheduleRevision":0}`を返す。`goal_review`のcurrent workにはこのobjectを含めない。見直す日の更新はGoal rowのsort keyを変更しない。
 
 Errors: `401 SESSION_EXPIRED`, `500 INTERNAL_ERROR`。
 
@@ -3259,6 +3297,8 @@ Start Goalの`cycle`、Cycle detailの`cycle`、Goal Reviewの`triggerCycle`、C
 
 ```json
 {
+  "reviewDate": "2026-08-25",
+  "reviewScheduleRevision": 2,
   "previousCompletedCycleAction": {
     "cycleId": "cycle-uuid",
     "cycleSequenceNumber": 1,
@@ -3268,7 +3308,9 @@ Start Goalの`cycle`、Cycle detailの`cycle`、Goal Reviewの`triggerCycle`、C
 }
 ```
 
-値の規則は§14.5を正とする。Cycle 1とterminal Cycleではfieldを明示的な`null`、Active Cycle `N > 1`では直接の前Completed Cycleを表すobjectとする。`cycleId`はUUID v7、`cycleSequenceNumber`と`goalVersionNumber`は正整数、`action`は§14.5の上限内かつtrim後非空である。Cycle list / historyのsummaryとFrame PATCH responseはこのfull read modelを使用せず、fieldを追加しない。
+`reviewDate`と`reviewScheduleRevision`の規則は§14.5を正とし、unset時も`null` / `0`を省略しない。Start、Cycle detail、Goal Review trigger、Cycle Complete、Goal Review Continue、Goal Terminate、およびReview schedule mutation responseの全full `CycleView` surfaceで同じrequired fieldとする。
+
+`previousCompletedCycleAction`の値の規則も§14.5を正とする。Cycle 1とterminal Cycleではfieldを明示的な`null`、Active Cycle `N > 1`では直接の前Completed Cycleを表すobjectとする。`cycleId`はUUID v7、`cycleSequenceNumber`と`goalVersionNumber`は正整数、`action`は§14.5の上限内かつtrim後非空である。Cycle list / historyのsummaryとFrame PATCH responseはこのfull read modelを使用せず、review schedule fieldまたはpredecessor fieldを追加しない。
 
 Current Cycleと前Cycleは同じconsistent readで取得し、Current Cycleの`user_id + goal_id + cycle_id`と前Cycleの`user_id + goal_id + sequence_number`をすべてscopeする。Infrastructureはexact `N - 1`をLEFT JOINし、前Cycleのstatusを内部rowへ残してmapperでCompletedを検証する。CompletedをJOIN条件で除外してCanceledとmissingを同じNULLへ潰さず、さらに古いCycleへfallbackしない。Repository mapperとApplicationは§14.5のnull / object、sequence、status、A本文と§18.5のGoal Version遷移のinvariantを検証し、不可能なrowを公開可能な別状態へ補正しない。既存のowner非開示とGoal / Cycle mismatchの`404`正規化を維持し、前CycleのUser、Goalまたは旧Goal本文をResponseへ追加しない。
 
@@ -3569,6 +3611,59 @@ Errors:
 - `IDEMPOTENCY_KEY_REUSED`
 - `CYCLE_COMPLETION_FAILED`
 
+## 24.7 `PATCH /api/v1/goals/{goalId}/cycles/{cycleId}/review-schedule`
+
+**Use Case:** ChangeReviewSchedule
+**Auth:** Session
+**Authorization:** Goal owner + Cycle same Goal + Goal `active_cycle` + Cycle `active`
+
+Set / change request:
+
+```json
+{
+  "action": "set",
+  "reviewDate": "2026-08-25",
+  "expectedReviewScheduleRevision": 2
+}
+```
+
+Clear request:
+
+```json
+{
+  "action": "clear",
+  "expectedReviewScheduleRevision": 2
+}
+```
+
+`action`は`set|clear`のtagged unionとする。`set`ではnon-null `reviewDate`を必須、`clear`では`reviewDate` member自体を送らない。`reviewDate`はexact `YYYY-MM-DD`の有効なGregorian dateかつ`0001-01-01`〜`9999-12-31`、`expectedReviewScheduleRevision >= 0`とする。Datetime、UTC offset、timezone、短縮表現、存在しない日、範囲外、unknown memberを拒否する。
+
+Response `200`:
+
+```json
+{
+  "cycle": {
+    "id": "cycle-uuid",
+    "status": "active",
+    "reviewDate": "2026-08-25",
+    "reviewScheduleRevision": 3,
+    "previousCompletedCycleAction": null
+  }
+}
+```
+
+Responseの`cycle`は§24.0のfull `CycleView`である。Goal→Cycleをlockし、現在targetと要求targetが同じ場合はexpected revisionがstaleでもrevisionを増やさず成功する。targetが異なる場合だけ独立schedule revisionのCASを要求し、成功時に+1する。P/D/C/A本文、content / Frame revision、AI、Browser Draftを変更しない。Completed / Canceledではsame-target retryを含め常に変更を拒否する。
+
+Errors:
+
+- `VALIDATION_ERROR`
+- `GOAL_NOT_FOUND`
+- `CYCLE_NOT_FOUND`
+- `GOAL_STATE_CONFLICT`
+- `CYCLE_NOT_ACTIVE`
+- `CYCLE_REVISION_CONFLICT`
+- `REVIEW_SCHEDULE_UPDATE_FAILED`
+
 ---
 
 # 25. Authentication / Account API
@@ -3795,6 +3890,7 @@ Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除す�
 | 500 | `GOAL_DRAFT_DELETE_FAILED` | Draft維持 |
 | 500 | `GOAL_START_FAILED` | Draft維持 |
 | 500 | `FRAME_SAVE_FAILED` | Frame維持 |
+| 500 | `REVIEW_SCHEDULE_UPDATE_FAILED` | 現在の見直す日を再取得して再試行 |
 | 500 | `CYCLE_COMPLETION_FAILED` | Cycle active維持 |
 | 500 | `GOAL_REVIEW_INVARIANT_BROKEN` | 一般Error +運用alert |
 | 500 | `GOAL_REVIEW_DRAFT_SAVE_FAILED` | Review Draft維持 |
@@ -5208,7 +5304,7 @@ Database constraints
 
 - Frontend validationはUX改善でありSecurity boundaryではない。
 - HTTP decodeではunknown fieldを原則拒否する。
-- DomainはGoal/Cycle status、blank、length、transition等を検証する。
+- DomainはGoal/Cycle status、blank、length、transition、Review dateのexact Gregorian date範囲等を検証する。
 - DBはFK、Unique、CHECK、partial uniqueで最後の防波堤を提供する。
 
 Shared full `CycleView`の`previousCompletedCycleAction`は、Repository mapperがSQL nullable tupleと前Cycle statusを失わずに解釈し、Applicationが§14.5のcurrent / predecessor関係と§18.5のGoal Version遷移を再検証する。Required fieldの欠落、Active Cycle `N > 1`の`null`、Cycle 1またはterminal Cycleのobject、direct sequence以外、non-Completed predecessor、解決不能なGoal Version、Goal Version遷移違反、invalid / blank Aはinvariant errorとし、別のCycleまたは空値で補完しない。
@@ -5236,6 +5332,7 @@ Goでは文字列比較で分類せず、typed errorと`errors.Is/As`を使う�
 ```text
 DomainError
 - InvalidGoalText
+- InvalidReviewDate
 - GoalNotProgressing
 - GoalAlreadyTerminal
 - CycleNotActive
@@ -6112,7 +6209,7 @@ PostgreSQL固有のconstraint、deferred FK、row lock、transactionをSQLiteで
 |---|---|---|
 | Bootstrap、Session、Google、Account Delete | §§18.2、21、25、27、41.10 | Domain/Application、HTTP matrix、実DB concurrency、Frontend identity fence、E2E |
 | Goal Draft、Start、limit、Version | §§12、14、18.3、22 | Domain boundary、HTTP、real-DB rollback/concurrency、Frontend editor、E2E |
-| Cycle save、P/D template、complete、Review、termination、full Cycle predecessor read | §§9.6–9.7、13–14、18.4–18.6、23–24、28 | template preview / blank・non-blank・terminal・IME・recovery・UndoのFrontend、revision/transition/read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
+| Cycle save、P/D template、review schedule、complete、Review、termination、full Cycle predecessor read | §§9.6–9.7、13–14、18.4–18.6、23–24、28 | template preview / blank・non-blank・terminal・IME・recovery・UndoのFrontend、content / schedule revision・transition・read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model unit、authz/API、real-DB cascade/CAS/cleanup、E2E |
 | AI prompt、schema、context、result | §§32–37 | typed fake、mock transport、semantic boundary、context-isolation query/application、Frontend adoption |
 | AI quota、cost、abuse | §§38–39 | real-DB quota/rate/budget/settlement/cleanup concurrency、failure and replay |
@@ -6137,6 +6234,8 @@ Exact test file名やcase IDはRepositoryのTest suiteをSourceとし、本書�
 7. 各永続化step失敗時のall-or-none rollback。
 8. Browser identity/route generation変更後に旧payloadを公開しないこと。
 9. 削除後にcontent、cache、late callbackがresourceを復元しないこと。
+
+Review scheduleは、unset / set / change / clear、Gregorian dateの最小・最大・不正shape・存在しない日・範囲外、schedule revision 0と独立増分、same-target response-loss retry、stale different-target conflict、set / clearとCycle完了・Goal終了の直列化、terminal freeze、次Cycleへの非継承、Homeの安定順序、Cycle / Goal / Account削除cascadeをDomain、HTTP、Application、実PostgreSQLで検証する。全full `CycleView` surfaceはrequired `reviewDate` / `reviewScheduleRevision`を返し、Homeは`active_cycle`だけrequired nested schedule object、`goal_review`ではomit、Cycle list / Frame responseは従来shapeのままとする。
 
 Browser Draft privacy境界では、Goalに紐づくDraft putとdelete cleanupの両直列化順、Goal cleanupとAccount cleanupの両直列化順、別User / Goal isolation、旧schema writer、advisoryのsender / receiver / 重複 / 未達を決定的に検証する。
 

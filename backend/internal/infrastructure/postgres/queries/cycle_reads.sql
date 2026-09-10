@@ -57,6 +57,8 @@ SELECT
     c.do_revision,
     c.check_revision,
     c.action_revision,
+    review_schedule.review_date,
+    COALESCE(review_schedule.review_schedule_revision, 0)::bigint AS review_schedule_revision,
     gv.id AS goal_version_id,
     gv.version_number AS goal_version_number,
     gv.body AS goal_version_body,
@@ -73,6 +75,8 @@ JOIN goals AS g
 LEFT JOIN goal_versions AS gv
   ON gv.id = c.goal_version_id
  AND gv.goal_id = c.goal_id
+LEFT JOIN pdca_cycle_review_schedules AS review_schedule
+  ON review_schedule.cycle_id = c.id
 LEFT JOIN pdca_cycles AS previous_cycle
   ON previous_cycle.user_id = c.user_id
  AND previous_cycle.goal_id = c.goal_id

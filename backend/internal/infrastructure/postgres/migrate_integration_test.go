@@ -12,12 +12,19 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
 
 func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	reviewScheduleDown, err := os.ReadFile(filepath.Join(directory, "000007_cycle_review_schedule.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, reviewScheduleDown)
 	guardDown, err := os.ReadFile(filepath.Join(directory, "000006_anonymous_rate_limit_guard.down.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -54,17 +61,18 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 6 {
-		t.Fatalf("applied migrations = %v, want 6", result.Applied)
+	if len(result.Applied) != 7 {
+		t.Fatalf("applied migrations = %v, want 7", result.Applied)
 	}
 	baseline, retention, exposure := result.Applied[0], result.Applied[1], result.Applied[2]
-	hashSplit, cleanupIndex, guard := result.Applied[3], result.Applied[4], result.Applied[5]
+	hashSplit, cleanupIndex, guard, reviewSchedule := result.Applied[3], result.Applied[4], result.Applied[5], result.Applied[6]
 	if baseline.Version != 1 || baseline.Direction != "up" || baseline.File != "000001_fukamu_cycle_baseline.up.sql" ||
 		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" ||
 		exposure.Version != 3 || exposure.Direction != "up" || exposure.File != "000003_ai_usage_settlement_exposure.up.sql" ||
 		hashSplit.Version != 4 || hashSplit.Direction != "up" || hashSplit.File != "000004_ai_generation_hash_split.up.sql" ||
 		cleanupIndex.Version != 5 || cleanupIndex.Direction != "up" || cleanupIndex.File != "000005_retention_cleanup_index.up.sql" ||
-		guard.Version != 6 || guard.Direction != "up" || guard.File != "000006_anonymous_rate_limit_guard.up.sql" {
+		guard.Version != 6 || guard.Direction != "up" || guard.File != "000006_anonymous_rate_limit_guard.up.sql" ||
+		reviewSchedule.Version != 7 || reviewSchedule.Direction != "up" || reviewSchedule.File != "000007_cycle_review_schedule.up.sql" {
 		t.Fatalf("applied migrations = %+v", result.Applied)
 	}
 	result, err = Migrate(databaseURL, directory)
@@ -77,7 +85,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 6 || users != 0 {
+	if version != 7 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
@@ -132,6 +140,80 @@ VALUES ('anonymous_ip',$1,clock_timestamp() + INTERVAL '25 hours')`, []byte("mig
 	assertAnonymousRateLimitGuardObjects(t, pool, true)
 }
 
+func TestCycleReviewScheduleMigrationPreservesOldCycleShapeAndSupportsDownAndReUp(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	directory := filepath.Join("..", "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(directory, "000007_cycle_review_schedule.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile(filepath.Join(directory, "000007_cycle_review_schedule.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := true
+	t.Cleanup(func() {
+		if !installed {
+			executeMigrationScript(t, pool, up)
+		}
+	})
+
+	now := integrationNow()
+	const userID = "10000000-0000-7000-8000-000000000001"
+	insertAIConcurrencyUser(t, pool, userID, now)
+	fixture := progressingGoalFixtures()[0]
+	startProgressingGoal(t, NewWorkspaceStore(pool), userID, fixture, 2, now)
+
+	var cycleColumnCount int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM information_schema.columns
+WHERE table_schema='public' AND table_name='pdca_cycles'`).Scan(&cycleColumnCount); err != nil {
+		t.Fatal(err)
+	}
+	if cycleColumnCount != 27 {
+		t.Fatalf("pdca_cycles columns = %d, want old-image-compatible 27", cycleColumnCount)
+	}
+	locked, err := db.New(pool).LockCycleForTransition(t.Context(), db.LockCycleForTransitionParams{
+		CycleID: mustUUID(fixture.cycleID), GoalID: mustUUID(fixture.goalID), UserID: mustUUID(userID),
+	})
+	if err != nil || uuidString(locked.ID) != fixture.cycleID {
+		t.Fatalf("old SELECT c.* scan = %#v, error = %v", locked, err)
+	}
+
+	if _, err = pool.Exec(t.Context(), `INSERT INTO public.pdca_cycle_review_schedules
+(cycle_id,review_date,review_schedule_revision) VALUES($1,DATE '9999-12-31',1)`, fixture.cycleID); err != nil {
+		t.Fatal(err)
+	}
+	_, negativeRevisionErr := pool.Exec(t.Context(), `UPDATE public.pdca_cycle_review_schedules
+SET review_schedule_revision=-1 WHERE cycle_id=$1`, fixture.cycleID)
+	assertPostgresSQLState(t, negativeRevisionErr, "23514")
+	_, zeroRevisionDateErr := pool.Exec(t.Context(), `UPDATE public.pdca_cycle_review_schedules
+SET review_schedule_revision=0 WHERE cycle_id=$1`, fixture.cycleID)
+	assertPostgresSQLState(t, zeroRevisionDateErr, "23514")
+	_, outOfRangeErr := pool.Exec(t.Context(), `UPDATE public.pdca_cycle_review_schedules
+SET review_date=DATE '10000-01-01' WHERE cycle_id=$1`, fixture.cycleID)
+	assertPostgresSQLState(t, outOfRangeErr, "23514")
+
+	executeMigrationScript(t, pool, down)
+	installed = false
+	var missingTable *string
+	if err := pool.QueryRow(t.Context(), `SELECT to_regclass('public.pdca_cycle_review_schedules')::text`).Scan(&missingTable); err != nil {
+		t.Fatal(err)
+	}
+	if missingTable != nil {
+		t.Fatalf("review schedule table after down = %q", *missingTable)
+	}
+	executeMigrationScript(t, pool, up)
+	installed = true
+	var tableName *string
+	if err := pool.QueryRow(t.Context(), `SELECT to_regclass('public.pdca_cycle_review_schedules')::text`).Scan(&tableName); err != nil {
+		t.Fatal(err)
+	}
+	if tableName == nil || *tableName != "pdca_cycle_review_schedules" {
+		t.Fatalf("review schedule table after re-up = %v", tableName)
+	}
+}
+
 func TestMigratePinsPublicSchemaAndHistoryAgainstAmbientOptions(t *testing.T) {
 	pool := integrationPool(t)
 	directory := filepath.Join("..", "..", "..", "migrations")
@@ -170,7 +252,7 @@ INSERT INTO migration_runner_shadow.schema_migrations(version, dirty) VALUES(999
 	); err != nil {
 		t.Fatal(err)
 	}
-	if publicVersion != 6 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
+	if publicVersion != 7 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
 		t.Fatalf("migration schemas = public:%d/%t shadow:%d/%t tables:%d",
 			publicVersion, publicDirty, shadowVersion, shadowDirty, shadowTables)
 	}

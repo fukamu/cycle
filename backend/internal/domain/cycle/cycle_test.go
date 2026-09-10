@@ -259,6 +259,72 @@ func TestUnicodeWhitespaceBlankSemanticsMatchFrontend(t *testing.T) {
 	}
 }
 
+func TestParseReviewDateUsesExactGregorianCalendarRange(t *testing.T) {
+	for _, value := range []string{"0001-01-01", "2028-02-29", "9999-12-31"} {
+		parsed, err := ParseReviewDate(value)
+		if err != nil || string(parsed) != value {
+			t.Fatalf("ParseReviewDate(%q) = %q, %v", value, parsed, err)
+		}
+	}
+	for _, value := range []string{
+		"", "0000-12-31", "2026-2-03", "2026-02-3", "2026/02/03",
+		"2026-02-29", "2024-02-30", "10000-01-01", "2026-02-03T00:00:00Z", "２０２６-０２-０３",
+	} {
+		if parsed, err := ParseReviewDate(value); !errors.Is(err, ErrInvalidReviewDate) || parsed != "" {
+			t.Fatalf("ParseReviewDate(%q) = %q, %v, want invalid", value, parsed, err)
+		}
+	}
+}
+
+func TestChangeReviewScheduleUsesIndependentCASAndSameTargetReplay(t *testing.T) {
+	current := New("cycle", "user", "goal", "version", 1, "operation", "hash", testNow)
+	date, err := ParseReviewDate("2026-09-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := ChangeReviewSchedule(current, &date, 0)
+	if err != nil || set.NoOp || set.Cycle.ReviewDate == nil || *set.Cycle.ReviewDate != date ||
+		set.Cycle.ReviewScheduleRevision != 1 || set.Cycle.Revisions != current.Revisions ||
+		set.Cycle.UpdatedAt != current.UpdatedAt {
+		t.Fatalf("set result = %#v, error = %v", set, err)
+	}
+
+	replayed, err := ChangeReviewSchedule(set.Cycle, &date, 0)
+	if err != nil || !replayed.NoOp || replayed.Cycle != set.Cycle {
+		t.Fatalf("same-target retry = %#v, error = %v", replayed, err)
+	}
+	different, _ := ParseReviewDate("2026-10-01")
+	if _, err = ChangeReviewSchedule(set.Cycle, &different, 0); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("stale different-target error = %v", err)
+	}
+
+	cleared, err := ChangeReviewSchedule(set.Cycle, nil, 1)
+	if err != nil || cleared.NoOp || cleared.Cycle.ReviewDate != nil || cleared.Cycle.ReviewScheduleRevision != 2 {
+		t.Fatalf("clear result = %#v, error = %v", cleared, err)
+	}
+	replayedClear, err := ChangeReviewSchedule(cleared.Cycle, nil, 1)
+	if err != nil || !replayedClear.NoOp || replayedClear.Cycle != cleared.Cycle {
+		t.Fatalf("same clear retry = %#v, error = %v", replayedClear, err)
+	}
+}
+
+func TestChangeReviewScheduleRejectsTerminalCycleBeforeSameTargetReplay(t *testing.T) {
+	date, _ := ParseReviewDate("2026-09-30")
+	current := New("cycle", "user", "goal", "version", 1, "operation", "hash", testNow)
+	current.ReviewDate = &date
+	current.ReviewScheduleRevision = 1
+	for _, status := range []Status{StatusCompleted, StatusCanceled} {
+		terminal := current
+		terminal.Status = status
+		if _, err := ChangeReviewSchedule(terminal, &date, 0); !errors.Is(err, ErrCycleNotActive) {
+			t.Fatalf("%s same-target error = %v, want inactive", status, err)
+		}
+		if _, err := ChangeReviewSchedule(terminal, nil, 1); !errors.Is(err, ErrCycleNotActive) {
+			t.Fatalf("%s clear error = %v, want inactive", status, err)
+		}
+	}
+}
+
 func readyCycle(t *testing.T) PDCACycle {
 	t.Helper()
 	current := New("cycle", "user", "goal", "version", 1, "operation", "hash", testNow)

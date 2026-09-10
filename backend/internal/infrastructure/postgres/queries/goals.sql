@@ -17,6 +17,8 @@ SELECT
     )::integer AS cycle_count,
     active_cycle.id AS active_cycle_id,
     active_cycle.sequence_number AS active_cycle_sequence_number,
+    active_review_schedule.review_date AS active_cycle_review_date,
+    COALESCE(active_review_schedule.review_schedule_revision, 0)::bigint AS active_cycle_review_schedule_revision,
     review_draft.id AS review_draft_id,
     trigger_cycle.id AS trigger_cycle_id,
     trigger_cycle.sequence_number AS trigger_cycle_sequence_number,
@@ -38,6 +40,8 @@ LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
    AND active_cycle.status = 'active'
+LEFT JOIN pdca_cycle_review_schedules active_review_schedule
+    ON active_review_schedule.cycle_id = active_cycle.id
 LEFT JOIN goal_drafts review_draft
     ON review_draft.user_id = g.user_id
    AND review_draft.goal_id = g.id
@@ -69,6 +73,8 @@ SELECT
     )::integer AS cycle_count,
     active_cycle.id AS active_cycle_id,
     active_cycle.sequence_number AS active_cycle_sequence_number,
+    active_review_schedule.review_date AS active_cycle_review_date,
+    COALESCE(active_review_schedule.review_schedule_revision, 0)::bigint AS active_cycle_review_schedule_revision,
     review_draft.id AS review_draft_id,
     trigger_cycle.id AS trigger_cycle_id,
     trigger_cycle.sequence_number AS trigger_cycle_sequence_number,
@@ -90,6 +96,8 @@ LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
    AND active_cycle.status = 'active'
+LEFT JOIN pdca_cycle_review_schedules active_review_schedule
+    ON active_review_schedule.cycle_id = active_cycle.id
 LEFT JOIN goal_drafts review_draft
     ON review_draft.user_id = g.user_id
    AND review_draft.goal_id = g.id
@@ -145,6 +153,8 @@ SELECT
     )::integer AS cycle_count,
     active_cycle.id AS active_cycle_id,
     active_cycle.sequence_number AS active_cycle_sequence_number,
+    active_review_schedule.review_date AS active_cycle_review_date,
+    COALESCE(active_review_schedule.review_schedule_revision, 0)::bigint AS active_cycle_review_schedule_revision,
     review_draft.id AS review_draft_id,
     trigger_cycle.id AS trigger_cycle_id,
     trigger_cycle.sequence_number AS trigger_cycle_sequence_number,
@@ -166,6 +176,8 @@ LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
    AND active_cycle.status = 'active'
+LEFT JOIN pdca_cycle_review_schedules active_review_schedule
+    ON active_review_schedule.cycle_id = active_cycle.id
 LEFT JOIN goal_drafts review_draft
     ON review_draft.user_id = g.user_id
    AND review_draft.goal_id = g.id

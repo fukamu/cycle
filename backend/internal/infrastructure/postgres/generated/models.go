@@ -183,6 +183,12 @@ type PdcaCycle struct {
 	UpdatedAt                          pgtype.Timestamptz
 }
 
+type PdcaCycleReviewSchedule struct {
+	CycleID                pgtype.UUID
+	ReviewDate             pgtype.Date
+	ReviewScheduleRevision int64
+}
+
 type Session struct {
 	ID                pgtype.UUID
 	UserID            pgtype.UUID
