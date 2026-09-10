@@ -11,6 +11,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { StrictMode, useState } from "react";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -23,6 +24,7 @@ import {
   type GoalDeletionCleanupOutcome,
 } from "../features/goal-deletion";
 import { APIError } from "../shared/api/client";
+import { cycleFrameCopy, frameCopy } from "../shared/copy/ja";
 import {
   AutoSaveScopeProvider,
   useAutoSaveScopeRegistry,
@@ -550,6 +552,10 @@ describe("GoalWorkspacePage", () => {
     const view = renderPage(cache);
 
     expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    const editor = screen.getByRole("textbox", { name: "D — Do" });
+    expect(editor).not.toHaveAttribute("readonly");
+    expect(editor).toHaveAttribute("placeholder", frameCopy.do.placeholder);
     fireEvent.click(screen.getByText("目標の操作"));
     fireEvent.click(screen.getByRole("button", { name: "目標を削除" }));
     fireEvent.click(
@@ -558,6 +564,12 @@ describe("GoalWorkspacePage", () => {
       }),
     );
     await waitFor(() => expect(deleteGoal).toHaveBeenCalledOnce());
+    expect(editor).toHaveAttribute("readonly");
+    expect(editor).toHaveValue("");
+    expect(editor).toHaveAttribute("placeholder", frameCopy.do.placeholder);
+    expect(
+      screen.queryByText(cycleFrameCopy.terminalEmpty, { exact: true }),
+    ).not.toBeInTheDocument();
 
     const goalActions =
       view.container.querySelector<HTMLElement>(".goal-actions");
@@ -796,6 +808,238 @@ describe("GoalWorkspacePage", () => {
     expect(complete).toHaveFocus();
     expect(saveCycleFrame).not.toHaveBeenCalled();
     expect(completeCycle).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "Canceled empty",
+      terminalCycle: {
+        ...cycle,
+        status: "canceled",
+        plan: "",
+        canceledAt: "2026-08-20T00:06:00.000Z",
+        cancellationReason: "goal_ended",
+      },
+      emptyFrames: { plan: true, do: true, check: true, action: true },
+    },
+    {
+      label: "Canceled Unicode-whitespace-only",
+      terminalCycle: {
+        ...cycle,
+        status: "canceled",
+        plan: "\u0085",
+        do: "\u00a0",
+        check: "\u2003",
+        action: "\u3000",
+        canceledAt: "2026-08-20T00:06:00.000Z",
+        cancellationReason: "goal_ended",
+      },
+      emptyFrames: { plan: true, do: true, check: true, action: true },
+    },
+    {
+      label: "Canceled filled",
+      terminalCycle: {
+        ...completableCycle,
+        status: "canceled",
+        canceledAt: "2026-08-20T00:06:00.000Z",
+        cancellationReason: "goal_ended",
+      },
+      emptyFrames: { plan: false, do: false, check: false, action: false },
+    },
+    {
+      label: "Completed filled",
+      terminalCycle: {
+        ...completableCycle,
+        status: "completed",
+        completedAt: "2026-08-20T00:06:00.000Z",
+      },
+      emptyFrames: { plan: false, do: false, check: false, action: false },
+    },
+    {
+      label: "Canceled mixed",
+      terminalCycle: {
+        ...cycle,
+        status: "canceled",
+        plan: "入力済みの計画",
+        do: "",
+        check: "\u2003",
+        action: "改善\n次へ",
+        canceledAt: "2026-08-20T00:06:00.000Z",
+        cancellationReason: "goal_ended",
+      },
+      emptyFrames: { plan: false, do: true, check: true, action: false },
+    },
+  ] satisfies Array<{
+    label: string;
+    terminalCycle: Cycle;
+    emptyFrames: {
+      plan: boolean;
+      do: boolean;
+      check: boolean;
+      action: boolean;
+    };
+  }>)(
+    "renders $label frames as immutable values without editable examples",
+    async ({ terminalCycle, emptyFrames }) => {
+      const user = userEvent.setup();
+      vi.mocked(getCycle).mockResolvedValue({ cycle: terminalCycle });
+      const cache = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      });
+      renderPage(cache);
+
+      await screen.findByText("読み取り専用");
+      const frameCases = [
+        { frame: "plan", tab: /P\s*Plan/, textbox: "P — Plan" },
+        { frame: "do", tab: /D\s*Do/, textbox: "D — Do" },
+        { frame: "check", tab: /C\s*Check/, textbox: "C — Check" },
+        { frame: "action", tab: /A\s*Action/, textbox: "A — Action" },
+      ] as const;
+
+      for (const [index, { frame, tab, textbox }] of frameCases.entries()) {
+        const frameTab = screen.getByRole("tab", { name: tab });
+        if (index === 0) {
+          frameTab.focus();
+        } else {
+          await user.click(frameTab);
+        }
+        const editor = screen.getByRole("textbox", { name: textbox });
+        if (index === 0) {
+          await user.tab();
+          expect(editor).toHaveFocus();
+        }
+
+        expect(editor).toHaveAttribute("readonly");
+        expect(editor).toHaveAttribute("aria-readonly", "true");
+        expect(editor).toHaveValue(terminalCycle[frame]);
+        expect(
+          document.querySelector('label[for="cycle-frame-editor"]'),
+        ).toHaveTextContent(frameCopy[frame].name);
+        expect(
+          screen.getByText(`${Array.from(terminalCycle[frame]).length} / 200`),
+        ).toBeVisible();
+        const describedBy =
+          editor.getAttribute("aria-describedby")?.split(/\s+/) ?? [];
+        expect(describedBy).toContain("cycle-frame-guide");
+
+        if (emptyFrames[frame]) {
+          expect(editor).not.toHaveAttribute("placeholder");
+          const empty = screen.getByText("未入力", { exact: true });
+          expect(empty).toBeVisible();
+          expect(empty.id).not.toBe("");
+          expect(describedBy).toContain(empty.id);
+          expect(
+            editor.compareDocumentPosition(empty) &
+              Node.DOCUMENT_POSITION_FOLLOWING,
+          ).toBeTruthy();
+        } else {
+          expect(editor).toHaveAttribute(
+            "placeholder",
+            frameCopy[frame].placeholder,
+          );
+          expect(
+            screen.queryByText(cycleFrameCopy.terminalEmpty, { exact: true }),
+          ).not.toBeInTheDocument();
+        }
+      }
+      expect(saveCycleFrame).not.toHaveBeenCalled();
+    },
+  );
+
+  it("replaces a stale Active cache view with an empty canonical terminal frame", async () => {
+    const refreshedCycle = deferred<Awaited<ReturnType<typeof getCycle>>>();
+    const staleActiveCycle: Cycle = { ...cycle, plan: "" };
+    const canonicalCanceledCycle: Cycle = {
+      ...staleActiveCycle,
+      status: "canceled",
+      canceledAt: "2026-08-20T00:06:00.000Z",
+      cancellationReason: "goal_ended",
+    };
+    const endedGoal: Goal = {
+      ...goal,
+      status: "ended",
+      currentWork: null,
+      terminalAt: "2026-08-20T00:06:00.000Z",
+    };
+    vi.mocked(getGoal).mockResolvedValue({ goal: endedGoal });
+    vi.mocked(getCycle).mockReturnValue(refreshedCycle.promise);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0 } },
+    });
+    cache.setQueryData(userQueryKeys.goal(session.user.id, goal.id), {
+      goal: endedGoal,
+    });
+    cache.setQueryData(
+      userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
+      { cycle: staleActiveCycle },
+    );
+    renderPage(cache);
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    expect(editor).not.toHaveAttribute("readonly");
+    expect(editor).toHaveValue("");
+    expect(editor).toHaveAttribute("placeholder", frameCopy.plan.placeholder);
+    expect(
+      screen.queryByText("未入力", { exact: true }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(getCycle).toHaveBeenCalledOnce());
+
+    await act(async () =>
+      refreshedCycle.resolve({ cycle: canonicalCanceledCycle }),
+    );
+
+    await screen.findByText("読み取り専用");
+    expect(editor).toHaveAttribute("readonly");
+    expect(editor).toHaveAttribute("aria-readonly", "true");
+    expect(editor).toHaveValue("");
+    expect(editor).not.toHaveAttribute("placeholder");
+    const empty = screen.getByText("未入力", { exact: true });
+    expect(empty).toBeVisible();
+    expect(empty.id).not.toBe("");
+    expect(editor.getAttribute("aria-describedby")?.split(/\s+/)).toEqual(
+      expect.arrayContaining(["cycle-frame-guide", empty.id]),
+    );
+  });
+
+  it("keeps the editable example for an empty Active Action while AI temporarily makes it read-only", async () => {
+    const generation = deferred<Awaited<ReturnType<typeof generateAction>>>();
+    vi.mocked(getCycle).mockResolvedValue({
+      cycle: { ...completableCycle, action: "" },
+    });
+    vi.mocked(generateAction).mockReturnValue(generation.promise);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+    const editor = screen.getByRole("textbox", { name: "A — Action" });
+    expect(editor).not.toHaveAttribute("readonly");
+    expect(editor).toHaveValue("");
+    expect(editor).toHaveAttribute("placeholder", frameCopy.action.placeholder);
+    expect(
+      screen.queryByText(cycleFrameCopy.terminalEmpty, { exact: true }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "アクションを生成" }));
+    await waitFor(() => expect(generateAction).toHaveBeenCalledOnce());
+
+    expect(editor).toHaveAttribute("readonly");
+    expect(editor).toHaveAttribute("aria-readonly", "true");
+    expect(editor).toHaveValue("");
+    expect(editor).toHaveAttribute("placeholder", frameCopy.action.placeholder);
+    expect(editor).toHaveAttribute("aria-describedby", "cycle-frame-guide");
+    expect(
+      screen.queryByText(cycleFrameCopy.terminalEmpty, { exact: true }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => generation.reject(new Error("provider failure")));
+    expect(
+      await screen.findByText(
+        "AI処理を完了できませんでした。現在のAは保持されています。",
+      ),
+    ).toBeVisible();
   });
 
   it.each([
@@ -1158,14 +1402,16 @@ describe("GoalWorkspacePage", () => {
   });
 
   it("prioritizes recovery guidance over missing-frame guidance", async () => {
-    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    vi.mocked(getCycle).mockResolvedValue({
+      cycle: { ...completableCycle, plan: "" },
+    });
     vi.mocked(getBrowserDraft).mockImplementation(async (_userId, key) =>
       key.endsWith(":plan")
         ? {
             userId: session.user.id,
             goalId: goal.id,
             subjectKey: key,
-            body: "この端末に残った計画",
+            body: "",
             baseRevision: 9,
             updatedAt: new Date().toISOString(),
           }
@@ -1177,6 +1423,17 @@ describe("GoalWorkspacePage", () => {
     const view = renderPage(cache);
 
     await screen.findByText("別の更新が見つかりました");
+    const recoveryEditor = screen.getByRole("textbox", { name: "P — Plan" });
+    expect(recoveryEditor).toHaveAttribute("readonly");
+    expect(recoveryEditor).toHaveAttribute("aria-readonly", "true");
+    expect(recoveryEditor).toHaveValue("");
+    expect(recoveryEditor).toHaveAttribute(
+      "placeholder",
+      frameCopy.plan.placeholder,
+    );
+    expect(
+      screen.queryByText(cycleFrameCopy.terminalEmpty, { exact: true }),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
 
     const guidance = screen.getByText(
@@ -2364,6 +2621,10 @@ describe("GoalWorkspacePage", () => {
       ).not.toBeInTheDocument();
       expect(editor).toHaveValue("移動前の端末の計画");
       expect(editor).toHaveAttribute("readonly");
+      expect(editor).toHaveAttribute("placeholder", frameCopy.plan.placeholder);
+      expect(
+        screen.queryByText(cycleFrameCopy.terminalEmpty, { exact: true }),
+      ).not.toBeInTheDocument();
       expect(saveCycleFrame).toHaveBeenCalledOnce();
       expect(getGoal).toHaveBeenCalledTimes(2);
       expect(getCycle).toHaveBeenCalledTimes(2);
@@ -2384,11 +2645,17 @@ describe("GoalWorkspacePage", () => {
         name: "今の実行を記録",
       });
       expect(quickEntry).toHaveAttribute("aria-disabled", "true");
+      expect(movedDo).toHaveAttribute("readonly");
+      expect(movedDo).toHaveAttribute("aria-readonly", "true");
+      expect(movedDo).toHaveValue("");
+      expect(movedDo).toHaveAttribute("placeholder", frameCopy.do.placeholder);
+      expect(
+        screen.queryByText(cycleFrameCopy.terminalEmpty, { exact: true }),
+      ).not.toBeInTheDocument();
       expect(
         screen.getByText("現在の作業を確認してから追加してください。"),
       ).toBeVisible();
       fireEvent.click(quickEntry);
-      expect(movedDo).toHaveValue(cycle.do);
       expect(saveCycleFrame).toHaveBeenCalledOnce();
       fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
       for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {

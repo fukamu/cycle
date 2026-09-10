@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
+import { cycleFrameCopy, frameCopy } from "../src/shared/copy/ja";
 import { newUUIDv7 } from "../src/shared/id/uuid";
 import { expectAPIError, getSession, requestFromPage } from "./support/api";
 import {
@@ -1876,6 +1877,110 @@ test("Active Cycle Goal guidance stays nearby and usable at narrow widths", asyn
   await expect(end).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(remove).toBeFocused();
+});
+
+test("an empty Cycle canceled with its Goal shows every terminal frame as unentered", async ({
+  page,
+}) => {
+  const goalText = "空のCanceled Cycleを確認する目標";
+  await createProgressingGoal(page, goalText);
+
+  const activePlan = page.getByRole("textbox", { name: "P — Plan" });
+  await expect(activePlan).toHaveValue("");
+  await expect(activePlan).toHaveAttribute(
+    "placeholder",
+    frameCopy.plan.placeholder,
+  );
+  await expect(
+    page.getByText(cycleFrameCopy.terminalEmpty, { exact: true }),
+  ).toHaveCount(0);
+
+  await page.getByText("目標の操作").click();
+  await page.getByRole("button", { name: "目標を終了" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "目標を終了" })
+    .click();
+  await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
+
+  await page.getByRole("button", { name: "メニューを開く" }).click();
+  await page.getByRole("link", { name: "目標の履歴" }).click();
+  await page.getByRole("link", { name: new RegExp(goalText) }).click();
+  await page.getByRole("link", { name: /Cycle 1/ }).click();
+  await expect(page.getByText("読み取り専用")).toBeVisible();
+
+  const frames = [
+    { tab: "P Plan", textbox: "P — Plan" },
+    { tab: "D Do", textbox: "D — Do" },
+    { tab: "C Check", textbox: "C — Check" },
+    { tab: "A Action", textbox: "A — Action" },
+  ] as const;
+  const assertTerminalLayout = async () => {
+    for (const { tab, textbox } of frames) {
+      const frameTab = page.getByRole("tab", { name: tab });
+      await frameTab.click();
+      await expect(frameTab).toBeFocused();
+      const editor = page.getByRole("textbox", { name: textbox });
+      await expect(editor).toHaveValue("");
+      await expect(editor).toHaveAttribute("readonly", "");
+      await expect(editor).toHaveAttribute("aria-readonly", "true");
+      await expect(editor).not.toHaveAttribute("placeholder");
+      const empty = page.getByText(cycleFrameCopy.terminalEmpty, {
+        exact: true,
+      });
+      await expect(empty).toBeVisible();
+      const emptyId = await empty.getAttribute("id");
+      expect(emptyId).toBeTruthy();
+      const describedBy =
+        (await editor.getAttribute("aria-describedby"))?.split(/\s+/) ?? [];
+      expect(describedBy).toContain("cycle-frame-guide");
+      expect(describedBy).toContain(emptyId);
+      expect(
+        await page.evaluate(
+          ({ tabName, textboxName, emptyElementId }) => {
+            const tabElement = document.querySelector<HTMLElement>(
+              `[role="tab"][aria-label="${tabName}"]`,
+            );
+            const editorElement = document.querySelector<HTMLElement>(
+              `textarea[aria-label="${textboxName}"]`,
+            );
+            const emptyElement = document.getElementById(emptyElementId);
+            return Boolean(
+              tabElement &&
+              editorElement &&
+              emptyElement &&
+              tabElement.compareDocumentPosition(editorElement) &
+                Node.DOCUMENT_POSITION_FOLLOWING &&
+              editorElement.compareDocumentPosition(emptyElement) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+            );
+          },
+          { tabName: tab, textboxName: textbox, emptyElementId: emptyId ?? "" },
+        ),
+      ).toBe(true);
+      await page.keyboard.press("Tab");
+      await expect(editor).toBeFocused();
+    }
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(false);
+  };
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await assertTerminalLayout();
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await assertTerminalLayout();
 });
 
 test("mobile long content stays in bounds and frame tabs support keyboard navigation", async ({

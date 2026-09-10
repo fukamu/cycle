@@ -38,6 +38,10 @@ export const frameCopy: Record<
   },
 };
 
+export const cycleFrameCopy = {
+  terminalEmpty: "未入力",
+} as const;
+
 export const cycleNextFrameCopy = {
   plan: { frame: "do", label: "D — Doへ進む" },
   do: { frame: "check", label: "C — Checkへ進む" },

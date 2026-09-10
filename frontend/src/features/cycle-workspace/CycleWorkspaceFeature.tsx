@@ -60,6 +60,7 @@ import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
 import {
   cycleActionCopy,
   cycleDoQuickEntryCopy,
+  cycleFrameCopy,
   cycleGoalActionCopy,
   cycleNextFrameCopy,
   frameCopy,
@@ -373,6 +374,7 @@ function CycleWorkspace({
   const actionGuidanceId = useId();
   const goalActionGuidanceId = useId();
   const textLimitFeedbackId = useId();
+  const terminalFrameEmptyId = useId();
   const scopeRegistry = useAutoSaveScopeRegistry();
   const scopeKey = ["cycle", userId, goal.id, cycle.id].join(":");
   const lease = useMemo(
@@ -1808,6 +1810,13 @@ function CycleWorkspace({
     Boolean(selectedConflict) ||
     pendingAction ||
     (selected === "action" && aiState !== "idle");
+  const terminalFrameEmpty =
+    (cycle.status === "completed" || cycle.status === "canceled") &&
+    !pendingAction &&
+    !workspaceMoved &&
+    !selectedConflict &&
+    aiState === "idle" &&
+    !hasNonWhitespace(values[selected]);
   const nextFrame =
     selected === "action" ? undefined : cycleNextFrameCopy[selected];
   const boundedInput = useBoundedTextInput({
@@ -1822,6 +1831,13 @@ function CycleWorkspace({
       setIsDoComposing(composing);
     },
   });
+  const frameEditorDescribedBy = [
+    "cycle-frame-guide",
+    boundedInput.feedback ? textLimitFeedbackId : undefined,
+    terminalFrameEmpty ? terminalFrameEmptyId : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const doQuickEntryDisabledReason = workspaceMoved
     ? cycleDoQuickEntryCopy.disabled.workspaceMoved
     : recoveryConflicts.has("do")
@@ -2008,20 +2024,21 @@ function CycleWorkspace({
           ref={frameEditorRef}
           id="cycle-frame-editor"
           aria-label={`${copy.label} — ${copy.name}`}
-          aria-describedby={
-            boundedInput.feedback
-              ? `cycle-frame-guide ${textLimitFeedbackId}`
-              : "cycle-frame-guide"
-          }
+          aria-describedby={frameEditorDescribedBy}
           aria-readonly={frameEditorReadOnly}
           value={boundedInput.value}
-          placeholder={copy.placeholder}
+          placeholder={terminalFrameEmpty ? undefined : copy.placeholder}
           readOnly={frameEditorReadOnly}
           onChange={boundedInput.onChange}
           onCompositionStart={boundedInput.onCompositionStart}
           onCompositionEnd={boundedInput.onCompositionEnd}
           onBlur={() => flush(selected)}
         />
+        {terminalFrameEmpty && (
+          <p className="terminal-frame-empty" id={terminalFrameEmptyId}>
+            {cycleFrameCopy.terminalEmpty}
+          </p>
+        )}
         {boundedInput.feedback && (
           <p
             className="text-limit-feedback"
