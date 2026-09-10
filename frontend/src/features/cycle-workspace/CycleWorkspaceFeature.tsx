@@ -61,9 +61,11 @@ import {
   cycleActionCopy,
   cycleDoQuickEntryCopy,
   cycleFrameCopy,
+  cycleFrameTemplateCopy,
   cycleGoalActionCopy,
   cycleNextFrameCopy,
   frameCopy,
+  type CycleFrameTemplate,
 } from "../../shared/copy/ja";
 import {
   type BrowserDraft,
@@ -98,6 +100,10 @@ import {
 import { CycleCheckComparison } from "./CycleCheckComparison";
 import { CycleCompletionSummary } from "./CycleCompletionSummary";
 import {
+  CycleFrameTemplatePicker,
+  type TemplateFrame,
+} from "./CycleFrameTemplatePicker";
+import {
   DoQuickEntryControls,
   type DoQuickEntryFeedback,
 } from "./DoQuickEntryControls";
@@ -126,6 +132,11 @@ type DoQuickEntryUndo = {
   readonly before: string;
   readonly after: string;
   readonly header: string;
+};
+type FrameTemplateUndo = {
+  readonly frame: TemplateFrame;
+  readonly before: string;
+  readonly after: string;
 };
 type MovedWorkspace = {
   readonly currentWorkspace: CurrentWork | null;
@@ -371,6 +382,9 @@ function CycleWorkspace({
   const [doQuickEntryFeedback, setDoQuickEntryFeedback] =
     useState<DoQuickEntryFeedback>();
   const [isDoComposing, setIsDoComposing] = useState(false);
+  const [composingFrame, setComposingFrame] = useState<Frame>();
+  const [frameTemplateUndo, setFrameTemplateUndo] =
+    useState<FrameTemplateUndo>();
   const actionGuidanceId = useId();
   const goalActionGuidanceId = useId();
   const textLimitFeedbackId = useId();
@@ -398,6 +412,8 @@ function CycleWorkspace({
   const pendingActionRef = useRef(false);
   const doQuickEntryUndoRef = useRef<DoQuickEntryUndo | undefined>(undefined);
   const isDoComposingRef = useRef(false);
+  const composingFrameRef = useRef<Frame | undefined>(undefined);
+  const frameTemplateUndoRef = useRef<FrameTemplateUndo | undefined>(undefined);
   const frameEditorRef = useRef<HTMLTextAreaElement>(null);
   const deferredHydrationEditsRef = useRef(new Map<Frame, string>());
   const browserBaseRevisionsRef = useRef(new Map<Frame, number>());
@@ -1076,6 +1092,19 @@ function CycleWorkspace({
     setDoQuickEntryUndo(undefined);
   }, [movedWorkspace, values.do]);
 
+  useEffect(() => {
+    const undo = frameTemplateUndoRef.current;
+    if (
+      !undo ||
+      (!movedWorkspace &&
+        !recoveryConflicts.has(undo.frame) &&
+        values[undo.frame] === undo.after)
+    )
+      return;
+    frameTemplateUndoRef.current = undefined;
+    setFrameTemplateUndo(undefined);
+  }, [movedWorkspace, recoveryConflicts, values]);
+
   function applyFrameValue(frame: Frame, value: string) {
     editedFramesRef.current.add(frame);
     valuesRef.current = { ...valuesRef.current, [frame]: value };
@@ -1087,6 +1116,13 @@ function CycleWorkspace({
     if (!doQuickEntryUndoRef.current) return;
     doQuickEntryUndoRef.current = undefined;
     setDoQuickEntryUndo(undefined);
+  }
+
+  function clearFrameTemplateUndo(frame?: Frame) {
+    const undo = frameTemplateUndoRef.current;
+    if (!undo || (frame && undo.frame !== frame)) return;
+    frameTemplateUndoRef.current = undefined;
+    setFrameTemplateUndo(undefined);
   }
 
   function change(frame: Frame, value: string) {
@@ -1105,6 +1141,7 @@ function CycleWorkspace({
       clearDoQuickEntryUndo();
       setDoQuickEntryFeedback(undefined);
     }
+    clearFrameTemplateUndo(frame);
     applyFrameValue(frame, normalizedValue);
   }
 
@@ -1127,6 +1164,10 @@ function CycleWorkspace({
       setIsDoComposing(false);
       setDoQuickEntryFeedback(undefined);
     }
+    if (composingFrameRef.current === selected) {
+      composingFrameRef.current = undefined;
+      setComposingFrame(undefined);
+    }
     setSelected(frame);
   }
 
@@ -1138,11 +1179,12 @@ function CycleWorkspace({
     );
   }
 
-  function focusDoEditorAtEnd(content: string) {
+  function focusFrameEditorAtEnd(frame: Frame, content: string) {
     window.setTimeout(() => {
       if (
-        document.getElementById("tab-do")?.getAttribute("aria-selected") !==
-        "true"
+        document
+          .getElementById(`tab-${frame}`)
+          ?.getAttribute("aria-selected") !== "true"
       )
         return;
       const editor = frameEditorRef.current;
@@ -1150,6 +1192,58 @@ function CycleWorkspace({
       editor.focus();
       editor.setSelectionRange(content.length, content.length);
     }, 0);
+  }
+
+  function focusDoEditorAtEnd(content: string) {
+    focusFrameEditorAtEnd("do", content);
+  }
+
+  function handleInsertFrameTemplate(
+    frame: TemplateFrame,
+    template: CycleFrameTemplate,
+  ) {
+    if (
+      selected !== frame ||
+      !editable ||
+      movedWorkspaceRef.current ||
+      conflictsRef.current.has(frame) ||
+      pendingActionRef.current ||
+      composingFrameRef.current === frame
+    )
+      return;
+    const before = valuesRef.current[frame];
+    if (hasNonWhitespace(before)) return;
+    const content = normalizeBoundedTextInput(
+      template.content,
+      FRAME_TEXT_MAX_CODE_POINTS,
+    );
+    if (content === null) return;
+    if (frame === "do") {
+      clearDoQuickEntryUndo();
+      setDoQuickEntryFeedback(undefined);
+    }
+    applyFrameValue(frame, content);
+    const undo: FrameTemplateUndo = { frame, before, after: content };
+    frameTemplateUndoRef.current = undo;
+    setFrameTemplateUndo(undo);
+    focusFrameEditorAtEnd(frame, content);
+  }
+
+  function handleUndoFrameTemplate(frame: TemplateFrame) {
+    const undo = frameTemplateUndoRef.current;
+    if (
+      !undo ||
+      undo.frame !== frame ||
+      undo.after !== valuesRef.current[frame] ||
+      movedWorkspaceRef.current ||
+      conflictsRef.current.has(frame) ||
+      pendingActionRef.current ||
+      composingFrameRef.current === frame
+    )
+      return;
+    applyFrameValue(frame, undo.before);
+    clearFrameTemplateUndo(frame);
+    focusFrameEditorAtEnd(frame, undo.before);
   }
 
   function handleAddDoQuickEntry() {
@@ -1194,6 +1288,7 @@ function CycleWorkspace({
       after: result.content,
       header: result.header,
     };
+    clearFrameTemplateUndo("do");
     applyFrameValue("do", result.content);
     doQuickEntryUndoRef.current = undo;
     setDoQuickEntryUndo(undo);
@@ -1826,9 +1921,17 @@ function CycleWorkspace({
     readOnly: frameEditorReadOnly,
     onAccept: (value) => change(selected, value),
     onCompositionChange: (composing) => {
-      if (selected !== "do") return;
-      isDoComposingRef.current = composing;
-      setIsDoComposing(composing);
+      if (composing) {
+        composingFrameRef.current = selected;
+        setComposingFrame(selected);
+      } else if (composingFrameRef.current === selected) {
+        composingFrameRef.current = undefined;
+        setComposingFrame(undefined);
+      }
+      if (selected === "do") {
+        isDoComposingRef.current = composing;
+        setIsDoComposing(composing);
+      }
     },
   });
   const frameEditorDescribedBy = [
@@ -1847,6 +1950,32 @@ function CycleWorkspace({
         : pendingAction
           ? cycleDoQuickEntryCopy.disabled.commandPending
           : undefined;
+  const templateFrame: TemplateFrame | undefined =
+    selected === "plan" || selected === "do" ? selected : undefined;
+  const templateDisabledReason = !templateFrame
+    ? undefined
+    : workspaceMoved
+      ? cycleFrameTemplateCopy.disabled.workspaceMoved
+      : recoveryConflicts.has(templateFrame)
+        ? cycleFrameTemplateCopy.disabled.recovery
+        : composingFrame === templateFrame
+          ? cycleFrameTemplateCopy.disabled.composition
+          : pendingAction
+            ? cycleFrameTemplateCopy.disabled.commandPending
+            : hasNonWhitespace(values[templateFrame])
+              ? cycleFrameTemplateCopy.disabled.hasContent(
+                  frameCopy[templateFrame].label,
+                )
+              : undefined;
+  const templateUndoAvailable = Boolean(
+    templateFrame &&
+    frameTemplateUndo?.frame === templateFrame &&
+    frameTemplateUndo.after === values[templateFrame] &&
+    !workspaceMoved &&
+    !recoveryConflicts.has(templateFrame) &&
+    composingFrame !== templateFrame &&
+    !pendingAction,
+  );
   const comparisonFrames = ["plan", "do"] as const;
   const comparisonRecoveryPending = new Set(
     comparisonFrames.filter((frame) => recoveryConflicts.has(frame)),
@@ -2005,6 +2134,18 @@ function CycleWorkspace({
             onReviewRecovery={reviewFrameRecovery}
           />
         )}
+        {(editable || (workspaceMoved && initiallyEditableRef.current)) &&
+          templateFrame && (
+            <CycleFrameTemplatePicker
+              frame={templateFrame}
+              disabledReason={templateDisabledReason}
+              canUndo={templateUndoAvailable}
+              onInsert={(template) =>
+                handleInsertFrameTemplate(templateFrame, template)
+              }
+              onUndo={() => handleUndoFrameTemplate(templateFrame)}
+            />
+          )}
         {(editable || (workspaceMoved && initiallyEditableRef.current)) &&
           selected === "do" && (
             <DoQuickEntryControls

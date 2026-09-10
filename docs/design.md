@@ -575,6 +575,10 @@ Goal v2 · Cycle 3
 
 Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Completed / Canceledで選択中Frameが空文字またはUnicode whitespaceだけの場合は編集用Placeholderを表示せず、Textareaの近接textとaccessible descriptionで`未入力`と示す。Active Cycleの通常編集およびAI、Browser Draft Recovery、workspace移動、command処理による一時Read-onlyでは編集用Placeholderを維持し、`未入力`を表示しない。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 
+Active CycleのPまたはD選択中は、Guideの後、Textareaの前に任意のbuilt-in templateを3件表示する。各templateは名称、用途、実際に挿入する全文preview、明示操作`{template名}を挿入`を選択前から示す。現在Frameが空文字またはUnicode whitespaceだけの場合だけ、明示操作で既存本文全体をpreviewどおり置き換え、同じTextarea入力・Auto Save経路へ渡して末尾へfocusする。挿入直後は`テンプレートの挿入を取り消す`を提供し、その後はtemplate IDや選択情報を持たないplain textとして自由に編集できる。
+
+P/Dが非空の場合もtemplateとpreviewを表示したまま挿入操作を無効にし、`現在の{P|D}に入力があるため、テンプレートを挿入できません。既存の内容は上書きしません。`をvisible textとaccessible descriptionで示す。IME composition中、選択FrameのBrowser Draft Recovery確認待ち、workspace移動後、Cycle command処理中も挿入せず、それぞれの理由を同じ場所へ示す。Completed / Canceled CycleとC/Aではtemplate UIを表示しない。Exact template copyは§9.7を正とする。
+
 Active Cycleの編集可能なP / D / Cでは、Textarea、文字数feedback、Auto Save state / counterの後に、それぞれ`D — Doへ進む`、`C — Checkへ進む`、`A — Actionへ進む`というinline CTAを通常のscroll flowで表示する。CTAは既存のFrame選択経路で次のFrameを選択し、選択後は遷移先Tabへfocusする。入力が空、dirty / saving / failedを含むAuto Save state、または保存処理中であることを理由に無効化せず、保存完了を待たない。既存のflush、Auto Save queue、Browser Draft Cache、選択Frameの端末保存、自由なTab移動は変更しない。A、Completed / Canceled Cycle、選択中FrameのBrowser Draft Recoveryの確認待ち、workspace移動後、Cycle command処理中などTextareaがread-onlyとなる状態では表示しない。固定・sticky配置や、入力完了を強制するwizard / validation gateにはしない。
 
 Active CycleのD選択中だけ、明示操作`今の実行を記録`を表示する。操作時点のBrowser local date/timeを`【YYYY/MM/DD HH:mm UTC±HH:MM】`というplain-text見出しにし、Dが空なら見出しと末尾改行、非空なら既存本文を1字も変更せず、空行区切り、見出し、末尾改行の順で追記する。追記後はD Textareaの末尾へfocusする。同じ見出しを追加した直後の連続操作はno-opとし、`日時の追加を取り消す`では追記直前の本文へexactに戻す。追記後にDを手入力した時点で、その追記に対するUndoは無効にする。
@@ -605,6 +609,66 @@ Active Cycle中のterminal confirmationには、現在CycleがCanceledのRead-on
 ## 9.7 P/D/C/A Copy
 
 UI文言はComponentへ散在させず、日本語copy moduleで管理する。
+
+### P/D built-in templates
+
+共通heading: `書き始めのテンプレート（任意）`
+
+共通guide: `内容を確認してから選んでください。挿入後は自由に編集できます。`
+
+P:
+
+1. `小さく試す` — 用途: `試すことと、できたと判断する目安を短く整理します。`
+
+   ```text
+   今回試すこと：
+   いつ・どこで：
+   できたと判断する目安：
+   ```
+
+2. `時間を決める` — 用途: `取り組む時間と、時間内に終える範囲を決めます。`
+
+   ```text
+   取り組む時間：
+   その時間にやること：
+   終わりの条件：
+   ```
+
+3. `手順を決める` — 用途: `始め方と次の手順、行き詰まったときの動きを決めます。`
+
+   ```text
+   最初の一歩：
+   次にやること：
+   行き詰まったとき：
+   ```
+
+D:
+
+1. `実行メモ` — 用途: `実際にやったことと、予定との違いを残します。`
+
+   ```text
+   やったこと：
+   起きたこと：
+   予定との違い：
+   ```
+
+2. `時間ごとの記録` — 用途: `時刻ごとに行動と結果を並べて記録します。`
+
+   ```text
+   時刻：
+   やったこと：
+   結果：
+   ```
+
+3. `中断・再開メモ` — 用途: `中断した場所と理由、再開の一歩を残します。`
+
+   ```text
+   止まったところ：
+   止まった理由：
+   再開時の最初の一歩：
+   ```
+
+各操作のvisible labelとaccessible nameは`{template名}を挿入`、preview labelは`挿入される内容`、Undoは`テンプレートの挿入を取り消す`とする。
 
 ### P — Plan
 
@@ -962,6 +1026,8 @@ Frontend confirmationは、Draftに変更がある場合に次を明示する。
 - Canceled時は未入力Frameがあってよい。
 - Completed / Canceledは個別update/delete/re-open不可。
 - Goal Aggregate Delete / Account Deleteだけが破壊的削除例外。
+
+P/D built-in templateは§9.7のplain textをActive Cycleの現在Frameへ入力するだけであり、Cycle、Frame、Browser Draft Cache、API、DB、telemetryへtemplate IDや選択情報を保持しない。挿入後の本文は手入力と区別せず、この節の文字semanticsと上限を適用する。
 
 Active Cycle `N > 1`のfull read modelは、同じUser・同じGoalの`sequenceNumber = N - 1`である直接の前CycleがCompletedである場合に限り、そのCycleのAを`previousCompletedCycleAction`として返す。Goal Versionが変わっていても直接の前後関係は変わらず、read modelは前CycleのGoal Version番号をAとともに保持するが、旧Goal本文は含めない。現在Cycleと前CycleのGoal Version番号の関係は§18.5の0 / +1遷移を正とする。
 
@@ -3870,6 +3936,8 @@ Auto Save対象:
 
 Completed / Canceled Cycle、Goal VersionはAuto Save対象外。
 
+P/D template挿入とそのUndoは新しい保存対象やqueueを作らず、Active Cycle Frameの通常入力として既存のCycle単位queue、Browser Draft Cache、revision conflict / Retryへ渡す。
+
 ## 28.2 Timing
 
 **[設計判断]**
@@ -4034,7 +4102,7 @@ Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTa
 | Goal Creation editor | Creation Draft、Auto Save state、Goal Refine、Start eligibility、Draft recoveryを統合する |
 | Goal Refine comparison | User draftとAI suggestionを同時表示し、明示Adoptだけを反映する |
 | Goal Review editor | Current Goal Version、Review Draft、Continue、Achieve、Endを扱い、terminal時のDraft破棄を説明する |
-| Cycle editor | P/D/C/A Tab、Textarea、Frame別revision、Save state、Action AI、Cycle completionを扱う |
+| Cycle editor | P/D/C/A Tab、Textarea、P/Dの任意built-in template、Frame別revision、Save state、Action AI、Cycle completionを扱う |
 | Action eligibility | Generate / Refine / Completeのpredicateをpure logicとして算出し、UI文言で判定しない |
 | Goal history timeline | Cycleの`goalVersionId`変化からVersion change markerを生成し、Completed / Canceled detailをread-only表示する |
 | Session / account UI | Anonymous state、Google connection、identity collision、Account Deleteを扱う。Anonymous bootstrapの`429 RATE_LIMIT_EXCEEDED`は自動再送せず、待ってからの手動Retryを案内する |
@@ -4134,6 +4202,7 @@ Actions:
 - content max widthは例`720px`。
 - Cycle Frame tabsはmobile bottom固定、desktopでも同じ情報構造。
 - CのP/D比較はdesktopで2列、狭幅とzoom時はP→Dの縦配置とし、内部scrollを作らない。
+- P/D templateは320px幅と200% zoom相当で名称、用途、全文preview、操作、disabled理由を切らずに縦のreading orderで表示し、横scrollやnested scrollを作らない。
 - Goal card collectionは1列からresponsiveに拡張可能だが、MVPでdesktop専用layoutを作らない。
 - 翻訳後の長いlabelに備え、固定pixel widthや1行強制を避ける。
 
@@ -4148,6 +4217,7 @@ Actions:
 - AI中Aは`readOnly` + `aria-readonly=true`。disabledにせずcopy/scroll可能。
 - ColorだけでGoal status / save state / version markerを表現しない。
 - CのP/D比較はvisible headingとP→D→Cのreading orderを持ち、Recovery待ちは色だけでなく文字とfocus可能な確認操作で示す。
+- P/D templateの各挿入操作は固有のtemplate名をaccessible nameに含め、用途、全文preview、適用中のdisabled理由を`aria-describedby`で取得できるようにする。
 - Button disabled理由を近接textで示す。
 - SPA内で`pathname`が実際に変わった場合は、初回document loadを除き、Keyboard / screen readerが遷移先を識別できるよう、render済みのdestination `h1`へ一度だけprogrammatic focusを置く。Loading / Errorから同じ`pathname`の最終`h1`へ置換される場合とbrowser back / forwardも同じ対象とし、hashだけの遷移と同じ`pathname`内のFrame / tab / autosave / Dialog操作ではfocusを奪わない。
 
@@ -5155,6 +5225,8 @@ Grapheme clusterと完全一致しないtrade-offはあるが、Frontend / Backe
 
 Goal Creation、Goal Review、Active CycleのP/D/C/A Textareaでは、改行正規化後の候補が上限を超えた場合に現在値を一切変更せず、Auto Save APIとBrowser Draft Cacheへ送らない。Textarea近傍のlive statusで`入力後は{required}文字になるため反映できませんでした。上限{maximum}文字まで、入力内容をあと{excess}文字減らしてください。`と示し、次の上限内編集、Draft / Goal / Frame切替、またはRead-only化で消す。貼り付けや選択範囲置換も同じatomic rejectionとし、substring切断、`maxlength`、上限超過値の一時保持は行わない。
 
+P/D template本文は§14.5の上限内に固定し、挿入時もTextareaの同じ改行正規化・code point判定を経由する。IME composition中は挿入せず、確定後の通常入力から判定を再開する。
+
 IME composition中の中間値は画面上の変換操作だけに保持し、文字数超過feedback、Auto Save API、Browser Draft Cacheを発生させない。`compositionend`の確定候補を改行正規化後に一度だけ判定し、上限内なら通常の編集として反映し、超過なら直前の確定値へ戻して同じfeedbackを示す。Dの`今の実行を記録`がcomposition中に使えない理由は§9.7の専用文言を維持し、文字数超過feedbackと混同しない。
 
 ## 40.3 Error classes
@@ -6040,7 +6112,7 @@ PostgreSQL固有のconstraint、deferred FK、row lock、transactionをSQLiteで
 |---|---|---|
 | Bootstrap、Session、Google、Account Delete | §§18.2、21、25、27、41.10 | Domain/Application、HTTP matrix、実DB concurrency、Frontend identity fence、E2E |
 | Goal Draft、Start、limit、Version | §§12、14、18.3、22 | Domain boundary、HTTP、real-DB rollback/concurrency、Frontend editor、E2E |
-| Cycle save、complete、Review、termination、full Cycle predecessor read | §§13–14、18.4–18.6、23–24、28 | revision/transition/read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
+| Cycle save、P/D template、complete、Review、termination、full Cycle predecessor read | §§9.6–9.7、13–14、18.4–18.6、23–24、28 | template preview / blank・non-blank・terminal・IME・recovery・UndoのFrontend、revision/transition/read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model unit、authz/API、real-DB cascade/CAS/cleanup、E2E |
 | AI prompt、schema、context、result | §§32–37 | typed fake、mock transport、semantic boundary、context-isolation query/application、Frontend adoption |
 | AI quota、cost、abuse | §§38–39 | real-DB quota/rate/budget/settlement/cleanup concurrency、failure and replay |

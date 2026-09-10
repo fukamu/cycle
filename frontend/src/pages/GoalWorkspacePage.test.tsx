@@ -24,7 +24,11 @@ import {
   type GoalDeletionCleanupOutcome,
 } from "../features/goal-deletion";
 import { APIError } from "../shared/api/client";
-import { cycleFrameCopy, frameCopy } from "../shared/copy/ja";
+import {
+  cycleFrameCopy,
+  cycleFrameTemplateCopy,
+  frameCopy,
+} from "../shared/copy/ja";
 import {
   AutoSaveScopeProvider,
   useAutoSaveScopeRegistry,
@@ -196,6 +200,212 @@ describe("GoalWorkspacePage", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("inserts a Plan template into Unicode whitespace through normal autosave and restores the exact prior value with Undo", async () => {
+    const before = "\u00a0\u2003\n";
+    const template = cycleFrameTemplateCopy.templates.plan[0];
+    vi.mocked(getCycle).mockResolvedValue({
+      cycle: { ...cycle, plan: before },
+    });
+    mockEchoingCycleSave();
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    const editor = screen.getByRole("textbox", { name: "P — Plan" });
+    const insert = screen.getByRole("button", {
+      name: cycleFrameTemplateCopy.insert(template.name),
+    });
+    expect(insert).toHaveAttribute("aria-disabled", "false");
+
+    fireEvent.click(insert);
+
+    expect(editor).toHaveValue(template.content);
+    await waitFor(() => expect(editor).toHaveFocus());
+    expect((editor as HTMLTextAreaElement).selectionStart).toBe(
+      template.content.length,
+    );
+    expect((editor as HTMLTextAreaElement).selectionEnd).toBe(
+      template.content.length,
+    );
+    fireEvent.blur(editor);
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledOnce());
+    expect(saveCycleFrame).toHaveBeenLastCalledWith(
+      sessionLease,
+      goal.id,
+      cycle.id,
+      "plan",
+      template.content,
+      0,
+      session.csrfToken,
+      expect.any(AbortSignal),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: cycleFrameTemplateCopy.undo,
+      }),
+    );
+
+    expect(editor).toHaveValue(before);
+    await waitFor(() => expect(editor).toHaveFocus());
+    expect((editor as HTMLTextAreaElement).selectionStart).toBe(before.length);
+    fireEvent.blur(editor);
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledTimes(2));
+    expect(saveCycleFrame).toHaveBeenLastCalledWith(
+      sessionLease,
+      goal.id,
+      cycle.id,
+      "plan",
+      before,
+      1,
+      session.csrfToken,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("keeps all previews visible without overwriting nonempty content and offers the matching Do templates", async () => {
+    mockEchoingCycleSave();
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    const planEditor = screen.getByRole("textbox", { name: "P — Plan" });
+    const planRegion = screen.getByRole("region", {
+      name: cycleFrameTemplateCopy.heading,
+    });
+    expect(
+      within(planRegion).getByText(
+        cycleFrameTemplateCopy.disabled.hasContent("P"),
+      ),
+    ).toBeVisible();
+    for (const template of cycleFrameTemplateCopy.templates.plan) {
+      expect(within(planRegion).getByText(template.name)).toBeVisible();
+      expect(
+        within(planRegion).getByText(
+          (_content, element) => element?.textContent === template.content,
+        ),
+      ).toBeVisible();
+      const insert = within(planRegion).getByRole("button", {
+        name: cycleFrameTemplateCopy.insert(template.name),
+      });
+      expect(insert).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(insert);
+    }
+    expect(planEditor).toHaveValue(cycle.plan);
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("tab", { name: /D\s*Do/ }));
+    const doRegion = screen.getByRole("region", {
+      name: cycleFrameTemplateCopy.heading,
+    });
+    expect(
+      within(doRegion).queryByText(
+        cycleFrameTemplateCopy.templates.plan[0].name,
+      ),
+    ).not.toBeInTheDocument();
+    for (const template of cycleFrameTemplateCopy.templates.do) {
+      expect(within(doRegion).getByText(template.name)).toBeVisible();
+    }
+    const doTemplate = cycleFrameTemplateCopy.templates.do[1];
+    fireEvent.click(
+      within(doRegion).getByRole("button", {
+        name: cycleFrameTemplateCopy.insert(doTemplate.name),
+      }),
+    );
+    const doEditor = screen.getByRole("textbox", { name: "D — Do" });
+    expect(doEditor).toHaveValue(doTemplate.content);
+    await waitFor(() => expect(doEditor).toHaveFocus());
+    expect((doEditor as HTMLTextAreaElement).selectionStart).toBe(
+      doTemplate.content.length,
+    );
+    expect(
+      screen.getByRole("button", { name: cycleFrameTemplateCopy.undo }),
+    ).toBeVisible();
+
+    fireEvent.change(doEditor, {
+      target: { value: `${doTemplate.content}記録` },
+    });
+    expect(
+      screen.queryByRole("button", { name: cycleFrameTemplateCopy.undo }),
+    ).not.toBeInTheDocument();
+
+    for (const tab of [/C\s*Check/, /A\s*Action/]) {
+      fireEvent.click(screen.getByRole("tab", { name: tab }));
+      expect(
+        screen.queryByRole("region", {
+          name: cycleFrameTemplateCopy.heading,
+        }),
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it("blocks template insertion during IME composition and enables it after confirmation", async () => {
+    vi.mocked(getCycle).mockResolvedValue({ cycle: { ...cycle, plan: "" } });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    const editor = screen.getByRole("textbox", { name: "P — Plan" });
+    const insert = screen.getByRole("button", {
+      name: cycleFrameTemplateCopy.insert(
+        cycleFrameTemplateCopy.templates.plan[0].name,
+      ),
+    });
+    fireEvent.compositionStart(editor);
+
+    expect(insert).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByText(cycleFrameTemplateCopy.disabled.composition),
+    ).toBeVisible();
+    fireEvent.click(insert);
+    expect(editor).toHaveValue("");
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(editor);
+    expect(insert).toHaveAttribute("aria-disabled", "false");
+  });
+
+  it("blocks template insertion while browser recovery needs a choice", async () => {
+    vi.mocked(getCycle).mockResolvedValue({ cycle: { ...cycle, plan: "" } });
+    vi.mocked(getBrowserDraft).mockImplementation(async (_userId, key) =>
+      key.endsWith(":plan")
+        ? {
+            userId: session.user.id,
+            goalId: goal.id,
+            subjectKey: key,
+            body: "",
+            baseRevision: 9,
+            updatedAt: "2026-09-08T00:00:00.000Z",
+          }
+        : null,
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("別の更新が見つかりました");
+    const editor = screen.getByRole("textbox", { name: "P — Plan" });
+    const insert = screen.getByRole("button", {
+      name: cycleFrameTemplateCopy.insert(
+        cycleFrameTemplateCopy.templates.plan[0].name,
+      ),
+    });
+    expect(insert).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByText(cycleFrameTemplateCopy.disabled.recovery),
+    ).toBeVisible();
+    fireEvent.click(insert);
+    expect(editor).toHaveValue("");
+    expect(saveCycleFrame).not.toHaveBeenCalled();
   });
 
   it.each(["Goal", "Cycle"] as const)(
@@ -912,6 +1122,11 @@ describe("GoalWorkspacePage", () => {
         expect(editor).toHaveAttribute("readonly");
         expect(editor).toHaveAttribute("aria-readonly", "true");
         expect(editor).toHaveValue(terminalCycle[frame]);
+        expect(
+          screen.queryByRole("region", {
+            name: cycleFrameTemplateCopy.heading,
+          }),
+        ).not.toBeInTheDocument();
         expect(
           document.querySelector('label[for="cycle-frame-editor"]'),
         ).toHaveTextContent(frameCopy[frame].name);
@@ -2655,6 +2870,17 @@ describe("GoalWorkspacePage", () => {
       expect(
         screen.getByText("現在の作業を確認してから追加してください。"),
       ).toBeVisible();
+      const templateInsert = screen.getByRole("button", {
+        name: cycleFrameTemplateCopy.insert(
+          cycleFrameTemplateCopy.templates.do[0].name,
+        ),
+      });
+      expect(templateInsert).toHaveAttribute("aria-disabled", "true");
+      expect(
+        screen.getByText(cycleFrameTemplateCopy.disabled.workspaceMoved),
+      ).toBeVisible();
+      fireEvent.click(templateInsert);
+      expect(movedDo).toHaveValue("");
       fireEvent.click(quickEntry);
       expect(saveCycleFrame).toHaveBeenCalledOnce();
       fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
@@ -3465,6 +3691,21 @@ describe("GoalWorkspacePage", () => {
     expect(refineAction).not.toHaveBeenCalled();
     expect(completeCycle).toHaveBeenCalledOnce();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /P\s*Plan/ }));
+    const insert = screen.getByRole("button", {
+      name: cycleFrameTemplateCopy.insert(
+        cycleFrameTemplateCopy.templates.plan[0].name,
+      ),
+    });
+    expect(insert).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByText(cycleFrameTemplateCopy.disabled.commandPending),
+    ).toBeVisible();
+    fireEvent.click(insert);
+    expect(screen.getByRole("textbox", { name: "P — Plan" })).toHaveValue(
+      completableCycle.plan,
+    );
   });
 
   it("ignores a Complete result that arrives after navigating to another Cycle", async () => {

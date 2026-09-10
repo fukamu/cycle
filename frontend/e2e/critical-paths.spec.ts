@@ -1,6 +1,10 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
-import { cycleFrameCopy, frameCopy } from "../src/shared/copy/ja";
+import {
+  cycleFrameCopy,
+  cycleFrameTemplateCopy,
+  frameCopy,
+} from "../src/shared/copy/ja";
 import { newUUIDv7 } from "../src/shared/id/uuid";
 import { expectAPIError, getSession, requestFromPage } from "./support/api";
 import {
@@ -2083,6 +2087,49 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   await page.getByRole("button", { name: "この目標で始める" }).click();
 
   await expect(page.getByRole("heading", { name: goalText })).toBeVisible();
+  const planTemplate = cycleFrameTemplateCopy.templates.plan[0];
+  const templatePicker = page.getByRole("region", {
+    name: cycleFrameTemplateCopy.heading,
+  });
+  await expect(templatePicker).toBeVisible();
+  await expect(
+    templatePicker.locator(".frame-template__preview p").nth(0),
+  ).toHaveText(planTemplate.content);
+  const templateInsert = templatePicker.getByRole("button", {
+    name: cycleFrameTemplateCopy.insert(planTemplate.name),
+  });
+  expect((await templateInsert.boundingBox())?.height).toBeGreaterThanOrEqual(
+    44,
+  );
+  const templateSave = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "PATCH" &&
+      candidate.url().endsWith("/frames/plan") &&
+      candidate.ok(),
+  );
+  await templateInsert.click();
+  const planEditor = page.getByRole("textbox", { name: "P — Plan" });
+  await expect(planEditor).toHaveValue(planTemplate.content);
+  await expect(planEditor).toBeFocused();
+  expect(
+    await planEditor.evaluate((element) => {
+      const editor = element as HTMLTextAreaElement;
+      return (
+        editor.selectionStart === editor.value.length &&
+        editor.selectionEnd === editor.value.length
+      );
+    }),
+  ).toBe(true);
+  await templateSave;
+  const undoSave = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "PATCH" &&
+      candidate.url().endsWith("/frames/plan") &&
+      candidate.ok(),
+  );
+  await page.getByRole("button", { name: cycleFrameTemplateCopy.undo }).click();
+  await expect(planEditor).toHaveValue("");
+  await undoSave;
   expect(
     await page.evaluate(
       () =>
@@ -2090,6 +2137,26 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
         document.documentElement.clientWidth,
     ),
   ).toBe(false);
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await expect(templatePicker).toBeVisible();
+  await expect(
+    templatePicker.locator(".frame-template__preview p").nth(0),
+  ).toHaveCSS("white-space", "pre-wrap");
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await page.setViewportSize({ width: 320, height: 844 });
 
   const doTab = page.getByRole("tab", { name: /^D/ });
   const nextDo = page.getByRole("button", { name: "D — Doへ進む" });
