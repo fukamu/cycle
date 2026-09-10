@@ -1,4 +1,52 @@
-import { goalCopy, goalReviewDecisionCopy, textLimitCopy } from "./ja";
+import {
+  cycleFrameTemplateCopy,
+  goalCopy,
+  goalReviewDecisionCopy,
+  textLimitCopy,
+} from "./ja";
+
+describe("cycle frame template copy", () => {
+  it("keeps the approved Plan and Do names and exact inserted previews", () => {
+    expect(
+      cycleFrameTemplateCopy.templates.plan.map(({ name, content }) => ({
+        name,
+        content,
+      })),
+    ).toEqual([
+      {
+        name: "小さく試す",
+        content: "今回試すこと：\nいつ・どこで：\nできたと判断する目安：",
+      },
+      {
+        name: "時間を決める",
+        content: "取り組む時間：\nその時間にやること：\n終わりの条件：",
+      },
+      {
+        name: "手順を決める",
+        content: "最初の一歩：\n次にやること：\n行き詰まったとき：",
+      },
+    ]);
+    expect(
+      cycleFrameTemplateCopy.templates.do.map(({ name, content }) => ({
+        name,
+        content,
+      })),
+    ).toEqual([
+      {
+        name: "実行メモ",
+        content: "やったこと：\n起きたこと：\n予定との違い：",
+      },
+      {
+        name: "時間ごとの記録",
+        content: "時刻：\nやったこと：\n結果：",
+      },
+      {
+        name: "中断・再開メモ",
+        content: "止まったところ：\n止まった理由：\n再開時の最初の一歩：",
+      },
+    ]);
+  });
+});
 
 describe("goal limit copy", () => {
   it.each([

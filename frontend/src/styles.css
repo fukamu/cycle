@@ -560,6 +560,109 @@ button:disabled {
   white-space: nowrap;
 }
 
+.frame-templates {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--brand-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.frame-templates__intro h3,
+.frame-templates__intro p,
+.frame-template h4,
+.frame-template__purpose,
+.frame-template__preview p,
+.frame-templates__status {
+  margin: 0;
+}
+
+.frame-templates__intro h3 {
+  color: var(--brand-deep);
+  font-size: 1rem;
+}
+
+.frame-templates__intro p,
+.frame-template__purpose,
+.frame-templates__status {
+  color: var(--muted);
+  font-size: var(--font-size-small);
+  overflow-wrap: anywhere;
+}
+
+.frame-templates__intro p {
+  margin-top: 5px;
+}
+
+.frame-templates__list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.frame-template {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 15px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.frame-template h4 {
+  color: var(--brand-deep);
+  font-size: 0.98rem;
+}
+
+.frame-template__preview {
+  min-width: 0;
+  padding: 12px;
+  background: var(--canvas);
+  border-radius: 8px;
+}
+
+.frame-template__preview > span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--brand-dark);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-bold);
+}
+
+.frame-template__preview p {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.frame-template__insert,
+.frame-templates__undo {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.frame-template__insert[aria-disabled="true"] {
+  cursor: not-allowed;
+  box-shadow: none;
+  opacity: 0.48;
+}
+
+.frame-template__insert[aria-disabled="true"]:hover {
+  background: white;
+  border-color: var(--line-strong);
+}
+
+.frame-templates__status:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .text-button,
 .danger-link {
   padding: 6px 0;
@@ -1590,6 +1693,8 @@ textarea[readonly] {
   .button-row > .button,
   .action-controls__ai > .button,
   .do-quick-entry__actions > .button,
+  .frame-template > .button,
+  .frame-templates > .button,
   .action-controls__complete {
     flex: 1 1 100%;
     width: 100%;

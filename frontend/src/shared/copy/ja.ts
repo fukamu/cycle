@@ -42,6 +42,72 @@ export const cycleFrameCopy = {
   terminalEmpty: "未入力",
 } as const;
 
+export type CycleFrameTemplate = {
+  readonly id: string;
+  readonly name: string;
+  readonly purpose: string;
+  readonly content: string;
+};
+
+export const cycleFrameTemplateCopy = {
+  heading: "書き始めのテンプレート（任意）",
+  guide: "内容を確認してから選んでください。挿入後は自由に編集できます。",
+  previewLabel: "挿入される内容",
+  insert: (name: string) => `${name}を挿入`,
+  undo: "テンプレートの挿入を取り消す",
+  disabled: {
+    hasContent: (frameLabel: string) =>
+      `現在の${frameLabel}に入力があるため、テンプレートを挿入できません。既存の内容は上書きしません。`,
+    composition: "文字の変換を確定してからテンプレートを挿入してください。",
+    recovery: "確認待ちの入力を解決してからテンプレートを挿入してください。",
+    workspaceMoved: "現在の作業を確認してからテンプレートを挿入してください。",
+    commandPending:
+      "サイクルの操作が完了してからテンプレートを挿入してください。",
+  },
+  templates: {
+    plan: [
+      {
+        id: "small-experiment",
+        name: "小さく試す",
+        purpose: "試すことと、できたと判断する目安を短く整理します。",
+        content: "今回試すこと：\nいつ・どこで：\nできたと判断する目安：",
+      },
+      {
+        id: "time-box",
+        name: "時間を決める",
+        purpose: "取り組む時間と、時間内に終える範囲を決めます。",
+        content: "取り組む時間：\nその時間にやること：\n終わりの条件：",
+      },
+      {
+        id: "steps",
+        name: "手順を決める",
+        purpose: "始め方と次の手順、行き詰まったときの動きを決めます。",
+        content: "最初の一歩：\n次にやること：\n行き詰まったとき：",
+      },
+    ] as const satisfies readonly CycleFrameTemplate[],
+    do: [
+      {
+        id: "execution-note",
+        name: "実行メモ",
+        purpose: "実際にやったことと、予定との違いを残します。",
+        content: "やったこと：\n起きたこと：\n予定との違い：",
+      },
+      {
+        id: "time-log",
+        name: "時間ごとの記録",
+        purpose: "時刻ごとに行動と結果を並べて記録します。",
+        content: "時刻：\nやったこと：\n結果：",
+      },
+      {
+        id: "resume-note",
+        name: "中断・再開メモ",
+        purpose: "中断した場所と理由、再開の一歩を残します。",
+        content: "止まったところ：\n止まった理由：\n再開時の最初の一歩：",
+      },
+    ] as const satisfies readonly CycleFrameTemplate[],
+  } satisfies Record<"plan" | "do", readonly CycleFrameTemplate[]>,
+} as const;
+
 export const cycleNextFrameCopy = {
   plan: { frame: "do", label: "D — Doへ進む" },
   do: { frame: "check", label: "C — Checkへ進む" },
