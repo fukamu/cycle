@@ -692,6 +692,7 @@ Route: `/settings`
 - Google Account状態。連携済みの場合は検証済みEmailも併記し、Emailを取得できない場合はその旨を表示する。
 - Google Account連携。
 - Google Identity Servicesのbutton hostは描画前から高さと最大幅を確保し、外部Widgetの非同期初期描画が設定画面全体へはみ出さないようにする。
+- Google Identity Services scriptの読込失敗時は、失敗を説明して「Google認証を再読み込み」を表示する。自動Retryやpage reloadは要求せず、Userの明示操作ごとに新しいscript loadをsingle-flightで開始する。
 - Account Delete。
 - Billing / Upgrade Plan UIは表示しない。
 

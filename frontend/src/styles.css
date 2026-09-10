@@ -388,9 +388,10 @@ summary:focus-visible {
   margin-top: 24px;
 }
 
-.draft-card > p:not(.eyebrow) {
+.draft-card__preview {
   color: var(--muted);
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .home-cta {
@@ -1251,6 +1252,16 @@ textarea[readonly] {
 
 .google-identity__button:empty {
   display: none;
+}
+
+.google-identity__error {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.google-identity__error p {
+  margin: 0;
 }
 
 .danger-zone {

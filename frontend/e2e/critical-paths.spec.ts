@@ -339,6 +339,63 @@ test("header drawer contains focus and deactivates the background", async ({
   ).toBe(false);
 });
 
+test("Home preserves Creation Draft preview meaning at narrow widths", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "新しい目標を設定" }).click();
+  await page.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
+
+  let draftCard = page.locator(".draft-card");
+  await expect(
+    draftCard.getByText("まだ本文はありません。", { exact: true }),
+  ).toBeVisible();
+
+  await draftCard.getByRole("link", { name: "下書きを開く" }).click();
+  const editor = page.getByRole("textbox", { name: "あなたの目標" });
+  await saveText(page, editor, " \n\u3000", "/api/v1/goal-drafts/");
+  await page.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
+  draftCard = page.locator(".draft-card");
+  await expect(
+    draftCard.getByText("まだ本文はありません。", { exact: true }),
+  ).toBeVisible();
+
+  await draftCard.getByRole("link", { name: "下書きを開く" }).click();
+  const multilineBody = `一行目の目標\n${"長い日本語".repeat(12)}`;
+  await saveText(page, editor, multilineBody, "/api/v1/goal-drafts/");
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
+  const preview = page.locator(".draft-card__preview");
+  await expect(preview).toHaveText(multilineBody);
+  expect(
+    await preview.evaluate((element) => getComputedStyle(element).whiteSpace),
+  ).toBe("pre-wrap");
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+
+  await page.getByRole("link", { name: "下書きを開く" }).click();
+  await expect(page).toHaveURL(/\/goals\/new$/);
+  await expect(editor).toHaveValue(multilineBody);
+});
+
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
 }) => {
@@ -686,6 +743,64 @@ test("a failed Settings route chunk recovers through a full-page retry", async (
   await expect(page).toHaveURL("/settings");
   await expect(page.getByRole("heading", { name: "設定" })).toBeVisible();
   expect(settingsChunkRequests).toBe(2);
+});
+
+test("a failed Google Identity script recovers through an explicit in-page retry", async ({
+  page,
+}) => {
+  const googleIdentityScriptURL = "https://accounts.google.com/gsi/client";
+  const fakeGoogleButtonName = "テスト用Google Accountで続行";
+  let scriptRequests = 0;
+  await page.route(googleIdentityScriptURL, async (route) => {
+    scriptRequests += 1;
+    if (scriptRequests === 1) {
+      await route.abort("connectionfailed");
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/javascript",
+      body: `
+        window.google = {
+          accounts: {
+            id: {
+              initialize() {},
+              renderButton(parent) {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.textContent = "${fakeGoogleButtonName}";
+                button.setAttribute("aria-label", "${fakeGoogleButtonName}");
+                parent.replaceChildren(button);
+              },
+            },
+          },
+        };
+      `,
+    });
+  });
+
+  await page.goto("/settings");
+
+  await expect(page.getByRole("heading", { name: "設定" })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(
+    "Google認証を読み込めませんでした",
+  );
+  expect(scriptRequests).toBe(1);
+  await expect(
+    page.locator('script[data-fukamu-cycle-google-identity="true"]'),
+  ).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Google認証を再読み込み" }).click();
+
+  await expect(
+    page.getByRole("button", { name: fakeGoogleButtonName }),
+  ).toBeVisible();
+  expect(scriptRequests).toBe(2);
+  await expect(
+    page.locator('script[data-fukamu-cycle-google-identity="true"]'),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Google認証を再読み込み" }),
+  ).toHaveCount(0);
 });
 
 test("cycle completion reuses its operation after committed response loss and converges to the current workspace", async ({
