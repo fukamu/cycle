@@ -1,23 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, useId } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../auth";
 import { cacheGoals, userQueryKeys } from "../goal-collection";
 import { listGoals } from "../../shared/api/workspace";
-import {
-  LoadMoreError,
-  PageError,
-  PageLoading,
-} from "../../shared/components/AsyncState";
-import { statusLabel } from "../../shared/copy/ja";
+import { PageError, PageLoading } from "../../shared/components/AsyncState";
+import { goalHistoryPaginationCopy, statusLabel } from "../../shared/copy/ja";
 import {
   formatActivePeriod,
   formatCompletedPeriod,
 } from "../../shared/date/format";
 import { useInfiniteScrollTrigger } from "./useInfiniteScrollTrigger";
 
+const historyListId = "goal-history-list";
+
 export function GoalHistoryFeature() {
+  const paginationStatusId = useId();
   const session = useSession();
   const sessionLease = useAuthenticatedRequestLease();
   const userId = session.user.id;
@@ -62,7 +61,11 @@ export function GoalHistoryFeature() {
         <h1>目標の履歴</h1>
         <p>進行中、見直し中、終了した目標を、目標ごとに振り返れます。</p>
       </header>
-      <section className="history-list" aria-label="目標一覧">
+      <section
+        className="history-list"
+        id={historyListId}
+        aria-label="目標一覧"
+      >
         {goals.length === 0 && (
           <div className="empty-card">まだ目標はありません。</div>
         )}
@@ -90,12 +93,51 @@ export function GoalHistoryFeature() {
         ))}
       </section>
       <div ref={sentinel} className="load-sentinel" aria-hidden="true" />
-      {query.isFetchingNextPage && (
+      {hasNextPage && (
+        <div
+          className={`history-pagination${
+            isFetchNextPageError && !isFetchingNextPage
+              ? " pagination-status pagination-status--error"
+              : ""
+          }`}
+          role={
+            isFetchNextPageError && !isFetchingNextPage ? "alert" : undefined
+          }
+        >
+          {isFetchNextPageError && !isFetchingNextPage && (
+            <p>{goalHistoryPaginationCopy.error}</p>
+          )}
+          <button
+            className="button button--secondary"
+            type="button"
+            onClick={requestNextPage}
+            disabled={isFetchingNextPage}
+            aria-controls={historyListId}
+            aria-describedby={
+              isFetchingNextPage ? paginationStatusId : undefined
+            }
+          >
+            {isFetchNextPageError
+              ? goalHistoryPaginationCopy.retry
+              : goalHistoryPaginationCopy.loadMore}
+          </button>
+          {isFetchingNextPage && (
+            <p
+              className="pagination-status"
+              id={paginationStatusId}
+              role="status"
+              aria-live="polite"
+            >
+              {goalHistoryPaginationCopy.loading}
+            </p>
+          )}
+        </div>
+      )}
+      {!hasNextPage && goals.length > 0 && (
         <p className="pagination-status" role="status" aria-live="polite">
-          続きを読み込んでいます…
+          {goalHistoryPaginationCopy.complete}
         </p>
       )}
-      {query.isFetchNextPageError && <LoadMoreError retry={requestNextPage} />}
     </main>
   );
 }

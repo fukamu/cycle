@@ -396,6 +396,135 @@ test("Home preserves Creation Draft preview meaning at narrow widths", async ({
   await expect(editor).toHaveValue(multilineBody);
 });
 
+test("History loads another page explicitly from the keyboard at narrow widths", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(
+    page.getByRole("button", { name: "新しい目標を設定" }),
+  ).toBeVisible();
+  const session = await getSession(page);
+  await page.addInitScript(() => {
+    class IdleIntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly thresholds = [0];
+
+      disconnect() {}
+      observe() {}
+      takeRecords() {
+        return [];
+      }
+      unobserve() {}
+    }
+    Object.defineProperty(window, "IntersectionObserver", {
+      configurable: true,
+      value: IdleIntersectionObserver,
+      writable: true,
+    });
+  });
+
+  const firstGoal = "最初の長い目標".repeat(8);
+  const nextGoal = "明示操作で読み込んだ次の目標";
+  const makeGoal = (body: string, suffix: string) => ({
+    id: `10000000-0000-7000-8000-${suffix}`,
+    status: "ended",
+    revision: 1,
+    currentVersion: {
+      id: `20000000-0000-7000-8000-${suffix}`,
+      versionNumber: 1,
+      body,
+      createdAt: "2026-08-01T00:00:00.000Z",
+    },
+    currentWork: null,
+    nextCycleSequenceNumber: 2,
+    cycleCount: 1,
+    createdAt: "2026-08-01T00:00:00.000Z",
+    terminalAt: "2026-08-02T00:00:00.000Z",
+  });
+  let goalPageRequests = 0;
+  let releaseNextPage = () => undefined;
+  const nextPageMayResolve = new Promise<void>((resolve) => {
+    releaseNextPage = resolve;
+  });
+  await page.route("**/api/v1/goals?*", async (route) => {
+    const requestURL = new URL(route.request().url());
+    const cursor = requestURL.searchParams.get("cursor");
+    goalPageRequests += 1;
+    if (cursor === "next-page") await nextPageMayResolve;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: {
+        "X-Fukamu-Authenticated-User-ID": session.user.id,
+      },
+      body: JSON.stringify(
+        cursor === "next-page"
+          ? {
+              items: [makeGoal(nextGoal, "000000000102")],
+              nextCursor: null,
+            }
+          : {
+              items: [makeGoal(firstGoal, "000000000101")],
+              nextCursor: "next-page",
+            },
+      ),
+    });
+  });
+
+  await page.goto("/history");
+  const firstGoalLink = page.getByRole("link", {
+    name: new RegExp(firstGoal),
+  });
+  const loadMore = page.getByRole("button", { name: "続きを読み込む" });
+  await expect(firstGoalLink).toBeVisible();
+  await expect(loadMore).toBeVisible();
+
+  const expectReachableWithoutOverflow = async () => {
+    await loadMore.scrollIntoViewIfNeeded();
+    await expect(loadMore).toBeVisible();
+    expect((await loadMore.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(false);
+  };
+  await page.setViewportSize({ width: 320, height: 844 });
+  await expectReachableWithoutOverflow();
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await expectReachableWithoutOverflow();
+
+  await firstGoalLink.focus();
+  await page.keyboard.press("Tab");
+  await expect(loadMore).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => goalPageRequests).toBe(2);
+  const loadingStatus = page.getByText("続きを読み込んでいます…");
+  await expect(loadingStatus).toBeVisible();
+  await expect(loadMore).toBeDisabled();
+  await expect(loadMore).toHaveAttribute(
+    "aria-describedby",
+    (await loadingStatus.getAttribute("id")) ?? "",
+  );
+  await expect(firstGoalLink).toBeVisible();
+
+  releaseNextPage();
+  await expect(page.getByText(nextGoal)).toBeVisible();
+  await expect(loadMore).toHaveCount(0);
+  await expect(page.getByText("すべての目標を読み込みました。")).toBeVisible();
+  expect(await page.locator(".history-row h2").allTextContents()).toEqual([
+    firstGoal,
+    nextGoal,
+  ]);
+  expect(goalPageRequests).toBe(2);
+});
+
 test("goal creation, cycle completion, review, next cycle, timeline, and delete", async ({
   page,
 }) => {
