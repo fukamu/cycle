@@ -149,6 +149,66 @@ export const goalActionCopy = {
   },
 } as const;
 
+export const goalReviewDecisionCopy = {
+  context: {
+    heading: "判断の材料",
+    guide:
+      "現在の目標と直前の振り返りを確認して、次のサイクルへ進むか、この目標を終えるかを選びます。",
+    currentGoal: (versionNumber: number) =>
+      `現在の目標 · Goal v${versionNumber}`,
+    checkHeading: "直前のC — 分かったこと",
+    actionHeading: "直前のA — 次に続ける・変えること",
+    planAndDoSummary: "直前のCycleのP/Dも確認",
+  },
+  draft: {
+    same: (versionNumber: number) =>
+      `現在のGoal v${versionNumber}と同じ内容です。`,
+    changed: (nextVersionNumber: number) =>
+      `変更案です。次のサイクルへ進む場合だけGoal v${nextVersionNumber}として保存します。`,
+  },
+  continue: {
+    same: (versionNumber: number, nextCycleSequenceNumber: number) =>
+      `現在のGoal v${versionNumber}を維持し、新しいGoal Versionは作成せず、Cycle ${nextCycleSequenceNumber}を開始します。`,
+    changed: (nextVersionNumber: number, nextCycleSequenceNumber: number) =>
+      `変更案をGoal v${nextVersionNumber}として保存し、Cycle ${nextCycleSequenceNumber}を開始します。`,
+  },
+  terminal: {
+    unchangedResult: (versionNumber: number, nextCycleSequenceNumber: number) =>
+      `Review下書きは破棄されます。現在のGoal v${versionNumber}のまま終了し、新しいGoal Versionは作成せず、Cycle ${nextCycleSequenceNumber}も開始しません。`,
+    changedResult: (
+      versionNumber: number,
+      nextVersionNumber: number,
+      nextCycleSequenceNumber: number,
+    ) =>
+      `変更中の目標案は破棄し、Goal v${nextVersionNumber}は作成しません。現在のGoal v${versionNumber}のまま終了し、Cycle ${nextCycleSequenceNumber}も開始しません。`,
+    irreversible:
+      "どちらの操作も取り消せず、この目標はあとから再開できません。",
+    achieved: {
+      heading: "達成として終える",
+      description:
+        "目標を達成した状態として記録して、ここで取り組みを終えます。",
+      action: "目標を達成として終了",
+    },
+    ended: {
+      heading: "達成とはせずに終える",
+      description: "目標を達成したとはせず、ここで取り組みを終えます。",
+      action: "目標を終了",
+    },
+    deleteHeading: "目標と履歴を削除する",
+    deleteDescription:
+      "目標自体とすべてのCycle履歴を完全に削除する場合はこちらを選びます。",
+    modalDraftDiscardSame:
+      "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionは作成しません。",
+    modalDraftDiscardChanged: (nextVersionNumber: number) =>
+      `このReview下書きは、別のタブで保存された変更も含めて破棄され、Goal v${nextVersionNumber}として保存されません。`,
+    modalCurrentGoal: (
+      versionNumber: number,
+      nextCycleSequenceNumber: number,
+    ) =>
+      `現在のGoal v${versionNumber}のまま終了し、Cycle ${nextCycleSequenceNumber}は開始されません。`,
+  },
+} as const;
+
 export const statusLabel = {
   active_cycle: "進行中",
   goal_review: "目標の見直し中",

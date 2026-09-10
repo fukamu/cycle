@@ -44,7 +44,11 @@ import {
   SaveBadge,
 } from "../../shared/components/AsyncState";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
-import { frameCopy, goalActionCopy } from "../../shared/copy/ja";
+import {
+  frameCopy,
+  goalActionCopy,
+  goalReviewDecisionCopy,
+} from "../../shared/copy/ja";
 import {
   type PostCommitRouteOwnershipToken,
   useCapturePostCommitRouteOwnership,
@@ -83,6 +87,13 @@ type ReviewCommandRecovery =
   | { readonly kind: "ready" }
   | { readonly kind: "failed" }
   | { readonly kind: "deleted" };
+
+function combineDescriptionIds(
+  ...ids: readonly (string | undefined)[]
+): string | undefined {
+  const value = ids.filter((id): id is string => Boolean(id)).join(" ");
+  return value || undefined;
+}
 
 function goalReviewActionGuidanceText(
   reason: GoalReviewActionDisabledReason,
@@ -263,6 +274,12 @@ function ReviewEditor({
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const actionGuidanceBaseId = useId();
   const textLimitFeedbackId = useId();
+  const reviewDraftComparisonId = useId();
+  const nextCycleResultId = useId();
+  const terminalResultId = useId();
+  const achievedDescriptionId = useId();
+  const endedDescriptionId = useId();
+  const deleteDescriptionId = useId();
   const markDeletedGoal = useStartGoalDeletionFence();
   const mountedGenerationRef = useRef(true);
   const deletedFenceStartedRef = useRef(false);
@@ -421,6 +438,31 @@ function ReviewEditor({
     editor.body,
     goal.currentVersion.body,
   );
+  const currentVersionNumber = goal.currentVersion.versionNumber;
+  const nextVersionNumber = currentVersionNumber + 1;
+  const nextCycleSequenceNumber = goal.nextCycleSequenceNumber;
+  const draftComparison = changed
+    ? goalReviewDecisionCopy.draft.changed(nextVersionNumber)
+    : goalReviewDecisionCopy.draft.same(currentVersionNumber);
+  const continueResult = changed
+    ? goalReviewDecisionCopy.continue.changed(
+        nextVersionNumber,
+        nextCycleSequenceNumber,
+      )
+    : goalReviewDecisionCopy.continue.same(
+        currentVersionNumber,
+        nextCycleSequenceNumber,
+      );
+  const terminalResult = changed
+    ? goalReviewDecisionCopy.terminal.changedResult(
+        currentVersionNumber,
+        nextVersionNumber,
+        nextCycleSequenceNumber,
+      )
+    : goalReviewDecisionCopy.terminal.unchangedResult(
+        currentVersionNumber,
+        nextCycleSequenceNumber,
+      );
 
   const fenceDeletedGoalEditor = useCallback(() => {
     if (deletedFenceStartedRef.current) return;
@@ -791,23 +833,47 @@ function ReviewEditor({
     <main className="page review-page">
       <header className="goal-context">
         <p className="eyebrow">GOAL REVIEW</p>
+        <p className="goal-context__label">
+          {goalReviewDecisionCopy.context.currentGoal(currentVersionNumber)}
+        </p>
         <h1>{goal.currentVersion.body}</h1>
         <p>
-          Goal v{goal.currentVersion.versionNumber} · Cycle{" "}
-          {triggerCycle.sequenceNumber} を完了しました
+          Goal v{currentVersionNumber} · Cycle {triggerCycle.sequenceNumber}{" "}
+          を完了しました
         </p>
       </header>
-      <details className="cycle-summary" open>
-        <summary>直前のCycleを振り返る</summary>
-        {(["plan", "do", "check", "action"] as const).map((frame) => (
-          <div key={frame}>
-            <h3>
-              {frameCopy[frame].label} — {frameCopy[frame].name}
-            </h3>
-            <p>{triggerCycle[frame]}</p>
-          </div>
-        ))}
-      </details>
+      <section
+        className="review-decision-context"
+        aria-labelledby="goal-review-context-heading"
+      >
+        <h2 id="goal-review-context-heading">
+          {goalReviewDecisionCopy.context.heading}
+        </h2>
+        <p className="review-decision-context__guide">
+          {goalReviewDecisionCopy.context.guide}
+        </p>
+        <div className="review-decision-context__learning">
+          <article>
+            <h3>{goalReviewDecisionCopy.context.checkHeading}</h3>
+            <p>{triggerCycle.check}</p>
+          </article>
+          <article>
+            <h3>{goalReviewDecisionCopy.context.actionHeading}</h3>
+            <p>{triggerCycle.action}</p>
+          </article>
+        </div>
+        <details className="cycle-summary" open>
+          <summary>{goalReviewDecisionCopy.context.planAndDoSummary}</summary>
+          {(["plan", "do"] as const).map((frame) => (
+            <div key={frame}>
+              <h3>
+                {frameCopy[frame].label} — {frameCopy[frame].name}
+              </h3>
+              <p>{triggerCycle[frame]}</p>
+            </div>
+          ))}
+        </details>
+      </section>
       <section className="editor-card">
         {editor.recoveryConflict && (
           <DraftRecoveryNotice
@@ -873,9 +939,10 @@ function ReviewEditor({
         <label htmlFor="review-goal">次のサイクルで目指す目標</label>
         <textarea
           id="review-goal"
-          aria-describedby={
-            boundedInput.feedback ? textLimitFeedbackId : undefined
-          }
+          aria-describedby={combineDescriptionIds(
+            reviewDraftComparisonId,
+            boundedInput.feedback ? textLimitFeedbackId : undefined,
+          )}
           value={boundedInput.value}
           readOnly={editorReadOnly}
           onChange={boundedInput.onChange}
@@ -883,6 +950,15 @@ function ReviewEditor({
           onCompositionEnd={boundedInput.onCompositionEnd}
           onBlur={editor.flush}
         />
+        <p
+          className="review-draft-comparison"
+          data-review-draft={changed ? "changed" : "same"}
+          id={reviewDraftComparisonId}
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {draftComparison}
+        </p>
         {boundedInput.feedback && (
           <p
             className="text-limit-feedback"
@@ -947,17 +1023,20 @@ function ReviewEditor({
           aria-labelledby="goal-review-next-cycle-heading"
         >
           <h2 id="goal-review-next-cycle-heading">次のサイクルへ進む</h2>
-          <p className="next-cycle-note">
-            {changed
-              ? `変更した目標をGoal v${goal.currentVersion.versionNumber + 1}として保存し、Cycle ${goal.nextCycleSequenceNumber}を開始します`
-              : `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`}
+          <p
+            className="next-cycle-note"
+            data-review-draft={changed ? "changed" : "same"}
+            id={nextCycleResultId}
+          >
+            {continueResult}
           </p>
           <div className="button-row">
             <button
               className="button button--primary"
               type="button"
-              aria-describedby={actionDescribedBy(
-                actionControls.continue.reason,
+              aria-describedby={combineDescriptionIds(
+                nextCycleResultId,
+                actionDescribedBy(actionControls.continue.reason),
               )}
               disabled={!actionControls.continue.enabled}
               onClick={() => void nextCycle()}
@@ -972,34 +1051,65 @@ function ReviewEditor({
         aria-labelledby="goal-review-terminal-heading"
       >
         <h2 id="goal-review-terminal-heading">この目標を終える</h2>
-        {changed && (
-          <p>次のサイクルを開始しない場合、現在の変更案は保存されません。</p>
-        )}
-        <div className="button-row">
-          <button
-            type="button"
-            aria-describedby={actionDescribedBy(actionControls.terminal.reason)}
-            disabled={!actionControls.terminal.enabled}
-            onClick={() =>
-              setConfirmation({ kind: "terminate", outcome: "achieved" })
-            }
-          >
-            目標を達成として終了
-          </button>
-          <button
-            type="button"
-            aria-describedby={actionDescribedBy(actionControls.terminal.reason)}
-            disabled={!actionControls.terminal.enabled}
-            onClick={() =>
-              setConfirmation({ kind: "terminate", outcome: "ended" })
-            }
-          >
-            目標を終了
-          </button>
+        <p className="terminal-actions__result" id={terminalResultId}>
+          {terminalResult} {goalReviewDecisionCopy.terminal.irreversible}
+        </p>
+        <div className="terminal-decision-list">
+          <article className="terminal-decision">
+            <h3>{goalReviewDecisionCopy.terminal.achieved.heading}</h3>
+            <p id={achievedDescriptionId}>
+              {goalReviewDecisionCopy.terminal.achieved.description}
+            </p>
+            <button
+              className="button button--secondary"
+              type="button"
+              aria-describedby={combineDescriptionIds(
+                achievedDescriptionId,
+                terminalResultId,
+                actionDescribedBy(actionControls.terminal.reason),
+              )}
+              disabled={!actionControls.terminal.enabled}
+              onClick={() =>
+                setConfirmation({ kind: "terminate", outcome: "achieved" })
+              }
+            >
+              {goalReviewDecisionCopy.terminal.achieved.action}
+            </button>
+          </article>
+          <article className="terminal-decision">
+            <h3>{goalReviewDecisionCopy.terminal.ended.heading}</h3>
+            <p id={endedDescriptionId}>
+              {goalReviewDecisionCopy.terminal.ended.description}
+            </p>
+            <button
+              className="button button--secondary"
+              type="button"
+              aria-describedby={combineDescriptionIds(
+                endedDescriptionId,
+                terminalResultId,
+                actionDescribedBy(actionControls.terminal.reason),
+              )}
+              disabled={!actionControls.terminal.enabled}
+              onClick={() =>
+                setConfirmation({ kind: "terminate", outcome: "ended" })
+              }
+            >
+              {goalReviewDecisionCopy.terminal.ended.action}
+            </button>
+          </article>
+        </div>
+        <div className="terminal-actions__delete">
+          <h3>{goalReviewDecisionCopy.terminal.deleteHeading}</h3>
+          <p id={deleteDescriptionId}>
+            {goalReviewDecisionCopy.terminal.deleteDescription}
+          </p>
           <button
             className="danger-link"
             type="button"
-            aria-describedby={actionDescribedBy(actionControls.terminal.reason)}
+            aria-describedby={combineDescriptionIds(
+              deleteDescriptionId,
+              actionDescribedBy(actionControls.terminal.reason),
+            )}
             disabled={!actionControls.terminal.enabled}
             onClick={() => setConfirmation({ kind: "delete" })}
           >
@@ -1029,13 +1139,29 @@ function ReviewEditor({
           }}
         >
           <p>
-            このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal
-            Versionとして保存されません。
+            {changed
+              ? goalReviewDecisionCopy.terminal.modalDraftDiscardChanged(
+                  nextVersionNumber,
+                )
+              : goalReviewDecisionCopy.terminal.modalDraftDiscardSame}
           </p>
           <p>
-            現在の目標のまま
-            {confirmation.outcome === "achieved" ? "達成として終了" : "終了"}
-            します。
+            {goalReviewDecisionCopy.terminal.modalCurrentGoal(
+              currentVersionNumber,
+              nextCycleSequenceNumber,
+            )}
+          </p>
+          <p>
+            {confirmation.outcome === "achieved"
+              ? goalReviewDecisionCopy.terminal.achieved.description
+              : goalReviewDecisionCopy.terminal.ended.description}
+          </p>
+          <p>{goalReviewDecisionCopy.terminal.irreversible}</p>
+          <p>
+            選択する結果:{" "}
+            <strong>
+              {confirmation.outcome === "achieved" ? "達成" : "終了"}
+            </strong>
           </p>
         </ConfirmationDialog>
       )}

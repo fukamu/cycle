@@ -306,6 +306,18 @@ function expectBefore(first: Node, second: Node) {
   ).not.toBe(0);
 }
 
+function expectDescribedBy(element: HTMLElement, descriptionId: string) {
+  expect(element.getAttribute("aria-describedby")?.split(/\s+/)).toContain(
+    descriptionId,
+  );
+}
+
+function expectNotDescribedBy(element: HTMLElement, descriptionId: string) {
+  expect(element.getAttribute("aria-describedby")?.split(/\s+/)).not.toContain(
+    descriptionId,
+  );
+}
+
 describe("GoalReviewPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -449,7 +461,7 @@ describe("GoalReviewPage", () => {
       "入力後は81文字になるため反映できませんでした。上限80文字まで、入力内容をあと1文字減らしてください。",
     );
     expect(feedback).toHaveAttribute("role", "status");
-    expect(editor).toHaveAttribute("aria-describedby", feedback.id);
+    expectDescribedBy(editor, feedback.id);
     expect(saveReview).toHaveBeenCalledTimes(saveCallsBeforeRejection);
     expect(putBrowserDraft).toHaveBeenCalledTimes(cacheCallsBeforeRejection);
 
@@ -481,10 +493,12 @@ describe("GoalReviewPage", () => {
 
     expect(refine).toBeDisabled();
     expect(continueAction).toBeDisabled();
-    expect(refine).toHaveAttribute("aria-describedby", guidance.id);
-    expect(continueAction).toHaveAttribute("aria-describedby", guidance.id);
+    expectDescribedBy(refine, guidance.id);
+    expectDescribedBy(continueAction, guidance.id);
     await waitFor(() => expect(terminate).toBeEnabled());
-    expect(terminate).not.toHaveAttribute("aria-describedby");
+    expect(terminate).toHaveAccessibleDescription(
+      /この目標はあとから再開できません/,
+    );
   });
 
   it("groups idle Review outcomes into ordered labelled sections", async () => {
@@ -492,6 +506,24 @@ describe("GoalReviewPage", () => {
     const editor = await screen.findByRole("textbox", {
       name: "次のサイクルで目指す目標",
     });
+    const context = screen.getByRole("region", { name: "判断の材料" });
+    const currentGoalLabel = screen.getByText("現在の目標 · Goal v1");
+    const check = within(context).getByRole("heading", {
+      level: 3,
+      name: "直前のC — 分かったこと",
+    });
+    const action = within(context).getByRole("heading", {
+      level: 3,
+      name: "直前のA — 次に続ける・変えること",
+    });
+    expect(within(context).getByText(triggerCycle.check)).toBeVisible();
+    expect(within(context).getByText(triggerCycle.action)).toBeVisible();
+    expect(within(context).getByText("直前のCycleのP/Dも確認")).toBeVisible();
+    expect(within(context).getByText(triggerCycle.plan)).toBeVisible();
+    expect(within(context).getByText(triggerCycle.do)).toBeVisible();
+    const draftComparison = screen.getByText(
+      `現在のGoal v${goal.currentVersion.versionNumber}と同じ内容です。`,
+    );
     const saveStatus = await screen.findByText("保存済み");
     const refine = screen.getByRole("button", { name: "AIで目標を整える" });
     const nextCycleHeading = screen.getByRole("heading", {
@@ -502,7 +534,7 @@ describe("GoalReviewPage", () => {
       name: "次のサイクルへ進む",
     });
     const note = within(nextCycleSection).getByText(
-      `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`,
+      `現在のGoal v${goal.currentVersion.versionNumber}を維持し、新しいGoal Versionは作成せず、Cycle ${goal.nextCycleSequenceNumber}を開始します。`,
     );
     const continueAction = within(nextCycleSection).getByRole("button", {
       name: "この目標で次のサイクルへ",
@@ -514,23 +546,40 @@ describe("GoalReviewPage", () => {
     const terminalSection = screen.getByRole("region", {
       name: "この目標を終える",
     });
+    const terminalResult = within(terminalSection).getByText(
+      `Review下書きは破棄されます。現在のGoal v${goal.currentVersion.versionNumber}のまま終了し、新しいGoal Versionは作成せず、Cycle ${goal.nextCycleSequenceNumber}も開始しません。 どちらの操作も取り消せず、この目標はあとから再開できません。`,
+    );
+    const achieve = within(terminalSection).getByRole("button", {
+      name: "目標を達成として終了",
+    });
+    const terminate = within(terminalSection).getByRole("button", {
+      name: "目標を終了",
+    });
 
+    expectBefore(currentGoalLabel, context);
+    expectBefore(context, editor);
+    expectBefore(check, action);
+    expectBefore(editor, draftComparison);
     expectBefore(editor, saveStatus);
     expectBefore(saveStatus, refine);
     expectBefore(refine, nextCycleHeading);
     expectBefore(nextCycleHeading, note);
     expectBefore(note, continueAction);
     expectBefore(continueAction, terminalHeading);
+    expectDescribedBy(editor, draftComparison.id);
+    expectDescribedBy(continueAction, note.id);
+    expectDescribedBy(achieve, terminalResult.id);
+    expectDescribedBy(terminate, terminalResult.id);
+    expect(achieve).toHaveAccessibleDescription(
+      /目標を達成した状態として記録して、ここで取り組みを終えます/,
+    );
+    expect(terminate).toHaveAccessibleDescription(
+      /目標を達成したとはせず、ここで取り組みを終えます/,
+    );
     expect(refine).toBeEnabled();
     expect(continueAction).toBeEnabled();
-    expect(
-      within(terminalSection).getByRole("button", {
-        name: "目標を達成として終了",
-      }),
-    ).toBeEnabled();
-    expect(
-      within(terminalSection).getByRole("button", { name: "目標を終了" }),
-    ).toBeEnabled();
+    expect(achieve).toBeEnabled();
+    expect(terminate).toBeEnabled();
     expect(
       within(terminalSection).getByRole("button", { name: "目標を削除" }),
     ).toBeEnabled();
@@ -559,7 +608,7 @@ describe("GoalReviewPage", () => {
       name: "次のサイクルへ進む",
     });
     const note = screen.getByText(
-      `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`,
+      `現在のGoal v${goal.currentVersion.versionNumber}を維持し、新しいGoal Versionは作成せず、Cycle ${goal.nextCycleSequenceNumber}を開始します。`,
     );
     const continueAction = screen.getByRole("button", {
       name: "この目標で次のサイクルへ",
@@ -987,7 +1036,7 @@ describe("GoalReviewPage", () => {
 
     expect(
       await screen.findByText(
-        `目標を維持してCycle ${goal.nextCycleSequenceNumber}を開始します`,
+        `現在のGoal v${goal.currentVersion.versionNumber}を維持し、新しいGoal Versionは作成せず、Cycle ${goal.nextCycleSequenceNumber}を開始します。`,
       ),
     ).toBeInTheDocument();
   });
@@ -1003,9 +1052,16 @@ describe("GoalReviewPage", () => {
 
     renderPage();
 
+    const editor = await screen.findByRole("textbox", {
+      name: "次のサイクルで目指す目標",
+    });
+    const draftComparison = screen.getByText(
+      `変更案です。次のサイクルへ進む場合だけGoal v${goal.currentVersion.versionNumber + 1}として保存します。`,
+    );
+    expectDescribedBy(editor, draftComparison.id);
     expect(
-      await screen.findByText(
-        `変更した目標をGoal v${goal.currentVersion.versionNumber + 1}として保存し、Cycle ${goal.nextCycleSequenceNumber}を開始します`,
+      screen.getByText(
+        `変更案をGoal v${goal.currentVersion.versionNumber + 1}として保存し、Cycle ${goal.nextCycleSequenceNumber}を開始します。`,
       ),
     ).toBeInTheDocument();
   });
@@ -1025,14 +1081,16 @@ describe("GoalReviewPage", () => {
     const guidance = screen.getByText(
       "この端末に残る入力を確認しています。完了するまでお待ちください。",
     );
-    expect(terminate).toHaveAttribute("aria-describedby", guidance.id);
-    expect(remove).toHaveAttribute("aria-describedby", guidance.id);
+    expectDescribedBy(terminate, guidance.id);
+    expectDescribedBy(remove, guidance.id);
 
     await act(async () => browserRead.resolve(null));
     expect(terminate).toBeEnabled();
     expect(remove).toBeEnabled();
-    expect(terminate).not.toHaveAttribute("aria-describedby");
-    expect(remove).not.toHaveAttribute("aria-describedby");
+    expectNotDescribedBy(terminate, guidance.id);
+    expectNotDescribedBy(remove, guidance.id);
+    expect(terminate).toHaveAccessibleDescription(/達成したとはせず/);
+    expect(remove).toHaveAccessibleDescription(/すべてのCycle履歴/);
     expect(guidance).not.toBeInTheDocument();
   });
 
@@ -1049,11 +1107,24 @@ describe("GoalReviewPage", () => {
     const dialog = await screen.findByRole("dialog");
     expect(
       within(dialog).getByText(
-        "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません。",
+        "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionは作成しません。",
+      ),
+    ).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("Goal v2として保存されません");
+    expect(
+      within(dialog).getByText(
+        `現在のGoal v${goal.currentVersion.versionNumber}のまま終了し、Cycle ${goal.nextCycleSequenceNumber}は開始されません。`,
       ),
     ).toBeInTheDocument();
     expect(
-      within(dialog).getByText("現在の目標のまま終了します。"),
+      within(dialog).getByText(
+        "目標を達成したとはせず、ここで取り組みを終えます。",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        "どちらの操作も取り消せず、この目標はあとから再開できません。",
+      ),
     ).toBeInTheDocument();
     expect(terminateGoal).not.toHaveBeenCalled();
   });
@@ -1067,16 +1138,23 @@ describe("GoalReviewPage", () => {
     fireEvent.change(editor, { target: { value: "明確に変更した目標" } });
 
     expect(screen.getByText("未保存")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        `変更中の目標案は破棄し、Goal v${goal.currentVersion.versionNumber + 1}は作成しません。現在のGoal v${goal.currentVersion.versionNumber}のまま終了し、Cycle ${goal.nextCycleSequenceNumber}も開始しません。 どちらの操作も取り消せず、この目標はあとから再開できません。`,
+      ),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "目標を終了" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(
       within(dialog).getByText(
-        "このReview下書きは、別のタブで保存された変更も含めて破棄され、新しいGoal Versionとして保存されません。",
+        "このReview下書きは、別のタブで保存された変更も含めて破棄され、Goal v2として保存されません。",
       ),
     ).toBeInTheDocument();
     expect(
-      within(dialog).getByText("現在の目標のまま終了します。"),
+      within(dialog).getByText(
+        `現在のGoal v${goal.currentVersion.versionNumber}のまま終了し、Cycle ${goal.nextCycleSequenceNumber}は開始されません。`,
+      ),
     ).toBeInTheDocument();
     expect(terminateGoal).not.toHaveBeenCalled();
     expect(saveReview).not.toHaveBeenCalled();
@@ -1166,11 +1244,12 @@ describe("GoalReviewPage", () => {
       "目標を達成として終了",
       "目標を終了",
       "目標を削除",
-    ])
-      expect(screen.getByRole("button", { name: actionName })).toHaveAttribute(
-        "aria-describedby",
+    ]) {
+      expectDescribedBy(
+        screen.getByRole("button", { name: actionName }),
         commandGuidance.id,
       );
+    }
 
     expect(editor).toHaveAttribute("readonly");
     await user.type(editor, "command中の追記");
@@ -1232,13 +1311,15 @@ describe("GoalReviewPage", () => {
     expect(
       screen.getByRole("button", { name: "AIで目標を整える" }),
     ).toHaveAttribute("aria-describedby", recoveryNotice?.id);
-    expect(
+    expectDescribedBy(
       screen.getByRole("button", { name: "この目標で次のサイクルへ" }),
-    ).toHaveAttribute("aria-describedby", recoveryNotice?.id);
+      recoveryNotice?.id ?? "",
+    );
     expect(screen.getByRole("button", { name: "目標を終了" })).toBeEnabled();
-    expect(
+    expectNotDescribedBy(
       screen.getByRole("button", { name: "目標を終了" }),
-    ).not.toHaveAttribute("aria-describedby");
+      recoveryNotice?.id ?? "",
+    );
     expect(
       screen.queryByText(
         "入力を保存できていません。「再試行」で保存してから操作してください。",
@@ -1807,11 +1888,12 @@ describe("GoalReviewPage", () => {
       "目標を達成として終了",
       "目標を終了",
       "目標を削除",
-    ])
-      expect(screen.getByRole("button", { name: actionName })).toHaveAttribute(
-        "aria-describedby",
-        movedNotice?.id,
+    ]) {
+      expectDescribedBy(
+        screen.getByRole("button", { name: actionName }),
+        movedNotice?.id ?? "",
       );
+    }
     expect(
       screen.queryByText(
         "入力を保存できていません。「再試行」で保存してから操作してください。",
