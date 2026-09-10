@@ -489,13 +489,16 @@ button:disabled {
   gap: 6px;
 }
 
-.action-controls__guidance {
+.action-controls__guidance,
+.goal-actions__guidance {
   margin: 0;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: var(--font-size-small);
 }
 
-.action-controls__guidance:empty {
+.action-controls__guidance:empty,
+.goal-actions__guidance:empty {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -926,6 +929,10 @@ textarea[readonly] {
   color: var(--brand-deep);
   cursor: pointer;
   font-weight: var(--font-weight-medium);
+}
+
+.goal-actions__guidance {
+  margin-top: 12px;
 }
 
 .goal-actions .button-row {

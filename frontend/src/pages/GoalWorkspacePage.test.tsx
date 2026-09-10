@@ -391,6 +391,198 @@ describe("GoalWorkspacePage", () => {
     ).toBeEnabled();
   });
 
+  it("explains autosave blockers beside Active Cycle Goal actions without gating Delete", async () => {
+    const firstSave = deferred<Awaited<ReturnType<typeof saveCycleFrame>>>();
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockReturnValueOnce(firstSave.promise)
+      .mockResolvedValueOnce({
+        cycleId: cycle.id,
+        frame: "plan",
+        content: "保存状態を案内する計画",
+        frameRevision: 1,
+        contentRevision: 1,
+        savedAt: "2026-08-20T00:01:00.000Z",
+      });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const view = renderPage(cache);
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("目標の操作"));
+    const goalActions =
+      view.container.querySelector<HTMLElement>(".goal-actions");
+    expect(goalActions).not.toBeNull();
+    if (!goalActions) throw new Error("Goal actions are missing");
+    const achieve = within(goalActions).getByRole("button", {
+      name: "目標を達成として終了",
+    });
+    const end = within(goalActions).getByRole("button", {
+      name: "目標を終了",
+    });
+    const remove = within(goalActions).getByRole("button", {
+      name: "目標を削除",
+    });
+    const expectTerminationGuidance = (text: string) => {
+      const guidance = within(goalActions).getByText(text);
+      expect(guidance).toBeVisible();
+      expect(guidance).toHaveAttribute("role", "status");
+      expect(guidance).toHaveAttribute("aria-live", "polite");
+      expect(guidance).toHaveAttribute("aria-atomic", "true");
+      expect(achieve).toBeDisabled();
+      expect(end).toBeDisabled();
+      expect(achieve).toHaveAttribute("aria-describedby", guidance.id);
+      expect(end).toHaveAttribute("aria-describedby", guidance.id);
+      expect(remove).toBeEnabled();
+      expect(remove).not.toHaveAttribute("aria-describedby");
+    };
+
+    expect(achieve).toBeEnabled();
+    expect(end).toBeEnabled();
+    expect(remove).toBeEnabled();
+    expect(
+      goalActions.querySelector(".goal-actions__guidance"),
+    ).toBeEmptyDOMElement();
+
+    fireEvent.change(editor, {
+      target: { value: "保存状態を案内する計画" },
+    });
+    expectTerminationGuidance(
+      "目標を達成・終了するには、入力が保存済みになるまでお待ちください。",
+    );
+
+    fireEvent.blur(editor);
+    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledOnce());
+    expectTerminationGuidance(
+      "目標を達成・終了するには、入力の保存完了をお待ちください。",
+    );
+
+    await act(async () =>
+      firstSave.reject(
+        new APIError(
+          409,
+          "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+          "different resource conflict",
+          "60000000-0000-7000-8000-000000000052",
+        ),
+      ),
+    );
+    expect(await screen.findByText("保存失敗")).toBeInTheDocument();
+    expectTerminationGuidance(
+      "目標を達成・終了するには、「再試行」で入力を保存してください。",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "再試行" }));
+
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    expect(saveCycleFrame).toHaveBeenCalledTimes(2);
+    expect(achieve).toBeEnabled();
+    expect(end).toBeEnabled();
+    expect(remove).toBeEnabled();
+    expect(achieve).not.toHaveAttribute("aria-describedby");
+    expect(end).not.toHaveAttribute("aria-describedby");
+    expect(remove).not.toHaveAttribute("aria-describedby");
+    expect(
+      goalActions.querySelector(".goal-actions__guidance"),
+    ).toBeEmptyDOMElement();
+  });
+
+  it("explains an Action AI blocker only to Active Cycle Goal termination", async () => {
+    const refinement = deferred<Awaited<ReturnType<typeof refineAction>>>();
+    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
+    vi.mocked(refineAction).mockReturnValue(refinement.promise);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const view = renderPage(cache);
+
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("目標の操作"));
+    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
+    fireEvent.click(screen.getByRole("button", { name: "AIで推敲" }));
+
+    const goalActions =
+      view.container.querySelector<HTMLElement>(".goal-actions");
+    expect(goalActions).not.toBeNull();
+    if (!goalActions) throw new Error("Goal actions are missing");
+    const guidance = within(goalActions).getByText(
+      "目標を達成・終了するには、アクションの推敲完了をお待ちください。",
+    );
+    const achieve = within(goalActions).getByRole("button", {
+      name: "目標を達成として終了",
+    });
+    const end = within(goalActions).getByRole("button", {
+      name: "目標を終了",
+    });
+    const remove = within(goalActions).getByRole("button", {
+      name: "目標を削除",
+    });
+    expect(achieve).toBeDisabled();
+    expect(end).toBeDisabled();
+    expect(achieve).toHaveAttribute("aria-describedby", guidance.id);
+    expect(end).toHaveAttribute("aria-describedby", guidance.id);
+    expect(remove).toBeEnabled();
+    expect(remove).not.toHaveAttribute("aria-describedby");
+
+    await act(async () => refinement.reject(new Error("provider failure")));
+
+    expect(
+      await screen.findByText(
+        "AI処理を完了できませんでした。現在のAは保持されています。",
+      ),
+    ).toBeInTheDocument();
+    expect(achieve).toBeEnabled();
+    expect(end).toBeEnabled();
+    expect(remove).toBeEnabled();
+    expect(
+      goalActions.querySelector(".goal-actions__guidance"),
+    ).toBeEmptyDOMElement();
+  });
+
+  it("associates pending command guidance with every Active Cycle Goal action", async () => {
+    const deletion = deferred<Awaited<ReturnType<typeof deleteGoal>>>();
+    vi.mocked(deleteGoal).mockReturnValue(deletion.promise);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const view = renderPage(cache);
+
+    expect(await screen.findByText("保存済み")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("目標の操作"));
+    fireEvent.click(screen.getByRole("button", { name: "目標を削除" }));
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "目標を削除",
+      }),
+    );
+    await waitFor(() => expect(deleteGoal).toHaveBeenCalledOnce());
+
+    const goalActions =
+      view.container.querySelector<HTMLElement>(".goal-actions");
+    expect(goalActions).not.toBeNull();
+    if (!goalActions) throw new Error("Goal actions are missing");
+    const guidance = within(goalActions).getByText(
+      "現在の操作を処理しています。完了するまでお待ちください。",
+    );
+    expect(guidance).toHaveAttribute("role", "status");
+    for (const name of ["目標を達成として終了", "目標を終了", "目標を削除"]) {
+      const control = within(goalActions).getByRole("button", { name });
+      expect(control).toBeDisabled();
+      expect(control).toHaveAttribute("aria-describedby", guidance.id);
+    }
+
+    await act(async () => deletion.reject(new Error("delete failed")));
+
+    expect(
+      await screen.findByText("目標を削除できませんでした。"),
+    ).toBeInTheDocument();
+    expect(
+      goalActions.querySelector(".goal-actions__guidance"),
+    ).toBeEmptyDOMElement();
+  });
+
   it("explains missing P/D/C and follows the specified Action control order", async () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -628,9 +820,12 @@ describe("GoalWorkspacePage", () => {
         defaultOptions: { queries: { retry: false, staleTime: Infinity } },
       });
       const advisory = createGoalDeletionAdvisoryHarness();
-      renderPage(cache, { goalDeletionAdvisory: advisory });
+      const view = renderPage(cache, { goalDeletionAdvisory: advisory });
 
       await screen.findByText("読み取り専用");
+      expect(
+        view.container.querySelector(".goal-actions"),
+      ).not.toBeInTheDocument();
       expect(
         screen.queryByRole("button", { name: "D — Doへ進む" }),
       ).not.toBeInTheDocument();
@@ -979,7 +1174,7 @@ describe("GoalWorkspacePage", () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache);
+    const view = renderPage(cache);
 
     await screen.findByText("別の更新が見つかりました");
     fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
@@ -994,6 +1189,25 @@ describe("GoalWorkspacePage", () => {
         guidance.id,
       );
     }
+    fireEvent.click(screen.getByText("目標の操作"));
+    const goalActions =
+      view.container.querySelector<HTMLElement>(".goal-actions");
+    expect(goalActions).not.toBeNull();
+    if (!goalActions) throw new Error("Goal actions are missing");
+    const goalGuidance = within(goalActions).getByText(
+      "目標を達成・終了するには、「要確認」のフレームを開き、使用する内容を選んでください。",
+    );
+    for (const name of ["目標を達成として終了", "目標を終了"]) {
+      const control = within(goalActions).getByRole("button", { name });
+      expect(control).toBeDisabled();
+      expect(control).toHaveAttribute("aria-describedby", goalGuidance.id);
+    }
+    const remove = within(goalActions).getByRole("button", {
+      name: "目標を削除",
+    });
+    expect(remove).toBeEnabled();
+    expect(remove).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByRole("button", { name: "再試行" })).toBeNull();
   });
 
   it("explains a failed Action save and removes the guidance after retry succeeds", async () => {
@@ -2136,7 +2350,7 @@ describe("GoalWorkspacePage", () => {
       const cache = new QueryClient({
         defaultOptions: { queries: { retry: false, staleTime: Infinity } },
       });
-      renderPage(cache);
+      const view = renderPage(cache);
 
       const editor = await screen.findByRole("textbox", { name: "P — Plan" });
       fireEvent.change(editor, { target: { value: "移動前の端末の計画" } });
@@ -2145,6 +2359,9 @@ describe("GoalWorkspacePage", () => {
       expect(
         await screen.findByText("現在の作業状態が更新されました"),
       ).toBeInTheDocument();
+      expect(
+        view.container.querySelector(".goal-actions"),
+      ).not.toBeInTheDocument();
       expect(editor).toHaveValue("移動前の端末の計画");
       expect(editor).toHaveAttribute("readonly");
       expect(saveCycleFrame).toHaveBeenCalledOnce();
