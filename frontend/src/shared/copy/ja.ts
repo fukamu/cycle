@@ -154,3 +154,11 @@ export const statusLabel = {
   completed: "Completed",
   canceled: "Canceled",
 } as const;
+
+export const goalHistoryPaginationCopy = {
+  loadMore: "続きを読み込む",
+  error: "続きを読み込めませんでした。",
+  retry: "もう一度読み込む",
+  loading: "続きを読み込んでいます…",
+  complete: "すべての目標を読み込みました。",
+} as const;

@@ -4117,6 +4117,7 @@ Actions:
 
 - Goal History / Goal Cyclesのpage sizeはそれぞれ§§23.1、24.1のAPI contractを使用する。
 - `useInfiniteQuery` + IntersectionObserver。
+- Goal History Listは自動読み込みを維持したまま、次pageがある間はlist末尾に`続きを読み込む`buttonを表示し、同じsingle-flight取得をkeyboardからも明示実行できるようにする。取得中はbuttonをdisabledにして近接するloading状態と関連付け、失敗時は既存itemを保持してretry操作、最終page取得後はend状態を文字で示す。空listでは既存のempty状態だけを表示する。
 - Same cursor fetchをdedupe。
 - Error/retry UIをlist末尾へ。
 - 全履歴を一括取得しない。

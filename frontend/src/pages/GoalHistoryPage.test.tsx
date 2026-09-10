@@ -1,11 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
@@ -58,16 +53,15 @@ describe("GoalHistoryPage pagination recovery", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("keeps loaded goals visible and retries only the failed next page", async () => {
+    const user = userEvent.setup();
+    const retryPage = deferred<Awaited<ReturnType<typeof listGoals>>>();
     vi.mocked(listGoals)
       .mockResolvedValueOnce({
         items: [makeGoal("最初の目標", 1)],
         nextCursor: "next",
       })
       .mockRejectedValueOnce(new TypeError("network"))
-      .mockResolvedValueOnce({
-        items: [makeGoal("次の目標", 2)],
-        nextCursor: null,
-      })
+      .mockReturnValueOnce(retryPage.promise)
       .mockResolvedValue({
         items: [makeGoal("次の目標", 2)],
         nextCursor: null,
@@ -76,6 +70,9 @@ describe("GoalHistoryPage pagination recovery", () => {
     renderHistory();
 
     expect(await screen.findByText("最初の目標")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "続きを読み込む" }),
+    ).toHaveAttribute("aria-controls", "goal-history-list");
     act(() => {
       notifyIntersection(
         [{ isIntersecting: true } as IntersectionObserverEntry],
@@ -87,14 +84,36 @@ describe("GoalHistoryPage pagination recovery", () => {
       "続きを読み込めませんでした。",
     );
     expect(screen.getByText("最初の目標")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "続きを読み込む" }),
+    ).not.toBeInTheDocument();
     const retry = screen.getByRole("button", { name: "もう一度読み込む" });
+    await user.click(retry);
+
+    const loadingStatus = await screen.findByText("続きを読み込んでいます…");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("最初の目標")).toBeVisible();
+    expect(retry).toBeDisabled();
+    expect(retry).toHaveAttribute("aria-describedby", loadingStatus.id);
+    await user.click(retry);
     act(() => {
-      fireEvent.click(retry);
-      fireEvent.click(retry);
+      notifyIntersection(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        undefined as unknown as IntersectionObserver,
+      );
     });
+    expect(listGoals).toHaveBeenCalledTimes(3);
+
+    await act(async () =>
+      retryPage.resolve({
+        items: [makeGoal("次の目標", 2)],
+        nextCursor: null,
+      }),
+    );
 
     expect(await screen.findByText("次の目標")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("すべての目標を読み込みました。")).toBeVisible();
     expect(listGoals).toHaveBeenCalledTimes(3);
     expect(listGoals).toHaveBeenNthCalledWith(
       3,
@@ -105,7 +124,8 @@ describe("GoalHistoryPage pagination recovery", () => {
     );
   });
 
-  it("coalesces duplicate intersection notices while a cursor is in flight", async () => {
+  it("loads the next page from the keyboard and coalesces an intersection notice", async () => {
+    const user = userEvent.setup();
     const nextPage = deferred<Awaited<ReturnType<typeof listGoals>>>();
     vi.mocked(listGoals)
       .mockResolvedValueOnce({
@@ -117,6 +137,17 @@ describe("GoalHistoryPage pagination recovery", () => {
     renderHistory();
 
     expect(await screen.findByText("最初の目標")).toBeVisible();
+    const firstGoal = screen.getByRole("link", { name: /最初の目標/ });
+    const loadMore = screen.getByRole("button", { name: "続きを読み込む" });
+    firstGoal.focus();
+    await user.tab();
+    expect(loadMore).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    const loadingStatus = await screen.findByText("続きを読み込んでいます…");
+    expect(screen.getByText("最初の目標")).toBeVisible();
+    expect(loadMore).toBeDisabled();
+    expect(loadMore).toHaveAttribute("aria-describedby", loadingStatus.id);
     act(() => {
       const entries = [{ isIntersecting: true } as IntersectionObserverEntry];
       const observer = undefined as unknown as IntersectionObserver;
@@ -134,6 +165,16 @@ describe("GoalHistoryPage pagination recovery", () => {
       }),
     );
 
+    expect(await screen.findByText("次の目標")).toBeVisible();
+    expect(
+      screen
+        .getAllByRole("heading", { level: 2 })
+        .map((heading) => heading.textContent?.trim()),
+    ).toEqual(["最初の目標", "次の目標"]);
+    expect(
+      screen.queryByRole("button", { name: "続きを読み込む" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("すべての目標を読み込みました。")).toBeVisible();
     expect(listGoals).toHaveBeenCalledTimes(2);
     expect(listGoals).toHaveBeenLastCalledWith(
       sessionLease,
@@ -141,6 +182,23 @@ describe("GoalHistoryPage pagination recovery", () => {
       "next",
       expect.any(AbortSignal),
     );
+  });
+
+  it("does not add pagination controls to an empty history", async () => {
+    vi.mocked(listGoals).mockResolvedValue({
+      items: [],
+      nextCursor: null,
+    });
+
+    renderHistory();
+
+    expect(await screen.findByText("まだ目標はありません。")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "続きを読み込む" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("すべての目標を読み込みました。"),
+    ).not.toBeInTheDocument();
   });
 });
 
