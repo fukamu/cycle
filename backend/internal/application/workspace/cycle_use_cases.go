@@ -156,6 +156,55 @@ func (useCases *CycleUseCases) SaveFrame(ctx context.Context, input SaveFrameInp
 	return result, err
 }
 
+func (useCases *CycleUseCases) ChangeReviewSchedule(
+	ctx context.Context,
+	input ChangeReviewScheduleInput,
+) (result ChangeReviewScheduleResult, err error) {
+	err = useCases.uow.WithinCycleTransaction(ctx, func(tx CycleTx) error {
+		lockedGoal, lockErr := tx.LockGoal(ctx, input.UserID, input.GoalID)
+		if lockErr != nil {
+			return lockErr
+		}
+		current, lockErr := tx.LockCycle(ctx, input.UserID, input.GoalID, input.CycleID)
+		if lockErr != nil {
+			return lockErr
+		}
+		if current.UserID != input.UserID || current.GoalID != input.GoalID || current.ID != input.CycleID {
+			return cycleInvariantError("locked Cycle target does not match the review schedule command")
+		}
+		if lockedGoal.Status != goal.StatusActiveCycle {
+			return ErrGoalStateConflict
+		}
+		changed, changeErr := cycle.ChangeReviewSchedule(
+			current,
+			input.ReviewDate,
+			input.ExpectedReviewScheduleRevision,
+		)
+		if changeErr != nil {
+			return changeErr
+		}
+		if !changed.NoOp {
+			rows, updateErr := tx.SaveCycleReviewScheduleCAS(
+				ctx,
+				changed.Cycle,
+				input.ExpectedReviewScheduleRevision,
+			)
+			if updateErr != nil {
+				return updateErr
+			}
+			if updateErr = requireCycleRows("change Cycle review schedule", rows, 1); updateErr != nil {
+				return updateErr
+			}
+		}
+		result.Cycle, changeErr = tx.LoadCycleView(ctx, input.UserID, input.GoalID, input.CycleID)
+		if changeErr != nil {
+			return changeErr
+		}
+		return validateCycleView(result.Cycle, input.GoalID, input.CycleID)
+	})
+	return result, err
+}
+
 func (useCases *CycleUseCases) CompleteCycle(ctx context.Context, input CompleteCycleInput) (result CompleteCycleResult, err error) {
 	requestHash := completeCycleRequestHash(input)
 
@@ -482,9 +531,15 @@ func cycleSummaryFollows(previous, current CycleSummary) bool {
 
 func validateCycleView(view CycleView, goalID, cycleID string) error {
 	if view.ID != cycleID || view.GoalID != goalID || view.SequenceNumber <= 0 || view.StartedAt.IsZero() ||
-		view.ContentRevision < 0 || view.FrameRevisions.Plan < 0 || view.FrameRevisions.Do < 0 ||
+		view.ContentRevision < 0 || view.ReviewScheduleRevision < 0 ||
+		view.FrameRevisions.Plan < 0 || view.FrameRevisions.Do < 0 ||
 		view.FrameRevisions.Check < 0 || view.FrameRevisions.Action < 0 {
 		return cycleInvariantError("Cycle view metadata is inconsistent")
+	}
+	if view.ReviewDate != nil {
+		if _, err := cycle.ParseReviewDate(string(*view.ReviewDate)); err != nil {
+			return cycleInvariantError("Cycle review date is invalid")
+		}
 	}
 	if view.ContentRevision != view.FrameRevisions.Plan+view.FrameRevisions.Do+view.FrameRevisions.Check+view.FrameRevisions.Action {
 		return cycleInvariantError("Cycle content revision does not match frame revisions")

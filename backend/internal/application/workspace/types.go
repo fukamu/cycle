@@ -108,6 +108,8 @@ type CycleView struct {
 	Action                       string                            `json:"action"`
 	ContentRevision              int64                             `json:"contentRevision"`
 	FrameRevisions               FrameRevisions                    `json:"frameRevisions"`
+	ReviewDate                   *cycle.ReviewDate                 `json:"reviewDate"`
+	ReviewScheduleRevision       int64                             `json:"reviewScheduleRevision"`
 }
 
 type PreviousCompletedCycleActionView struct {
@@ -125,12 +127,18 @@ type FrameRevisions struct {
 }
 
 type CurrentWorkView struct {
-	Kind                       string `json:"kind"`
-	CycleID                    string `json:"cycleId,omitempty"`
-	CycleSequenceNumber        int32  `json:"cycleSequenceNumber,omitempty"`
-	ReviewDraftID              string `json:"reviewDraftId,omitempty"`
-	TriggerCycleID             string `json:"triggerCycleId,omitempty"`
-	TriggerCycleSequenceNumber int32  `json:"triggerCycleSequenceNumber,omitempty"`
+	Kind                       string              `json:"kind"`
+	CycleID                    string              `json:"cycleId,omitempty"`
+	CycleSequenceNumber        int32               `json:"cycleSequenceNumber,omitempty"`
+	ReviewSchedule             *ReviewScheduleView `json:"reviewSchedule,omitempty"`
+	ReviewDraftID              string              `json:"reviewDraftId,omitempty"`
+	TriggerCycleID             string              `json:"triggerCycleId,omitempty"`
+	TriggerCycleSequenceNumber int32               `json:"triggerCycleSequenceNumber,omitempty"`
+}
+
+type ReviewScheduleView struct {
+	ReviewDate             *cycle.ReviewDate `json:"reviewDate"`
+	ReviewScheduleRevision int64             `json:"reviewScheduleRevision"`
 }
 
 type GoalView struct {
@@ -289,6 +297,18 @@ type SaveFrameResult struct {
 	FrameRevision   int64       `json:"frameRevision"`
 	ContentRevision int64       `json:"contentRevision"`
 	SavedAt         time.Time   `json:"savedAt"`
+}
+
+type ChangeReviewScheduleInput struct {
+	UserID                         string
+	GoalID                         string
+	CycleID                        string
+	ReviewDate                     *cycle.ReviewDate
+	ExpectedReviewScheduleRevision int64
+}
+
+type ChangeReviewScheduleResult struct {
+	Cycle CycleView `json:"cycle"`
 }
 
 type GoalRefineInput struct {

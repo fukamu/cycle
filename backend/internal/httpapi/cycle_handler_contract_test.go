@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -14,6 +15,11 @@ import (
 type cycleCompletionContractWorkspaceStub struct {
 	httpapi.WorkspaceService
 	complete func(context.Context, workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error)
+}
+
+type reviewScheduleContractWorkspaceStub struct {
+	httpapi.WorkspaceService
+	change func(context.Context, workspace.ChangeReviewScheduleInput) (workspace.ChangeReviewScheduleResult, error)
 }
 
 type cycleViewResponseContractWorkspaceStub struct {
@@ -84,6 +90,23 @@ func (stub *cycleCompletionContractWorkspaceStub) CompleteCycle(
 	return stub.complete(ctx, input)
 }
 
+func (stub *reviewScheduleContractWorkspaceStub) ChangeReviewSchedule(
+	ctx context.Context,
+	input workspace.ChangeReviewScheduleInput,
+) (workspace.ChangeReviewScheduleResult, error) {
+	if stub.change == nil {
+		panic("unexpected ChangeReviewSchedule call")
+	}
+	return stub.change(ctx, input)
+}
+
+func (stub *cycleViewResponseContractWorkspaceStub) ChangeReviewSchedule(
+	context.Context,
+	workspace.ChangeReviewScheduleInput,
+) (workspace.ChangeReviewScheduleResult, error) {
+	return workspace.ChangeReviewScheduleResult{Cycle: stub.active}, nil
+}
+
 func TestCompleteCycleErrorHTTPContract(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -151,7 +174,11 @@ func TestCompleteCycleErrorHTTPContract(t *testing.T) {
 	}
 }
 
-func TestFullCycleViewHTTPResponsesRequireNullablePreviousCompletedAction(t *testing.T) {
+func TestFullCycleViewHTTPResponsesRequireReviewScheduleAndNullablePreviousCompletedAction(t *testing.T) {
+	reviewDate, err := cycle.ParseReviewDate("2026-09-30")
+	if err != nil {
+		t.Fatal(err)
+	}
 	previous := &workspace.PreviousCompletedCycleActionView{
 		CycleID:             contractCycleID,
 		CycleSequenceNumber: 1,
@@ -159,19 +186,27 @@ func TestFullCycleViewHTTPResponsesRequireNullablePreviousCompletedAction(t *tes
 		Action:              "次は通知を切る",
 	}
 	spaces := &cycleViewResponseContractWorkspaceStub{
-		first:     workspace.CycleView{ID: contractCycleID, SequenceNumber: 1, Status: cycle.StatusActive},
-		active:    workspace.CycleView{ID: contractGenerationID, SequenceNumber: 2, Status: cycle.StatusActive, PreviousCompletedCycleAction: previous},
-		completed: workspace.CycleView{ID: contractCycleID, SequenceNumber: 1, Status: cycle.StatusCompleted},
-		canceled:  workspace.CycleView{ID: contractGenerationID, SequenceNumber: 2, Status: cycle.StatusCanceled},
+		first: workspace.CycleView{ID: contractCycleID, SequenceNumber: 1, Status: cycle.StatusActive},
+		active: workspace.CycleView{
+			ID: contractGenerationID, SequenceNumber: 2, Status: cycle.StatusActive,
+			PreviousCompletedCycleAction: previous, ReviewDate: &reviewDate, ReviewScheduleRevision: 2,
+		},
+		completed: workspace.CycleView{
+			ID: contractCycleID, SequenceNumber: 1, Status: cycle.StatusCompleted,
+			ReviewDate: &reviewDate, ReviewScheduleRevision: 1,
+		},
+		canceled: workspace.CycleView{ID: contractGenerationID, SequenceNumber: 2, Status: cycle.StatusCanceled},
 	}
 	router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
 	tests := []struct {
-		name     string
-		method   string
-		path     string
-		body     string
-		cycleKey string
-		want     *workspace.PreviousCompletedCycleActionView
+		name         string
+		method       string
+		path         string
+		body         string
+		cycleKey     string
+		want         *workspace.PreviousCompletedCycleActionView
+		wantDate     *cycle.ReviewDate
+		wantRevision int64
 	}{
 		{
 			name: "Start", method: http.MethodPost, path: "/api/v1/goal-drafts/" + contractDraftID + "/start",
@@ -180,23 +215,23 @@ func TestFullCycleViewHTTPResponsesRequireNullablePreviousCompletedAction(t *tes
 		{
 			name: "GET Cycle", method: http.MethodGet,
 			path:     "/api/v1/goals/" + contractGoalID + "/cycles/" + contractGenerationID,
-			cycleKey: "cycle", want: previous,
+			cycleKey: "cycle", want: previous, wantDate: &reviewDate, wantRevision: 2,
 		},
 		{
 			name: "Review trigger", method: http.MethodGet,
-			path: "/api/v1/goals/" + contractGoalID + "/review", cycleKey: "triggerCycle",
+			path: "/api/v1/goals/" + contractGoalID + "/review", cycleKey: "triggerCycle", wantDate: &reviewDate, wantRevision: 1,
 		},
 		{
 			name: "Complete", method: http.MethodPost,
 			path:     "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/complete",
 			body:     `{"operationId":"` + contractOperationID + `","expectedGoalRevision":1,"expectedContentRevision":4}`,
-			cycleKey: "completedCycle",
+			cycleKey: "completedCycle", wantDate: &reviewDate, wantRevision: 1,
 		},
 		{
 			name: "Continue", method: http.MethodPost,
 			path:     "/api/v1/goals/" + contractGoalID + "/review/continue",
 			body:     `{"operationId":"` + contractOperationID + `","expectedGoalRevision":1,"expectedDraftRevision":0}`,
-			cycleKey: "cycle", want: previous,
+			cycleKey: "cycle", want: previous, wantDate: &reviewDate, wantRevision: 2,
 		},
 		{
 			name: "Terminate", method: http.MethodPost,
@@ -204,6 +239,12 @@ func TestFullCycleViewHTTPResponsesRequireNullablePreviousCompletedAction(t *tes
 			body: `{"operationId":"` + contractOperationID + `","outcome":"ended","expectedGoalRevision":1,` +
 				`"expectedState":"active_cycle","activeCycleId":"` + contractGenerationID + `","expectedCycleContentRevision":0}`,
 			cycleKey: "canceledCycle",
+		},
+		{
+			name: "Review schedule", method: http.MethodPatch,
+			path:     "/api/v1/goals/" + contractGoalID + "/cycles/" + contractGenerationID + "/review-schedule",
+			body:     `{"action":"set","reviewDate":"2026-09-30","expectedReviewScheduleRevision":1}`,
+			cycleKey: "cycle", want: previous, wantDate: &reviewDate, wantRevision: 2,
 		},
 	}
 	for _, test := range tests {
@@ -227,6 +268,28 @@ func TestFullCycleViewHTTPResponsesRequireNullablePreviousCompletedAction(t *tes
 			field, ok := cyclePayloadObject["previousCompletedCycleAction"]
 			if !ok {
 				t.Fatalf("required nullable field is missing from %s", cyclePayload)
+			}
+			reviewDateField, ok := cyclePayloadObject["reviewDate"]
+			if !ok {
+				t.Fatalf("required reviewDate is missing from %s", cyclePayload)
+			}
+			reviewRevisionField, ok := cyclePayloadObject["reviewScheduleRevision"]
+			if !ok {
+				t.Fatalf("required reviewScheduleRevision is missing from %s", cyclePayload)
+			}
+			if test.wantDate == nil {
+				if string(reviewDateField) != "null" {
+					t.Fatalf("reviewDate = %s, want null", reviewDateField)
+				}
+			} else {
+				var gotDate cycle.ReviewDate
+				if err := json.Unmarshal(reviewDateField, &gotDate); err != nil || gotDate != *test.wantDate {
+					t.Fatalf("reviewDate = %q, error = %v, want %q", gotDate, err, *test.wantDate)
+				}
+			}
+			var gotRevision int64
+			if err := json.Unmarshal(reviewRevisionField, &gotRevision); err != nil || gotRevision != test.wantRevision {
+				t.Fatalf("reviewScheduleRevision = %d, error = %v, want %d", gotRevision, err, test.wantRevision)
 			}
 			if test.want == nil {
 				if string(field) != "null" {
@@ -264,6 +327,12 @@ func TestPreviousCompletedActionIsAbsentFromSummaryAndFramePatchWire(t *testing.
 	if _, exists := page.Items[0]["previousCompletedCycleAction"]; exists {
 		t.Fatalf("Cycle summary leaked full-view field: %s", listResponse.Body.String())
 	}
+	if _, exists := page.Items[0]["reviewDate"]; exists {
+		t.Fatalf("Cycle summary leaked reviewDate: %s", listResponse.Body.String())
+	}
+	if _, exists := page.Items[0]["reviewScheduleRevision"]; exists {
+		t.Fatalf("Cycle summary leaked reviewScheduleRevision: %s", listResponse.Body.String())
+	}
 
 	patchResponse := serveContract(
 		router,
@@ -282,4 +351,108 @@ func TestPreviousCompletedActionIsAbsentFromSummaryAndFramePatchWire(t *testing.
 	if _, exists := frame["previousCompletedCycleAction"]; exists {
 		t.Fatalf("Frame PATCH leaked full-view field: %s", patchResponse.Body.String())
 	}
+	if _, exists := frame["reviewDate"]; exists {
+		t.Fatalf("Frame PATCH leaked reviewDate: %s", patchResponse.Body.String())
+	}
+	if _, exists := frame["reviewScheduleRevision"]; exists {
+		t.Fatalf("Frame PATCH leaked reviewScheduleRevision: %s", patchResponse.Body.String())
+	}
+}
+
+func TestChangeReviewScheduleHTTPContract(t *testing.T) {
+	reviewDate, _ := cycle.ParseReviewDate("2026-09-30")
+	for _, test := range []struct {
+		name       string
+		body       string
+		wantTarget *cycle.ReviewDate
+	}{
+		{name: "set", body: `{"action":"set","reviewDate":"2026-09-30","expectedReviewScheduleRevision":4}`, wantTarget: &reviewDate},
+		{name: "clear", body: `{"action":"clear","expectedReviewScheduleRevision":4}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			spaces := &reviewScheduleContractWorkspaceStub{change: func(
+				_ context.Context,
+				input workspace.ChangeReviewScheduleInput,
+			) (workspace.ChangeReviewScheduleResult, error) {
+				calls++
+				if input.UserID != contractUserID || input.GoalID != contractGoalID || input.CycleID != contractCycleID ||
+					input.ExpectedReviewScheduleRevision != 4 ||
+					(input.ReviewDate == nil) != (test.wantTarget == nil) ||
+					(input.ReviewDate != nil && *input.ReviewDate != *test.wantTarget) {
+					t.Fatalf("ChangeReviewSchedule input = %#v", input)
+				}
+				return workspace.ChangeReviewScheduleResult{Cycle: workspace.CycleView{
+					ID: contractCycleID, ReviewDate: input.ReviewDate, ReviewScheduleRevision: 5,
+				}}, nil
+			}}
+			response := serveContract(
+				contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+				http.MethodPatch,
+				"/api/v1/goals/"+contractGoalID+"/cycles/"+contractCycleID+"/review-schedule",
+				test.body,
+				addContractAuthentication,
+			)
+			if response.Code != http.StatusOK || calls != 1 {
+				t.Fatalf("response = %d %s, calls = %d", response.Code, response.Body.String(), calls)
+			}
+		})
+	}
+
+	invalidBodies := []string{
+		`{"action":"set","expectedReviewScheduleRevision":0}`,
+		`{"action":"set","reviewDate":null,"expectedReviewScheduleRevision":0}`,
+		`{"action":"set","reviewDate":"2026-02-29","expectedReviewScheduleRevision":0}`,
+		`{"action":"set","reviewDate":"2026-09-30T00:00:00Z","expectedReviewScheduleRevision":0}`,
+		`{"action":"clear","reviewDate":"2026-09-30","expectedReviewScheduleRevision":0}`,
+		`{"action":"replace","reviewDate":"2026-09-30","expectedReviewScheduleRevision":0}`,
+		`{"action":"clear","expectedReviewScheduleRevision":-1}`,
+	}
+	for _, body := range invalidBodies {
+		spaces := &reviewScheduleContractWorkspaceStub{change: func(
+			context.Context,
+			workspace.ChangeReviewScheduleInput,
+		) (workspace.ChangeReviewScheduleResult, error) {
+			t.Fatal("invalid request reached application")
+			return workspace.ChangeReviewScheduleResult{}, nil
+		}}
+		response := serveContract(
+			contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+			http.MethodPatch,
+			"/api/v1/goals/"+contractGoalID+"/cycles/"+contractCycleID+"/review-schedule",
+			body,
+			addContractAuthentication,
+		)
+		assertContractError(t, response, http.StatusBadRequest, "VALIDATION_ERROR", nil)
+	}
+
+	spaces := &reviewScheduleContractWorkspaceStub{change: func(
+		context.Context,
+		workspace.ChangeReviewScheduleInput,
+	) (workspace.ChangeReviewScheduleResult, error) {
+		return workspace.ChangeReviewScheduleResult{}, cycle.ErrRevisionConflict
+	}}
+	response := serveContract(
+		contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+		http.MethodPatch,
+		"/api/v1/goals/"+contractGoalID+"/cycles/"+contractCycleID+"/review-schedule",
+		`{"action":"clear","expectedReviewScheduleRevision":3}`,
+		addContractAuthentication,
+	)
+	assertContractError(t, response, http.StatusConflict, "CYCLE_REVISION_CONFLICT", nil)
+
+	spaces = &reviewScheduleContractWorkspaceStub{change: func(
+		context.Context,
+		workspace.ChangeReviewScheduleInput,
+	) (workspace.ChangeReviewScheduleResult, error) {
+		return workspace.ChangeReviewScheduleResult{}, errors.New("schedule storage unavailable")
+	}}
+	response = serveContract(
+		contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil),
+		http.MethodPatch,
+		"/api/v1/goals/"+contractGoalID+"/cycles/"+contractCycleID+"/review-schedule",
+		`{"action":"clear","expectedReviewScheduleRevision":3}`,
+		addContractAuthentication,
+	)
+	assertContractError(t, response, http.StatusInternalServerError, "REVIEW_SCHEDULE_UPDATE_FAILED", nil)
 }

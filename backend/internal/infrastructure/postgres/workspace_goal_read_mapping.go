@@ -34,6 +34,8 @@ type goalViewColumns struct {
 	cycleCount                 int32
 	activeCycleID              pgtype.UUID
 	activeCycleSequenceNumber  *int32
+	activeCycleReviewDate      pgtype.Date
+	activeCycleReviewRevision  int64
 	reviewDraftID              pgtype.UUID
 	triggerCycleID             pgtype.UUID
 	triggerCycleSequenceNumber *int32
@@ -67,6 +69,7 @@ func goalViewFromGetRow(row *db.GetGoalViewRow) (goalViewRow, error) {
 		currentVersionNumber: row.CurrentVersionNumber, currentVersionBody: row.CurrentVersionBody,
 		currentVersionCreatedAt: row.CurrentVersionCreatedAt, cycleCount: row.CycleCount,
 		activeCycleID: row.ActiveCycleID, activeCycleSequenceNumber: row.ActiveCycleSequenceNumber,
+		activeCycleReviewDate: row.ActiveCycleReviewDate, activeCycleReviewRevision: row.ActiveCycleReviewScheduleRevision,
 		reviewDraftID: row.ReviewDraftID, triggerCycleID: row.TriggerCycleID,
 		triggerCycleSequenceNumber: row.TriggerCycleSequenceNumber, category: row.Category, sortTime: row.SortTime,
 	})
@@ -80,6 +83,7 @@ func goalViewFromHomeRow(row *db.ListHomeGoalViewsRow) (goalViewRow, error) {
 		currentVersionNumber: row.CurrentVersionNumber, currentVersionBody: row.CurrentVersionBody,
 		currentVersionCreatedAt: row.CurrentVersionCreatedAt, cycleCount: row.CycleCount,
 		activeCycleID: row.ActiveCycleID, activeCycleSequenceNumber: row.ActiveCycleSequenceNumber,
+		activeCycleReviewDate: row.ActiveCycleReviewDate, activeCycleReviewRevision: row.ActiveCycleReviewScheduleRevision,
 		reviewDraftID: row.ReviewDraftID, triggerCycleID: row.TriggerCycleID,
 		triggerCycleSequenceNumber: row.TriggerCycleSequenceNumber, category: row.Category, sortTime: row.SortTime,
 	})
@@ -93,6 +97,7 @@ func goalViewFromListRow(row *db.ListGoalViewsRow) (goalViewRow, error) {
 		currentVersionNumber: row.CurrentVersionNumber, currentVersionBody: row.CurrentVersionBody,
 		currentVersionCreatedAt: row.CurrentVersionCreatedAt, cycleCount: row.CycleCount,
 		activeCycleID: row.ActiveCycleID, activeCycleSequenceNumber: row.ActiveCycleSequenceNumber,
+		activeCycleReviewDate: row.ActiveCycleReviewDate, activeCycleReviewRevision: row.ActiveCycleReviewScheduleRevision,
 		reviewDraftID: row.ReviewDraftID, triggerCycleID: row.TriggerCycleID,
 		triggerCycleSequenceNumber: row.TriggerCycleSequenceNumber, category: row.Category, sortTime: row.SortTime,
 	})
@@ -148,10 +153,20 @@ func mapGoalView(columns goalViewColumns) (goalViewRow, error) {
 		if cycleID == "" {
 			return goalViewRow{}, fmt.Errorf("%w: active Goal Cycle identity invalid", workspace.ErrGoalPersistenceInvariant)
 		}
+		reviewDate, reviewScheduleRevision, reviewErr := cycleReviewScheduleFromSQLC(
+			columns.activeCycleReviewDate,
+			columns.activeCycleReviewRevision,
+		)
+		if reviewErr != nil {
+			return goalViewRow{}, reviewErr
+		}
 		result.View.CurrentWork = &workspace.CurrentWorkView{
 			Kind:                "active_cycle",
 			CycleID:             cycleID,
 			CycleSequenceNumber: *columns.activeCycleSequenceNumber,
+			ReviewSchedule: &workspace.ReviewScheduleView{
+				ReviewDate: reviewDate, ReviewScheduleRevision: reviewScheduleRevision,
+			},
 		}
 	case goal.StatusGoalReview:
 		if result.View.TerminalAt != nil || hasActive || !reviewComplete {
@@ -161,6 +176,9 @@ func mapGoalView(columns goalViewColumns) (goalViewRow, error) {
 		triggerCycleID := uuidString(columns.triggerCycleID)
 		if reviewDraftID == "" || triggerCycleID == "" {
 			return goalViewRow{}, fmt.Errorf("%w: review Goal current work identity invalid", workspace.ErrGoalPersistenceInvariant)
+		}
+		if columns.activeCycleReviewDate.Valid || columns.activeCycleReviewRevision != 0 {
+			return goalViewRow{}, fmt.Errorf("%w: review Goal exposes an active Cycle schedule", workspace.ErrGoalPersistenceInvariant)
 		}
 		result.View.CurrentWork = &workspace.CurrentWorkView{
 			Kind:                       "goal_review",

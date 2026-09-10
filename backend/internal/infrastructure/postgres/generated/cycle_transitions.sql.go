@@ -242,6 +242,26 @@ func (q *Queries) FindStartReplay(ctx context.Context, arg FindStartReplayParams
 	return &i, err
 }
 
+const getCycleReviewSchedule = `-- name: GetCycleReviewSchedule :one
+SELECT
+    review_date,
+    review_schedule_revision
+FROM pdca_cycle_review_schedules
+WHERE cycle_id = $1::uuid
+`
+
+type GetCycleReviewScheduleRow struct {
+	ReviewDate             pgtype.Date
+	ReviewScheduleRevision int64
+}
+
+func (q *Queries) GetCycleReviewSchedule(ctx context.Context, cycleID pgtype.UUID) (*GetCycleReviewScheduleRow, error) {
+	row := q.db.QueryRow(ctx, getCycleReviewSchedule, cycleID)
+	var i GetCycleReviewScheduleRow
+	err := row.Scan(&i.ReviewDate, &i.ReviewScheduleRevision)
+	return &i, err
+}
+
 const hasRunningCycleGenerationForTransition = `-- name: HasRunningCycleGenerationForTransition :one
 SELECT EXISTS (
     SELECT 1
@@ -640,6 +660,51 @@ func (q *Queries) SaveCyclePlanCAS(ctx context.Context, arg SaveCyclePlanCASPara
 		arg.UserID,
 		arg.GoalID,
 		arg.ExpectedFrameRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const saveCycleReviewScheduleCAS = `-- name: SaveCycleReviewScheduleCAS :execrows
+INSERT INTO pdca_cycle_review_schedules (
+    cycle_id,
+    review_date,
+    review_schedule_revision
+)
+SELECT
+    $1::uuid,
+    $2::date,
+    $3::bigint
+WHERE $4::bigint = 0
+   OR EXISTS (
+        SELECT 1
+        FROM pdca_cycle_review_schedules AS current_schedule
+        WHERE current_schedule.cycle_id = $1::uuid
+          AND current_schedule.review_schedule_revision =
+              $4::bigint
+   )
+ON CONFLICT (cycle_id) DO UPDATE
+SET review_date = EXCLUDED.review_date,
+    review_schedule_revision = EXCLUDED.review_schedule_revision
+WHERE pdca_cycle_review_schedules.review_schedule_revision =
+      $4::bigint
+`
+
+type SaveCycleReviewScheduleCASParams struct {
+	CycleID                        pgtype.UUID
+	ReviewDate                     pgtype.Date
+	ReviewScheduleRevision         int64
+	ExpectedReviewScheduleRevision int64
+}
+
+func (q *Queries) SaveCycleReviewScheduleCAS(ctx context.Context, arg SaveCycleReviewScheduleCASParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveCycleReviewScheduleCAS,
+		arg.CycleID,
+		arg.ReviewDate,
+		arg.ReviewScheduleRevision,
+		arg.ExpectedReviewScheduleRevision,
 	)
 	if err != nil {
 		return 0, err

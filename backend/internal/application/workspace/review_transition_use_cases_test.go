@@ -255,7 +255,10 @@ func (tx *reviewTransitionTestTx) LoadGoalView(context.Context, string, string) 
 	}
 	switch tx.goal.Status {
 	case goal.StatusActiveCycle:
-		view.CurrentWork = &CurrentWorkView{Kind: "active_cycle", CycleID: tx.cycle.ID, CycleSequenceNumber: tx.cycle.SequenceNumber}
+		view.CurrentWork = &CurrentWorkView{
+			Kind: "active_cycle", CycleID: tx.cycle.ID, CycleSequenceNumber: tx.cycle.SequenceNumber,
+			ReviewSchedule: &ReviewScheduleView{},
+		}
 	case goal.StatusGoalReview:
 		view.CurrentWork = &CurrentWorkView{
 			Kind: "goal_review", ReviewDraftID: tx.draft.ID,

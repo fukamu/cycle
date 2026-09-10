@@ -34,6 +34,45 @@ func nullableFiniteCycleTimestamp(value pgtype.Timestamptz) (*time.Time, bool) {
 	return &timestamp, true
 }
 
+func cycleReviewScheduleFromSQLC(
+	value pgtype.Date,
+	revision int64,
+) (*cycle.ReviewDate, int64, error) {
+	if revision < 0 {
+		return nil, 0, cyclePersistenceError("Cycle review schedule revision is invalid")
+	}
+	if !value.Valid {
+		return nil, revision, nil
+	}
+	if value.InfinityModifier != pgtype.Finite {
+		return nil, 0, cyclePersistenceError("Cycle review date is non-finite")
+	}
+	text := value.Time.Format("2006-01-02")
+	parsed, err := cycle.ParseReviewDate(text)
+	if err != nil || value.Time.Year() < 1 || value.Time.Year() > 9999 {
+		return nil, 0, cyclePersistenceError("Cycle review date is invalid")
+	}
+	if revision == 0 {
+		return nil, 0, cyclePersistenceError("Cycle review date has no revision")
+	}
+	return &parsed, revision, nil
+}
+
+func cycleReviewDateParam(value *cycle.ReviewDate) (pgtype.Date, error) {
+	if value == nil {
+		return pgtype.Date{}, nil
+	}
+	parsed, err := cycle.ParseReviewDate(string(*value))
+	if err != nil {
+		return pgtype.Date{}, err
+	}
+	timestamp, err := time.Parse("2006-01-02", string(parsed))
+	if err != nil {
+		return pgtype.Date{}, err
+	}
+	return pgtype.Date{Time: timestamp, Valid: true}, nil
+}
+
 func cycleLifecycleFromSQLC(
 	statusValue string,
 	completedValue, canceledValue pgtype.Timestamptz,
@@ -170,6 +209,13 @@ func cycleViewFromReadRow(row *db.GetCycleViewRow) (workspace.CycleView, error) 
 	if err != nil {
 		return workspace.CycleView{}, err
 	}
+	reviewDate, reviewScheduleRevision, err := cycleReviewScheduleFromSQLC(
+		row.ReviewDate,
+		row.ReviewScheduleRevision,
+	)
+	if err != nil {
+		return workspace.CycleView{}, err
+	}
 	return workspace.CycleView{
 		ID:                           cycleID,
 		GoalID:                       goalID,
@@ -192,6 +238,8 @@ func cycleViewFromReadRow(row *db.GetCycleViewRow) (workspace.CycleView, error) 
 			Check:  row.CheckRevision,
 			Action: row.ActionRevision,
 		},
+		ReviewDate:             reviewDate,
+		ReviewScheduleRevision: reviewScheduleRevision,
 	}, nil
 }
 

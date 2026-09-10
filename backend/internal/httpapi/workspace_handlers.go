@@ -50,6 +50,33 @@ type saveFrameRequest struct {
 	Content               string `json:"content"`
 	ExpectedFrameRevision int64  `json:"expectedFrameRevision"`
 }
+type changeReviewScheduleRequest struct {
+	Action                         string                    `json:"action"`
+	ReviewDate                     optionalJSONField[string] `json:"reviewDate"`
+	ExpectedReviewScheduleRevision int64                     `json:"expectedReviewScheduleRevision"`
+}
+
+func (input changeReviewScheduleRequest) target() (*cycle.ReviewDate, error) {
+	switch input.Action {
+	case "set":
+		if !input.ReviewDate.Present || input.ReviewDate.Null {
+			return nil, errRequestValidation
+		}
+		parsed, err := cycle.ParseReviewDate(input.ReviewDate.Value)
+		if err != nil {
+			return nil, errRequestValidation
+		}
+		return &parsed, nil
+	case "clear":
+		if input.ReviewDate.Present {
+			return nil, errRequestValidation
+		}
+		return nil, nil
+	default:
+		return nil, errRequestValidation
+	}
+}
+
 type actionGenerateRequest struct {
 	ExpectedContentRevision int64 `json:"expectedContentRevision"`
 	ConfirmReplace          bool  `json:"confirmReplace"`
@@ -409,6 +436,34 @@ func (server *api) saveGoalCycleFrame(writer http.ResponseWriter, request *http.
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
+}
+
+func (server *api) changeGoalCycleReviewSchedule(writer http.ResponseWriter, request *http.Request) {
+	var input changeReviewScheduleRequest
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	target, err := input.target()
+	if err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	result, err := server.dependencies.Workspace.ChangeReviewSchedule(
+		request.Context(),
+		workspace.ChangeReviewScheduleInput{
+			UserID:                         currentUserID(request),
+			GoalID:                         chi.URLParam(request, "goalId"),
+			CycleID:                        chi.URLParam(request, "cycleId"),
+			ReviewDate:                     target,
+			ExpectedReviewScheduleRevision: input.ExpectedReviewScheduleRevision,
+		},
+	)
+	if err != nil {
+		server.writeError(writer, request, stableUseCaseError(err, errReviewScheduleUpdateFailed), nil)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func (server *api) generateAction(writer http.ResponseWriter, request *http.Request) {

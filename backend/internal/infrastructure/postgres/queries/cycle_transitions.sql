@@ -50,6 +50,13 @@ SELECT EXISTS (
       AND status = 'running'
 ) AS running;
 
+-- name: GetCycleReviewSchedule :one
+SELECT
+    review_date,
+    review_schedule_revision
+FROM pdca_cycle_review_schedules
+WHERE cycle_id = sqlc.arg(cycle_id)::uuid;
+
 -- name: HasRunningGoalGenerationForReviewTransition :one
 SELECT EXISTS (
     SELECT 1
@@ -99,6 +106,30 @@ WHERE id = sqlc.arg(cycle_id)::uuid
   AND goal_id = sqlc.arg(goal_id)::uuid
   AND status = 'active'
   AND plan_revision = sqlc.arg(expected_frame_revision)::bigint;
+
+-- name: SaveCycleReviewScheduleCAS :execrows
+INSERT INTO pdca_cycle_review_schedules (
+    cycle_id,
+    review_date,
+    review_schedule_revision
+)
+SELECT
+    sqlc.arg(cycle_id)::uuid,
+    sqlc.narg(review_date)::date,
+    sqlc.arg(review_schedule_revision)::bigint
+WHERE sqlc.arg(expected_review_schedule_revision)::bigint = 0
+   OR EXISTS (
+        SELECT 1
+        FROM pdca_cycle_review_schedules AS current_schedule
+        WHERE current_schedule.cycle_id = sqlc.arg(cycle_id)::uuid
+          AND current_schedule.review_schedule_revision =
+              sqlc.arg(expected_review_schedule_revision)::bigint
+   )
+ON CONFLICT (cycle_id) DO UPDATE
+SET review_date = EXCLUDED.review_date,
+    review_schedule_revision = EXCLUDED.review_schedule_revision
+WHERE pdca_cycle_review_schedules.review_schedule_revision =
+      sqlc.arg(expected_review_schedule_revision)::bigint;
 
 -- name: SaveCycleDoCAS :execrows
 UPDATE pdca_cycles

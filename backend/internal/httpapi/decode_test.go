@@ -104,6 +104,10 @@ func TestDecodeAndValidateJSONEnforcesTypedMemberContracts(t *testing.T) {
 			required: []string{"content", "expectedFrameRevision"}, destination: func() any { return &saveFrameRequest{} },
 		},
 		{
+			name: "review schedule clear", body: `{"action":"clear","expectedReviewScheduleRevision":0}`,
+			required: []string{"action", "expectedReviewScheduleRevision"}, destination: func() any { return &changeReviewScheduleRequest{} },
+		},
+		{
 			name: "action generate", body: `{"expectedContentRevision":0,"confirmReplace":false}`,
 			required: []string{"expectedContentRevision", "confirmReplace"}, destination: func() any { return &actionGenerateRequest{} },
 		},

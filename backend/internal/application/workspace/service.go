@@ -251,6 +251,14 @@ func (service *Service) SaveFrame(ctx context.Context, input SaveFrameInput) (Sa
 	return result, resourceNotFound(err, ErrCycleNotFound)
 }
 
+func (service *Service) ChangeReviewSchedule(
+	ctx context.Context,
+	input ChangeReviewScheduleInput,
+) (ChangeReviewScheduleResult, error) {
+	result, err := service.cycles.ChangeReviewSchedule(ctx, input)
+	return result, resourceNotFound(err, ErrCycleNotFound)
+}
+
 func (service *Service) CompleteCycle(ctx context.Context, input CompleteCycleInput) (CompleteCycleResult, error) {
 	result, err := service.cycles.CompleteCycle(ctx, input)
 	if err == nil && !result.Replayed && result.Replay == nil {

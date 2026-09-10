@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
 	"github.com/fukamu/cycle/backend/internal/identifier"
 	"github.com/fukamu/cycle/backend/internal/securehash"
@@ -208,12 +209,14 @@ func validateGoalCurrentWork(view GoalView) error {
 	switch view.Status {
 	case goal.StatusActiveCycle:
 		if work == nil || work.Kind != "active_cycle" || work.CycleID == "" || work.CycleSequenceNumber <= 0 ||
-			work.ReviewDraftID != "" || work.TriggerCycleID != "" || work.TriggerCycleSequenceNumber != 0 {
+			work.ReviewDraftID != "" || work.TriggerCycleID != "" || work.TriggerCycleSequenceNumber != 0 ||
+			!validReviewScheduleView(work.ReviewSchedule) {
 			return goalInvariantError("active Goal current work is invalid")
 		}
 	case goal.StatusGoalReview:
 		if work == nil || work.Kind != "goal_review" || work.ReviewDraftID == "" || work.TriggerCycleID == "" ||
-			work.TriggerCycleSequenceNumber <= 0 || work.CycleID != "" || work.CycleSequenceNumber != 0 {
+			work.TriggerCycleSequenceNumber <= 0 || work.CycleID != "" || work.CycleSequenceNumber != 0 ||
+			work.ReviewSchedule != nil {
 			return goalInvariantError("review Goal current work is invalid")
 		}
 	case goal.StatusAchieved, goal.StatusEnded:
@@ -224,6 +227,20 @@ func validateGoalCurrentWork(view GoalView) error {
 		return goalInvariantError("Goal status is invalid")
 	}
 	return nil
+}
+
+func validReviewScheduleView(view *ReviewScheduleView) bool {
+	if view == nil || view.ReviewScheduleRevision < 0 {
+		return false
+	}
+	if view.ReviewDate == nil {
+		return true
+	}
+	if view.ReviewScheduleRevision == 0 {
+		return false
+	}
+	_, err := cycle.ParseReviewDate(string(*view.ReviewDate))
+	return err == nil
 }
 
 func (useCases *GoalUseCases) DeleteGoal(
