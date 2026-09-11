@@ -48,6 +48,11 @@ case "$1" in
     printf '%s\n' '{"result":"drained_smoke_pending"}' >"${STAGING_ROLLOUT_EVIDENCE_FILE}"
     printf '%s\n' 'safe summary' >>"${GITHUB_STEP_SUMMARY}"
     ;;
+  ./scripts/staging-deploy-retry-checkpoint.mjs)
+    [[ "${STAGING_DEPLOY_CHECKPOINT_OPERATION}" == mark_mutation_boundary ]]
+    printf '%s\n' mutation-boundary >>"${TEST_COMMAND_LOG}"
+    [[ "${FAKE_CHECKPOINT_FAIL:-0}" == 0 ]]
+    ;;
   *) exit 97 ;;
 esac
 FAKE_NODE
@@ -89,6 +94,7 @@ run_child() {
   local infra_evidence_kind="${4-no_changes_plan}"
   local infra_evidence_run_id="${5-456}"
   local infra_plan_sha256="${6-$(printf '3%.0s' {1..64})}"
+  local checkpoint_fail="${7-0}"
   env -i \
     PATH="${fake_bin}:/usr/bin:/bin" \
     TEST_COMMAND_LOG="${log}" \
@@ -98,11 +104,14 @@ run_child() {
     GITHUB_ACTOR=matoruru \
     GITHUB_RUN_ID=123 \
     GITHUB_RUN_ATTEMPT=1 \
+    GITHUB_ACTIONS=true \
+    STAGING_DEPLOY_CHECKPOINT_STATE_FILE="${runner_temp}/fukamu-cycle-staging-deploy-retry-state.json" \
     EXACT_MAIN_CI_RUN_ID=789 \
     GH_TOKEN=github-private-value \
     COMMIT_SHA="${commit_sha}" \
     FAKE_MAIN_SHA="${main_sha}" \
     FAKE_PNPM_FAIL="${pnpm_fail}" \
+    FAKE_CHECKPOINT_FAIL="${checkpoint_fail}" \
     DEPLOY_MODE="${deploy_mode}" \
     INFRA_EVIDENCE_KIND="${infra_evidence_kind}" \
     INFRA_EVIDENCE_RUN_ID="${infra_evidence_run_id}" \
@@ -143,7 +152,7 @@ run_child() {
 : >"${log}"
 run_child "${commit_sha}" 0 >"${output}" 2>&1 \
   || fail "candidate deploy/drain wrapper rejected the valid fixture"
-[[ "$(cat "${log}")" == $'drain-start\ngh\nmigrate\ngh\nmaterialize\ndeploy\ndrain-ack\nwriter' ]] \
+[[ "$(cat "${log}")" == $'drain-start\ngh\nmutation-boundary\nmigrate\ngh\nmaterialize\ndeploy\ndrain-ack\nwriter' ]] \
   || fail "candidate deploy/drain command order changed"
 [[ ! -e "${runner_temp}/fukamu-cycle-worker-secrets.json" ]] \
   || fail "candidate deploy/drain left the Worker secret file"
@@ -159,7 +168,7 @@ rm -f -- "${runner_temp}/fukamu-cycle-stable-csrf-rollout-drained.json"
 : >"${log}"
 run_child "${commit_sha}" 0 recovery '' '' '' >"${output}" 2>&1 \
   || fail "candidate deploy/drain wrapper rejected the valid recovery fixture"
-[[ "$(cat "${log}")" == $'drain-start\ngh\nmigrate\ngh\nmaterialize\ndeploy\ndrain-ack\nwriter' ]] \
+[[ "$(cat "${log}")" == $'drain-start\ngh\nmutation-boundary\nmigrate\ngh\nmaterialize\ndeploy\ndrain-ack\nwriter' ]] \
   || fail "candidate deploy/drain recovery command order changed"
 
 rm -f -- "${runner_temp}/fukamu-cycle-stable-csrf-rollout-drained.json"
@@ -178,6 +187,16 @@ fi
   || fail "stale-main failure left a Worker secret file"
 if grep -Fq migrate "${log}"; then
   fail "stale-main failure reached migration"
+fi
+
+: >"${log}"
+if run_child "${commit_sha}" 0 normal no_changes_plan 456 "$(printf '3%.0s' {1..64})" 1 >"${output}" 2>&1; then
+  fail "candidate deploy/drain ignored a failed mutation-boundary checkpoint"
+fi
+grep -Fxq mutation-boundary "${log}" \
+  || fail "candidate deploy/drain did not attempt the mutation-boundary checkpoint"
+if grep -Fq migrate "${log}"; then
+  fail "mutation-boundary checkpoint failure reached migration"
 fi
 
 : >"${log}"

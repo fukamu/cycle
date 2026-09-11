@@ -359,7 +359,7 @@ validate_secret_workflow_exact_digest() {
 
   case "${contract}" in
     deploy)
-      expected_digest="3e73c1c838f6504846cc3bcc6d7cc3b1ab9c26bf0395d11d74e59fb25efe6d34"
+      expected_digest="ee45cba1015df76e9569fbadcc800742d415c69d9f28e4b182f6a158317b19e2"
       ;;
     terraform-plan)
       expected_digest="7a39d0e3d48705ad551700bca6dcbd5157ed79d8b41794e22e57c400b616aa4f"
@@ -686,6 +686,12 @@ validate_deploy_approval_gate() {
   local preflight_script="${test_root}/deploy-dispatch-preflight.sh"
   local resolve_step="${test_root}/deploy-approved-resolution.step"
   local resolve_script="${test_root}/deploy-approved-resolution.sh"
+  local deploy_job="${test_root}/deploy-mutation.job"
+  local deploy_steps="${test_root}/deploy-mutation.steps"
+  local deploy_attempt_step="${test_root}/deploy-attempt.step"
+  local deploy_attempt_script="${test_root}/deploy-attempt.sh"
+  local authorize_attempt_step="${test_root}/deploy-authorize-attempt.step"
+  local authorize_attempt_script="${test_root}/deploy-authorize-attempt.sh"
   local fake_bin="${test_root}/deploy-fake-bin"
   local output="${test_root}/deploy-gate.output"
   local github_output="${test_root}/deploy-gate.github-output"
@@ -783,9 +789,14 @@ validate_deploy_approval_gate() {
     violation "Deploy Staging dispatch preflight rejected a valid normal deployment"
     return 1
   fi
-  if run_deploy_preflight \
+  if ! run_deploy_preflight \
     workflow_dispatch refs/heads/main main "${valid_sha}" Owner owner OWNER normal 123 '' 2; then
-    violation "Deploy Staging dispatch preflight accepted a workflow rerun"
+    violation "Deploy Staging dispatch preflight rejected the single bounded rerun"
+    return 1
+  fi
+  if run_deploy_preflight \
+    workflow_dispatch refs/heads/main main "${valid_sha}" Owner owner OWNER normal 123 '' 3; then
+    violation "Deploy Staging dispatch preflight accepted an attempt beyond the single bounded rerun"
     return 1
   fi
   if ! run_deploy_preflight \
@@ -1008,6 +1019,107 @@ FAKE_GH
   fi
   if run_deploy_resolver success recovery "${stale_sha}"; then
     violation "Deploy Staging recovery resolver accepted a stale dispatch SHA"
+    return 1
+  fi
+
+  extract_named_step "${resolve_job}" "Authorize deploy job attempt" >"${authorize_attempt_step}" || {
+    violation "Deploy Staging must authorize the exact resolved run attempt"
+    return 1
+  }
+  extract_literal_run_script "${authorize_attempt_step}" >"${authorize_attempt_script}" || {
+    violation "Deploy Staging attempt authorization script must be extractable"
+    return 1
+  }
+  run_authorize_attempt() {
+    local run_attempt="$1"
+    local retry_verified="$2"
+    : >"${github_output}"
+    env -i \
+      PATH=/usr/bin:/bin \
+      GITHUB_RUN_ATTEMPT="${run_attempt}" \
+      RETRY_CHECKPOINT_VERIFIED="${retry_verified}" \
+      GITHUB_OUTPUT="${github_output}" \
+      bash "${authorize_attempt_script}" >"${output}" 2>&1
+  }
+  if ! run_authorize_attempt 1 ''; then
+    violation "Deploy Staging attempt authorization rejected attempt one"
+    return 1
+  fi
+  grep -Fxq "verified_run_attempt=1" "${github_output}" || {
+    violation "Deploy Staging attempt one authorization did not emit its exact attempt"
+    return 1
+  }
+  if ! run_authorize_attempt 2 true; then
+    violation "Deploy Staging attempt authorization rejected a verified attempt two"
+    return 1
+  fi
+  grep -Fxq "verified_run_attempt=2" "${github_output}" || {
+    violation "Deploy Staging attempt two authorization did not emit its exact attempt"
+    return 1
+  }
+  if run_authorize_attempt 2 false || run_authorize_attempt 3 true; then
+    violation "Deploy Staging attempt authorization accepted missing evidence or attempt three"
+    return 1
+  fi
+
+  extract_job "${deploy_workflow}" deploy >"${deploy_job}" || {
+    violation "Deploy Staging mutation job must exist"
+    return 1
+  }
+  extract_job_mapping "${deploy_job}" steps >"${deploy_steps}" || {
+    violation "Deploy Staging mutation job must define one steps mapping"
+    return 1
+  }
+  first_step="$(awk 'NF { print; exit }' "${deploy_steps}")"
+  [[ "${first_step}" == "      - name: Verify resolved deployment attempt" ]] || {
+    violation "Deploy Staging mutation job must reject a partial rerun before checkout or secrets"
+    return 1
+  }
+  extract_named_step "${deploy_job}" "Verify resolved deployment attempt" >"${deploy_attempt_step}" || {
+    violation "Deploy Staging mutation job must verify the fresh resolve attempt"
+    return 1
+  }
+  extract_literal_run_script "${deploy_attempt_step}" >"${deploy_attempt_script}" || {
+    violation "Deploy Staging mutation attempt guard must be extractable"
+    return 1
+  }
+  run_deploy_attempt_guard() {
+    env -i \
+      PATH=/usr/bin:/bin \
+      GITHUB_RUN_ATTEMPT="$1" \
+      VERIFIED_RUN_ATTEMPT="$2" \
+      bash "${deploy_attempt_script}" >"${output}" 2>&1
+  }
+  if ! run_deploy_attempt_guard 1 1 || ! run_deploy_attempt_guard 2 2; then
+    violation "Deploy Staging mutation attempt guard rejected an exact fresh resolve"
+    return 1
+  fi
+  if run_deploy_attempt_guard 2 1 || run_deploy_attempt_guard 3 3; then
+    violation "Deploy Staging mutation attempt guard accepted a partial rerun or attempt three"
+    return 1
+  fi
+
+  local resolve_retry_line
+  local download_retry_line
+  local verify_infra_line
+  local verify_retry_line
+  local reverify_main_line
+  local authorize_line
+  resolve_retry_line="$(grep -nF '      - name: Resolve prior safe retry checkpoint' "${resolve_job}" | cut -d: -f1)"
+  download_retry_line="$(grep -nF '      - name: Download prior safe retry checkpoint' "${resolve_job}" | cut -d: -f1)"
+  verify_infra_line="$(grep -nF '      - name: Verify approved Terraform evidence' "${resolve_job}" | cut -d: -f1)"
+  verify_retry_line="$(grep -nF '      - name: Verify prior safe retry checkpoint' "${resolve_job}" | cut -d: -f1)"
+  reverify_main_line="$(grep -nF '      - name: Re-verify deployment commit before Staging approval' "${resolve_job}" | cut -d: -f1)"
+  authorize_line="$(grep -nF '      - name: Authorize deploy job attempt' "${resolve_job}" | cut -d: -f1)"
+  if [[ -z "${resolve_retry_line}" || -z "${download_retry_line}" || -z "${verify_infra_line}" || -z "${verify_retry_line}" || -z "${reverify_main_line}" || -z "${authorize_line}" ]] \
+    || ! ((\
+    resolve_retry_line < download_retry_line && \
+    download_retry_line < verify_infra_line && \
+    verify_infra_line < verify_retry_line && \
+    verify_retry_line < reverify_main_line && \
+    reverify_main_line < authorize_line)) \
+    ; then
+    violation "Deploy Staging retry provenance, current evidence, and final authorization order is invalid"
     return 1
   fi
 

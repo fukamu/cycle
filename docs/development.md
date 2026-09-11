@@ -467,15 +467,19 @@ Localから日常的に実行せず、Production originやProduction dataへ向�
 
 ### Stable CSRF initial rollout fixtures
 
-初回rolloutのlive手順は[`operations.md`](operations.md#session-bound-stable-csrf-v1-release)を正本とし、LocalからStagingへ向けて実行しません。Cloudflare API、Browser process、fixed deploy child、safe evidenceの境界は外部credentialを使わない次のfixtureで確認できます。Rollout / gate / control-planeに関係する変更では、上記分類器を通じて全体checkとCommit前gateにも含まれます。
+初回rolloutのlive手順は[`operations.md`](operations.md#session-bound-stable-csrf-v1-release)を正本とし、LocalからStagingへ向けて実行しません。Cloudflare API、Browser process、fixed deploy child、safe evidence、同一runのbounded retryの境界は外部credentialを使わない次のfixtureで確認できます。Rollout / gate / control-planeに関係する変更では、上記分類器を通じて全体checkとCommit前gateにも含まれます。
 
 ```bash
 node --test scripts/tests/cloudflare-drain-evidence.test.mjs
 node --test scripts/tests/staging-csrf-rollout.test.mjs
 node --test scripts/tests/staging-rollout-evidence.test.mjs
+node --test scripts/tests/staging-deploy-retry-checkpoint.test.mjs
+node --test scripts/tests/resolve-staging-deploy-retry.test.mjs
 bash scripts/tests/check-staging-csrf-rollout.sh
 bash scripts/tests/check-staging-candidate-deploy-and-drain.sh
 ```
+
+`staging-deploy-retry-checkpoint.test.mjs`はmutation boundaryより前のcleanup state遷移、strict metadata / path / file検証と、`not_crossed`かつ`not_started|verified`の場合だけ`no_mutation_started` evidenceを生成することを確認します。`resolve-staging-deploy-retry.test.mjs`はfake GitHub responseを使い、同じrunのattempt 1が`completed` / `failure`であること、artifactの一意性・期限・size・digest・workflow / repository / SHA bindingを確認します。Workflow / rollout contract fixtureは、attempt 2が`Re-run all jobs`でresolverを再実行し、current main / CI / infraを再検証すること、fresh resolver outputのないpartial rerunとattempt 3、migration直前のmutation boundary以降または不明なstateをfail closedにすることを固定します。これらのtestはGitHub、Cloudflare、Stagingへ接続せず、live credentialを使いません。
 
 ### Commit前の必須gate
 

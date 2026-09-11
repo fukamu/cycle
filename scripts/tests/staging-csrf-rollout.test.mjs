@@ -11,6 +11,10 @@ import {
   stagingCSRFRolloutPhases,
   validateRolloutSession,
 } from "../lib/staging-csrf-rollout.mjs";
+import {
+  createStagingDeployAnonymousSessionRoute,
+  markStagingDeployCleanupFromRevokedResult,
+} from "../../frontend/e2e/staging-csrf-rollout-entry.mjs";
 
 const userID = "0198c20b-7b95-7000-8000-000000000001";
 const otherUserID = "0198c20b-7b95-7000-8000-000000000002";
@@ -20,6 +24,70 @@ const stableToken = "S".repeat(43);
 const preparedLegacySession = { userID, csrfToken: preparedLegacyToken };
 const originalSession = { userID, csrfToken: legacyToken };
 const stableSession = { userID, csrfToken: stableToken };
+
+test("writes the cleanup fence before releasing anonymous account creation", async () => {
+  const calls = [];
+  const checkpoint = createStagingDeployAnonymousSessionRoute({
+    checkpointEnabled: true,
+    markCleanupUnverified() {
+      calls.push("cleanup-unverified");
+    },
+  });
+  await checkpoint.handle({
+    async continue() {
+      calls.push("request-continued");
+    },
+    async abort() {
+      calls.push("request-aborted");
+    },
+  });
+  assert.deepEqual(calls, ["cleanup-unverified", "request-continued"]);
+  assert.equal(checkpoint.failure(), undefined);
+});
+
+test("aborts anonymous account creation when the cleanup fence cannot be written", async () => {
+  const calls = [];
+  const checkpointFailure = new Error("private checkpoint detail");
+  const checkpoint = createStagingDeployAnonymousSessionRoute({
+    checkpointEnabled: true,
+    markCleanupUnverified() {
+      calls.push("cleanup-unverified");
+      throw checkpointFailure;
+    },
+  });
+  await checkpoint.handle({
+    async continue() {
+      calls.push("request-continued");
+    },
+    async abort(reason) {
+      calls.push(`request-aborted:${reason}`);
+    },
+  });
+  assert.deepEqual(calls, ["cleanup-unverified", "request-aborted:failed"]);
+  assert.equal(checkpoint.failure(), checkpointFailure);
+});
+
+test("marks cleanup verified only from the exact revoked-session proof", () => {
+  const verified = [];
+  const record = (result, checkpointEnabled = true) =>
+    markStagingDeployCleanupFromRevokedResult(result, {
+      checkpointEnabled,
+      markCleanupVerified() {
+        verified.push(result);
+      },
+    });
+  const exact = {
+    status: 401,
+    code: "SESSION_EXPIRED",
+    authenticatedUserIDAbsent: true,
+  };
+  record(exact);
+  record({ ...exact, status: 403 });
+  record({ ...exact, code: "SESSION_MISSING" });
+  record({ ...exact, authenticatedUserIDAbsent: false });
+  record(exact, false);
+  assert.deepEqual(verified, [exact]);
+});
 
 test("accepts only UUIDv7 identities and exact base64url CSRF tokens", () => {
   assert.deepEqual(validateRolloutSession(originalSession), originalSession);

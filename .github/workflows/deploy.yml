@@ -37,6 +37,7 @@ jobs:
       infra_evidence_kind: ${{ steps.resolve.outputs.infra_evidence_kind }}
       infra_evidence_run_id: ${{ steps.resolve.outputs.infra_evidence_run_id }}
       infra_plan_sha256: ${{ steps.verify_evidence.outputs.plan_sha256 }}
+      verified_run_attempt: ${{ steps.authorize_attempt.outputs.verified_run_attempt }}
     steps:
       - name: Verify deploy dispatch preflight
         shell: bash
@@ -51,8 +52,8 @@ jobs:
             echo '::error::Deploy Staging accepts manual workflow dispatch only.'
             exit 1
           fi
-          if [[ "${GITHUB_RUN_ATTEMPT}" != '1' ]]; then
-            echo '::error::Deploy Staging workflow reruns are prohibited; start a new manual dispatch after reviewing the prior attempt.'
+          if [[ "${GITHUB_RUN_ATTEMPT}" != '1' && "${GITHUB_RUN_ATTEMPT}" != '2' ]]; then
+            echo '::error::Deploy Staging permits at most one checkpoint-authorized workflow rerun.'
             exit 1
           fi
           if [[ "${GITHUB_REF}" != 'refs/heads/main' || "${GITHUB_REF_NAME}" != 'main' ]]; then
@@ -345,16 +346,41 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: inputs.mode == 'normal'
         with:
           ref: ${{ steps.resolve.outputs.commit_sha }}
           persist-credentials: false
 
       - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
-        if: inputs.mode == 'normal'
         with:
           runtime: node@24
           install: false
+
+      - name: Resolve prior safe retry checkpoint
+        if: github.run_attempt == '2'
+        id: resolve_retry
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit_sha }}
+          DEPLOY_MODE: ${{ inputs.mode }}
+          EXPECTED_APPROVER: ${{ vars.STAGING_DEPLOY_APPROVER }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_name="$(node ./scripts/resolve-staging-deploy-retry.mjs)"
+          if [[ ! "${artifact_name}" =~ ^staging-deploy-retry-[0-9a-f]{40}-[1-9][0-9]*-1$ ]]; then
+            echo '::error::Resolved Staging deploy retry artifact name is invalid.'
+            exit 1
+          fi
+          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download prior safe retry checkpoint
+        if: github.run_attempt == '2'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.resolve_retry.outputs.artifact_name }}
+          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-source
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Download approved Terraform evidence
         if: inputs.mode == 'normal'
@@ -394,6 +420,23 @@ jobs:
           plan_sha256="$(node ./scripts/terraform-evidence.mjs)"
           echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
 
+      - name: Verify prior safe retry checkpoint
+        if: github.run_attempt == '2'
+        id: verify_retry
+        env:
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit_sha }}
+          DEPLOY_MODE: ${{ inputs.mode }}
+          EXACT_MAIN_CI_RUN_ID: ${{ steps.resolve.outputs.ci_run_id }}
+          INFRA_EVIDENCE_KIND: ${{ steps.resolve.outputs.infra_evidence_kind }}
+          INFRA_EVIDENCE_RUN_ID: ${{ steps.resolve.outputs.infra_evidence_run_id }}
+          INFRA_PLAN_SHA256: ${{ steps.verify_evidence.outputs.plan_sha256 }}
+          STAGING_DEPLOY_CHECKPOINT_OPERATION: verify_retry
+          STAGING_DEPLOY_RETRY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-source/fukamu-cycle-staging-deploy-retry.json
+        run: |
+          set -euo pipefail
+          node ./scripts/staging-deploy-retry-checkpoint.mjs
+          echo 'verified=true' >> "${GITHUB_OUTPUT}"
+
       - name: Re-verify deployment commit before Staging approval
         shell: bash
         env:
@@ -430,6 +473,28 @@ jobs:
             exit 1
           fi
 
+      - name: Authorize deploy job attempt
+        id: authorize_attempt
+        shell: bash
+        env:
+          RETRY_CHECKPOINT_VERIFIED: ${{ steps.verify_retry.outputs.verified }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_RUN_ATTEMPT}" in
+            1) ;;
+            2)
+              if [[ "${RETRY_CHECKPOINT_VERIFIED}" != 'true' ]]; then
+                echo '::error::Deploy Staging rerun is missing verified no-mutation evidence.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::Deploy Staging attempt is outside the authorized bound.'
+              exit 1
+              ;;
+          esac
+          echo "verified_run_attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
   deploy:
     needs: resolve
     runs-on: ubuntu-latest
@@ -439,9 +504,11 @@ jobs:
       url: https://cycle.staging.fukamu.matoruru.com
     env:
       COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
+      EXACT_MAIN_CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}
       INFRA_EVIDENCE_KIND: ${{ needs.resolve.outputs.infra_evidence_kind }}
       INFRA_EVIDENCE_RUN_ID: ${{ needs.resolve.outputs.infra_evidence_run_id }}
       INFRA_PLAN_SHA256: ${{ needs.resolve.outputs.infra_plan_sha256 }}
+      DEPLOY_MODE: ${{ inputs.mode }}
       PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
       BETA_ADMISSION_MODE: ${{ vars.BETA_ADMISSION_MODE || 'off' }}
@@ -486,6 +553,17 @@ jobs:
       RATE_AI_PER_SESSION_MINUTE: ${{ vars.RATE_AI_PER_SESSION_MINUTE }}
       RATE_AI_PER_IP_MINUTE: ${{ vars.RATE_AI_PER_IP_MINUTE }}
     steps:
+      - name: Verify resolved deployment attempt
+        shell: bash
+        env:
+          VERIFIED_RUN_ATTEMPT: ${{ needs.resolve.outputs.verified_run_attempt }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_RUN_ATTEMPT}" =~ ^[12]$ || "${VERIFIED_RUN_ATTEMPT}" != "${GITHUB_RUN_ATTEMPT}" ]]; then
+            echo '::error::Deploy Staging requires a fresh resolve from the same workflow attempt; use Re-run all jobs.'
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.COMMIT_SHA }}
@@ -496,6 +574,13 @@ jobs:
           runtime: node@24
           cache: true
           install: false
+
+      - name: Initialize deployment retry checkpoint state
+        env:
+          STAGING_DEPLOY_CHECKPOINT_OPERATION: initialize
+          STAGING_DEPLOY_CHECKPOINT_STATE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-state.json
+          STAGING_DEPLOY_RETRY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json
+        run: node ./scripts/staging-deploy-retry-checkpoint.mjs
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -579,6 +664,7 @@ jobs:
           STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}
           STAGING_ADMISSION_MODE: auto
           STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}
+          STAGING_DEPLOY_CHECKPOINT_STATE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-state.json
           MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
@@ -633,3 +719,20 @@ jobs:
           STAGING_ADMISSION_MODE: ${{ env.BETA_ADMISSION_MODE }}
           STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}
         run: bash ./scripts/check-staging-critical.sh
+
+      - name: Finalize safe deployment retry checkpoint
+        if: ${{ always() && github.run_attempt == '1' }}
+        env:
+          STAGING_DEPLOY_CHECKPOINT_OPERATION: finalize
+          STAGING_DEPLOY_CHECKPOINT_STATE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-state.json
+          STAGING_DEPLOY_RETRY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json
+        run: node ./scripts/staging-deploy-retry-checkpoint.mjs
+
+      - name: Upload safe deployment retry checkpoint
+        if: ${{ always() && github.run_attempt == '1' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-deploy-retry-${{ env.COMMIT_SHA }}-${{ github.run_id }}-1
+          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json
+          if-no-files-found: ignore
+          retention-days: 90

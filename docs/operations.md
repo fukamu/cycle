@@ -214,7 +214,16 @@ configured approver / dispatch input / exact main SHA / CI / no-change Plan or A
 
 Generic pre-switch hard gateはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへ`/healthz`と`/readyz`だけを確認します。Stable CSRF初回rolloutでは#139の同一Browser process / ContextだけがAdmission off / closedの自動判定、Turnstile anonymous bootstrap、legacy Sessionを所有します。同じDeploy runでgeneric anonymous journeyを先行させるとTurnstile / anonymous-create rate-limitを自己消費し得るため、manual `baseline` diagnosticは実行しません。#139のpre-mutation evidenceが失敗した場合はrelease mutationへ進まず、post-deploy smokeまたはaccount cleanupが失敗した場合はreleaseを成功としません。
 
-Post-deploy `full`だけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。Candidate critical journeyまたはcleanupの失敗ではreleaseを成功としません。Migration失敗時もWrangler deployへ進みません。`Deploy Staging`はrun attempt 1だけを許可し、child開始前の失敗でもworkflow rerunではなく、原因と前attemptを確認して新しいmanual dispatchを作成します。Recovery modeはApplication authorization boundaryであり、stable初回rolloutのpartial resumeやsmoke bypassには使いません。
+Post-deploy `full`だけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。Candidate critical journeyまたはcleanupの失敗ではreleaseを成功としません。Migration失敗時もWrangler deployへ進みません。Recovery modeはApplication authorization boundaryであり、stable初回rolloutのpartial resumeやsmoke bypassには使いません。
+
+`Deploy Staging`のattempt 1が失敗した場合、同じworkflow runを一度だけ安全に再試行できるのは、attempt 1が`completed` / `failure`であり、自動生成された`staging-deploy-retry-<commit>-<run-id>-1` artifactが次の全条件を満たす場合だけです。
+
+- `result=no_mutation_started`かつ`mutationBoundary=not_crossed`である。
+- 一時accountをまだ作り得ない`cleanupState=not_started`、または公開Delete 204と旧Session 401を確認した`cleanupState=verified`である。`unverified`は受理しない。
+- Repository、workflow path、同じrun ID、source attempt 1、candidate SHA、deploy mode、configured operator、exact-main CI run、mode固有のno-change Plan / Apply evidenceが今回の入力と完全一致する。
+- Artifactが一意、未失効、許容size内の通常fileで、strict schemaを満たす。
+
+条件を確認できた場合だけ、Actions画面から同じrunの`Re-run all jobs`を選びます。WorkflowはrerunのUI種別そのものではなく、attempt 2のdeployが同じattemptで生成されたfresh resolve outputを受け取ったことを検証します。Deploy jobだけを対象にして成功済みresolverを再実行しない`Re-run failed jobs` / selected-job rerunは拒否されます。Resolverとdependentを対象にしたselected-job rerunがfresh resolve条件を満たし得る場合も、運用手順としては使用しません。Attempt 2はcurrent main、同一SHAの成功CI、no-change Plan / Apply evidenceまたはrecovery confirmation、actor / triggering actorを再検証して最初から実行し、途中phaseから再開しません。Attempt 2の失敗後はattempt 3を実行せず、artifactの欠落、cancel / timeout、schema / binding不一致も安全の証拠として補完しません。
 
 Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し、CloudflareがDNS recordとcertificateを管理します。同名recordがある場合は所有用途を確認し、不要と確認できたrecordだけをDashboardから除去します。`workers.dev`とpreview URLは無効のまま維持します。
 
@@ -270,7 +279,9 @@ Rolloutと確認は次の順で行います。
 4. Drain後、同一Browser Contextの二tabで同時`GET /session`が同じtokenへ収束すること、片方をreloadした後も両tabのcommand / autosaveが成功することを確認する。CSRF token、Session ID、Response bodyを記録へ残さない。
 5. Live smokeではconvergence後のlegacy token、invalid token / Origin、Account Delete後の旧Session、advisory欠落時のauthoritative recoveryを確認する。Expiry / revoke race、旧 / 新Application・旧 / 新key matrix、Google fake / Session rotationはartifactに記録するexact-main CI runの証跡へ対応付け、Google live provider確認が必要な場合は非個人test identityによる別のmanual checkpointとする。Drain-pending recordとは別に、同じCI run / Deploy run ID / attempt / commitへbindingした`smoke_passed` markerをlive smoke完了後だけ作成し、両方がある場合だけ初回live smoke成功とする。想定外の拒否が続く場合は新規deployを止め、security guardを迂回せず[Application rollback](#application)またはreviewed forward fixを選ぶ。
 
-このone-time harnessでstable rollout childを開始した後の失敗、cancel、timeoutは、checkpointの有無にかかわらずmutation unknownとして扱い、同じDeploy jobを単純rerunしません。新規Deployを停止し、safe metadata artifactを保全してauthoritative Worker / Container stateを確認します。Exact baselineへ戻せるschema-compatible rollbackは個別のlive承認後にold-version drainまで確認し、それ以外はreviewed forward fixを選びます。Migration down、pepper変更、legacy smoke waiver、自動rollbackは行いません。Drain済みでも`smoke_passed` markerがなければ初回rollout受入は未完了です。
+このone-time harnessではfixed childがread-onlyのdrain baselineとcurrent-main確認を終えた後、migration commandを呼ぶ直前にcheckpointのmutation boundaryを`crossed`へ遷移します。遷移に失敗した場合はmigrationを開始しません。遷移後の失敗、cancel、timeoutは、migration commandへ到達したと確認できない場合もmutation開始済みまたは不明として扱い、workflow rerunを行いません。Checkpointが欠落・破損している場合やcleanupを証明できない場合も`no_mutation_started`と推測しません。新規Deployを停止し、safe metadata artifactを保全してauthoritative Worker / Container stateを確認します。Exact baselineへ戻せるschema-compatible rollbackは個別のlive承認後にold-version drainまで確認し、それ以外はreviewed forward fixを選びます。Migration down、pepper変更、legacy smoke waiver、自動rollbackは行いません。Drain済みでも`smoke_passed` markerがなければ初回rollout受入は未完了です。
+
+G10は同じrunのattempt 2を証跡で認可する仕組みであり、別のmanual dispatchを過去runの状態から機械的にblockするものではありません。Child spawn以降または状態不明時は、Actions画面で新しいdispatchを開始できても、Operations ownerが新規dispatchを停止したままauthoritative recoveryを完了させます。
 
 Workflow artifactは90日保持の一時checkpointであり、180日後のlegacy verifier削除判断の正本にはしません。Actual live rolloutでは、drain-pending recordと`smoke_passed` markerのsafe metadataを失効前に承認済みのaccess-controlledな長期release recordへ保全します。対応する長期記録がなければdrain時刻を推測せず、legacy verifier削除を解禁しません。
 
@@ -352,10 +363,12 @@ OTLP failureでは固定error classと集約`failure_count`だけを確認し、
 | Terraform Planが開始しない | mainの同一SHA CI、workflow state | 同一SHAのCIを成功させる。PR検証treeを証明できなければmain全CIを待つ |
 | Apply preflightで停止 | actor / approver、Plan run ID、artifact期限、current main | Owner本人が最新成功Planを指定する。Stale / expired planを再利用しない |
 | Applyがapproval待ち | `Review deployments` | Planをreviewした指定ownerがApprove / Rejectする。期限超過時は新Plan |
-| Deployが開始しない | Apply metadata、main SHA、workflow conclusion | CI → Plan → approved Applyをやり直し、manual DeployでTerraformを迂回しない |
+| Deployが開始しない | no-change Plan / Apply metadata、main SHA、workflow conclusion | CI → Plan → 必要な場合だけapproved Applyをやり直し、manual DeployでTerraformを迂回しない |
+| Deploy attempt 1がmutation boundary前に失敗 | attempt 1のconclusion、safe retry artifactの`mutationBoundary` / `cleanupState` / SHA / mode / operator / CI / infra binding | Exact artifactが`no_mutation_started`を証明する場合だけ同じrunで`Re-run all jobs`を一度実行する。Fresh resolverを再実行しないdeploy-only / failed-job rerunや新しいdispatchへ置き換えない |
+| Deploy rerunがStaging approval前に拒否 | run attempt、attempt 1 conclusion、artifactの一意性・期限・schema・binding、resolver output | Attempt 2の条件を補正・waiveしない。Attempt 3、partial rerun、cancel / timeout、artifact欠落・不一致は停止して原因を調査する |
 | Input validationで停止 | Errorに出たkey名、[`environment.md`](environment.md) | 承認値を設定する。仮値を使わず、secret値は表示しない |
-| Migrationで停止 | Neon branch / direct URL更新履歴 / SQL error | Wrangler前に停止済み。[`database.md`](database.md)に従いforce / resetせず修正 |
-| Wrangler deployで停止 | Token scope、Workers Paid、build / config | Account / zone / plan / token権限を修正し、CI dry-runとの差を解消 |
+| Migrationで停止 | Neon branch / direct URL更新履歴 / SQL error、authoritative Worker / Container state | Child spawn後なのでrerun / 新規dispatchを停止する。[`database.md`](database.md)に従いforce / resetせず、schema-compatible recoveryを判断する |
+| Wrangler deployで停止 | Token scope、Workers Paid、build / config、authoritative Worker / Container state | Child spawn後なのでrerun / 新規dispatchを停止する。状態確認後にschema-compatible rollbackまたはreviewed forward fixを選ぶ |
 | Custom domain作成失敗 | DNS owner、zone Active、token zone scope | 所有用途を確認し、不要と確認できたrecordだけ除去 |
 | `/healthz` 200 / `/readyz` 503 | Neon compute / pooled URL / pool | DB接続を修正。OpenAI / Google / Turnstile / OTLPをreadiness原因と誤認しない |
 | Static assetsだけ404 | Frontend build、Wrangler assets output | Frontend build後にdeployし、API routingと分けて確認 |

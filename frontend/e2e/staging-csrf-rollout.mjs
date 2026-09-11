@@ -61,6 +61,7 @@ try {
     ),
     marker: randomBytes(6).toString("hex"),
     repositoryRoot,
+    retryCheckpointEnabled: runMetadata.runID !== "local",
   });
   inviteToken = "";
   failures = await runStagingCSRFRollout({ adapter });

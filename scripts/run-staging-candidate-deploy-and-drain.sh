@@ -33,8 +33,9 @@ if (($# != 0)); then
 fi
 
 required=(
-  COMMIT_SHA GITHUB_ACTOR GITHUB_REPOSITORY GITHUB_RUN_ATTEMPT GITHUB_RUN_ID
+  COMMIT_SHA GITHUB_ACTIONS GITHUB_ACTOR GITHUB_REPOSITORY GITHUB_RUN_ATTEMPT GITHUB_RUN_ID
   GITHUB_STEP_SUMMARY GH_TOKEN RUNNER_TEMP DEPLOY_MODE EXACT_MAIN_CI_RUN_ID PUBLIC_ORIGIN
+  STAGING_DEPLOY_CHECKPOINT_STATE_FILE
   MIGRATION_DATABASE_URL DATABASE_URL CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
   OTEL_EXPORTER_OTLP_HEADERS SESSION_TOKEN_PEPPER CSRF_TOKEN_PEPPER
   BOOTSTRAP_ID_PEPPER RATE_LIMIT_HMAC_SECRET CURSOR_SIGNING_SECRET OPENAI_API_KEY
@@ -44,6 +45,7 @@ for name in "${required[@]}"; do
   [[ "${!name:-}" =~ [^[:space:]] ]] || fail
 done
 [[ "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]] || fail
+[[ "${GITHUB_ACTIONS}" == "true" ]] || fail
 [[ "${GITHUB_REPOSITORY}" == "fukamu/cycle" ]] || fail
 [[ "${GITHUB_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || fail
 [[ "${GITHUB_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]] || fail
@@ -87,6 +89,9 @@ current_main_sha="$(
     --jq '.object.sha'
 )"
 [[ "${current_main_sha}" =~ ^[0-9a-f]{40}$ && "${current_main_sha}" == "${COMMIT_SHA}" ]] || fail
+
+STAGING_DEPLOY_CHECKPOINT_OPERATION=mark_mutation_boundary \
+  node ./scripts/staging-deploy-retry-checkpoint.mjs
 
 (
   cd -- backend
