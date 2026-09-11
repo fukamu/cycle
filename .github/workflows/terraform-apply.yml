@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      artifact_id: ${{ steps.resolve.outputs.artifact_id }}
       artifact_name: ${{ steps.resolve.outputs.artifact_name }}
       commit_sha: ${{ steps.resolve.outputs.commit_sha }}
       plan_run_id: ${{ steps.resolve.outputs.plan_run_id }}
@@ -61,7 +62,7 @@ jobs:
             echo '::error::Terraform Apply actor and triggering actor must both match TERRAFORM_APPLY_APPROVER.'
             exit 1
           fi
-          if [[ ! "${PLAN_RUN_ID}" =~ ^[0-9]+$ ]]; then
+          if [[ ! "${PLAN_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::Plan workflow run ID must be numeric: ${PLAN_RUN_ID}"
             exit 1
           fi
@@ -115,18 +116,18 @@ jobs:
               -H 'Accept: application/vnd.github+json' \
               "/repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}/artifacts?per_page=100"
           )"
-          artifact_name="$(
+          artifact_record="$(
             jq -ser \
               --arg run_id "${PLAN_RUN_ID}" \
-              --arg prefix "terraform-plan-staging-" \
+              --arg expected_name "terraform-plan-staging-${plan_head_sha}-changes_present" \
               '
                 if (
                   length == 1 and
                   (.[0] | type) == "object" and
                   (.[0].total_count | type) == "number" and
                   (.[0].total_count | floor) == .[0].total_count and
-                  .[0].total_count >= 0 and
-                  (.[0].artifacts | type) == "array" and
+                    .[0].total_count == 1 and
+                    (.[0].artifacts | type) == "array" and
                   .[0].total_count == (.[0].artifacts | length) and
                   .[0].total_count <= 100 and
                   all(.[0].artifacts[];
@@ -146,13 +147,13 @@ jobs:
                     .[0].artifacts[]
                     | select(
                         .expired == false and
-                        (.name | startswith($prefix))
+                        .name == $expected_name
                       )
                   ] as $matches
                   | if ($matches | length) == 1 then
-                      $matches[0].name
+                      [($matches[0].id | tostring), $matches[0].name] | @tsv
                     else
-                      error("expected exactly one saved Terraform plan artifact")
+                      error("expected exactly one changes-present Terraform plan artifact")
                     end
                 else
                   error("invalid or paginated artifact response")
@@ -160,17 +161,12 @@ jobs:
               ' \
               <<< "${artifacts_json}"
           )"
-
-          commit_sha="${artifact_name#terraform-plan-staging-}"
-          if [[ ! "${commit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Plan artifact name does not contain a valid commit SHA: ${artifact_name}"
+          IFS=$'\t' read -r artifact_id artifact_name unexpected <<< "${artifact_record}"
+          if [[ ! "${artifact_id}" =~ ^[1-9][0-9]*$ || -n "${unexpected:-}" || "${artifact_name}" != "terraform-plan-staging-${plan_head_sha}-changes_present" ]]; then
+            echo '::error::Terraform Plan artifact resolution was invalid.'
             exit 1
           fi
-
-          if [[ "${commit_sha}" != "${plan_head_sha}" ]]; then
-            echo "::error::Plan artifact commit ${commit_sha} does not match workflow run head ${plan_head_sha}."
-            exit 1
-          fi
+          commit_sha="${plan_head_sha}"
           current_main_sha="$(
             gh api \
               -H 'Accept: application/vnd.github+json' \
@@ -183,6 +179,7 @@ jobs:
           fi
 
           {
+            echo "artifact_id=${artifact_id}"
             echo "artifact_name=${artifact_name}"
             echo "commit_sha=${commit_sha}"
             echo "plan_run_id=${PLAN_RUN_ID}"
@@ -200,6 +197,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_APPLY_R2_SECRET_ACCESS_KEY }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.TERRAFORM_CLOUDFLARE_API_TOKEN }}
       COMMIT_SHA: ${{ needs.preflight.outputs.commit_sha }}
+      PLAN_ARTIFACT_ID: ${{ needs.preflight.outputs.artifact_id }}
       PLAN_ARTIFACT_NAME: ${{ needs.preflight.outputs.artifact_name }}
       PLAN_RUN_ID: ${{ needs.preflight.outputs.plan_run_id }}
       R2_STATE_BUCKET: ${{ vars.TERRAFORM_R2_STATE_BUCKET }}
@@ -254,25 +252,32 @@ jobs:
           ref: ${{ env.COMMIT_SHA }}
           persist-credentials: false
 
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          runtime: node@24
+          install: false
+
       - name: Download approved saved plan
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ env.PLAN_ARTIFACT_NAME }}
-          path: infra/terraform/staging
+          path: ${{ runner.temp }}/fukamu-cycle-terraform-plan
           github-token: ${{ github.token }}
           run-id: ${{ env.PLAN_RUN_ID }}
 
       - name: Verify saved plan integrity and commit
-        working-directory: infra/terraform/staging
+        id: verify_plan
         shell: bash
+        env:
+          EXPECTED_COMMIT_SHA: ${{ env.COMMIT_SHA }}
+          EXPECTED_PLAN_RESULT: changes_present
+          EXPECTED_WORKFLOW_RUN_ID: ${{ env.PLAN_RUN_ID }}
+          TERRAFORM_EVIDENCE_DIRECTORY: ${{ runner.temp }}/fukamu-cycle-terraform-plan
+          TERRAFORM_EVIDENCE_OPERATION: verify_plan
         run: |
           set -euo pipefail
-          artifact_commit="$(tr -d '\r\n' < staging.tfplan.commit-sha)"
-          if [[ "${artifact_commit}" != "${COMMIT_SHA}" ]]; then
-            echo "::error::Saved plan commit ${artifact_commit} does not match approved commit ${COMMIT_SHA}."
-            exit 1
-          fi
-          sha256sum --check staging.tfplan.sha256
+          plan_sha256="$(node ./scripts/terraform-evidence.mjs)"
+          echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
 
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -323,7 +328,7 @@ jobs:
 
       - name: Apply approved saved plan
         working-directory: infra/terraform/staging
-        run: terraform apply -input=false -no-color staging.tfplan
+        run: terraform apply -input=false -no-color "${RUNNER_TEMP}/fukamu-cycle-terraform-plan/staging.tfplan"
 
       - name: Publish apply result
         working-directory: infra/terraform/staging
@@ -338,20 +343,27 @@ jobs:
             echo "- Turnstile site key (public): \`${sitekey}\`"
             echo "- State backup: \`${{ steps.state_recovery.outputs.state_backup_key }}\`"
             echo "- State backup checksum: \`${{ steps.state_recovery.outputs.state_backup_checksum_key }}\`"
-            echo "- Manually run \`Deploy Staging\` in \`normal\` mode with Apply workflow run ID \`${GITHUB_RUN_ID}\`."
+            echo "- Applied Plan checksum: \`${{ steps.verify_plan.outputs.plan_sha256 }}\`"
+            echo "- Manually run \`Deploy Staging\` in \`normal\` mode with infrastructure evidence run ID \`${GITHUB_RUN_ID}\`."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Write deployment metadata
         shell: bash
+        env:
+          PLAN_RUN_ID: ${{ env.PLAN_RUN_ID }}
+          TERRAFORM_APPLY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-terraform-apply/terraform-apply-evidence.json
+          TERRAFORM_EVIDENCE_OPERATION: write_apply
+          TERRAFORM_PLAN_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-terraform-plan/terraform-plan-evidence.json
         run: |
+          set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/fukamu-cycle-terraform-apply"
-          printf '%s\n' "${COMMIT_SHA}" > "${RUNNER_TEMP}/fukamu-cycle-terraform-apply/commit-sha"
+          node ./scripts/terraform-evidence.mjs
 
       - name: Upload deployment metadata
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: terraform-apply-staging-${{ env.COMMIT_SHA }}
-          path: ${{ runner.temp }}/fukamu-cycle-terraform-apply/commit-sha
+          path: ${{ runner.temp }}/fukamu-cycle-terraform-apply/terraform-apply-evidence.json
           if-no-files-found: error
           overwrite: true
           retention-days: 30
@@ -364,16 +376,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          artifact_id="$(
-            gh api \
-              -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}/artifacts?per_page=100" \
-              --jq ".artifacts[] | select(.name == \"${PLAN_ARTIFACT_NAME}\") | .id" \
-              | head -n 1
-          )"
-          if [[ -n "${artifact_id}" ]]; then
-            gh api \
-              --method DELETE \
-              -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
-          fi
+          [[ "${PLAN_ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          gh api \
+            --method DELETE \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PLAN_ARTIFACT_ID}"

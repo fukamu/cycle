@@ -14,6 +14,7 @@ import { serializeCloudflareDrainEvidence } from "./lib/cloudflare-drain-evidenc
 
 const maximumInputBytes = 16 * 1024;
 const commitSHAPattern = /^[0-9a-f]{40}$/;
+const digestPattern = /^[0-9a-f]{64}$/;
 const githubLoginPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const positiveIntegerPattern = /^[1-9][0-9]*$/;
 const releaseEvidenceKeys = Object.freeze([
@@ -24,7 +25,7 @@ const releaseEvidenceKeys = Object.freeze([
   "deployRunID",
   "deployRunAttempt",
   "deployMode",
-  "terraformApplyRunID",
+  "terraformEvidence",
   "exactMainCI",
   "cloudflareDrain",
 ]);
@@ -88,6 +89,14 @@ function parseBoundedJSON(raw) {
 }
 
 function validatedMetadata(env) {
+  const normalTerraformEvidence =
+    /^(?:no_changes_plan|applied_plan)$/.test(env.INFRA_EVIDENCE_KIND ?? "") &&
+    positiveIntegerPattern.test(env.INFRA_EVIDENCE_RUN_ID ?? "") &&
+    digestPattern.test(env.INFRA_PLAN_SHA256 ?? "");
+  const recoveryWithoutTerraformEvidence =
+    (env.INFRA_EVIDENCE_KIND ?? "") === "" &&
+    (env.INFRA_EVIDENCE_RUN_ID ?? "") === "" &&
+    (env.INFRA_PLAN_SHA256 ?? "") === "";
   if (
     !commitSHAPattern.test(env.COMMIT_SHA ?? "") ||
     !githubLoginPattern.test(env.GITHUB_ACTOR ?? "") ||
@@ -96,9 +105,8 @@ function validatedMetadata(env) {
     !positiveIntegerPattern.test(env.EXACT_MAIN_CI_RUN_ID ?? "") ||
     !/^(?:normal|recovery)$/.test(env.DEPLOY_MODE ?? "") ||
     !(
-      (env.DEPLOY_MODE === "normal" &&
-        positiveIntegerPattern.test(env.APPLY_RUN_ID ?? "")) ||
-      (env.DEPLOY_MODE === "recovery" && (env.APPLY_RUN_ID ?? "") === "")
+      (env.DEPLOY_MODE === "normal" && normalTerraformEvidence) ||
+      (env.DEPLOY_MODE === "recovery" && recoveryWithoutTerraformEvidence)
     )
   ) {
     fail();
@@ -109,7 +117,14 @@ function validatedMetadata(env) {
     deployRunID: env.GITHUB_RUN_ID,
     deployRunAttempt: env.GITHUB_RUN_ATTEMPT,
     deployMode: env.DEPLOY_MODE,
-    terraformApplyRunID: env.DEPLOY_MODE === "normal" ? env.APPLY_RUN_ID : null,
+    terraformEvidence:
+      env.DEPLOY_MODE === "normal"
+        ? {
+            kind: env.INFRA_EVIDENCE_KIND,
+            workflowRunID: env.INFRA_EVIDENCE_RUN_ID,
+            planSHA256: env.INFRA_PLAN_SHA256,
+          }
+        : null,
     exactMainCIWorkflowRunID: env.EXACT_MAIN_CI_RUN_ID,
   };
 }
@@ -134,7 +149,7 @@ function validatePendingEvidence(value, metadata) {
     value.deployRunID !== metadata.deployRunID ||
     value.deployRunAttempt !== metadata.deployRunAttempt ||
     value.deployMode !== metadata.deployMode ||
-    value.terraformApplyRunID !== metadata.terraformApplyRunID ||
+    !terraformEvidenceMatches(value.terraformEvidence, metadata) ||
     !hasOnlyKeys(value.exactMainCI, ["commitSHA", "result", "workflowRunID"]) ||
     value.exactMainCI.commitSHA !== metadata.commitSHA ||
     value.exactMainCI.result !== "verified" ||
@@ -144,6 +159,16 @@ function validatePendingEvidence(value, metadata) {
   }
   validateDrainEvidence(value.cloudflareDrain, metadata.commitSHA);
   return value;
+}
+
+function terraformEvidenceMatches(value, metadata) {
+  if (metadata.terraformEvidence === null) return value === null;
+  return (
+    hasOnlyKeys(value, ["kind", "workflowRunID", "planSHA256"]) &&
+    value.kind === metadata.terraformEvidence.kind &&
+    value.workflowRunID === metadata.terraformEvidence.workflowRunID &&
+    value.planSHA256 === metadata.terraformEvidence.planSHA256
+  );
 }
 
 function buildReleaseEvidence(result, metadata, cloudflareDrain) {
@@ -173,6 +198,9 @@ function formatSummary(releaseEvidence) {
     `| Exact-main CI | ${releaseEvidence.exactMainCI.result} |`,
     `| Exact-main CI workflow run | \`${releaseEvidence.exactMainCI.workflowRunID}\` |`,
     `| Deploy mode | ${releaseEvidence.deployMode} |`,
+    `| Terraform evidence | ${releaseEvidence.terraformEvidence?.kind ?? "recovery"} |`,
+    `| Terraform evidence workflow run | \`${releaseEvidence.terraformEvidence?.workflowRunID ?? "not_applicable"}\` |`,
+    `| Terraform Plan checksum | \`${releaseEvidence.terraformEvidence?.planSHA256 ?? "not_applicable"}\` |`,
     `| Deploy operator | \`${releaseEvidence.operator}\` |`,
     `| Worker version | \`${drainEvidence.workerVersionId}\` |`,
     `| Drained Worker version | \`${drainEvidence.drainedWorkerVersionId}\` |`,

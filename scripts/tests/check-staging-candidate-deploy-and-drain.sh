@@ -85,6 +85,10 @@ commit_sha="$(printf 'a%.0s' {1..40})"
 run_child() {
   local main_sha="$1"
   local pnpm_fail="$2"
+  local deploy_mode="${3-normal}"
+  local infra_evidence_kind="${4-no_changes_plan}"
+  local infra_evidence_run_id="${5-456}"
+  local infra_plan_sha256="${6-$(printf '3%.0s' {1..64})}"
   env -i \
     PATH="${fake_bin}:/usr/bin:/bin" \
     TEST_COMMAND_LOG="${log}" \
@@ -99,8 +103,10 @@ run_child() {
     COMMIT_SHA="${commit_sha}" \
     FAKE_MAIN_SHA="${main_sha}" \
     FAKE_PNPM_FAIL="${pnpm_fail}" \
-    DEPLOY_MODE=normal \
-    APPLY_RUN_ID=456 \
+    DEPLOY_MODE="${deploy_mode}" \
+    INFRA_EVIDENCE_KIND="${infra_evidence_kind}" \
+    INFRA_EVIDENCE_RUN_ID="${infra_evidence_run_id}" \
+    INFRA_PLAN_SHA256="${infra_plan_sha256}" \
     PUBLIC_ORIGIN=https://cycle.staging.fukamu.matoruru.com \
     MIGRATION_DATABASE_URL=migration-private-value \
     DATABASE_URL=runtime-database-private-value \
@@ -150,6 +156,20 @@ for private_value in github-private-value migration-private-value runtime-databa
 done
 
 rm -f -- "${runner_temp}/fukamu-cycle-stable-csrf-rollout-drained.json"
+: >"${log}"
+run_child "${commit_sha}" 0 recovery '' '' '' >"${output}" 2>&1 \
+  || fail "candidate deploy/drain wrapper rejected the valid recovery fixture"
+[[ "$(cat "${log}")" == $'drain-start\ngh\nmigrate\ngh\nmaterialize\ndeploy\ndrain-ack\nwriter' ]] \
+  || fail "candidate deploy/drain recovery command order changed"
+
+rm -f -- "${runner_temp}/fukamu-cycle-stable-csrf-rollout-drained.json"
+: >"${log}"
+if run_child "${commit_sha}" 0 normal changes_present 456 "$(printf '3%.0s' {1..64})" >"${output}" 2>&1; then
+  fail "candidate deploy/drain accepted an invalid Terraform evidence kind"
+fi
+[[ ! -s "${log}" ]] \
+  || fail "invalid Terraform evidence reached a deployment operation"
+
 : >"${log}"
 if run_child "$(printf 'c%.0s' {1..40})" 0 >"${output}" 2>&1; then
   fail "candidate deploy/drain accepted stale main"

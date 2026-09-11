@@ -2143,7 +2143,7 @@ test_config_gate() {
   # shellcheck disable=SC2016 # GitHub expression is an intentional workflow fixture literal.
   replace_exact_line_after_marker \
     "${fixture}/.github/workflows/deploy.yml" \
-    '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' \
+    '  deploy:' \
     '          ref: ${{ env.COMMIT_SHA }}' \
     '          ref: main'
   assert_failure_contains "deployment checkout ref drift" \
@@ -2259,10 +2259,12 @@ test_config_gate() {
 
   fixture="$(new_config_fixture checkout-app-secret)"
   # shellcheck disable=SC2016 # GitHub expression is an intentional fixture literal.
-  insert_after_exact_line \
+  replace_exact_line_after_marker \
     "${fixture}/.github/workflows/deploy.yml" \
+    '  deploy:' \
     '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' \
-    $'        env:
+    $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}'
   assert_failure_contains "checkout application secret exposure" \
     "deployment checkout step" \

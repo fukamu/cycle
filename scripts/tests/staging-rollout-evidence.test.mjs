@@ -5,6 +5,7 @@ import { materializeStagingWorkerSecrets } from "../materialize-staging-worker-s
 import { writeStagingRolloutEvidence } from "../write-staging-rollout-evidence.mjs";
 
 const commitSHA = "a".repeat(40);
+const planSHA256 = "3".repeat(64);
 const safeDrainEvidence = Object.freeze({
   result: "drained",
   commitSHA,
@@ -96,7 +97,9 @@ function normalEnvironment(overrides = {}) {
     GITHUB_RUN_ATTEMPT: "2",
     EXACT_MAIN_CI_RUN_ID: "789",
     DEPLOY_MODE: "normal",
-    APPLY_RUN_ID: "456",
+    INFRA_EVIDENCE_KIND: "no_changes_plan",
+    INFRA_EVIDENCE_RUN_ID: "456",
+    INFRA_PLAN_SHA256: planSHA256,
     ...overrides,
   };
 }
@@ -129,7 +132,7 @@ test("records drain as smoke-pending with only release-safe metadata", () => {
       deployRunID: record.deployRunID,
       deployRunAttempt: record.deployRunAttempt,
       deployMode: record.deployMode,
-      terraformApplyRunID: record.terraformApplyRunID,
+      terraformEvidence: record.terraformEvidence,
       exactMainCI: record.exactMainCI,
     },
     {
@@ -140,7 +143,11 @@ test("records drain as smoke-pending with only release-safe metadata", () => {
       deployRunID: "123",
       deployRunAttempt: "2",
       deployMode: "normal",
-      terraformApplyRunID: "456",
+      terraformEvidence: {
+        kind: "no_changes_plan",
+        workflowRunID: "456",
+        planSHA256,
+      },
       exactMainCI: {
         commitSHA,
         result: "verified",
@@ -178,7 +185,7 @@ test("records drain as smoke-pending with only release-safe metadata", () => {
         env: {
           ...environment,
           DEPLOY_MODE: "recovery",
-          APPLY_RUN_ID: "456",
+          INFRA_EVIDENCE_KIND: "applied_plan",
         },
         readInput: () => JSON.stringify(safeDrainEvidence),
         writeFile: () => undefined,
@@ -186,6 +193,28 @@ test("records drain as smoke-pending with only release-safe metadata", () => {
       }),
     /evidence write failed/,
   );
+});
+
+test("accepts applied Plan evidence and rejects malformed Terraform metadata", () => {
+  const { record } = writePending(
+    normalEnvironment({ INFRA_EVIDENCE_KIND: "applied_plan" }),
+  );
+  assert.deepEqual(record.terraformEvidence, {
+    kind: "applied_plan",
+    workflowRunID: "456",
+    planSHA256,
+  });
+
+  for (const override of [
+    { INFRA_EVIDENCE_KIND: "changes_present" },
+    { INFRA_EVIDENCE_RUN_ID: "0" },
+    { INFRA_PLAN_SHA256: "not-a-checksum" },
+  ]) {
+    assert.throws(
+      () => writePending(normalEnvironment(override)),
+      /evidence write failed/,
+    );
+  }
 });
 
 test("finalizes a matching pending checkpoint in a distinct file", () => {
@@ -234,7 +263,9 @@ test("finalizes a matching pending checkpoint in a distinct file", () => {
 test("finalizes a matching recovery checkpoint without an apply run", () => {
   const pendingEnvironment = normalEnvironment({
     DEPLOY_MODE: "recovery",
-    APPLY_RUN_ID: "",
+    INFRA_EVIDENCE_KIND: "",
+    INFRA_EVIDENCE_RUN_ID: "",
+    INFRA_PLAN_SHA256: "",
   });
   const { record: pendingRecord } = writePending(pendingEnvironment);
   const files = [];
@@ -254,7 +285,7 @@ test("finalizes a matching recovery checkpoint without an apply run", () => {
   const finalRecord = JSON.parse(files[0][1]);
   assert.equal(finalRecord.result, "smoke_passed");
   assert.equal(finalRecord.deployMode, "recovery");
-  assert.equal(finalRecord.terraformApplyRunID, null);
+  assert.equal(finalRecord.terraformEvidence, null);
 });
 
 test("fails closed when pending checkpoint metadata does not match the run", () => {
@@ -269,8 +300,14 @@ test("fails closed when pending checkpoint metadata does not match the run", () 
     { operator: "another-operator" },
     { deployRunID: "999" },
     { deployRunAttempt: "3" },
-    { deployMode: "recovery", terraformApplyRunID: null },
-    { terraformApplyRunID: "999" },
+    { deployMode: "recovery", terraformEvidence: null },
+    {
+      terraformEvidence: {
+        kind: "applied_plan",
+        workflowRunID: "999",
+        planSHA256,
+      },
+    },
     {
       exactMainCI: {
         commitSHA: "b".repeat(40),
