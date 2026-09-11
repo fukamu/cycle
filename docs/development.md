@@ -379,7 +379,7 @@ go run ./cmd/server
 ./scripts/check.sh
 ```
 
-実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate/cleanup/configcheck build、Bash syntax/ShellCheck 0.11.0/shfmt 3.13.1/script test、文書・設定contract、security scan、Dockerローカル実機Composeの構文確認、Docker build context監査、Terraform 1.15.8 exactのformat/init/validate、Wrangler config/typecheck/dry-runです。`go test ./...`は`kpireport` commandもcompileし、`TEST_DATABASE_URL`が未設定ならその実PostgreSQL integration testをskipします。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
+実行内容はFrontendのformat check、lint、typecheck、unit test、build、Backendのsqlc差分確認、gofmt、vet、test、server/migrate/cleanup/configcheck build、Bash syntax/ShellCheck 0.11.0/shfmt 3.13.1、文書・設定contract、security scan、Dockerローカル実機Composeの構文確認、Docker build context監査、Terraform 1.15.8 exactのformat/init/validate、Wrangler config/typecheck/dry-runです。Gate / CI control-planeの負例suiteは変更分類に応じて実行します。`go test ./...`は`kpireport` commandもcompileし、`TEST_DATABASE_URL`が未設定ならその実PostgreSQL integration testをskipします。Terraform validateは`.tmp/terraform-check`の専用`TF_DATA_DIR`とcredential不要の`backend=false` initializationを使い、localで初期化済みのR2 backend設定を再利用しません。
 
 Frontend、Backend、Infrastructureだけを確認できます。
 
@@ -416,6 +416,14 @@ Docker build context監査だけを単独で実行する場合は、次を使い
 
 文書gateはRepository内のMarkdownについてfence、reference definition、実際にparseされたlink/image、local file/heading anchorを検査し、固定した`markdown-it` 15.0.0と`github-slugger` 2.0.0でCommonMark構文とGitHub heading anchorを解釈し、固定した`mermaid` 11.16.1でMermaid fenceを構文解析します。CommonMark上の未定義reference-like表記はlinkではなくliteralとして扱います。Markdown fileとlocal link pathのsymlinkは禁止し、外部URLはnetworkへ接続せず対象外にします。Configuration parity gateは[`deployment-contract.json`](../config/deployment-contract.json)を基準に、Backend typed config、canonicalなGo環境package importと直接環境参照の明示allowlist、`.env.example`、[`environment.md`](environment.md)、Worker/Container handoff、Wrangler、Frontendのproduction `import.meta.env` consumerと`VITE_DEPLOYMENT_ENV` build-config配線、deploy workflowのkeyと分類が一致することを検査します。Deployではresolve/CI確認からsecret cleanup・smoke testまでのjob/step列、migration-before-deploy、必要stepだけへのsecret公開も完全一致で検査します。
 
+Gate / CI control-planeの負例suiteだけを現在の変更へ適用する場合は、次を使います。
+
+```bash
+./scripts/check-control-plane-fixtures.sh --working-tree
+```
+
+この分類器は`.github/`、`.fukamu/`、`scripts/`、`config/`、`infra/`、package / lock / build / test設定など、gateの判定・実行方法を変え得るpathでは`scripts/tests/run.sh`を実行します。既知のFrontend / Backend / Cloudflare application codeと文書だけからなる変更では、この大規模な負例suiteを省略します。未知path、空の変更inventory、rename / copy / file type変更、100件超、非canonical path、SHA・Git object・ancestor関係・inventoryを確定できない場合は省略せずsuite実行へ倒します。これはapplication自体のformat、lint、typecheck、unit / integration / E2E、build、security、文書、設定、infrastructure checkを省略する分類ではありません。
+
 Security profileだけを実行する場合は、次を使います。
 
 ```bash
@@ -428,7 +436,7 @@ Repositoryを読むGit commandはambient環境とglobal/system configを除去�
 
 Registry packageが脆弱なtransitive dependencyをexact pinし、修正版を含む上流releaseがまだない場合だけ、`pnpm-workspace.yaml`の`overrides`でreview済みの親package・親version・対象dependencyに限定して修正版をexact pinできます。追加・変更時は対象edgeとversionをNode policyのallowlistおよびnegative fixtureへ同時に反映し、lockfile audit、依存元packageのtest / build / dry-run、全commit前gateを通します。上流が修正版を採用したらoverrideを削除し、通常のdependency graphへ戻します。
 
-Gate内では、固定container imageがHostにない場合、そのimage refだけをcontainer registryへ問い合わせて取得することがあります。この前提runtime取得ではRepository内容を送信しません。その後、すべてのfull-history/staged/current-tree secret viewを、Repository由来のpackage/module metadataを送るdependency install、advisory lookup、scanner database/tool取得、candidate command、production image buildより先に完了します。Node auditはregistryをCLIで`https://registry.npmjs.org/`へ固定してpnpm hookを無効化し、Go scannerも上記の隔離環境を使います。Git管理外でignore済みの`.env`やcredential fileは読みません。CI quality jobの依存導入は`--ignore-scripts`で行い、直後にtracked/index/untracked candidate treeが不変であることを確認してから各quality gateを実行します。`scripts/tests/check-security.sh`はsecret、IaC、Node/Go vulnerability、Go static analysis、container vulnerabilityの負例を実行時に一時生成し、各scannerが期待classで失敗することとsecretが出力されないことを検証します。これらの負例は標準のBash script test、全体check、Commit前gate、CI quality jobから実行されます。M25で導入したscanner/toolはここで固定します。既存GitHub Actionのcommit SHA、production base imageを含む全image digest、Dependabot更新経路の包括的な固定はM28の責務です。
+Gate内では、固定container imageがHostにない場合、そのimage refだけをcontainer registryへ問い合わせて取得することがあります。この前提runtime取得ではRepository内容を送信しません。その後、すべてのfull-history/staged/current-tree secret viewを、Repository由来のpackage/module metadataを送るdependency install、advisory lookup、scanner database/tool取得、candidate command、production image buildより先に完了します。Node auditはregistryをCLIで`https://registry.npmjs.org/`へ固定してpnpm hookを無効化し、Go scannerも上記の隔離環境を使います。Git管理外でignore済みの`.env`やcredential fileは読みません。CI quality jobの依存導入は`--ignore-scripts`で行い、直後にtracked/index/untracked candidate treeが不変であることを確認してから各quality gateを実行します。`scripts/tests/check-security.sh`はsecret、IaC、Node/Go vulnerability、Go static analysis、container vulnerabilityの負例を実行時に一時生成し、各scannerが期待classで失敗することとsecretが出力されないことを検証します。これらの負例はgate / control-plane変更または分類不能時に、上記の分類器を通じて全体check、Commit前gate、CI quality jobから実行されます。通常のapplication変更でも本体security profileは省略しません。M25で導入したscanner/toolはここで固定します。既存GitHub Actionのcommit SHA、production base imageを含む全image digest、Dependabot更新経路の包括的な固定はM28の責務です。
 
 Backend integration testには、消去してよい専用DBだけを指定してください。テストはschema内のapplication tableをdown/up migrationで作り直します。開発DBやproduction DBを指定してはいけません。
 
@@ -459,7 +467,7 @@ Localから日常的に実行せず、Production originやProduction dataへ向�
 
 ### Stable CSRF initial rollout fixtures
 
-初回rolloutのlive手順は[`operations.md`](operations.md#session-bound-stable-csrf-v1-release)を正本とし、LocalからStagingへ向けて実行しません。Cloudflare API、Browser process、fixed deploy child、safe evidenceの境界は外部credentialを使わない次のfixtureで確認できます。全体checkとCommit前gateにも含まれます。
+初回rolloutのlive手順は[`operations.md`](operations.md#session-bound-stable-csrf-v1-release)を正本とし、LocalからStagingへ向けて実行しません。Cloudflare API、Browser process、fixed deploy child、safe evidenceの境界は外部credentialを使わない次のfixtureで確認できます。Rollout / gate / control-planeに関係する変更では、上記分類器を通じて全体checkとCommit前gateにも含まれます。
 
 ```bash
 node --test scripts/tests/cloudflare-drain-evidence.test.mjs
@@ -471,14 +479,14 @@ bash scripts/tests/check-staging-candidate-deploy-and-drain.sh
 
 ### Commit前の必須gate
 
-Commitへ含める変更をすべてstageし、unstaged/untracked fileがない状態で次を実行します。この1コマンドはNode/pnpm/Go/Terraformの標準version、frozen lockfile install、CI再利用・権限modelのnegative fixture、actionlint 1.7.12、文書・設定・securityを含む全scopeの品質check、CI設定のPlaywright E2Eを検証します。sqlc生成物は、検証開始時点から`sqlc generate`後に差分が増えないことも確認します。
+Commitへ含める変更をすべてstageし、unstaged/untracked fileがない状態で次を実行します。この1コマンドは最初にfull security profileを固定したstaged treeへ1回だけ実行し、続いて`check.sh`と共通のsource-only内部runnerで残りの全scope checkとPlaywright E2Eを実行します。Node/pnpm/Go/Terraformの標準version、frozen lockfile install、actionlint 1.7.12、文書・設定を含む品質checkも検証します。CI再利用・権限model等の大規模negative fixtureはgate / control-plane変更または保守的に分類できない場合に実行し、既知のapplication-only変更では省略します。sqlc生成物は、検証開始時点から`sqlc generate`後に差分が増えないことも確認します。
 
 ```bash
 export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable'
 ./scripts/check-before-commit.sh
 ```
 
-このgateが成功しない限りcommitしてはいけません。成功後にindexまたはworking treeを変更した場合は、その変更をstageして全gateを再実行します。成功messageに表示されたstaged treeだけを、そのままcommitしてください。GitHub-hosted runner固有の障害はローカルから排除できませんが、repository内容に対するCIの検証commandとE2E suiteはこのgateで先に実行されます。
+`check-before-commit.sh`は開始時、Security直後、依存導入後、全check後にindex / working tree / untracked fileを再確認し、固定したstaged treeからの通常のdriftや誤操作をfail-closedに検出します。Security後は同じsource-only内部runnerを直接呼ぶため、full security profileを重複実行しません。このrunner単体は公開gateではなく、`check.sh`の公開CLIは全scope checkで常にfull security profileを実行します。Local gateはworktreeとOS accountの分離を前提とし、同じOS userが検査の瞬間だけ悪意をもって内容を差し替える攻撃までは扱いません。このgateが成功しない限りcommitしてはいけません。成功後にindexまたはworking treeを変更した場合は、その変更をstageして全gateを再実行します。成功messageに表示されたstaged treeだけを、そのままcommitしてください。GitHub-hosted runner固有の障害はローカルから排除できませんが、repository内容に対するCIの検証commandとE2E suiteはこのgateで先に実行されます。
 
 ### 性能変更の確認
 
@@ -512,7 +520,7 @@ Workflowで利用する公式Actionは、特別な互換性制約がない限り
 
 Pull request CIはGitHubのmerge refをcheckoutして全checkを実行し、成功時にPR番号、head SHA、検証commit、検証tree SHA、workflow run IDの5項目だけを含むattestationを30日保持のartifactへ保存します。mainの`CI` workflowは、マージ後commitに対応するPR、同一head SHAの成功したPR CI、canonical job一式の期待結果（attestation成功とreuse jobのskipを含む）、artifact APIがexact nameの未期限切れartifactを正確に1件だけ返すこと、検証済みtreeとmain treeの完全一致を確認できた場合だけ重いjobをskipします。PR workflow runの関連PRが非空なら対象PR番号だけのexact listを要求します。Head branch自動削除後などに関連PRが空の場合だけhead commitの関連PRを追加照会し、対象PRが唯一で、merge commit、head SHA/ref、base branchまで一致した場合に限り後続の検証へ進みます。Artifactは展開せず、archive全体を16 KiB以下、compressionをstoredまたはdeflate、entryをregular fileの`attestation.txt` 1個、payloadを4 KiB以下へ制限し、実sizeとCRCを照合します。そのうえで5行payloadがPR、head、tree、runと一致し、検証commitが40文字のlowercase SHAであることまで確認します。判定job自体がmain SHAの成功CIとなるため、Terraform PlanとDeployの同一SHA gateは維持されます。
 
-CI全体の既定権限は`contents: read`だけです。GitHub APIで再利用可否を判定するmain push専用jobだけに`actions: read`と`pull-requests: read`を追加し、Pull requestのcodeを実行するjobへ渡しません。全checkoutはcredential永続化を無効にし、Git全履歴が必要なquality jobだけ`fetch-depth: 0`を指定します。Quality jobが失敗またはskipされたtreeではE2Eの成功証明を作りません。全CI jobとDeployのdependency installはlifecycle scriptを無効化し、直後のtracked/index/untracked tree不変確認を通過してから候補commandを実行します。Functional jobのrunner、PostgreSQL service、job環境、必須step/command列も完全一致とし、step skip、failure許容shell、`BASH_ENV`、self-hosted差替えを拒否します。この権限・依存関係は`./scripts/tests/check-ci-security-model.sh`の破壊fixtureで固定します。
+CI全体の既定権限は`contents: read`だけです。GitHub APIで再利用可否を判定するmain push専用jobだけに`actions: read`と`pull-requests: read`を追加し、Pull requestのcodeを実行するjobへ渡しません。全checkoutはcredential永続化を無効にし、Git全履歴が必要なquality jobだけ`fetch-depth: 0`を指定します。Full CIが必要なときはworkflow、quality、frontend、backend、infrastructure、E2Eを再利用判定後に並列開始し、`Attest tested PR tree`だけが全jobのsuccessを待って検証済みtreeを証明します。したがってquality失敗またはskipを他jobの成功で隠さず、required contextとPR-tree attestationを維持したまま待ち時間を短縮します。全CI jobとDeployのdependency installはlifecycle scriptを無効化し、直後のtracked/index/untracked tree不変確認を通過してから候補commandを実行します。Functional jobのrunner、PostgreSQL service、job環境、必須step/command列も完全一致とし、step skip、failure許容shell、`BASH_ENV`、self-hosted差替えを拒否します。この権限・依存関係は`./scripts/tests/check-ci-security-model.sh`の破壊fixtureで固定します。
 
 Manual Terraform PlanとDeployはAPI応答のschemaと非paginationをfail-closedに確認し、同一repository・main・commitのexactな`CI` workflow path/nameを持つcompleted/success `push` runだけを受け入れます。PR run、forkの`main` branch、別workflow、曖昧または101件以上の応答は成功CIとして扱いません。
 

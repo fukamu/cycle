@@ -30,10 +30,8 @@ require_command git
 
 cd -- "${repo_root}"
 
-# The complete local repository guard and every secret view run before host Git
-# inspects candidate diffs or any candidate-selected tool contacts the network.
-bash ./scripts/check-security.sh
-
+# Freeze a complete, quiet staged inventory before security. Candidate content
+# is not printed, formatted, or passed to dependency tooling in this phase.
 staged_diff_status=0
 trusted_git diff --no-ext-diff --no-textconv --cached --quiet -- || staged_diff_status=$?
 case "${staged_diff_status}" in
@@ -50,6 +48,32 @@ untracked_files="$(trusted_git ls-files --others --exclude-standard)"
 
 candidate_tree="$(trusted_git write-tree)"
 
+assert_candidate_state() {
+  local phase="$1"
+  local observed_tree
+  local confirmed_tree
+  local untracked_files
+
+  observed_tree="$(trusted_git write-tree)"
+  [[ "${observed_tree}" == "${candidate_tree}" ]] \
+    || die "The staged tree changed ${phase}."
+  trusted_git diff --no-ext-diff --no-textconv --quiet -- \
+    || die "Unstaged tracked changes appeared ${phase}."
+  untracked_files="$(trusted_git ls-files --others --exclude-standard)"
+  [[ -z "${untracked_files}" ]] \
+    || die "Untracked files appeared ${phase}."
+  confirmed_tree="$(trusted_git write-tree)"
+  [[ "${confirmed_tree}" == "${candidate_tree}" ]] \
+    || die "The staged tree changed while confirming it ${phase}."
+}
+
+# Run the full security profile exactly once, before printable diagnostics,
+# candidate-selected tool probes, dependency access, or candidate commands.
+bash ./scripts/check-security.sh
+assert_candidate_state "while the security profile was running"
+# shellcheck source=scripts/lib/check-runner.sh
+source "${script_dir}/lib/check-runner.sh"
+
 trusted_git diff --no-ext-diff --no-textconv --check
 trusted_git diff --no-ext-diff --no-textconv --cached --check
 
@@ -61,32 +85,20 @@ require_local_docker_context >/dev/null
 require_disposable_test_database_url "${TEST_DATABASE_URL:-}"
 
 pnpm install --frozen-lockfile --ignore-scripts
-trusted_git diff --no-ext-diff --no-textconv --quiet -- \
-  || die "Dependency installation changed tracked files."
-installed_tree="$(trusted_git write-tree)"
-[[ "${installed_tree}" == "${candidate_tree}" ]] \
-  || die "Dependency installation changed the staged tree."
-untracked_files="$(trusted_git ls-files --others --exclude-standard)"
-[[ -z "${untracked_files}" ]] \
-  || die "Dependency installation created untracked files."
+assert_candidate_state "while dependencies were being installed"
 bash .github/scripts/resolve-ci-reuse.test.sh
 docker run --rm \
   --volume "${repo_root}:/repo:ro" \
   --workdir /repo \
   "${SUPPLY_CHAIN_ACTIONLINT_IMAGE}" \
   -color
-CI=true "${script_dir}/check.sh" --e2e
+CI=true run_cycle_checks_after_security \
+  "${repo_root}" "${script_dir}" all true
 
 trusted_git diff --no-ext-diff --no-textconv --check
 trusted_git diff --no-ext-diff --no-textconv --cached --check
-trusted_git diff --no-ext-diff --no-textconv --quiet -- \
-  || die "Checks changed tracked files. Review and stage the changes, then rerun the complete commit gate."
-untracked_files="$(trusted_git ls-files --others --exclude-standard)"
-[[ -z "${untracked_files}" ]] \
-  || die "Checks created untracked files. Review them, then rerun the complete commit gate: ${untracked_files//$'\n'/, }"
-validated_tree="$(trusted_git write-tree)"
-[[ "${validated_tree}" == "${candidate_tree}" ]] \
-  || die "The staged tree changed during checks. Rerun the complete commit gate."
+assert_candidate_state "while checks were running"
+validated_tree="${candidate_tree}"
 
 printf 'Commit checks passed for staged tree %s. Commit without changing the index or working tree.\n' \
   "${validated_tree}"
