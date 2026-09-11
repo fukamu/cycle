@@ -194,8 +194,8 @@ configured approver / dispatch input / exact main SHA / CI / Apply evidence chec
 -> staging Environment approval
 -> staging Chromium install
 -> frontend build
--> 現在配信中Stagingのpre-switch baseline + 公開account cleanup
--> 同じBrowser processでlegacy Sessionを二度取得し、同一Userでtokenが変化することをmutation前に確認
+-> 現在配信中Stagingの/healthz + /readyz blocking preflight
+-> 同じBrowser processで一度だけanonymous bootstrapし、legacy Sessionを二度取得して、同一Userでtokenが変化することをmutation前に確認
 -> Cloudflare Worker / Container baseline取得
 -> Neon direct URLでmigration
 -> ephemeral secrets file作成
@@ -209,7 +209,9 @@ configured approver / dispatch input / exact main SHA / CI / Apply evidence chec
 -> 公開account-delete APIでaccount cleanup
 ```
 
-Pre-switch baselineはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへfresh Browser Contextで`/healthz`、`/readyz`、Admission off / closedのentry、Turnstile anonymous bootstrap、session discovery、公開account delete、削除後session 401を確認します。Candidateの`BETA_ADMISSION_MODE`を現在配信中revisionへ適用せず`auto`でentryし、現在がclosedでcandidateがoffへ変わる場合も非個人Inviteをprocess memory内だけで使用します。Post-deploy full journeyだけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。失敗またはcleanup未確認では後続の変更処理へ進みません。Migration失敗時もWrangler deployへ進みません。`Deploy Staging`はrun attempt 1だけを許可し、child開始前の失敗でもworkflow rerunではなく、原因と前attemptを確認して新しいmanual dispatchを作成します。Recovery modeはApplication authorization boundaryであり、stable初回rolloutのpartial resumeやsmoke bypassには使いません。
+Generic pre-switch hard gateはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへ`/healthz`と`/readyz`だけを確認します。Stable CSRF初回rolloutでは#139の同一Browser process / ContextだけがAdmission off / closedの自動判定、Turnstile anonymous bootstrap、legacy Sessionを所有します。同じDeploy runでgeneric anonymous journeyを先行させるとTurnstile / anonymous-create rate-limitを自己消費し得るため、manual `baseline` diagnosticは実行しません。#139のpre-mutation evidenceが失敗した場合はrelease mutationへ進まず、post-deploy smokeまたはaccount cleanupが失敗した場合はreleaseを成功としません。
+
+Post-deploy `full`だけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。Candidate critical journeyまたはcleanupの失敗ではreleaseを成功としません。Migration失敗時もWrangler deployへ進みません。`Deploy Staging`はrun attempt 1だけを許可し、child開始前の失敗でもworkflow rerunではなく、原因と前attemptを確認して新しいmanual dispatchを作成します。Recovery modeはApplication authorization boundaryであり、stable初回rolloutのpartial resumeやsmoke bypassには使いません。
 
 Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し、CloudflareがDNS recordとcertificateを管理します。同名recordがある場合は所有用途を確認し、不要と確認できたrecordだけをDashboardから除去します。`workers.dev`とpreview URLは無効のまま維持します。
 
@@ -328,11 +330,13 @@ OTLP failureでは固定error classと集約`failure_count`だけを確認し、
 
 ## Staging critical journey cleanup
 
-`Deploy Staging`のpre-switch baselineとpost-deploy full journeyは、それぞれrepository / run ID / commit / modeから同一runで安定する別のUUIDv7 bootstrap IDを作り、Raw IDを表示しません。各検証でBrowserを閉じてsessionを更新し、CSRF、expected-user binding、`{"confirmed":true}`を使う公開`DELETE /api/v1/account`だけでcleanupします。204とresponse identityを確認するまで1、2、4、8、16秒backoffで再試行し、最後に`GET /api/v1/session`が401であることを確認します。
+`baseline`は現在配信中StagingのAdmission entry、Turnstile anonymous bootstrap、session discovery、公開account cleanupを別のoperator調査runで確認するnon-blocking diagnosticです。検出した失敗はwarning annotationとnon-zero exitで調査run自体へ通知しますが、Deploy workflowに接続しないためcandidate releaseをblockしません。Stable CSRF初回rolloutが存続する間はDeploy workflowから自動実行せず、日常monitorにも使いません。実行する場合は前のlive runとanonymous bootstrap TTL / rate-limitを確認し、候補releaseの合否判定や#139 gateの代替にせず、[`development.md`](development.md#staging-pre-switch-baseline--post-deploy-critical-journey)のsecret注入境界に従います。`full`はcandidate-publicのblocking post-deploy journeyです。
 
-失敗annotationはclosed enumの`phase` / `reason`とGitHub run ID / attempt / commit SHAだけを記録します。`phase`は`configuration`、`browser_launch`、`health`、`readiness`、`bootstrap_seed`、`entry`、`session_discovery`、`goal_creation`、`cycle_editing`、`cycle_completion`、`review_transition`、`history_verification`、`account_delete`、`cleanup_verification`のいずれかです。`reason`は`entry_cta_timeout`、`anonymous_session_not_observed`、`unexpected_status`、`session_discovery_failed`、`account_delete_failed`、`cleanup_unverified`のいずれかです。任意の例外message、URL query / fragment、token / cookie、account ID、email、本文、response body、screenshot、trace、video、profile、storage stateを記録しません。
+`baseline`と`full`はrepository / run ID / candidate commit / modeから同一runで安定する別のUUIDv7 bootstrap IDを作り、Raw IDを表示しません。各検証でBrowserを閉じてsessionを更新し、CSRF、expected-user binding、`{"confirmed":true}`を使う公開`DELETE /api/v1/account`だけでcleanupします。204とresponse identityを確認するまで1、2、4、8、16秒backoffで再試行し、最後に`GET /api/v1/session`が401であることを確認します。
 
-1. Stable rollout child開始前のpre-switch baseline失敗は、`ANONYMOUS_BOOTSTRAP_TTL_MINUTES`内でもworkflow rerunせず、cleanup状況と前attemptを確認して新しいmanual dispatchを作成する。Child開始後またはpost-deploy journeyの失敗では新しいdispatchも開始せず、[stable CSRF release手順](#session-bound-stable-csrf-v1-release)のmutation unknown処理に従う。
+失敗annotationはclosed enumの`target`、`mutation_started`、`cleanup_state`、`phase`、`reason`とGitHub run ID / attempt / candidate SHAだけを記録します。`target`は`current-public`、`candidate-public`、configuration不明時の`unknown`、`mutation_started`は`false`、`true`、configuration不明時の`unknown`です。Release mutationはmigration process、secret materialization、Application deployを指し、temporary account作成は含めません。`cleanup_state`はaccountを作らない`not_applicable`、create request前の`not_started`、create response-lossまたは削除証明前の`unverified`、公開Delete 204と旧Session 401を確認した`verified`です。`phase`は`configuration`、`browser_launch`、`health`、`readiness`、`bootstrap_seed`、`entry`、`session_discovery`、`goal_creation`、`cycle_editing`、`cycle_completion`、`review_transition`、`history_verification`、`account_delete`、`cleanup_verification`のいずれかです。`reason`は`entry_cta_timeout`、`anonymous_session_not_observed`、`unexpected_status`、`session_discovery_failed`、`account_delete_failed`、`cleanup_unverified`のいずれかです。任意の例外message、URL query / fragment、token / cookie、account ID、email、本文、response body、screenshot、trace、video、profile、storage stateを記録しません。
+
+1. Blocking preflightのhealth / readiness失敗ではrelease mutation前に停止する。別runのmanual `baseline`失敗はwarningとしてcleanup状況を調査するが、candidate releaseのblockerまたは成功証拠にしない。#139 child開始後またはpost-deploy `full`の失敗では新しいdispatchも開始せず、[stable CSRF release手順](#session-bound-stable-csrf-v1-release)のmutation unknown処理に従う。
 2. Workers Logsではroute template、status、固定error class / code、request / trace IDだけを確認し、annotationへ相関用の識別子を追加しない。
 3. TTL内でも失敗する場合は新規deployを止め、schema互換なら直前Wrangler deploymentへのrollback、非互換ならforward fixを選ぶ。Migrationをdownせず、SQL手動DELETE / UPDATE、Raw DB correction、別の管理削除経路を作らない。
 

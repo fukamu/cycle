@@ -13,6 +13,7 @@ import {
   parseStagingBaseURL,
   parseStagingCriticalMode,
   runStagingCritical,
+  stagingCriticalExecution,
   StagingCriticalFailure,
   validateStagingInviteToken,
 } from "../../scripts/lib/staging-critical.mjs";
@@ -38,15 +39,45 @@ const interrupt = () => {
 process.once("SIGINT", interrupt);
 process.once("SIGTERM", interrupt);
 
-let failures;
-let runMetadata = { runID: "local", runAttempt: "local", commitSHA: "local" };
+let failures = [];
+let runMetadata = {
+  runID: "local",
+  runAttempt: "local",
+  commitSHA: "local",
+  target: "unknown",
+  mutationStarted: "unknown",
+  diagnosticLevel: "error",
+  cleanupState: "not_started",
+};
 try {
   const mode = parseStagingCriticalMode(process.env.STAGING_CRITICAL_MODE);
-  const admissionMode = parseStagingAdmissionMode(
-    process.env.STAGING_ADMISSION_MODE,
-  );
+  const execution = stagingCriticalExecution(mode);
+  runMetadata = {
+    ...runMetadata,
+    ...execution,
+    cleanupState: mode === "preflight" ? "not_applicable" : "not_started",
+  };
+  const run = stagingRunIdentity();
+  runMetadata = {
+    ...run.metadata,
+    ...execution,
+    cleanupState: runMetadata.cleanupState,
+  };
   const baseURL = parseStagingBaseURL(process.env.STAGING_BASE_URL);
-  if (admissionMode !== "off") {
+  let admissionMode;
+  if (mode === "preflight") {
+    if (
+      process.env.STAGING_ADMISSION_MODE !== undefined ||
+      process.env.STAGING_E2E_INVITE_TOKEN !== undefined
+    ) {
+      throw new Error("preflight does not accept admission configuration");
+    }
+  } else {
+    admissionMode = parseStagingAdmissionMode(
+      process.env.STAGING_ADMISSION_MODE,
+    );
+  }
+  if (admissionMode !== undefined && admissionMode !== "off") {
     inviteToken = validateStagingInviteToken(
       process.env.STAGING_E2E_INVITE_TOKEN,
     );
@@ -57,15 +88,13 @@ try {
   delete process.env.NODE_OPTIONS;
   delete process.env.PWDEBUG;
 
-  const run = stagingRunIdentity();
-  runMetadata = run.metadata;
   const bootstrapID = deriveBootstrapUUIDv7(
     `${run.key}:${mode}`,
     run.timestampMilliseconds,
   );
   const marker = randomBytes(6).toString("hex");
   const goalText = `Staging critical ${marker}`;
-  failures = await runStagingCritical({
+  const result = await runStagingCritical({
     mode,
     admissionMode,
     adapter: {
@@ -126,10 +155,13 @@ try {
       },
     },
   });
+  failures = result.failures;
+  runMetadata = { ...runMetadata, cleanupState: result.cleanupState };
 } catch {
   failures = [new StagingCriticalFailure("configuration", "unexpected_status")];
 } finally {
   inviteToken = "";
+  delete process.env.STAGING_E2E_INVITE_TOKEN;
   if (context !== undefined) {
     await context.close().catch(() => undefined);
   }
@@ -155,7 +187,7 @@ if (failures.length > 0 || interrupted) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    "Staging critical journey and public account cleanup succeeded.\n",
+    `Staging critical succeeded; target=${runMetadata.target}; mutation_started=${runMetadata.mutationStarted}; cleanup_state=${runMetadata.cleanupState}.\n`,
   );
 }
 

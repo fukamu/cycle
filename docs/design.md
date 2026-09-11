@@ -6031,19 +6031,24 @@ Playbook policyは`.fukamu/playbook/lock.json`のexact revisionとSHA-256、vend
 
 ```text
 1. current main、manual Deploy approver、mode固有のApply evidenceまたはrecovery confirmation、同一SHAの成功CIを検証
-2. main commitをbuild
-3. CandidateのAdmission modeを現在配信中revisionへ仮定せず、/healthz、/readyz、fresh Browser Context、Admission off / closedを自動判定するentry、Turnstile anonymous bootstrap、session discovery、公開account delete、削除後session 401のpre-switch baselineを実行。Stable CSRF rolloutでは別の同一Browser Context二tabとlegacy Session / tokenをprocess memoryへ保持する
-4. 同じBrowser test processが固定child commandを待つ間に、staging migrationをdirect DB URLで適用し、Worker/Container/assetsをdeployする
-5. Authoritative Cloudflare metadataからold-image drainをbounded pollし、candidate-only stateを連続2回確認する。証跡不能またはtimeoutでは停止する
-6. 保持した二tabでstable convergence / security smokeを行い、続けて/healthz /readyz smoke testを行う
-7. Goal / Cycle / Review / Historyを含むpost-deploy critical E2Eと公開account cleanupを実行
-8. production approval
-9. production migration
-10. production deploy
-11. smoke / metrics確認
+2. main commitをbuildし、deployment inputとBackend runtime configurationをmigration前に検証
+3. release mutation前に、現在配信中Stagingを`target=current-public`として`/healthz`、`/readyz`をhard gateで確認する
+4. Stable CSRF v1初回rolloutでは、同一Browser Context二tabとlegacy Session / tokenをprocess memoryへ保持し、同一Userで二度取得したlegacy tokenの変化と旧版unsafe request成功をrelease mutation前に確認する。この一回限りのgateがpre-mutation anonymous bootstrap / sessionを一度だけ所有する
+5. exact mainを再確認し、同じBrowser test processが固定child commandを待つ間に、staging migrationをdirect DB URLで適用し、Worker/Container/assetsをdeployする
+6. Authoritative Cloudflare metadataからold-image drainをbounded pollし、candidate-only stateを連続2回確認する。証跡不能またはtimeoutでは停止する
+7. 保持した二tabでstable convergence / security smokeと公開account cleanupを行い、続けて`/healthz` / `/readyz` smoke testを行う
+8. `target=candidate-public`のGoal / Cycle / Review / Historyを含むpost-deploy critical E2E、公開account delete 204、旧session 401をhard gateで確認する
+9. production approval
+10. production migration
+11. production deploy
+12. smoke / metrics確認
 ```
 
-Pre-switch baselineまたはそのcleanup proofが失敗した場合はmigration、secret materialization、Application deployへ進まない。Migration失敗時はApplication deployを行わない。Backward-incompatible変更はExpand / Contractを使い、同一Deployで直前Application versionとの互換性を即座に破壊しない。
+Generic pre-switch hard gateはcurrent-publicのhealth / readinessとmigration precondition / revision evidenceに限定する。Current-publicのAdmission entry、Turnstile anonymous bootstrap、session discovery、公開account delete、削除後session 401は`baseline` modeのself-cleaning diagnosticとして別のoperator調査runでだけ実行でき、その失敗をcandidate deployの成否根拠にしない。Stable CSRF初回rolloutが存続する間は、同一run / runner / IPでTurnstileやrate-limitを重複消費しないようDeploy workflowからgeneric `baseline`を実行せず、§41.5の一回限りのgateがanonymous / legacy Sessionを一度だけ所有する。このgateをgeneric diagnosticのnon-blocking性、Recovery mode、runtime inputでwaiveしない。Candidate-publicのhealth / readiness、critical journeyまたはcleanup proofが失敗した場合はreleaseを成功としない。Migration失敗時はApplication deployを行わない。
+
+Staging critical diagnosticの`mutation_started`はtemporary test accountの作成ではなく、schemaまたは配信中Applicationを変更し得るrelease mutationを表す。`preflight` / `baseline`では`false`、deploy後の`full`では`true`とmode / workflow phaseから導出し、caller入力から推測しない。Temporary accountのlifecycleは別のclosed enum `cleanup_state=not_applicable|not_started|unverified|verified`で表し、anonymous create requestのresponse-lossや削除後401未確認を`not_started`または`verified`へ補正しない。Configuration不明時だけtarget / mutation stateを`unknown`とし、URL、token、cookie、User / Session ID、本文、response bodyをdiagnosticへ含めない。
+
+Backward-incompatible変更はExpand / Contractを使い、同一Deployで直前Application versionとの互換性を即座に破壊しない。
 
 Worker、Static Assets、Containerを同じDeployで更新しても、旧Containerのauthoritative drainが完了するまでは新Frontendと旧Backendが混在し得る。新Frontendが欠落を拒否するrequired response fieldを追加し、旧Frontendがunknown fieldを安全に無視できる場合は、Backend response contractのexpandとFrontend consumer activationを別candidateへ分ける。`previousCompletedCycleAction`のBackend expandでは、旧Frontendはこのunknown fieldを無視し、既存の表示と操作を維持する。先にBackend expandだけをdeployし、old-image drainと新fieldの全適用surfaceを検証したcheckpointの後でのみFrontendのrequired schema / UIを有効化する。Backend expand candidateだけではFrontend behaviorを有効化せず、新Frontendはfield欠落を`null`へ正規化して互換性問題を隠さない。Drainまたは全surfaceのcontractを証明できない場合はFrontend activation candidateのmerge / deployを停止する。
 
@@ -6263,6 +6268,8 @@ E2Eは§6のuser flowと§§20–25のpublic contractを投影し、内部module
 - Save/AI/provider failure、response loss、session identity transition。
 
 Exact scenario manifestはversioned Playwright suiteを正とし、同じjourney一覧を文書へ複製しない。
+
+Staging release fixtureは、current-publicのblocking preflightがhealth / readinessだけを呼び、Stable CSRF初回rollout中はgeneric anonymous diagnosticを同じDeploy runで重複実行せず、#139のlegacy Session gateとcandidate-publicのfull journey / cleanupがhard gateのままであることを固定する。Manual `baseline` failureは`target=current-public` / `mutation_started=false`のwarning、candidate `full` failureは`target=candidate-public` / `mutation_started=true`のerrorとし、全modeのcleanup state遷移とsecret-safe field allowlistをunit / workflow contractで検証する。
 
 ## 48.6 Acceptance test environment
 
@@ -6508,7 +6515,7 @@ MVP acceptanceは、各canonical ownerのContractと§48のverificationが同じ
 | API / validation / errors | §§19–26、40 | decoder/contract/schema、actual HTTP、real DB、Frontend parse/presentation |
 | Security / privacy / observability | §§27、41–42 | cross-user、redaction/allowlist、metric/span、aggregate KPI snapshot、S |
 | Typography / accessibility | §43 | token/lint、component/A11y、responsive E2E |
-| Infrastructure / migration / configuration | §§44–45、50–51 | empty DB、Q、I、config parity、health/readiness |
+| Infrastructure / migration / configuration | §§44–45、50–51 | empty DB、Q、I、config parity、current-public health/readiness、candidate critical journey/cleanup、safe release diagnostic |
 
 Release candidateはA、D、S、I、Q、Eおよびstaged-tree Cのうち計画で要求されたGateを、Production/共有Dataを使わず完走する。未実行項目、外部承認待ち、Production運用値、残存riskは完了扱いにせず明記する。
 

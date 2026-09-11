@@ -448,7 +448,7 @@ test("deployment contract is the exact repository handoff classification", () =>
       "name: Install staging Chromium",
       "name: Build static frontend",
       "name: Validate Backend runtime configuration",
-      "name: Verify current Staging baseline before migration",
+      "name: Verify current Staging health and readiness before migration",
       "name: Run stable CSRF initial rollout and authoritative drain",
       "name: Upload stable CSRF rollout evidence",
       "name: Smoke test",
@@ -1035,41 +1035,39 @@ test("deployment contract is the exact repository handoff classification", () =>
     ].join("\n"),
     "deployment smoke test step",
   );
-  const stagingBaselineStep = extractStep(
+  const stagingPreflightStep = extractStep(
     workflow,
-    "Verify current Staging baseline before migration",
+    "Verify current Staging health and readiness before migration",
   );
   assertStepExecutionControls(
-    stagingBaselineStep,
-    "deployment pre-switch staging baseline",
+    stagingPreflightStep,
+    "deployment pre-switch staging health and readiness",
     "bash",
   );
   assert.equal(
-    stagingBaselineStep.trimEnd(),
+    stagingPreflightStep.trimEnd(),
     [
-      "      - name: Verify current Staging baseline before migration",
+      "      - name: Verify current Staging health and readiness before migration",
       "        shell: bash",
       "        env:",
       "          STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}",
-      "          STAGING_CRITICAL_MODE: baseline",
-      "          STAGING_ADMISSION_MODE: auto",
-      "          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}",
+      "          STAGING_CRITICAL_MODE: preflight",
       "        run: bash ./scripts/check-staging-critical.sh",
     ].join("\n"),
-    "deployment pre-switch staging baseline step",
+    "deployment pre-switch staging health and readiness step",
   );
-  assert.deepEqual(stepEnvironmentMappings(stagingBaselineStep), {
+  assert.deepEqual(stepEnvironmentMappings(stagingPreflightStep), {
     STAGING_BASE_URL: {
       kind: "environment",
       value: "PUBLIC_ORIGIN",
     },
-    STAGING_CRITICAL_MODE: { kind: "literal", value: "baseline" },
-    STAGING_ADMISSION_MODE: { kind: "literal", value: "auto" },
-    STAGING_E2E_INVITE_TOKEN: {
-      kind: "secret",
-      value: "STAGING_E2E_INVITE_TOKEN",
-    },
+    STAGING_CRITICAL_MODE: { kind: "literal", value: "preflight" },
   });
+  assert.equal(
+    workflow.includes("STAGING_CRITICAL_MODE: baseline"),
+    false,
+    "the one-time CSRF harness must own the only pre-mutation anonymous journey",
+  );
 
   const postDeployStagingCriticalStep = extractStep(
     workflow,
@@ -1235,8 +1233,8 @@ test("deployment contract is the exact repository handoff classification", () =>
   const backendValidationPosition = workflow.indexOf(
     "      - name: Validate Backend runtime configuration\n",
   );
-  const stagingBaselinePosition = workflow.indexOf(
-    "      - name: Verify current Staging baseline before migration\n",
+  const stagingPreflightPosition = workflow.indexOf(
+    "      - name: Verify current Staging health and readiness before migration\n",
   );
   const rolloutPosition = workflow.indexOf(
     "      - name: Run stable CSRF initial rollout and authoritative drain\n",
@@ -1251,12 +1249,12 @@ test("deployment contract is the exact repository handoff classification", () =>
   assert.ok(
     browserInstallPosition < frontendBuildPosition &&
       frontendBuildPosition < backendValidationPosition &&
-      backendValidationPosition < stagingBaselinePosition &&
-      stagingBaselinePosition < rolloutPosition &&
+      backendValidationPosition < stagingPreflightPosition &&
+      stagingPreflightPosition < rolloutPosition &&
       rolloutPosition < evidenceUploadPosition &&
       evidenceUploadPosition < smokeTestPosition &&
       smokeTestPosition < postDeployStagingCriticalPosition,
-    "browser install, build, runtime validation, pre-switch baseline, same-process rollout/drain, evidence, smoke, and post journey order",
+    "browser install, build, runtime validation, pre-switch health/readiness, same-process rollout/drain, evidence, smoke, and post journey order",
   );
 
   const expectedStepSecretSources = [
@@ -1265,7 +1263,6 @@ test("deployment contract is the exact repository handoff classification", () =>
     "NEON_MIGRATION_DATABASE_URL",
     ...Object.values(workerSecretSources),
     ...Object.values(cloudflareDeploySecretSources),
-    "STAGING_E2E_INVITE_TOKEN",
     "STAGING_E2E_INVITE_TOKEN",
     "STAGING_E2E_INVITE_TOKEN",
   ].sort();

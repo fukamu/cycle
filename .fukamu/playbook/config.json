@@ -118,6 +118,7 @@
       "relation": "cycle-concretization",
       "localSections": [
         "docs/design.md#48. Testing Strategy",
+        "docs/design.md#48.5 Critical E2E projection",
         "docs/development.md#品質チェック"
       ]
     },
@@ -172,7 +173,8 @@
       "relation": "cycle-concretization",
       "localSections": [
         "docs/design.md#42.1 Principles",
-        "docs/design.md#42.2 Structured log fields"
+        "docs/design.md#42.2 Structured log fields",
+        "docs/operations.md#Staging critical journey cleanup"
       ]
     },
     {
@@ -213,6 +215,7 @@
       "relation": "local-stricter",
       "localSections": [
         "docs/design.md#44.3 CI",
+        "docs/design.md#44.4 Deploy sequence",
         "docs/operations.md#Terraform Plan / approved Apply",
         "docs/operations.md#Manual Staging Deploy approval"
       ]
@@ -228,6 +231,7 @@
       "ruleId": "PE-REL-003",
       "relation": "cycle-concretization",
       "localSections": [
+        "docs/design.md#44.4 Deploy sequence",
         "docs/design.md#44.5 Health endpoints",
         "docs/operations.md#Post-deploy verification"
       ]
