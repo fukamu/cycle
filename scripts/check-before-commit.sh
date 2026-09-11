@@ -14,9 +14,9 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/check-before-commit.sh
 
-Validate the fully staged commit candidate with the CI-equivalent workflow,
-including all Playwright E2E tests. TEST_DATABASE_URL must identify a disposable
-localhost PostgreSQL database whose name ends in _test.
+Validate the fully staged commit candidate with the conservative change profile.
+Full fallback includes all Playwright E2E tests and requires TEST_DATABASE_URL to
+identify a disposable localhost PostgreSQL database whose name ends in _test.
 EOF
 }
 
@@ -74,31 +74,85 @@ assert_candidate_state "while the security profile was running"
 # shellcheck source=scripts/lib/check-runner.sh
 source "${script_dir}/lib/check-runner.sh"
 
+classification_file="$(mktemp "${TMPDIR:-/tmp}/fukamu-cycle-change-profile.XXXXXXXX")"
+cleanup_classification() {
+  rm -f -- "${classification_file}"
+}
+trap cleanup_classification EXIT
+if ! bash ./scripts/check-control-plane-fixtures.sh \
+  --classify-only --staged >"${classification_file}"; then
+  die "Could not classify the staged candidate safely."
+fi
+mapfile -t classification_lines <"${classification_file}"
+[[ "${#classification_lines[@]}" -eq 2 ]] \
+  || die "The staged candidate classifier returned an invalid result."
+change_profile="${classification_lines[0]#change_profile=}"
+change_reason="${classification_lines[1]#change_reason=}"
+[[ "${classification_lines[0]}" == "change_profile=${change_profile}" &&
+  "${classification_lines[1]}" == "change_reason=${change_reason}" &&
+  "${change_reason}" =~ ^[a-z_]+$ ]] \
+  || die "The staged candidate classifier returned an invalid result."
+case "${change_profile}" in
+  docs | frontend | backend | application | full) ;;
+  *) die "The staged candidate classifier returned an unknown profile." ;;
+esac
+assert_candidate_state "while changes were being classified"
+printf 'Commit change profile: %s (%s).\n' "${change_profile}" "${change_reason}"
+
 trusted_git diff --no-ext-diff --no-textconv --check
 trusted_git diff --no-ext-diff --no-textconv --cached --check
 
-require_command jq
-require_command docker
-require_standard_tool_versions
-require_terraform_version
-require_local_docker_context >/dev/null
-require_disposable_test_database_url "${TEST_DATABASE_URL:-}"
-
+require_node_pnpm_versions
 pnpm install --frozen-lockfile --ignore-scripts
 assert_candidate_state "while dependencies were being installed"
-bash .github/scripts/resolve-ci-reuse.test.sh
-docker run --rm \
-  --volume "${repo_root}:/repo:ro" \
-  --workdir /repo \
-  "${SUPPLY_CHAIN_ACTIONLINT_IMAGE}" \
-  -color
-CI=true run_cycle_checks_after_security \
-  "${repo_root}" "${script_dir}" all true
+
+case "${change_profile}" in
+  docs)
+    bash ./scripts/check-docs.sh
+    ;;
+  frontend)
+    bash ./scripts/check-docs.sh
+    CI=true run_cycle_checks_after_security \
+      "${repo_root}" "${script_dir}" frontend false
+    ;;
+  backend)
+    require_go_version
+    require_disposable_test_database_url "${TEST_DATABASE_URL:-}"
+    bash ./scripts/check-docs.sh
+    CI=true run_cycle_checks_after_security \
+      "${repo_root}" "${script_dir}" backend false
+    ;;
+  application)
+    require_go_version
+    require_disposable_test_database_url "${TEST_DATABASE_URL:-}"
+    bash ./scripts/check-docs.sh
+    CI=true run_cycle_checks_after_security \
+      "${repo_root}" "${script_dir}" application false
+    ;;
+  full)
+    require_command jq
+    require_command docker
+    require_standard_tool_versions
+    require_terraform_version
+    require_local_docker_context >/dev/null
+    require_disposable_test_database_url "${TEST_DATABASE_URL:-}"
+    bash .github/scripts/resolve-ci-reuse.test.sh
+    docker run --rm \
+      --volume "${repo_root}:/repo:ro" \
+      --workdir /repo \
+      "${SUPPLY_CHAIN_ACTIONLINT_IMAGE}" \
+      -color
+    CI=true run_cycle_checks_after_security \
+      "${repo_root}" "${script_dir}" all true
+    ;;
+esac
 
 trusted_git diff --no-ext-diff --no-textconv --check
 trusted_git diff --no-ext-diff --no-textconv --cached --check
 assert_candidate_state "while checks were running"
 validated_tree="${candidate_tree}"
+cleanup_classification
+trap - EXIT
 
 printf 'Commit checks passed for staged tree %s. Commit without changing the index or working tree.\n' \
   "${validated_tree}"

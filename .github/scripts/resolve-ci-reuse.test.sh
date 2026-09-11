@@ -23,19 +23,32 @@ PYTHON_HOOK
 make_archive() {
   local archive_path="$1"
   local mode="$2"
+  local change_profile="$3"
+  local required_jobs="$4"
   python3 - \
     "$archive_path" \
     "$mode" \
     "$main_sha" \
     "$tested_tree" \
     "$head_sha" \
-    "$tested_commit" <<'PY'
+    "$tested_commit" \
+    "$change_profile" \
+    "$required_jobs" <<'PY'
 import stat
 import sys
 import warnings
 import zipfile
 
-archive_path, mode, main_sha, tested_tree, head_sha, tested_commit = sys.argv[1:]
+(
+    archive_path,
+    mode,
+    main_sha,
+    tested_tree,
+    head_sha,
+    tested_commit,
+    change_profile,
+    required_jobs,
+) = sys.argv[1:]
 
 if mode == "corrupt":
     with open(archive_path, "wb") as target:
@@ -48,6 +61,8 @@ payload = (
     f"tested_commit={tested_commit}\n"
     f"tested_tree={tested_tree}\n"
     "workflow_run=42\n"
+    f"change_profile={change_profile}\n"
+    f"required_jobs={required_jobs}\n"
 )
 if mode == "wrong_pr":
     payload = payload.replace("pull_request=18", "pull_request=19")
@@ -59,6 +74,12 @@ elif mode == "wrong_tree":
     payload = payload.replace(tested_tree, "e" * 40)
 elif mode == "wrong_run":
     payload = payload.replace("workflow_run=42", "workflow_run=43")
+elif mode == "wrong_profile":
+    payload = payload.replace(f"change_profile={change_profile}", "change_profile=docs")
+elif mode == "wrong_required_jobs":
+    payload = payload.replace(f"required_jobs={required_jobs}", "required_jobs=quality")
+elif mode == "legacy_payload":
+    payload = "\n".join(payload.splitlines()[:5]) + "\n"
 elif mode == "extra_line":
     payload += "unexpected=true\n"
 elif mode == "reordered":
@@ -272,6 +293,15 @@ case "$endpoint" in
         printf '[{"filename":"backend/internal/domain/example.go","previous_filename":"%s","status":"renamed"}]\n' \
           "${FAKE_CONTROL_PATH:-.github/workflows/old.yml}"
         ;;
+      *:docs)
+        printf '%s\n' '[{"filename":"docs/design.md","status":"modified"}]'
+        ;;
+      *:frontend)
+        printf '%s\n' '[{"filename":"frontend/src/app.ts","status":"modified"}]'
+        ;;
+      *:application)
+        printf '%s\n' '[{"filename":"frontend/src/app.ts","status":"modified"},{"filename":"backend/internal/domain/example.go","status":"modified"}]'
+        ;;
       *:count_mismatch)
         printf '%s\n' '[{"filename":"backend/internal/domain/example.go","status":"modified"}]'
         ;;
@@ -306,6 +336,9 @@ case "$endpoint" in
           changed_files=2
           ;;
         duplicate_filename | duplicate_current_previous)
+          changed_files=2
+          ;;
+        application)
           changed_files=2
           ;;
       esac
@@ -358,23 +391,62 @@ case "$endpoint" in
     ;;
   */actions/runs/42/jobs?*)
     fail_if_requested jobs
-    case "${FAKE_SCHEMA_MODE:-none}:${FAKE_JOBS_MODE:-valid}" in
-      jobs:*)
-        printf '%s\n' '{"total_count":8,"jobs":[]}'
-        ;;
-      *:missing_attest)
-        printf '%s\n' '{"total_count":7,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"skipped"},{"name":"workflow","status":"completed","conclusion":"success"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"frontend","status":"completed","conclusion":"success"},{"name":"backend","status":"completed","conclusion":"success"},{"name":"infrastructure","status":"completed","conclusion":"success"},{"name":"e2e","status":"completed","conclusion":"success"}]}'
-        ;;
-      *:reuse_succeeded)
-        printf '%s\n' '{"total_count":8,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"success"},{"name":"workflow","status":"completed","conclusion":"success"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"frontend","status":"completed","conclusion":"success"},{"name":"backend","status":"completed","conclusion":"success"},{"name":"infrastructure","status":"completed","conclusion":"success"},{"name":"e2e","status":"completed","conclusion":"success"},{"name":"Attest tested PR tree","status":"completed","conclusion":"success"}]}'
-        ;;
-      *:attest_failed)
-        printf '%s\n' '{"total_count":8,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"skipped"},{"name":"workflow","status":"completed","conclusion":"success"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"frontend","status":"completed","conclusion":"success"},{"name":"backend","status":"completed","conclusion":"success"},{"name":"infrastructure","status":"completed","conclusion":"success"},{"name":"e2e","status":"completed","conclusion":"success"},{"name":"Attest tested PR tree","status":"completed","conclusion":"failure"}]}'
-        ;;
-      *)
-        printf '%s\n' '{"total_count":8,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"skipped"},{"name":"workflow","status":"completed","conclusion":"success"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"frontend","status":"completed","conclusion":"success"},{"name":"backend","status":"completed","conclusion":"success"},{"name":"infrastructure","status":"completed","conclusion":"success"},{"name":"e2e","status":"completed","conclusion":"success"},{"name":"Attest tested PR tree","status":"completed","conclusion":"success"}]}'
-        ;;
-    esac
+    if [[ "${FAKE_SCHEMA_MODE:-none}" == "jobs" ]]; then
+      printf '%s\n' '{"total_count":10,"jobs":[]}'
+    else
+      workflow_conclusion=skipped
+      frontend_conclusion=skipped
+      backend_conclusion=skipped
+      infrastructure_conclusion=skipped
+      e2e_conclusion=skipped
+      case "${FAKE_CHANGE_PROFILE}" in
+        docs) ;;
+        frontend)
+          frontend_conclusion=success
+          e2e_conclusion=success
+          ;;
+        backend)
+          backend_conclusion=success
+          e2e_conclusion=success
+          ;;
+        application)
+          frontend_conclusion=success
+          backend_conclusion=success
+          e2e_conclusion=success
+          ;;
+        full)
+          workflow_conclusion=success
+          frontend_conclusion=success
+          backend_conclusion=success
+          infrastructure_conclusion=success
+          e2e_conclusion=success
+          ;;
+        *) exit 65 ;;
+      esac
+      reuse_conclusion=skipped
+      classify_conclusion=success
+      required_conclusion=success
+      attest_conclusion=success
+      case "${FAKE_JOBS_MODE:-valid}" in
+        reuse_succeeded) reuse_conclusion=success ;;
+        classifier_failed) classify_conclusion=failure ;;
+        required_failed) required_conclusion=failure ;;
+        attest_failed) attest_conclusion=failure ;;
+        required_skipped) backend_conclusion=skipped ;;
+        nonrequired_succeeded) infrastructure_conclusion=success ;;
+      esac
+      if [[ "${FAKE_JOBS_MODE:-valid}" == "missing_attest" ]]; then
+        printf '{"total_count":9,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"%s"},{"name":"Classify candidate changes","status":"completed","conclusion":"%s"},{"name":"workflow","status":"completed","conclusion":"%s"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"frontend","status":"completed","conclusion":"%s"},{"name":"backend","status":"completed","conclusion":"%s"},{"name":"infrastructure","status":"completed","conclusion":"%s"},{"name":"e2e","status":"completed","conclusion":"%s"},{"name":"Required PR CI","status":"completed","conclusion":"%s"}]}\n' \
+          "$reuse_conclusion" "$classify_conclusion" "$workflow_conclusion" \
+          "$frontend_conclusion" "$backend_conclusion" "$infrastructure_conclusion" \
+          "$e2e_conclusion" "$required_conclusion"
+      else
+        printf '{"total_count":10,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"%s"},{"name":"Classify candidate changes","status":"completed","conclusion":"%s"},{"name":"workflow","status":"completed","conclusion":"%s"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"frontend","status":"completed","conclusion":"%s"},{"name":"backend","status":"completed","conclusion":"%s"},{"name":"infrastructure","status":"completed","conclusion":"%s"},{"name":"e2e","status":"completed","conclusion":"%s"},{"name":"Required PR CI","status":"completed","conclusion":"%s"},{"name":"Attest tested PR tree","status":"completed","conclusion":"%s"}]}\n' \
+          "$reuse_conclusion" "$classify_conclusion" "$workflow_conclusion" \
+          "$frontend_conclusion" "$backend_conclusion" "$infrastructure_conclusion" \
+          "$e2e_conclusion" "$required_conclusion" "$attest_conclusion"
+      fi
+    fi
     ;;
   */actions/runs/42/artifacts?*)
     fail_if_requested artifacts
@@ -456,12 +528,33 @@ run_case() {
   local runs_mode="${9:-valid}"
   local control_path="${10:-}"
   local head_pulls_mode="${11:-valid}"
+  local change_profile
+  local required_jobs
+
+  case "${files_mode}" in
+    docs)
+      change_profile=docs
+      required_jobs=quality
+      ;;
+    frontend)
+      change_profile=frontend
+      required_jobs=quality,frontend,e2e
+      ;;
+    application)
+      change_profile=application
+      required_jobs=quality,frontend,backend,e2e
+      ;;
+    *)
+      change_profile=backend
+      required_jobs=quality,backend,e2e
+      ;;
+  esac
 
   local archive_path="${test_dir}/${case_name}.zip"
   last_output="${test_dir}/${case_name}.output"
   last_log="${test_dir}/${case_name}.log"
   last_head_pulls_marker="${test_dir}/${case_name}.head-pulls"
-  make_archive "$archive_path" "$archive_mode"
+  make_archive "$archive_path" "$archive_mode" "$change_profile" "$required_jobs"
   : >"$last_output"
   rm -f -- "$last_head_pulls_marker"
 
@@ -471,6 +564,7 @@ run_case() {
     FIXTURE_HEAD_SHA="$head_sha" \
     FIXTURE_ARTIFACT_NAME="$artifact_name" \
     FAKE_ARCHIVE_PATH="$archive_path" \
+    FAKE_CHANGE_PROFILE="$change_profile" \
     FAKE_FILES_MODE="$files_mode" \
     FAKE_JOBS_MODE="$jobs_mode" \
     FAKE_ARTIFACT_MODE="$artifact_mode" \
@@ -538,9 +632,12 @@ assert_head_pulls_not_called() {
   fi
 }
 
-# A normal application-code PR with one exact artifact and attestation is reusable.
+# Every scoped application profile is reusable with its exact job matrix and attestation.
 assert_reuse valid
 assert_head_pulls_not_called
+assert_reuse docs_profile valid docs
+assert_reuse frontend_profile valid frontend
+assert_reuse application_union_profile valid application
 
 # A deleted head branch may erase the run association. The head commit must then
 # resolve to exactly the same merged PR before the normal evidence checks continue.
@@ -599,13 +696,16 @@ assert_fallback oversized_payload oversized_payload
 assert_fallback unsupported_archive_compression unsupported_compression
 assert_fallback archive_crc_corruption crc_corrupt
 
-# The payload is exactly five LF-terminated lines. Every bound identity is exact.
+# The payload is exactly seven LF-terminated lines. Every bound identity and gate plan is exact.
 for payload_mode in \
   wrong_pr \
   wrong_head \
   wrong_commit \
   wrong_tree \
   wrong_run \
+  wrong_profile \
+  wrong_required_jobs \
+  legacy_payload \
   extra_line \
   reordered \
   crlf \
@@ -617,6 +717,10 @@ done
 assert_fallback jobs_missing_attest valid code missing_attest
 assert_fallback jobs_attest_failed valid code attest_failed
 assert_fallback jobs_reuse_not_skipped valid code reuse_succeeded
+assert_fallback jobs_classifier_failed valid code classifier_failed
+assert_fallback jobs_aggregator_failed valid code required_failed
+assert_fallback jobs_required_scope_skipped valid code required_skipped
+assert_fallback jobs_nonrequired_scope_succeeded valid code nonrequired_succeeded
 assert_fallback run_wrong_pull valid code valid valid none none push wrong_pull
 assert_head_pulls_not_called
 assert_fallback run_boolean_pull_number valid code valid valid none none push boolean_pull

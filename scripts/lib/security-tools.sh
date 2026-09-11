@@ -364,7 +364,10 @@ security_validate_text_inventory() {
           "Dockerfile",
           "_headers",
         ]);
-        const exactPaths = new Set([".fukamu/playbook/validate.py"]);
+        const exactPaths = new Set([
+          ".fukamu/playbook/validate.py",
+          "scripts/classify-change-profile.py",
+        ]);
         const approvedSuffixes = [
           ".css",
           ".example",

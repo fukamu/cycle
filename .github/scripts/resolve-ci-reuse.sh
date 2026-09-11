@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+repo_root="$(realpath -e -- "${script_dir}/../..")"
 main_sha="${1:?main commit SHA is required}"
 repository="${2:?repository is required}"
 output_file="${3:-${GITHUB_OUTPUT:-}}"
@@ -228,164 +230,30 @@ if ! gh api \
   fallback "Could not query every changed file in the merged PR"
 fi
 
-files_status=0
-python3 -I - "$pull_files_json" "$changed_files" <<'PY' || files_status=$?
-import json
-import re
-import sys
-
-path, expected_count_text = sys.argv[1:]
-try:
-    expected_count = int(expected_count_text)
-    with open(path, encoding="utf-8") as source:
-        files = json.load(source)
-except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
-    raise SystemExit(2)
-
-if (
-    not isinstance(files, list)
-    or expected_count < 0
-    or expected_count > 100
-    or len(files) != expected_count
-):
-    raise SystemExit(2)
-
-allowed_statuses = {"added", "removed", "modified", "renamed"}
-paths = []
-current_paths = set()
-all_paths = set()
-for item in files:
-    if not isinstance(item, dict):
-        raise SystemExit(2)
-    filename = item.get("filename")
-    status = item.get("status")
-    if not isinstance(filename, str) or not filename or status not in allowed_statuses:
-        raise SystemExit(2)
-    if filename in current_paths or filename in all_paths:
-        raise SystemExit(2)
-    current_paths.add(filename)
-    all_paths.add(filename)
-    paths.append(filename)
-    if status == "renamed":
-        if "previous_filename" not in item:
-            raise SystemExit(2)
-        previous = item["previous_filename"]
-        if not isinstance(previous, str) or not previous:
-            raise SystemExit(2)
-        if previous in all_paths:
-            raise SystemExit(2)
-        all_paths.add(previous)
-        paths.append(previous)
-    elif "previous_filename" in item:
-        raise SystemExit(2)
-
-def canonical(pathname):
-    return (
-        pathname
-        and not pathname.startswith("/")
-        and "\\" not in pathname
-        and "\x00" not in pathname
-        and all(part not in {"", ".", ".."} for part in pathname.split("/"))
-    )
-
-if not all(canonical(pathname) for pathname in paths):
-    raise SystemExit(2)
-
-exact_control_paths = {
-    ".dockerignore",
-    ".editorconfig",
-    ".eslintignore",
-    ".gitignore",
-    ".gitattributes",
-    ".gitleaks.toml",
-    ".gitleaksignore",
-    ".node-version",
-    ".npmrc",
-    ".nvmrc",
-    ".pnpmfile.cjs",
-    ".pnpmfile.js",
-    ".prettierignore",
-    ".shellcheckrc",
-    ".tool-versions",
-    "Dockerfile",
-    "Dockerfile.local",
-    "bun.lock",
-    "bun.lockb",
-    "compose.local.yaml",
-    "config/deployment-contract.json",
-    "cloudflare/src/config/deployment-contract.test.mjs",
-    "package-lock.json",
-    "package.json",
-    "pnpm-lock.yaml",
-    "pnpm-workspace.yaml",
-    "sitecustomize.py",
-    "usercustomize.py",
-    "turbo.json",
-    "yarn.lock",
-}
-
-control_basename = re.compile(
-    r"^(?:"
-    r"Dockerfile(?:\.[^/]+)?|"
-    r"bun\.lockb?|"
-    r"compose(?:\.[^/]+)?\.ya?ml|"
-    r"go\.(?:mod|sum|work|work\.sum)|"
-    r"package(?:-lock)?\.json|"
-    r"pnpm-lock\.yaml|pnpm-workspace\.yaml|"
-    r"sqlc\.ya?ml|"
-    r"tsconfig(?:\.[^/]+)?\.json|"
-    r"vitest\.workspace\.(?:c?js|mjs|ts|cts|mts|json|jsonc)|"
-    r"wrangler\.(?:json|jsonc|toml)|"
-    r"yarn\.lock|"
-    r"(?:babel|eslint|jest|playwright|prettier|rollup|stylelint|vite|vitest|webpack)"
-    r"\.config\.(?:c?js|mjs|ts|cts|mts|json|jsonc)"
-    r")$"
-)
-
-def controls_ci(pathname):
-    basename = pathname.rsplit("/", 1)[-1]
-    return (
-        pathname in exact_control_paths
-        or pathname.startswith(".github/")
-        or pathname.startswith(".fukamu/playbook/")
-        or pathname.startswith("config/")
-        or pathname.startswith("scripts/")
-        or basename in {
-            ".dockerignore",
-            ".editorconfig",
-            ".eslintignore",
-            ".gitignore",
-            ".gitattributes",
-            ".gitleaks.toml",
-            ".gitleaksignore",
-            ".npmrc",
-            ".nvmrc",
-            ".pnpmfile.cjs",
-            ".pnpmfile.js",
-            ".prettierignore",
-            ".shellcheckrc",
-            ".tool-versions",
-            ".terraform.lock.hcl",
-            "sitecustomize.py",
-            "usercustomize.py",
-        }
-        or basename.startswith((".eslintrc", ".prettierrc"))
-        or control_basename.fullmatch(basename) is not None
-    )
-
-if any(controls_ci(pathname) for pathname in paths):
-    raise SystemExit(3)
-PY
-
-case "$files_status" in
-  0)
-    ;;
-  3)
-    fallback "The merged PR changed CI control-plane files and must run full main CI"
-    ;;
-  *)
-    fallback "The merged PR changed-file response was incomplete or ambiguous"
-    ;;
+classification_file="${validation_root}/change-profile.txt"
+if ! python3 -I "${repo_root}/scripts/classify-change-profile.py" \
+  --github-files "${pull_files_json}" \
+  --expected-count "${changed_files}" >"${classification_file}"; then
+  fallback "The merged PR changed-file response could not be classified"
+fi
+mapfile -t classification_lines <"${classification_file}"
+if [[ "${#classification_lines[@]}" -ne 2 ]]; then
+  fallback "The merged PR change profile was ambiguous"
+fi
+change_profile="${classification_lines[0]#change_profile=}"
+change_reason="${classification_lines[1]#change_reason=}"
+if [[ "${classification_lines[0]}" != "change_profile=${change_profile}" ||
+  "${classification_lines[1]}" != "change_reason=${change_reason}" ||
+  ! "${change_reason}" =~ ^[a-z_]+$ ]]; then
+  fallback "The merged PR change profile was ambiguous"
+fi
+case "${change_profile}" in
+  docs) required_jobs='quality' ;;
+  frontend) required_jobs='quality,frontend,e2e' ;;
+  backend) required_jobs='quality,backend,e2e' ;;
+  application) required_jobs='quality,frontend,backend,e2e' ;;
+  full) fallback "The merged PR requires full main CI" ;;
+  *) fallback "The merged PR change profile was unknown" ;;
 esac
 
 expected_artifact="pr-ci-${pr_number}-${head_sha}-${main_tree}"
@@ -550,7 +418,8 @@ fi
 
 validate_jobs() {
   local jobs_file="$1"
-  python3 -I - "$jobs_file" <<'PY'
+  local expected_profile="$2"
+  python3 -I - "$jobs_file" "$expected_profile" <<'PY'
 import json
 import sys
 
@@ -560,16 +429,26 @@ try:
 except (OSError, UnicodeError, json.JSONDecodeError):
     raise SystemExit(2)
 
+profile = sys.argv[2]
+required_by_profile = {
+    "docs": {"quality"},
+    "frontend": {"quality", "frontend", "e2e"},
+    "backend": {"quality", "backend", "e2e"},
+    "application": {"quality", "frontend", "backend", "e2e"},
+}
+if profile not in required_by_profile:
+    raise SystemExit(2)
+optional_jobs = {"workflow", "frontend", "backend", "infrastructure", "e2e"}
+required_jobs = required_by_profile[profile]
 expected = {
     "Reuse verified PR CI": "skipped",
-    "workflow": "success",
+    "Classify candidate changes": "success",
     "Security, configuration, and documentation": "success",
-    "frontend": "success",
-    "backend": "success",
-    "infrastructure": "success",
-    "e2e": "success",
+    "Required PR CI": "success",
     "Attest tested PR tree": "success",
 }
+for name in optional_jobs:
+    expected[name] = "success" if name in required_jobs else "skipped"
 if not isinstance(response, dict):
     raise SystemExit(2)
 total_count = response.get("total_count")
@@ -670,12 +549,16 @@ PY
 validate_attestation_archive() {
   local archive_file="$1"
   local expected_run_id="$2"
+  local expected_profile="$3"
+  local expected_required_jobs="$4"
   python3 -I - \
     "$archive_file" \
     "$pr_number" \
     "$head_sha" \
     "$main_tree" \
-    "$expected_run_id" <<'PY'
+    "$expected_run_id" \
+    "$expected_profile" \
+    "$expected_required_jobs" <<'PY'
 import os
 import re
 import stat
@@ -683,7 +566,15 @@ import sys
 import zipfile
 import zlib
 
-archive_path, pr_number, head_sha, tested_tree, run_id = sys.argv[1:]
+(
+    archive_path,
+    pr_number,
+    head_sha,
+    tested_tree,
+    run_id,
+    change_profile,
+    required_jobs,
+) = sys.argv[1:]
 max_archive_bytes = 16 * 1024
 max_payload_bytes = 4096
 
@@ -744,6 +635,8 @@ pattern = re.compile(
     rf"tested_commit=([0-9a-f]{{40}})\n"
     rf"tested_tree={re.escape(tested_tree)}\n"
     rf"workflow_run={re.escape(run_id)}\n"
+    rf"change_profile={re.escape(change_profile)}\n"
+    rf"required_jobs={re.escape(required_jobs)}\n"
 )
 if pattern.fullmatch(text) is None:
     raise SystemExit(3)
@@ -763,7 +656,7 @@ for run_id in "${run_ids[@]}"; do
   fi
 
   jobs_status=0
-  validate_jobs "$jobs_json" || jobs_status=$?
+  validate_jobs "$jobs_json" "$change_profile" || jobs_status=$?
   case "$jobs_status" in
     0)
       ;;
@@ -801,7 +694,8 @@ for run_id in "${run_ids[@]}"; do
     "/repos/${repository}/actions/artifacts/${artifact_id}/zip" >"$archive_file"; then
     fallback "Could not download the PR workflow run attestation"
   fi
-  if ! validate_attestation_archive "$archive_file" "$run_id"; then
+  if ! validate_attestation_archive \
+    "$archive_file" "$run_id" "$change_profile" "$required_jobs"; then
     fallback "The PR workflow run attestation archive or payload was invalid"
   fi
 

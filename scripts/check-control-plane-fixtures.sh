@@ -10,16 +10,22 @@ repo_root="$(resolve_repo_root "${BASH_SOURCE[0]}")"
 mode="working-tree"
 base_revision=''
 head_revision=''
+classify_only=false
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/check-control-plane-fixtures.sh [--working-tree|--staged|--range BASE_SHA HEAD_SHA]
+Usage: ./scripts/check-control-plane-fixtures.sh [--classify-only] [--working-tree|--staged|--range BASE_SHA HEAD_SHA]
 
 Run the repository gate/control-plane negative fixture suite when the selected
 candidate changes a CI trust-boundary path. Only a complete inventory made up
 entirely of known application paths may skip the suite; ambiguity runs it.
 EOF
 }
+
+if [[ "${1:-}" == "--classify-only" ]]; then
+  classify_only=true
+  shift
+fi
 
 if (($# > 0)); then
   case "$1" in
@@ -52,71 +58,6 @@ is_canonical_path() {
     "${relative_path}" != ./* && "${relative_path}" != ../* &&
     "${relative_path}" != */../* && "${relative_path}" != */.. &&
     "${relative_path}" != *$'\n'* && "${relative_path}" != *$'\r'* ]]
-}
-
-is_control_plane_path() {
-  local relative_path="$1"
-  local basename="${relative_path##*/}"
-
-  case "${relative_path}" in
-    .github/* | .fukamu/* | scripts/* | config/* | infra/* | AGENTS.md | \
-      .dockerignore | .editorconfig | .env.example | .eslintignore | \
-      .gitattributes | .gitignore | .gitleaks.toml | .gitleaksignore | \
-      .node-version | .npmrc | .nvmrc | .pnpmfile.cjs | .pnpmfile.js | \
-      .prettierignore | .shellcheckrc | .tool-versions | Dockerfile | \
-      Dockerfile.* | compose.local.yaml | package.json | package-lock.json | \
-      pnpm-lock.yaml | pnpm-workspace.yaml | sitecustomize.py | turbo.json | \
-      usercustomize.py | yarn.lock | bun.lock | bun.lockb | \
-      backend/cmd/configcheck/* | backend/sqlc.yaml | backend/sqlc.yml | \
-      cloudflare/src/config/* | \
-      cloudflare/legacy-retirement/* | frontend/.env.example | \
-      frontend/e2e/staging-critical*.mjs | frontend/e2e/staging-csrf-rollout*.mjs | \
-      frontend/public/_headers)
-      return 0
-      ;;
-  esac
-
-  case "${basename}" in
-    .dockerignore | .editorconfig | .env.example | .eslintignore | \
-      .gitattributes | .gitignore | .gitleaks.toml | .gitleaksignore | \
-      .npmrc | .nvmrc | .pnpmfile.cjs | .pnpmfile.js | .prettierignore | \
-      .shellcheckrc | .terraform.lock.hcl | .tool-versions | \
-      sitecustomize.py | usercustomize.py | go.mod | go.sum | go.work | \
-      go.work.sum | package.json | package-lock.json | pnpm-lock.yaml | \
-      pnpm-workspace.yaml | sqlc.yaml | sqlc.yml | yarn.lock | bun.lock | \
-      bun.lockb)
-      return 0
-      ;;
-  esac
-
-  case "${basename}" in
-    Dockerfile.* | *.Dockerfile | compose.*.yaml | compose.*.yml | \
-      docker-compose*.yaml | docker-compose*.yml | tsconfig*.json | \
-      wrangler.json | wrangler.jsonc | wrangler.toml | babel.config.* | \
-      eslint.config.* | jest.config.* | playwright.config.* | \
-      prettier.config.* | rollup.config.* | stylelint.config.* | \
-      vite.config.* | vitest.config.* | vitest.workspace.* | \
-      webpack.config.* | .eslintrc* | .prettierrc*)
-      return 0
-      ;;
-  esac
-
-  return 1
-}
-
-is_application_path() {
-  local relative_path="$1"
-
-  case "${relative_path}" in
-    README.md | docs/*.md | backend/*.go | backend/*.sql | \
-      backend/internal/ai/prompts/*.txt | backend/testdata/*.jsonl | \
-      frontend/index.html | frontend/src/*.css | frontend/src/*.ts | \
-      frontend/src/*.tsx | frontend/e2e/*.mjs | frontend/e2e/*.ts | \
-      frontend/vite/*.ts | cloudflare/src/*.mjs | cloudflare/src/*.ts)
-      return 0
-      ;;
-  esac
-  return 1
 }
 
 inventory_root="$(mktemp -d "${TMPDIR:-/tmp}/fukamu-cycle-control-plane.XXXXXXXX")"
@@ -249,74 +190,39 @@ case "${mode}" in
     ;;
 esac
 
-run_fixtures=false
-reason='application_only'
-entry_count=0
-declare -A seen_paths=()
-
-if [[ "${inventory_complete}" != "true" ]]; then
-  run_fixtures=true
-  reason='classification_failed'
-else
-  exec {manifest_fd}<"${manifest}"
-  while IFS= read -r -d '' status <&"${manifest_fd}"; do
-    if ! IFS= read -r -d '' old_mode <&"${manifest_fd}" \
-      || ! IFS= read -r -d '' new_mode <&"${manifest_fd}" \
-      || ! IFS= read -r -d '' relative_path <&"${manifest_fd}"; then
-      run_fixtures=true
-      reason='classification_failed'
-      break
+change_profile='full'
+change_reason='classification_failed'
+classification_file="${inventory_root}/classification.txt"
+if [[ "${inventory_complete}" == "true" ]] \
+  && command -v python3 >/dev/null 2>&1 \
+  && python3 -I "${script_dir}/classify-change-profile.py" \
+    --manifest "${manifest}" >"${classification_file}"; then
+  mapfile -t classification_lines <"${classification_file}"
+  if [[ "${#classification_lines[@]}" -eq 2 ]]; then
+    candidate_profile="${classification_lines[0]#change_profile=}"
+    candidate_reason="${classification_lines[1]#change_reason=}"
+    if [[ "${classification_lines[0]}" == "change_profile=${candidate_profile}" &&
+      "${classification_lines[1]}" == "change_reason=${candidate_reason}" &&
+      "${candidate_reason}" =~ ^[a-z_]+$ ]]; then
+      case "${candidate_profile}" in
+        docs | frontend | backend | application | full)
+          change_profile="${candidate_profile}"
+          change_reason="${candidate_reason}"
+          ;;
+      esac
     fi
-
-    ((entry_count += 1))
-    if ((entry_count > 100)); then
-      run_fixtures=true
-      reason='change_limit_exceeded'
-      break
-    fi
-    if ! is_canonical_path "${relative_path}" \
-      || [[ -n "${seen_paths["${relative_path}"]+present}" ]]; then
-      run_fixtures=true
-      reason='ambiguous_path_inventory'
-      break
-    fi
-    seen_paths["${relative_path}"]=1
-
-    case "${status}:${old_mode}:${new_mode}" in
-      A:000000:100644 | A:000000:100755 | \
-        M:100644:100644 | M:100644:100755 | \
-        M:100755:100644 | M:100755:100755 | \
-        D:100644:000000 | D:100755:000000) ;;
-      *)
-        run_fixtures=true
-        reason='rename_or_type_change'
-        break
-        ;;
-    esac
-
-    if is_control_plane_path "${relative_path}"; then
-      run_fixtures=true
-      reason='control_plane_change'
-      break
-    fi
-    if ! is_application_path "${relative_path}"; then
-      run_fixtures=true
-      reason='unknown_path'
-      break
-    fi
-  done
-  exec {manifest_fd}<&-
-
-  if ((entry_count == 0)); then
-    run_fixtures=true
-    reason='empty_change_inventory'
   fi
 fi
 
-if [[ "${run_fixtures}" == "true" ]]; then
-  printf 'Change classification: %s. Running gate/control-plane negative fixtures.\n' "${reason}"
+if [[ "${classify_only}" == "true" ]]; then
+  printf 'change_profile=%s\nchange_reason=%s\n' "${change_profile}" "${change_reason}"
+  exit 0
+fi
+
+if [[ "${change_profile}" == "full" ]]; then
+  printf 'Change classification: %s. Running gate/control-plane negative fixtures.\n' "${change_reason}"
   bash "${script_dir}/tests/run.sh"
 else
-  printf '%s\n' \
-    'Change classification: application_only. Gate/control-plane negative fixtures are not applicable.'
+  printf 'Change classification: %s (%s). Gate/control-plane negative fixtures are not applicable.\n' \
+    "${change_profile}" "${change_reason}"
 fi

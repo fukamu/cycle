@@ -66,6 +66,7 @@ create_fixture() {
     "${fixture_repo}/.github/workflows" \
     "${fixture_repo}/backend" \
     "${fixture_repo}/config" \
+    "${fixture_repo}/docs" \
     "${fixture_repo}/frontend" \
     "${fixture_repo}/frontend/src" \
     "${fixture_repo}/scripts/lib" \
@@ -74,6 +75,9 @@ create_fixture() {
   cp -- \
     "${repo_root}/scripts/check-control-plane-fixtures.sh" \
     "${fixture_repo}/scripts/check-control-plane-fixtures.sh"
+  cp -- \
+    "${repo_root}/scripts/classify-change-profile.py" \
+    "${fixture_repo}/scripts/classify-change-profile.py"
   cp -- "${repo_root}/scripts/lib/common.sh" "${fixture_repo}/scripts/lib/common.sh"
 
   # shellcheck disable=SC2016 # The fake suite must expand this at execution time.
@@ -90,6 +94,7 @@ create_fixture() {
     >"${external_diff_helper}"
   chmod +x -- \
     "${fixture_repo}/scripts/check-control-plane-fixtures.sh" \
+    "${fixture_repo}/scripts/classify-change-profile.py" \
     "${fixture_repo}/scripts/tests/run.sh" \
     "${external_diff_helper}"
 
@@ -97,6 +102,7 @@ create_fixture() {
   printf '%s\n' 'name: fixture' >"${fixture_repo}/.github/workflows/ci.yml"
   printf '%s\n' 'package backend' >"${fixture_repo}/backend/app.go"
   printf '%s\n' '{"fixture":true}' >"${fixture_repo}/config/tool.json"
+  printf '%s\n' '# Fixture documentation' >"${fixture_repo}/docs/guide.md"
   printf '%s\n' 'export const app = true;' >"${fixture_repo}/frontend/src/app.ts"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${fixture_repo}/scripts/policy.sh"
 
@@ -152,10 +158,51 @@ run_classifier() {
   pass "${description}"
 }
 
+assert_profile() {
+  local expected_profile="$1"
+  local expected_reason="$2"
+  local description="$3"
+  shift 3
+  local expected_output
+  local actual_output
+
+  expected_output="$(printf 'change_profile=%s\nchange_reason=%s' \
+    "${expected_profile}" "${expected_reason}")"
+  actual_output="$(
+    CONTROL_PLANE_FIXTURE_MARKER="${suite_marker}" \
+      bash "${fixture_repo}/scripts/check-control-plane-fixtures.sh" \
+      --classify-only "$@"
+  )"
+  [[ "${actual_output}" == "${expected_output}" ]] \
+    || fail "${description} returned unexpected profile: ${actual_output//$'\n'/, }"
+  pass "${description}"
+}
+
 create_fixture application-staged
 printf '%s\n' 'package backend' '// ordinary staged change' >"${fixture_repo}/backend/app.go"
 fixture_git add -- backend/app.go
 run_classifier skip 'application-only staged changes skip control-plane fixtures' --staged
+assert_profile backend backend_scope 'backend changes select the backend profile' --staged
+
+create_fixture docs-profile
+printf '%s\n' '# Updated fixture documentation' >"${fixture_repo}/docs/guide.md"
+fixture_git add -- docs/guide.md
+run_classifier skip 'documentation-only changes skip control-plane fixtures' --staged
+assert_profile docs docs_only 'documentation-only changes select the docs profile' --staged
+
+create_fixture frontend-profile
+printf '%s\n' 'export const app = false;' >"${fixture_repo}/frontend/src/app.ts"
+fixture_git add -- frontend/src/app.ts
+run_classifier skip 'frontend-only changes skip control-plane fixtures' --staged
+assert_profile frontend frontend_scope 'frontend changes select the frontend profile' --staged
+
+create_fixture application-union-profile
+printf '%s\n' 'package backend' '// union change' >"${fixture_repo}/backend/app.go"
+printf '%s\n' 'export const app = false;' >"${fixture_repo}/frontend/src/app.ts"
+printf '%s\n' '# Related documentation' >"${fixture_repo}/docs/guide.md"
+fixture_git add -- backend/app.go frontend/src/app.ts docs/guide.md
+run_classifier skip 'known frontend and backend changes skip control-plane fixtures' --staged
+assert_profile application application_union 'frontend and backend changes select the union profile' --staged
 
 create_fixture application-working-tree
 printf '%s\n' 'package backend' '// ordinary unstaged change' >"${fixture_repo}/backend/app.go"
@@ -185,6 +232,7 @@ create_fixture scripts-change
 printf '%s\n' '# changed' >>"${fixture_repo}/scripts/policy.sh"
 fixture_git add -- scripts/policy.sh
 run_classifier run 'scripts changes run control-plane fixtures exactly once' --staged
+assert_profile full control_or_infrastructure_change 'classifier changes select the full profile' --staged
 
 create_fixture github-change
 printf '%s\n' '# changed' >>"${fixture_repo}/.github/workflows/ci.yml"
@@ -218,6 +266,7 @@ run_classifier run 'mixed application and control-plane changes run fixtures exa
 create_fixture application-rename
 fixture_git mv -- backend/app.go backend/renamed.go
 run_classifier run 'renaming between application paths remains fail-closed' --staged
+assert_profile full rename_or_type_change 'renames select the full profile' --staged
 
 create_fixture control-plane-copy
 cp -- "${fixture_repo}/scripts/policy.sh" "${fixture_repo}/backend/copied-policy.go"
@@ -235,10 +284,17 @@ ln -s -- ../frontend/src/app.ts "${fixture_repo}/backend/app.go"
 fixture_git add -- backend/app.go
 run_classifier run 'an application file type change fails closed' --staged
 
+create_fixture application-mode-change
+chmod +x -- "${fixture_repo}/backend/app.go"
+fixture_git add -- backend/app.go
+run_classifier run 'an application file mode change fails closed' --staged
+assert_profile full rename_or_type_change 'mode changes select the full profile' --staged
+
 create_fixture unknown-path
 printf '%s\n' 'unclassified repository input' >"${fixture_repo}/unclassified.fixture"
 fixture_git add -- unclassified.fixture
 run_classifier run 'an unclassified repository path fails closed' --staged
+assert_profile full unknown_path 'unknown paths select the full profile' --staged
 
 create_fixture newline-path
 newline_path=$'backend/noncanonical\npath.go'
@@ -292,9 +348,11 @@ for ((file_number = 1; file_number <= 101; file_number += 1)); do
 done
 fixture_git add -- frontend
 run_classifier run 'an oversized application-only inventory fails closed' --staged
+assert_profile full change_limit_exceeded 'oversized inventories select the full profile' --staged
 
 create_fixture empty-staged-diff
 run_classifier run 'an empty staged inventory fails closed' --staged
+assert_profile full empty_change_inventory 'empty inventories select the full profile' --staged
 
 create_fixture empty-range
 head_sha="$(fixture_git rev-parse HEAD)"

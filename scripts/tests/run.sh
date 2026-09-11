@@ -497,9 +497,24 @@ case "${FAKE_SECURITY_MUTATION:-none}" in
 esac
 [[ "${FAKE_SECURITY_FAILURE:-false}" != "true" ]]
 EOF
+  cat >"${fixture}/scripts/check-control-plane-fixtures.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == "--classify-only --staged" ]]
+printf '%s\n' 'classifier' >>"${TEST_COMMAND_LOG}"
+printf 'change_profile=%s\n' "${FAKE_CHANGE_PROFILE:-full}"
+printf '%s\n' 'change_reason=fixture_profile'
+EOF
+  cat >"${fixture}/scripts/check-docs.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' 'docs' >>"${TEST_COMMAND_LOG}"
+EOF
   chmod +x \
     "${bin}/git" "${bin}/node" "${bin}/pnpm" "${bin}/go" "${bin}/docker" \
     "${bin}/jq" "${bin}/terraform" "${fixture}/scripts/check-security.sh" \
+    "${fixture}/scripts/check-control-plane-fixtures.sh" \
+    "${fixture}/scripts/check-docs.sh" \
     "${fixture}/.github/scripts/resolve-ci-reuse.test.sh"
 
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" TEST_DATABASE_URL="${test_database_url}" \
@@ -515,10 +530,11 @@ EOF
   assert_lines_in_order "${log}" \
     "security" \
     "runner-source" \
+    "classifier" \
     "git diff --no-ext-diff --no-textconv --check" \
     "git diff --no-ext-diff --no-textconv --cached --check" \
-    "go env GOVERSION GOENV=off GOTOOLCHAIN=local" \
     "pnpm install --frozen-lockfile --ignore-scripts" \
+    "go env GOVERSION GOENV=off GOTOOLCHAIN=local" \
     "resolve-ci-reuse test" \
     "docker run --rm --volume ${fixture}:/repo:ro --workdir /repo ${SUPPLY_CHAIN_ACTIONLINT_IMAGE} -color" \
     "runner CI=true ${fixture} ${fixture}/scripts all true"
@@ -530,6 +546,56 @@ EOF
     || fail "before-commit check did not validate unstaged whitespace before and after checks"
   [[ "$(grep -Fxc -- 'git diff --no-ext-diff --no-textconv --cached --check' "${log}")" == "2" ]] \
     || fail "before-commit check did not validate staged whitespace before and after checks"
+
+  : >"${log}"
+  PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" FAKE_CHANGE_PROFILE=docs \
+    bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
+  assert_lines_in_order "${log}" security runner-source classifier docs
+  assert_file_contains "${log}" "pnpm install --frozen-lockfile --ignore-scripts"
+  if grep -Eq 'resolve-ci-reuse test|runner CI=|terraform|docker run' "${log}"; then
+    fail "docs commit profile ran an unrelated build, infrastructure, or E2E gate"
+  fi
+
+  : >"${log}"
+  PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" FAKE_CHANGE_PROFILE=frontend \
+    bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
+  assert_lines_in_order "${log}" \
+    security runner-source classifier \
+    "pnpm install --frozen-lockfile --ignore-scripts" docs \
+    "runner CI=true ${fixture} ${fixture}/scripts frontend false"
+  if grep -Eq 'resolve-ci-reuse test|runner CI=.* all true|terraform|docker run' "${log}"; then
+    fail "frontend commit profile ran an unrelated backend, infrastructure, or E2E gate"
+  fi
+
+  : >"${log}"
+  PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" TEST_DATABASE_URL="${test_database_url}" \
+    FAKE_CHANGE_PROFILE=backend \
+    bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
+  assert_lines_in_order "${log}" \
+    security runner-source classifier \
+    "go env GOVERSION GOENV=off GOTOOLCHAIN=local" docs \
+    "runner CI=true ${fixture} ${fixture}/scripts backend false"
+  assert_file_contains "${log}" "pnpm install --frozen-lockfile --ignore-scripts"
+  if grep -Eq 'resolve-ci-reuse test|runner CI=.* all true|terraform|docker run' "${log}"; then
+    fail "backend commit profile ran an unrelated frontend, infrastructure, or Playwright E2E gate"
+  fi
+
+  : >"${log}"
+  PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" TEST_DATABASE_URL="${test_database_url}" \
+    FAKE_CHANGE_PROFILE=application \
+    bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
+  assert_lines_in_order "${log}" \
+    security runner-source classifier \
+    "pnpm install --frozen-lockfile --ignore-scripts" docs \
+    "runner CI=true ${fixture} ${fixture}/scripts application false"
+  if grep -Eq 'resolve-ci-reuse test|runner CI=.* all true|terraform|docker run' "${log}"; then
+    fail "application union profile ran infrastructure or Playwright E2E gates"
+  fi
+
+  assert_failure "backend commit profile without a disposable database" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" TEST_DATABASE_URL= \
+    FAKE_CHANGE_PROFILE=backend \
+    bash "${fixture}/scripts/check-before-commit.sh"
 
   local security_mutation
   for security_mutation in index working untracked; do
@@ -868,6 +934,7 @@ node --test "${script_dir}/staging-csrf-rollout.test.mjs"
 node --test "${script_dir}/staging-rollout-evidence.test.mjs"
 node --test "${script_dir}/staging-deploy-retry-checkpoint.test.mjs"
 node --test "${script_dir}/resolve-staging-deploy-retry.test.mjs"
+node --test "${script_dir}/verify-ci-change-profile.test.mjs"
 node --test "${script_dir}/terraform-evidence.test.mjs"
 bash "${script_dir}/check-staging-csrf-rollout.sh"
 bash "${script_dir}/check-staging-candidate-deploy-and-drain.sh"
