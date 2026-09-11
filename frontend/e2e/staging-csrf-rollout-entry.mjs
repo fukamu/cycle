@@ -6,6 +6,10 @@ import { URL } from "node:url";
 import { chromium, request } from "@playwright/test";
 
 import { parseAnonymousSession } from "../../scripts/lib/staging-critical.mjs";
+import {
+  markStagingDeployCleanupUnverified,
+  markStagingDeployCleanupVerified,
+} from "../../scripts/staging-deploy-retry-checkpoint.mjs";
 import { enterStagingCritical } from "./staging-critical-entry.mjs";
 
 const authenticatedUserIDHeader = "x-fukamu-authenticated-user-id";
@@ -21,8 +25,12 @@ export function createStagingCSRFRolloutBrowserAdapter({
   bootstrapID,
   marker,
   repositoryRoot,
+  retryCheckpointEnabled,
   actionTimeoutMilliseconds = 45_000,
 }) {
+  if (typeof retryCheckpointEnabled !== "boolean") {
+    throw new Error("staging deploy retry checkpoint mode is invalid");
+  }
   let currentInviteToken = inviteToken;
   let browser;
   let context;
@@ -85,6 +93,12 @@ export function createStagingCSRFRolloutBrowserAdapter({
     async prepareLegacySession() {
       await seedBootstrapID(pageA, bootstrapID);
       let session;
+      const anonymousSessionCheckpoint =
+        createStagingDeployAnonymousSessionRoute({
+          checkpointEnabled: retryCheckpointEnabled,
+        });
+      const anonymousSessionRoute = anonymousSessionCheckpoint.handle;
+      await pageA.route("**/api/v1/session/anonymous", anonymousSessionRoute);
       try {
         session = await enterStagingCritical({
           context: {
@@ -102,8 +116,14 @@ export function createStagingCSRFRolloutBrowserAdapter({
             ),
         });
       } finally {
+        await pageA.unroute(
+          "**/api/v1/session/anonymous",
+          anonymousSessionRoute,
+        );
         currentInviteToken = "";
       }
+      const checkpointFailure = anonymousSessionCheckpoint.failure();
+      if (checkpointFailure !== undefined) throw checkpointFailure;
       if (session === undefined) {
         throw new Error("legacy session preparation failed");
       }
@@ -396,12 +416,16 @@ export function createStagingCSRFRolloutBrowserAdapter({
         timeout: actionTimeoutMilliseconds,
       });
       try {
-        return {
+        const result = {
           status: response.status(),
           code: await safeErrorCode(response),
           authenticatedUserIDAbsent:
             response.headers()[authenticatedUserIDHeader] === undefined,
         };
+        markStagingDeployCleanupFromRevokedResult(result, {
+          checkpointEnabled: retryCheckpointEnabled,
+        });
+        return result;
       } finally {
         await response.dispose();
       }
@@ -453,6 +477,62 @@ export function createStagingCSRFRolloutBrowserAdapter({
       }
     },
   };
+}
+
+export function createStagingDeployAnonymousSessionRoute({
+  checkpointEnabled,
+  markCleanupUnverified = markStagingDeployCleanupUnverified,
+} = {}) {
+  if (
+    typeof checkpointEnabled !== "boolean" ||
+    typeof markCleanupUnverified !== "function"
+  ) {
+    throw new Error("staging deploy anonymous route configuration is invalid");
+  }
+  let checkpointFailure;
+  return {
+    async handle(route) {
+      if (
+        typeof route?.continue !== "function" ||
+        typeof route?.abort !== "function"
+      ) {
+        throw new Error("staging deploy anonymous route is invalid");
+      }
+      try {
+        if (checkpointEnabled) markCleanupUnverified();
+        await route.continue();
+      } catch (error) {
+        checkpointFailure = error;
+        await route.abort("failed").catch(() => undefined);
+      }
+    },
+    failure() {
+      return checkpointFailure;
+    },
+  };
+}
+
+export function markStagingDeployCleanupFromRevokedResult(
+  result,
+  {
+    checkpointEnabled,
+    markCleanupVerified = markStagingDeployCleanupVerified,
+  } = {},
+) {
+  if (
+    typeof checkpointEnabled !== "boolean" ||
+    typeof markCleanupVerified !== "function"
+  ) {
+    throw new Error("staging deploy cleanup checkpoint is invalid");
+  }
+  if (
+    checkpointEnabled &&
+    result?.status === 401 &&
+    result?.code === "SESSION_EXPIRED" &&
+    result?.authenticatedUserIDAbsent === true
+  ) {
+    markCleanupVerified();
+  }
 }
 
 function configurePage(page, timeout) {

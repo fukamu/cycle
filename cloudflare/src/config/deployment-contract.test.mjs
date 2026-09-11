@@ -79,6 +79,15 @@ const rolloutEvidenceWriter = readRepositoryFile(
 const stagingRolloutBrowserEntry = readRepositoryFile(
   "frontend/e2e/staging-csrf-rollout-entry.mjs",
 );
+const stagingRolloutContract = readRepositoryFile(
+  "scripts/lib/staging-csrf-rollout.mjs",
+);
+const stagingDeployRetryCheckpoint = readRepositoryFile(
+  "scripts/staging-deploy-retry-checkpoint.mjs",
+);
+const stagingDeployRetryResolver = readRepositoryFile(
+  "scripts/resolve-staging-deploy-retry.mjs",
+);
 const validationStep = extractStep(
   workflow,
   "Validate required deployment inputs",
@@ -206,9 +215,13 @@ test("deployment contract is the exact repository handoff classification", () =>
       "name: Resolve approved deployment",
       "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
       "uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0",
+      "name: Resolve prior safe retry checkpoint",
+      "name: Download prior safe retry checkpoint",
       "name: Download approved Terraform evidence",
       "name: Verify approved Terraform evidence",
+      "name: Verify prior safe retry checkpoint",
       "name: Re-verify deployment commit before Staging approval",
+      "name: Authorize deploy job attempt",
     ],
     "deployment pre-approval step inventory",
   );
@@ -223,6 +236,7 @@ test("deployment contract is the exact repository handoff classification", () =>
       "      infra_evidence_kind: ${{ steps.resolve.outputs.infra_evidence_kind }}",
       "      infra_evidence_run_id: ${{ steps.resolve.outputs.infra_evidence_run_id }}",
       "      infra_plan_sha256: ${{ steps.verify_evidence.outputs.plan_sha256 }}",
+      "      verified_run_attempt: ${{ steps.authorize_attempt.outputs.verified_run_attempt }}",
     ],
     "deployment resolve job contract",
   );
@@ -276,7 +290,7 @@ test("deployment contract is the exact repository handoff classification", () =>
   });
   for (const fragment of [
     "Deploy Staging accepts manual workflow dispatch only.",
-    "Deploy Staging workflow reruns are prohibited; start a new manual dispatch after reviewing the prior attempt.",
+    "Deploy Staging permits at most one checkpoint-authorized workflow rerun.",
     "Deploy Staging is allowed only from main.",
     "Missing repository variable STAGING_DEPLOY_APPROVER.",
     "Deploy Staging actor and triggering actor must both match STAGING_DEPLOY_APPROVER.",
@@ -287,7 +301,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     "Deploy Staging mode must be normal or recovery.",
     '[[ ! "${EXPECTED_APPROVER}" =~ ^[[:alnum:]]([[:alnum:]-]{0,37}[[:alnum:]])?$ || "${EXPECTED_APPROVER}" =~ -- ]]',
     '[[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" || "${GITHUB_TRIGGERING_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]',
-    "[[ \"${GITHUB_RUN_ATTEMPT}\" != '1' ]]",
+    "[[ \"${GITHUB_RUN_ATTEMPT}\" != '1' && \"${GITHUB_RUN_ATTEMPT}\" != '2' ]]",
     '[[ ! "${INFRA_EVIDENCE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]',
     "[[ \"${RECOVERY_CONFIRMATION}\" != 'RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY' ]]",
   ]) {
@@ -360,12 +374,11 @@ test("deployment contract is the exact repository handoff classification", () =>
     resolveNodeSetupStep.trimEnd(),
     [
       "      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0",
-      "        if: inputs.mode == 'normal'",
       "        with:",
       "          runtime: node@24",
       "          install: false",
     ].join("\n"),
-    "normal Terraform evidence verification must pin Node 24",
+    "Terraform and retry evidence verification must pin Node 24",
   );
   const downloadTerraformEvidenceStep = extractStep(
     workflow,
@@ -429,6 +442,111 @@ test("deployment contract is the exact repository handoff classification", () =>
       `Terraform evidence verification is missing: ${fragment}`,
     );
   }
+  const resolveRetryStep = extractStep(
+    workflow,
+    "Resolve prior safe retry checkpoint",
+  );
+  assert.equal(extractStepProperty(resolveRetryStep, "shell"), "bash");
+  assert.doesNotMatch(resolveRetryStep, /^        continue-on-error:/m);
+  assert.equal(
+    extractStepProperty(resolveRetryStep, "if"),
+    "github.run_attempt == '2'",
+  );
+  assert.equal(extractStepProperty(resolveRetryStep, "id"), "resolve_retry");
+  assert.deepEqual(stepEnvironmentMappings(resolveRetryStep), {
+    COMMIT_SHA: {
+      kind: "literal",
+      value: "${{ steps.resolve.outputs.commit_sha }}",
+    },
+    DEPLOY_MODE: { kind: "literal", value: "${{ inputs.mode }}" },
+    EXPECTED_APPROVER: {
+      kind: "literal",
+      value: "${{ vars.STAGING_DEPLOY_APPROVER }}",
+    },
+    GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
+  });
+  for (const fragment of [
+    'artifact_name="$(node ./scripts/resolve-staging-deploy-retry.mjs)"',
+    "^staging-deploy-retry-[0-9a-f]{40}-[1-9][0-9]*-1$",
+    'echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"',
+  ]) {
+    assert.equal(
+      resolveRetryStep.split(fragment).length - 1,
+      1,
+      `retry checkpoint resolution must remain closed and unique: ${fragment}`,
+    );
+  }
+
+  const downloadRetryStep = extractStep(
+    workflow,
+    "Download prior safe retry checkpoint",
+  );
+  assert.equal(
+    downloadRetryStep.trimEnd(),
+    [
+      "      - name: Download prior safe retry checkpoint",
+      "        if: github.run_attempt == '2'",
+      "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+      "        with:",
+      "          name: ${{ steps.resolve_retry.outputs.artifact_name }}",
+      "          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-source",
+      "          github-token: ${{ github.token }}",
+      "          run-id: ${{ github.run_id }}",
+    ].join("\n"),
+    "attempt 2 must download only the checkpoint resolved from its own workflow run",
+  );
+
+  const verifyRetryStep = extractStep(
+    workflow,
+    "Verify prior safe retry checkpoint",
+  );
+  assert.equal(
+    extractStepProperty(verifyRetryStep, "if"),
+    "github.run_attempt == '2'",
+  );
+  assert.equal(extractStepProperty(verifyRetryStep, "id"), "verify_retry");
+  assert.deepEqual(stepEnvironmentMappings(verifyRetryStep), {
+    COMMIT_SHA: {
+      kind: "literal",
+      value: "${{ steps.resolve.outputs.commit_sha }}",
+    },
+    DEPLOY_MODE: { kind: "literal", value: "${{ inputs.mode }}" },
+    EXACT_MAIN_CI_RUN_ID: {
+      kind: "literal",
+      value: "${{ steps.resolve.outputs.ci_run_id }}",
+    },
+    INFRA_EVIDENCE_KIND: {
+      kind: "literal",
+      value: "${{ steps.resolve.outputs.infra_evidence_kind }}",
+    },
+    INFRA_EVIDENCE_RUN_ID: {
+      kind: "literal",
+      value: "${{ steps.resolve.outputs.infra_evidence_run_id }}",
+    },
+    INFRA_PLAN_SHA256: {
+      kind: "literal",
+      value: "${{ steps.verify_evidence.outputs.plan_sha256 }}",
+    },
+    STAGING_DEPLOY_CHECKPOINT_OPERATION: {
+      kind: "literal",
+      value: "verify_retry",
+    },
+    STAGING_DEPLOY_RETRY_EVIDENCE_FILE: {
+      kind: "literal",
+      value:
+        "${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-source/fukamu-cycle-staging-deploy-retry.json",
+    },
+  });
+  for (const fragment of [
+    "node ./scripts/staging-deploy-retry-checkpoint.mjs",
+    "echo 'verified=true' >> \"${GITHUB_OUTPUT}\"",
+  ]) {
+    assert.equal(
+      verifyRetryStep.split(fragment).length - 1,
+      1,
+      `retry checkpoint verification must remain fail-closed: ${fragment}`,
+    );
+  }
   const preApprovalMainGuard = extractStep(
     workflow,
     "Re-verify deployment commit before Staging approval",
@@ -451,6 +569,54 @@ test("deployment contract is the exact repository handoff classification", () =>
     ).length - 1,
     1,
     "the deployment commit must be checked against current main immediately before staging approval",
+  );
+  const authorizeAttemptStep = extractStep(
+    workflow,
+    "Authorize deploy job attempt",
+  );
+  assertStepExecutionControls(
+    authorizeAttemptStep,
+    "Authorize deploy job attempt",
+    "bash",
+  );
+  assert.equal(
+    extractStepProperty(authorizeAttemptStep, "id"),
+    "authorize_attempt",
+  );
+  assert.deepEqual(stepEnvironmentMappings(authorizeAttemptStep), {
+    RETRY_CHECKPOINT_VERIFIED: {
+      kind: "literal",
+      value: "${{ steps.verify_retry.outputs.verified }}",
+    },
+  });
+  for (const fragment of [
+    'case "${GITHUB_RUN_ATTEMPT}" in',
+    "1) ;;",
+    "2)",
+    "[[ \"${RETRY_CHECKPOINT_VERIFIED}\" != 'true' ]]",
+    "*)",
+    'echo "verified_run_attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"',
+  ]) {
+    assert.equal(
+      authorizeAttemptStep.split(fragment).length - 1,
+      1,
+      `deploy attempt authorization must bind attempts 1 and 2 exactly once: ${fragment}`,
+    );
+  }
+  assert.ok(
+    resolveJob.indexOf("      - name: Resolve prior safe retry checkpoint\n") <
+      resolveJob.indexOf(
+        "      - name: Download prior safe retry checkpoint\n",
+      ) &&
+      resolveJob.indexOf(
+        "      - name: Download prior safe retry checkpoint\n",
+      ) <
+        resolveJob.indexOf(
+          "      - name: Verify prior safe retry checkpoint\n",
+        ) &&
+      resolveJob.indexOf("      - name: Verify prior safe retry checkpoint\n") <
+        resolveJob.indexOf("      - name: Authorize deploy job attempt\n"),
+    "attempt 2 must resolve, download, verify, and authorize its checkpoint in order",
   );
 
   const deployJob = between(workflow, "  deploy:\n", "");
@@ -484,8 +650,10 @@ test("deployment contract is the exact repository handoff classification", () =>
   assert.deepEqual(
     matches(deployJob, /^      - ([^\n]+)$/gm),
     [
+      "name: Verify resolved deployment attempt",
       "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
       "uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0",
+      "name: Initialize deployment retry checkpoint state",
       "uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
       "name: Validate required deployment inputs",
       "name: Install JavaScript dependencies",
@@ -498,6 +666,8 @@ test("deployment contract is the exact repository handoff classification", () =>
       "name: Upload stable CSRF rollout evidence",
       "name: Smoke test",
       "name: Run post-deploy staging critical journey",
+      "name: Finalize safe deployment retry checkpoint",
+      "name: Upload safe deployment retry checkpoint",
     ],
     "deployment step inventory",
   );
@@ -640,6 +810,20 @@ test("deployment contract is the exact repository handoff classification", () =>
   );
 
   const jobEnvironment = between(deployJobPreamble, "    env:\n", "");
+  for (const fragment of [
+    "      COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}",
+    "      EXACT_MAIN_CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}",
+    "      INFRA_EVIDENCE_KIND: ${{ needs.resolve.outputs.infra_evidence_kind }}",
+    "      INFRA_EVIDENCE_RUN_ID: ${{ needs.resolve.outputs.infra_evidence_run_id }}",
+    "      INFRA_PLAN_SHA256: ${{ needs.resolve.outputs.infra_plan_sha256 }}",
+    "      DEPLOY_MODE: ${{ inputs.mode }}",
+  ]) {
+    assert.equal(
+      jobEnvironment.split(fragment).length - 1,
+      1,
+      `deployment retry identity must remain bound at job scope: ${fragment}`,
+    );
+  }
   const workflowVariableMappings = expressionMappings(jobEnvironment, "vars");
   const expectedVariableSources = unique([
     ...backend.githubVariables,
@@ -658,6 +842,34 @@ test("deployment contract is the exact repository handoff classification", () =>
     expressionMappings(jobEnvironment, "secrets"),
     {},
     "deployment job must not expose secrets",
+  );
+
+  const verifyResolvedAttemptStep = extractStep(
+    workflow,
+    "Verify resolved deployment attempt",
+  );
+  assertStepExecutionControls(
+    verifyResolvedAttemptStep,
+    "Verify resolved deployment attempt",
+    "bash",
+  );
+  assert.deepEqual(stepEnvironmentMappings(verifyResolvedAttemptStep), {
+    VERIFIED_RUN_ATTEMPT: {
+      kind: "literal",
+      value: "${{ needs.resolve.outputs.verified_run_attempt }}",
+    },
+  });
+  assert.equal(
+    verifyResolvedAttemptStep.split(
+      '[[ ! "${GITHUB_RUN_ATTEMPT}" =~ ^[12]$ || "${VERIFIED_RUN_ATTEMPT}" != "${GITHUB_RUN_ATTEMPT}" ]]',
+    ).length - 1,
+    1,
+    "the deploy job must reject partial reruns and attempts outside the bound",
+  );
+  assert.equal(
+    matches(deployJob, /^      - ([^\n]+)$/gm)[0],
+    "name: Verify resolved deployment attempt",
+    "the resolved-attempt comparison must be the first deploy step",
   );
 
   const checkoutStep = extractUsesStep(
@@ -690,6 +902,27 @@ test("deployment contract is the exact repository handoff classification", () =>
       "          install: false",
     ].join("\n"),
     "deployment pnpm setup step",
+  );
+  const initializeRetryCheckpointStep = extractStep(
+    workflow,
+    "Initialize deployment retry checkpoint state",
+  );
+  assertStepExecutionControls(
+    initializeRetryCheckpointStep,
+    "Initialize deployment retry checkpoint state",
+    null,
+  );
+  assert.equal(
+    initializeRetryCheckpointStep.trimEnd(),
+    [
+      "      - name: Initialize deployment retry checkpoint state",
+      "        env:",
+      "          STAGING_DEPLOY_CHECKPOINT_OPERATION: initialize",
+      "          STAGING_DEPLOY_CHECKPOINT_STATE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-state.json",
+      "          STAGING_DEPLOY_RETRY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json",
+      "        run: node ./scripts/staging-deploy-retry-checkpoint.mjs",
+    ].join("\n"),
+    "the deploy job must initialize its exclusive checkpoint state before staging work",
   );
   const goSetupStep = extractUsesStep(
     workflow,
@@ -800,6 +1033,11 @@ test("deployment contract is the exact repository handoff classification", () =>
         kind: "secret",
         value: "STAGING_E2E_INVITE_TOKEN",
       },
+      STAGING_DEPLOY_CHECKPOINT_STATE_FILE: {
+        kind: "literal",
+        value:
+          "${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-state.json",
+      },
       MIGRATION_DATABASE_URL: {
         kind: "secret",
         value: "NEON_MIGRATION_DATABASE_URL",
@@ -858,6 +1096,200 @@ test("deployment contract is the exact repository handoff classification", () =>
     1,
     "the live Browser process must await the deployment and drain child",
   );
+  const anonymousSessionRoute = between(
+    stagingRolloutBrowserEntry,
+    "export function createStagingDeployAnonymousSessionRoute({\n",
+    "\nexport function markStagingDeployCleanupFromRevokedResult(\n",
+  );
+  assert.equal(
+    anonymousSessionRoute.split("markCleanupUnverified();").length - 1,
+    1,
+    "the anonymous-session request must make cleanup unverified exactly once",
+  );
+  assert.ok(
+    anonymousSessionRoute.indexOf("markCleanupUnverified();") <
+      anonymousSessionRoute.indexOf("await route.continue();"),
+    "cleanup must become unverified before the anonymous POST is released",
+  );
+  assert.ok(
+    stagingRolloutBrowserEntry.indexOf(
+      'await pageA.route("**/api/v1/session/anonymous", anonymousSessionRoute);',
+    ) <
+      stagingRolloutBrowserEntry.indexOf(
+        "session = await enterStagingCritical({",
+      ),
+    "the cleanup fence must be installed before anonymous session creation",
+  );
+  const revokedSessionVerification = between(
+    stagingRolloutBrowserEntry,
+    "export function markStagingDeployCleanupFromRevokedResult(\n",
+    "\nfunction configurePage(page, timeout) {\n",
+  );
+  assert.equal(
+    revokedSessionVerification.split("markCleanupVerified();").length - 1,
+    1,
+    "cleanup must become verified exactly once after revoked-session proof",
+  );
+  for (const fragment of [
+    "result?.status === 401",
+    'result?.code === "SESSION_EXPIRED"',
+    "result?.authenticatedUserIDAbsent === true",
+  ]) {
+    assert.notEqual(
+      revokedSessionVerification.indexOf(fragment),
+      -1,
+      `cleanup verification must include the complete 401 proof: ${fragment}`,
+    );
+    assert.ok(
+      revokedSessionVerification.indexOf(fragment) <
+        revokedSessionVerification.indexOf("markCleanupVerified();"),
+      `cleanup verification must require the complete 401 proof: ${fragment}`,
+    );
+  }
+  const primaryAccountCleanup = between(
+    stagingRolloutContract,
+    '    phase = "account_delete";\n',
+    "  } catch (failure) {\n",
+  );
+  assert.ok(
+    primaryAccountCleanup.indexOf("await retryAccountDelete(") <
+      primaryAccountCleanup.indexOf("accountDeleted = true;") &&
+      primaryAccountCleanup.indexOf("accountDeleted = true;") <
+        primaryAccountCleanup.indexOf("await adapter.verifyRevokedSession()"),
+    "the primary cleanup path must verify a valid account delete before the revoked-session 401",
+  );
+  const fallbackAccountCleanup = between(
+    stagingRolloutContract,
+    "  if (originalUserID !== undefined && !accountDeleted) {\n",
+    "\n  try {\n    await adapter.close();",
+  );
+  assert.ok(
+    fallbackAccountCleanup.indexOf("await retryAccountDelete(") <
+      fallbackAccountCleanup.indexOf("accountDeleted = true;") &&
+      fallbackAccountCleanup.indexOf("accountDeleted = true;") <
+        fallbackAccountCleanup.indexOf("if (accountDeleted) {") &&
+      fallbackAccountCleanup.indexOf("if (accountDeleted) {") <
+        fallbackAccountCleanup.indexOf("await adapter.verifyRevokedSession()"),
+    "the fallback cleanup path must verify a valid account delete before the revoked-session 401",
+  );
+  const boundedAccountDelete = between(
+    stagingRolloutContract,
+    "async function retryAccountDelete(\n",
+    "\n}\n",
+  );
+  for (const fragment of [
+    "result.status === 204",
+    "result.authenticatedUserIDVerified === true",
+  ]) {
+    assert.equal(
+      boundedAccountDelete.split(fragment).length - 1,
+      1,
+      `account cleanup success must require the complete delete proof: ${fragment}`,
+    );
+  }
+  const mutationBoundaryCheckpoint = [
+    "STAGING_DEPLOY_CHECKPOINT_OPERATION=mark_mutation_boundary \\",
+    "  node ./scripts/staging-deploy-retry-checkpoint.mjs",
+  ].join("\n");
+  assert.equal(
+    candidateDeployAndDrainScript.split(mutationBoundaryCheckpoint).length - 1,
+    1,
+    "the release mutation boundary must be crossed exactly once",
+  );
+  assert.ok(
+    candidateDeployAndDrainScript.indexOf("cloudflare_drain_baseline_ready") <
+      candidateDeployAndDrainScript.indexOf(mutationBoundaryCheckpoint) &&
+      candidateDeployAndDrainScript.indexOf(mutationBoundaryCheckpoint) <
+        candidateDeployAndDrainScript.indexOf("go run ./cmd/migrate"),
+    "the mutation boundary must be durably crossed after read-only preflight and before migration",
+  );
+
+  for (const fragment of [
+    "const maximumCheckpointBytes = 16 * 1024;",
+    'const stateKind = "staging_deploy_retry_state";',
+    'const evidenceKind = "staging_deploy_retry_checkpoint";',
+    "hasOnlyKeys(value, stateKeys)",
+    "hasOnlyKeys(value, evidenceKeys)",
+    "constants.O_EXCL",
+    "fstatSync(descriptor)",
+    "0o600",
+    "fsyncSync(descriptor)",
+    'metadata.deployRunAttempt !== "1"',
+    'metadata.deployRunAttempt !== "2"',
+    'value.result !== "no_mutation_started"',
+    'value.mutationBoundary !== "not_crossed"',
+    "!/^(?:not_started|verified)$/.test(value.cleanupState)",
+  ]) {
+    assert.equal(
+      stagingDeployRetryCheckpoint.split(fragment).length - 1,
+      1,
+      `retry checkpoint must keep bounded, exclusive, closed evidence: ${fragment}`,
+    );
+  }
+  assert.equal(
+    stagingDeployRetryCheckpoint.split("constants.O_NOFOLLOW ?? 0").length - 1,
+    2,
+    "retry checkpoint reads and writes must both reject final-component symlinks",
+  );
+  assert.ok(
+    stagingDeployRetryCheckpoint.indexOf(
+      'current.mutationBoundary !== "not_crossed"',
+    ) <
+      stagingDeployRetryCheckpoint.indexOf(
+        'return { ...current, mutationBoundary: "crossed" };',
+      ),
+    "mutation-boundary transition must only move from not_crossed to crossed",
+  );
+  assert.doesNotMatch(
+    stagingDeployRetryCheckpoint,
+    /console\.(?:log|debug|info)|JSON\.stringify\([^)]*(?:process\.env|environment)/,
+    "retry checkpoint output must not expose its environment or private state",
+  );
+
+  for (const fragment of [
+    "const maximumResponseBytes = 64 * 1024;",
+    "const maximumArtifactBytes = 64 * 1024;",
+    'environment.GITHUB_RUN_ATTEMPT !== "2"',
+    "value.id.toString() !== metadata.runID",
+    "value.run_attempt !== 1",
+    "value.name !== workflowName",
+    "value.path !== workflowPath",
+    'value.event !== "workflow_dispatch"',
+    'value.status !== "completed"',
+    'value.conclusion !== "failure"',
+    "value.head_sha !== metadata.commitSHA",
+    'value.head_branch !== "main"',
+    "value.repository.full_name !== metadata.repository",
+    "value.total_count !== 1",
+    "artifact.name !== expectedName",
+    "artifact.expired !== false",
+    "artifact.size_in_bytes > maximumArtifactBytes",
+    '!artifactDigestPattern.test(artifact.digest ?? "")',
+    "artifact.workflow_run.id.toString() !== metadata.runID",
+    'artifact.workflow_run.head_branch !== "main"',
+    "artifact.workflow_run.head_sha !== metadata.commitSHA",
+    "artifact.workflow_run.repository_id !==",
+    "const expectedName = `staging-deploy-retry-${metadata.commitSHA}-${metadata.runID}-1`;",
+    'redirect: "error"',
+    "signal: AbortSignal.timeout(30_000)",
+  ]) {
+    assert.equal(
+      stagingDeployRetryResolver.split(fragment).length - 1,
+      1,
+      `retry resolver must keep a bounded exact-attempt artifact contract: ${fragment}`,
+    );
+  }
+  assert.equal(
+    stagingDeployRetryResolver.split("stdout.write(`${artifactName}\\n`);")
+      .length - 1,
+    1,
+    "retry resolution may output only the validated artifact name",
+  );
+  assert.doesNotMatch(
+    stagingDeployRetryResolver,
+    /console\.(?:log|debug|info)|stdout\.write\([^\n]*token/i,
+    "retry resolution must not log credentials or unvalidated API payloads",
+  );
 
   const uploadEvidenceStep = extractStep(
     workflow,
@@ -878,6 +1310,58 @@ test("deployment contract is the exact repository handoff classification", () =>
       "          retention-days: 90",
     ].join("\n"),
     "stable rollout evidence must be uploaded after both success and failure without masking the rollout result",
+  );
+
+  const finalizeRetryCheckpointStep = extractStep(
+    workflow,
+    "Finalize safe deployment retry checkpoint",
+  );
+  assert.equal(
+    finalizeRetryCheckpointStep.trimEnd(),
+    [
+      "      - name: Finalize safe deployment retry checkpoint",
+      "        if: ${{ always() && github.run_attempt == '1' }}",
+      "        env:",
+      "          STAGING_DEPLOY_CHECKPOINT_OPERATION: finalize",
+      "          STAGING_DEPLOY_CHECKPOINT_STATE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-state.json",
+      "          STAGING_DEPLOY_RETRY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json",
+      "        run: node ./scripts/staging-deploy-retry-checkpoint.mjs",
+    ].join("\n"),
+    "attempt 1 must finalize retry evidence after every deploy outcome",
+  );
+  const uploadRetryCheckpointStep = extractStep(
+    workflow,
+    "Upload safe deployment retry checkpoint",
+  );
+  assert.equal(
+    uploadRetryCheckpointStep.trimEnd(),
+    [
+      "      - name: Upload safe deployment retry checkpoint",
+      "        if: ${{ always() && github.run_attempt == '1' }}",
+      "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+      "        with:",
+      "          name: staging-deploy-retry-${{ env.COMMIT_SHA }}-${{ github.run_id }}-1",
+      "          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json",
+      "          if-no-files-found: ignore",
+      "          retention-days: 90",
+    ].join("\n"),
+    "attempt 1 retry evidence must use an immutable run- and SHA-bound artifact name",
+  );
+  assert.ok(
+    deployJob.indexOf(
+      "      - name: Run post-deploy staging critical journey\n",
+    ) <
+      deployJob.indexOf(
+        "      - name: Finalize safe deployment retry checkpoint\n",
+      ) &&
+      deployJob.indexOf(
+        "      - name: Finalize safe deployment retry checkpoint\n",
+      ) <
+        deployJob.indexOf(
+          "      - name: Upload safe deployment retry checkpoint\n",
+        ) &&
+      deployJob.trimEnd().endsWith(uploadRetryCheckpointStep.trimEnd()),
+    "retry checkpoint finalization and upload must be the final deploy steps",
   );
 
   assert.equal(
@@ -1271,6 +1755,9 @@ test("deployment contract is the exact repository handoff classification", () =>
   const browserInstallPosition = workflow.indexOf(
     "      - name: Install staging Chromium\n",
   );
+  const retryCheckpointInitializationPosition = workflow.indexOf(
+    "      - name: Initialize deployment retry checkpoint state\n",
+  );
   const frontendBuildPosition = workflow.indexOf(
     "      - name: Build static frontend\n",
   );
@@ -1290,15 +1777,24 @@ test("deployment contract is the exact repository handoff classification", () =>
   const postDeployStagingCriticalPosition = workflow.indexOf(
     "      - name: Run post-deploy staging critical journey\n",
   );
+  const retryCheckpointFinalizationPosition = workflow.indexOf(
+    "      - name: Finalize safe deployment retry checkpoint\n",
+  );
+  const retryCheckpointUploadPosition = workflow.indexOf(
+    "      - name: Upload safe deployment retry checkpoint\n",
+  );
   assert.ok(
-    browserInstallPosition < frontendBuildPosition &&
+    retryCheckpointInitializationPosition < browserInstallPosition &&
+      browserInstallPosition < frontendBuildPosition &&
       frontendBuildPosition < backendValidationPosition &&
       backendValidationPosition < stagingPreflightPosition &&
       stagingPreflightPosition < rolloutPosition &&
       rolloutPosition < evidenceUploadPosition &&
       evidenceUploadPosition < smokeTestPosition &&
-      smokeTestPosition < postDeployStagingCriticalPosition,
-    "browser install, build, runtime validation, pre-switch health/readiness, same-process rollout/drain, evidence, smoke, and post journey order",
+      smokeTestPosition < postDeployStagingCriticalPosition &&
+      postDeployStagingCriticalPosition < retryCheckpointFinalizationPosition &&
+      retryCheckpointFinalizationPosition < retryCheckpointUploadPosition,
+    "checkpoint init, browser install, build, runtime validation, pre-switch health/readiness, same-process rollout/drain, evidence, smoke, post journey, and checkpoint finalization order",
   );
 
   const expectedStepSecretSources = [
@@ -3790,6 +4286,16 @@ function expressionMappings(block, context) {
         context: "vars",
         source: "BETA_ADMISSION_MODE",
       };
+    }
+    if (mapping === undefined) {
+      const retryMappings = {
+        "      DEPLOY_MODE: ${{ inputs.mode }}": {
+          target: "DEPLOY_MODE",
+          context: "retry",
+          source: "inputs.mode",
+        },
+      };
+      mapping = retryMappings[line];
     }
     assert.ok(
       mapping,

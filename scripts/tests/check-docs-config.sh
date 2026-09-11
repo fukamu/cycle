@@ -52,6 +52,9 @@ copy_gate_scripts() {
   cp -- "${repo_root}/scripts/lib/common.sh" "${fixture}/scripts/lib/common.sh"
   cp -- "${repo_root}/scripts/lib/security-tools.sh" "${fixture}/scripts/lib/security-tools.sh"
   cp -- \
+    "${repo_root}/scripts/lib/staging-csrf-rollout.mjs" \
+    "${fixture}/scripts/lib/staging-csrf-rollout.mjs"
+  cp -- \
     "${repo_root}/scripts/lib/docs-config-candidate-snapshot.sh" \
     "${fixture}/scripts/lib/docs-config-candidate-snapshot.sh"
   cp -- "${repo_root}/scripts/check-docs.sh" "${fixture}/scripts/check-docs.sh"
@@ -828,7 +831,9 @@ new_config_fixture() {
   cp -- \
     "${repo_root}/scripts/check-cloudflare-drain-evidence.mjs" \
     "${repo_root}/scripts/materialize-staging-worker-secrets.mjs" \
+    "${repo_root}/scripts/resolve-staging-deploy-retry.mjs" \
     "${repo_root}/scripts/run-staging-candidate-deploy-and-drain.sh" \
+    "${repo_root}/scripts/staging-deploy-retry-checkpoint.mjs" \
     "${repo_root}/scripts/write-staging-rollout-evidence.mjs" \
     "${fixture}/scripts/"
   cp -- "${repo_root}/scripts/validate-deploy-inputs.mjs" "${fixture}/scripts/validate-deploy-inputs.mjs"
