@@ -204,8 +204,10 @@ test("deployment contract is the exact repository handoff classification", () =>
     [
       "name: Verify deploy dispatch preflight",
       "name: Resolve approved deployment",
-      "name: Download approved Terraform Apply metadata",
-      "name: Verify approved Terraform Apply metadata",
+      "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+      "uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0",
+      "name: Download approved Terraform evidence",
+      "name: Verify approved Terraform evidence",
       "name: Re-verify deployment commit before Staging approval",
     ],
     "deployment pre-approval step inventory",
@@ -218,6 +220,9 @@ test("deployment contract is the exact repository handoff classification", () =>
       "    outputs:",
       "      ci_run_id: ${{ steps.resolve.outputs.ci_run_id }}",
       "      commit_sha: ${{ steps.resolve.outputs.commit_sha }}",
+      "      infra_evidence_kind: ${{ steps.resolve.outputs.infra_evidence_kind }}",
+      "      infra_evidence_run_id: ${{ steps.resolve.outputs.infra_evidence_run_id }}",
+      "      infra_plan_sha256: ${{ steps.verify_evidence.outputs.plan_sha256 }}",
     ],
     "deployment resolve job contract",
   );
@@ -232,14 +237,14 @@ test("deployment contract is the exact repository handoff classification", () =>
       "  workflow_dispatch:",
       "    inputs:",
       "      mode:",
-      "        description: Select normal after Terraform Apply, or schema-compatible application recovery",
+      "        description: Select normal after Terraform evidence, or schema-compatible application recovery",
       "        required: true",
       "        type: choice",
       "        options:",
       "          - normal",
       "          - recovery",
-      "      apply_run_id:",
-      "        description: Successful exact-current-main Terraform Apply Staging run ID (normal only)",
+      "      infra_evidence_run_id:",
+      "        description: Successful exact-current-main no-change Plan or Apply run ID (normal only)",
       "        required: false",
       "        type: string",
       "      recovery_confirmation:",
@@ -255,10 +260,13 @@ test("deployment contract is the exact repository handoff classification", () =>
     "bash",
   );
   assert.deepEqual(stepEnvironmentMappings(deployDispatchPreflightStep), {
-    APPLY_RUN_ID: { kind: "literal", value: "${{ inputs.apply_run_id }}" },
     EXPECTED_APPROVER: {
       kind: "literal",
       value: "${{ vars.STAGING_DEPLOY_APPROVER }}",
+    },
+    INFRA_EVIDENCE_RUN_ID: {
+      kind: "literal",
+      value: "${{ inputs.infra_evidence_run_id }}",
     },
     MODE: { kind: "literal", value: "${{ inputs.mode }}" },
     RECOVERY_CONFIRMATION: {
@@ -272,15 +280,15 @@ test("deployment contract is the exact repository handoff classification", () =>
     "Deploy Staging is allowed only from main.",
     "Missing repository variable STAGING_DEPLOY_APPROVER.",
     "Deploy Staging actor and triggering actor must both match STAGING_DEPLOY_APPROVER.",
-    "Normal deployment requires a numeric Terraform Apply workflow run ID.",
+    "Normal deployment requires a numeric Terraform infrastructure evidence run ID.",
     "Normal deployment must not include a recovery confirmation.",
-    "Recovery deployment must not include a Terraform Apply workflow run ID.",
+    "Recovery deployment must not include a Terraform infrastructure evidence run ID.",
     "RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY",
     "Deploy Staging mode must be normal or recovery.",
     '[[ ! "${EXPECTED_APPROVER}" =~ ^[[:alnum:]]([[:alnum:]-]{0,37}[[:alnum:]])?$ || "${EXPECTED_APPROVER}" =~ -- ]]',
     '[[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" || "${GITHUB_TRIGGERING_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]',
     "[[ \"${GITHUB_RUN_ATTEMPT}\" != '1' ]]",
-    '[[ ! "${APPLY_RUN_ID}" =~ ^[1-9][0-9]*$ ]]',
+    '[[ ! "${INFRA_EVIDENCE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]',
     "[[ \"${RECOVERY_CONFIRMATION}\" != 'RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY' ]]",
   ]) {
     assert.equal(
@@ -301,9 +309,12 @@ test("deployment contract is the exact repository handoff classification", () =>
   );
   assert.equal(extractStepProperty(resolveStep, "id"), "resolve");
   assert.deepEqual(stepEnvironmentMappings(resolveStep), {
-    APPLY_RUN_ID: { kind: "literal", value: "${{ inputs.apply_run_id }}" },
     DISPATCH_SHA: { kind: "literal", value: "${{ github.sha }}" },
     GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
+    INFRA_EVIDENCE_RUN_ID: {
+      kind: "literal",
+      value: "${{ inputs.infra_evidence_run_id }}",
+    },
     MODE: { kind: "literal", value: "${{ inputs.mode }}" },
   });
   assert.equal(
@@ -313,9 +324,11 @@ test("deployment contract is the exact repository handoff classification", () =>
   );
   for (const fragment of [
     '"/repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
-    '"/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}"',
-    '"/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}/artifacts?per_page=100"',
+    '"/repos/${GITHUB_REPOSITORY}/actions/runs/${INFRA_EVIDENCE_RUN_ID}"',
+    '"/repos/${GITHUB_REPOSITORY}/actions/runs/${INFRA_EVIDENCE_RUN_ID}/artifacts?per_page=100"',
     '"/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs"',
+    '.name == "Terraform Plan Staging"',
+    '.path == ".github/workflows/terraform-plan.yml"',
     '.name == "Terraform Apply Staging"',
     '.path == ".github/workflows/terraform-apply.yml"',
     "(.[0].id | tostring) == $run_id",
@@ -324,64 +337,96 @@ test("deployment contract is the exact repository handoff classification", () =>
     '.conclusion == "success"',
     '.head_branch == "main"',
     ".head_repository.full_name == $repository",
-    '--arg expected_name "terraform-apply-staging-${apply_head_sha}"',
+    '"terraform-plan-staging-${evidence_head_sha}-no_changes"',
+    '"terraform-apply-staging-${evidence_head_sha}"',
     "if ($matches | length) == 1 then",
     '.name == "CI"',
     '.path == ".github/workflows/ci.yml"',
     'echo "ci_run_id=${successful_ci_run_id}"',
     'echo "commit_sha=${current_main_sha}"',
+    'echo "infra_evidence_kind=${infra_evidence_kind}"',
+    'echo "infra_evidence_run_id=${INFRA_EVIDENCE_RUN_ID}"',
   ]) {
     assert.ok(
       resolveStep.includes(fragment),
       `approved deployment resolution is missing: ${fragment}`,
     );
   }
-  const downloadApplyMetadataStep = extractStep(
-    workflow,
-    "Download approved Terraform Apply metadata",
+  const resolveNodeSetupStep = extractUsesStep(
+    resolveJob,
+    "pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0",
   );
   assert.equal(
-    downloadApplyMetadataStep.trimEnd(),
+    resolveNodeSetupStep.trimEnd(),
     [
-      "      - name: Download approved Terraform Apply metadata",
+      "      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0",
+      "        if: inputs.mode == 'normal'",
+      "        with:",
+      "          runtime: node@24",
+      "          install: false",
+    ].join("\n"),
+    "normal Terraform evidence verification must pin Node 24",
+  );
+  const downloadTerraformEvidenceStep = extractStep(
+    workflow,
+    "Download approved Terraform evidence",
+  );
+  assert.equal(
+    downloadTerraformEvidenceStep.trimEnd(),
+    [
+      "      - name: Download approved Terraform evidence",
       "        if: inputs.mode == 'normal'",
       "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
       "        with:",
-      "          name: ${{ steps.resolve.outputs.apply_artifact_name }}",
-      "          path: ${{ runner.temp }}/fukamu-cycle-terraform-apply-metadata",
+      "          name: ${{ steps.resolve.outputs.infra_evidence_artifact_name }}",
+      "          path: ${{ runner.temp }}/fukamu-cycle-terraform-evidence",
       "          github-token: ${{ github.token }}",
-      "          run-id: ${{ steps.resolve.outputs.apply_run_id }}",
+      "          run-id: ${{ steps.resolve.outputs.infra_evidence_run_id }}",
     ].join("\n"),
-    "normal mode must download only the resolved Terraform Apply evidence",
+    "normal mode must download only the resolved Terraform evidence",
   );
-  const verifyApplyMetadataStep = extractStep(
+  const verifyTerraformEvidenceStep = extractStep(
     workflow,
-    "Verify approved Terraform Apply metadata",
+    "Verify approved Terraform evidence",
   );
   assert.equal(
-    extractStepProperty(verifyApplyMetadataStep, "if"),
+    extractStepProperty(verifyTerraformEvidenceStep, "if"),
     "inputs.mode == 'normal'",
   );
-  assert.deepEqual(stepEnvironmentMappings(verifyApplyMetadataStep), {
-    ARTIFACT_DIRECTORY: {
-      kind: "literal",
-      value: "${{ runner.temp }}/fukamu-cycle-terraform-apply-metadata",
-    },
-    COMMIT_SHA: {
+  assert.equal(
+    extractStepProperty(verifyTerraformEvidenceStep, "id"),
+    "verify_evidence",
+  );
+  assert.deepEqual(stepEnvironmentMappings(verifyTerraformEvidenceStep), {
+    EXPECTED_COMMIT_SHA: {
       kind: "literal",
       value: "${{ steps.resolve.outputs.commit_sha }}",
     },
+    EXPECTED_WORKFLOW_RUN_ID: {
+      kind: "literal",
+      value: "${{ steps.resolve.outputs.infra_evidence_run_id }}",
+    },
+    INFRA_EVIDENCE_KIND: {
+      kind: "literal",
+      value: "${{ steps.resolve.outputs.infra_evidence_kind }}",
+    },
+    TERRAFORM_EVIDENCE_DIRECTORY: {
+      kind: "literal",
+      value: "${{ runner.temp }}/fukamu-cycle-terraform-evidence",
+    },
   });
   for (const fragment of [
-    '! -d "${ARTIFACT_DIRECTORY}" || -L "${ARTIFACT_DIRECTORY}"',
-    'entry_count="$(find -P "${ARTIFACT_DIRECTORY}" -mindepth 1 -maxdepth 1 -printf \'.\' | wc -c)"',
-    '"${entry_count}" != \'1\' || ! -f "${metadata_file}" || -L "${metadata_file}"',
-    '"$(wc -c < "${metadata_file}")" != \'41\'',
-    '"${artifact_commit}" != "${COMMIT_SHA}"',
+    "no_changes_plan)",
+    "TERRAFORM_EVIDENCE_OPERATION=verify_plan",
+    "EXPECTED_PLAN_RESULT=no_changes",
+    "applied_plan)",
+    "TERRAFORM_EVIDENCE_OPERATION=verify_apply",
+    'plan_sha256="$(node ./scripts/terraform-evidence.mjs)"',
+    'echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"',
   ]) {
     assert.ok(
-      verifyApplyMetadataStep.includes(fragment),
-      `Terraform Apply metadata verification is missing: ${fragment}`,
+      verifyTerraformEvidenceStep.includes(fragment),
+      `Terraform evidence verification is missing: ${fragment}`,
     );
   }
   const preApprovalMainGuard = extractStep(
@@ -616,7 +661,7 @@ test("deployment contract is the exact repository handoff classification", () =>
   );
 
   const checkoutStep = extractUsesStep(
-    workflow,
+    deployJob,
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
   );
   assertStepExecutionControls(checkoutStep, "deployment checkout", null);
@@ -631,7 +676,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     "deployment checkout step",
   );
   const pnpmSetupStep = extractUsesStep(
-    workflow,
+    deployJob,
     "pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0",
   );
   assertStepExecutionControls(pnpmSetupStep, "deployment pnpm setup", null);
@@ -744,7 +789,6 @@ test("deployment contract is the exact repository handoff classification", () =>
     stepEnvironmentMappings(stableRolloutStep),
     {
       DEPLOY_MODE: { kind: "literal", value: "${{ inputs.mode }}" },
-      APPLY_RUN_ID: { kind: "literal", value: "${{ inputs.apply_run_id }}" },
       EXACT_MAIN_CI_RUN_ID: {
         kind: "literal",
         value: "${{ needs.resolve.outputs.ci_run_id }}",
@@ -1275,14 +1319,14 @@ test("deployment contract is the exact repository handoff classification", () =>
     [
       "checkout",
       extractUsesStep(
-        workflow,
+        deployJob,
         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
       ),
     ],
     [
       "pnpm setup",
       extractUsesStep(
-        workflow,
+        deployJob,
         "pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0",
       ),
     ],
@@ -3723,17 +3767,23 @@ function expressionMappings(block, context) {
     let mapping;
     if (direct) {
       mapping = { target: direct[1], context: direct[2], source: direct[3] };
-    } else if (
-      line === "      COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}"
-    ) {
-      mapping = {
-        target: "COMMIT_SHA",
-        context: "needs",
-        source: "resolve.outputs.commit_sha",
-      };
-    } else if (
+    } else {
+      const resolved =
+        /^      ([A-Z][A-Z0-9_]*): \$\{\{ needs\.resolve\.outputs\.([a-z][a-z0-9_]*) \}\}$/.exec(
+          line,
+        );
+      if (resolved) {
+        mapping = {
+          target: resolved[1],
+          context: "needs",
+          source: `resolve.outputs.${resolved[2]}`,
+        };
+      }
+    }
+    if (
+      mapping === undefined &&
       line ===
-      "      BETA_ADMISSION_MODE: ${{ vars.BETA_ADMISSION_MODE || 'off' }}"
+        "      BETA_ADMISSION_MODE: ${{ vars.BETA_ADMISSION_MODE || 'off' }}"
     ) {
       mapping = {
         target: "BETA_ADMISSION_MODE",

@@ -109,6 +109,11 @@ jobs:
           ref: ${{ env.COMMIT_SHA }}
           persist-credentials: false
 
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          runtime: node@24
+          install: false
+
       - name: Validate Terraform deployment inputs
         shell: bash
         run: |
@@ -159,34 +164,57 @@ jobs:
           terraform validate
 
       - name: Create saved Terraform plan
+        id: create_plan
         working-directory: infra/terraform/staging
         shell: bash
+        env:
+          TERRAFORM_EVIDENCE_OPERATION: write_plan
+          TERRAFORM_PLAN_EVIDENCE_FILE: ${{ github.workspace }}/infra/terraform/staging/terraform-plan-evidence.json
+          TERRAFORM_PLAN_FILE: ${{ github.workspace }}/infra/terraform/staging/staging.tfplan
         run: |
           set -euo pipefail
-          terraform plan -lock=false -input=false -no-color -out=staging.tfplan
-          sha256sum staging.tfplan > staging.tfplan.sha256
-          printf '%s\n' "${COMMIT_SHA}" > staging.tfplan.commit-sha
+          set +e
+          terraform plan -detailed-exitcode -lock=false -input=false -no-color -out=staging.tfplan
+          plan_status="$?"
+          set -e
+          case "${plan_status}" in
+            0) TERRAFORM_PLAN_RESULT=no_changes ;;
+            2) TERRAFORM_PLAN_RESULT=changes_present ;;
+            *)
+              echo "::error::Terraform Plan failed with exit status ${plan_status}."
+              exit 1
+              ;;
+          esac
+          export TERRAFORM_PLAN_RESULT
+          node ../../../scripts/terraform-evidence.mjs
+          echo "plan_result=${TERRAFORM_PLAN_RESULT}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload saved Terraform plan
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: terraform-plan-staging-${{ env.COMMIT_SHA }}
+          name: terraform-plan-staging-${{ env.COMMIT_SHA }}-${{ steps.create_plan.outputs.plan_result }}
           path: |
             infra/terraform/staging/staging.tfplan
-            infra/terraform/staging/staging.tfplan.sha256
-            infra/terraform/staging/staging.tfplan.commit-sha
+            infra/terraform/staging/terraform-plan-evidence.json
           if-no-files-found: error
           overwrite: true
           retention-days: 7
 
       - name: Publish review instructions
         shell: bash
+        env:
+          PLAN_RESULT: ${{ steps.create_plan.outputs.plan_result }}
         run: |
           {
             echo '## Terraform Plan ready for review'
             echo
             echo "- Commit: \`${COMMIT_SHA}\`"
             echo "- Plan workflow run: \`${GITHUB_RUN_ID}\`"
-            echo "- Review the \`Create saved Terraform plan\` log, then manually run \`Terraform Apply Staging\` with this Plan workflow run ID."
+            echo "- Change result: \`${PLAN_RESULT}\`"
+            if [[ "${PLAN_RESULT}" == 'no_changes' ]]; then
+              echo "- No infrastructure changes: manually run \`Deploy Staging\` in \`normal\` mode with infrastructure evidence run ID \`${GITHUB_RUN_ID}\`."
+            else
+              echo "- Infrastructure changes present: review the \`Create saved Terraform plan\` log, then manually run \`Terraform Apply Staging\` with this Plan workflow run ID."
+            fi
             echo "- The saved plan expires after 7 days; rerun Plan after expiry."
           } >> "${GITHUB_STEP_SUMMARY}"

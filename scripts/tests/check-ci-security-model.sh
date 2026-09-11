@@ -359,13 +359,13 @@ validate_secret_workflow_exact_digest() {
 
   case "${contract}" in
     deploy)
-      expected_digest="a5b1ca1d5772103408852e7189a47c6e5e2c4389148e036885f144957ea8579b"
+      expected_digest="3e73c1c838f6504846cc3bcc6d7cc3b1ab9c26bf0395d11d74e59fb25efe6d34"
       ;;
     terraform-plan)
-      expected_digest="3401da86fcb13bec1335fae58fa523c83cffcc1be7ddabedfcc976e900ec2bd7"
+      expected_digest="7a39d0e3d48705ad551700bca6dcbd5157ed79d8b41794e22e57c400b616aa4f"
       ;;
     terraform-apply)
-      expected_digest="642d2782ef3d1800585818e2025b49d6c6dd3ddc6378d3c472a65a822158f3aa"
+      expected_digest="8f2e01ad1aa7f0b79139a701a2277db9a5bb44a797ed95805a5cf3bd7efc9d76"
       ;;
     legacy-retirement)
       expected_digest="ffe1e152fd4c9f7dac2283751ac12adbf14d86f1080edb4199bcd944776e2036"
@@ -686,8 +686,6 @@ validate_deploy_approval_gate() {
   local preflight_script="${test_root}/deploy-dispatch-preflight.sh"
   local resolve_step="${test_root}/deploy-approved-resolution.step"
   local resolve_script="${test_root}/deploy-approved-resolution.sh"
-  local metadata_step="${test_root}/deploy-apply-metadata.step"
-  local metadata_script="${test_root}/deploy-apply-metadata.sh"
   local fake_bin="${test_root}/deploy-fake-bin"
   local output="${test_root}/deploy-gate.output"
   local github_output="${test_root}/deploy-gate.github-output"
@@ -703,14 +701,14 @@ validate_deploy_approval_gate() {
     "  workflow_dispatch:" \
     "    inputs:" \
     "      mode:" \
-    "        description: Select normal after Terraform Apply, or schema-compatible application recovery" \
+    "        description: Select normal after Terraform evidence, or schema-compatible application recovery" \
     "        required: true" \
     "        type: choice" \
     "        options:" \
     "          - normal" \
     "          - recovery" \
-    "      apply_run_id:" \
-    "        description: Successful exact-current-main Terraform Apply Staging run ID (normal only)" \
+    "      infra_evidence_run_id:" \
+    "        description: Successful exact-current-main no-change Plan or Apply run ID (normal only)" \
     "        required: false" \
     "        type: string" \
     "      recovery_confirmation:" \
@@ -761,7 +759,7 @@ validate_deploy_approval_gate() {
     local actor="$6"
     local triggering_actor="$7"
     local mode="$8"
-    local apply_run_id="$9"
+    local infra_evidence_run_id="$9"
     local confirmation="${10}"
     local run_attempt="${11:-1}"
     env -i \
@@ -775,7 +773,7 @@ validate_deploy_approval_gate() {
       GITHUB_TRIGGERING_ACTOR="${triggering_actor}" \
       GITHUB_RUN_ATTEMPT="${run_attempt}" \
       MODE="${mode}" \
-      APPLY_RUN_ID="${apply_run_id}" \
+      INFRA_EVIDENCE_RUN_ID="${infra_evidence_run_id}" \
       RECOVERY_CONFIRMATION="${confirmation}" \
       bash "${preflight_script}" >"${output}" 2>&1
   }
@@ -840,6 +838,7 @@ set -Eeuo pipefail
 valid_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 stale_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 scenario="${FAKE_SCENARIO}"
+evidence_kind="${FAKE_EVIDENCE_KIND:-apply}"
 apply_name='Terraform Apply Staging'
 apply_path='.github/workflows/terraform-apply.yml'
 apply_event='workflow_dispatch'
@@ -852,6 +851,8 @@ artifact_sha="${valid_sha}"
 artifact_expired=false
 artifact_total=1
 artifact_run_id=123
+artifact_name="terraform-apply-staging-${artifact_sha}"
+artifact_extra=false
 ci_name='CI'
 ci_path='.github/workflows/ci.yml'
 ci_event='push'
@@ -861,6 +862,12 @@ ci_sha="${valid_sha}"
 ci_repository='fukamu/cycle'
 ci_total=1
 ci_id=789
+if [[ "${evidence_kind}" == 'plan' ]]; then
+  apply_name='Terraform Plan Staging'
+  apply_path='.github/workflows/terraform-plan.yml'
+  apply_event='workflow_run'
+  artifact_name="terraform-plan-staging-${artifact_sha}-no_changes"
+fi
 case "${scenario}" in
   wrong-workflow) apply_name='Terraform Apply Renamed' ;;
   wrong-path) apply_path='.github/workflows/other.yml' ;;
@@ -871,8 +878,10 @@ case "${scenario}" in
   wrong-apply-branch) apply_branch='topic' ;;
   wrong-apply-repository) apply_repository='attacker/cycle' ;;
   wrong-artifact) artifact_sha="${stale_sha}" ;;
+  changes-plan) artifact_name="terraform-plan-staging-${valid_sha}-changes_present" ;;
   expired-artifact) artifact_expired=true ;;
   wrong-artifact-run) artifact_run_id=124 ;;
+  multiple-artifacts) artifact_total=2; artifact_extra=true ;;
   paginated-artifacts) artifact_total=101 ;;
   wrong-ci-name) ci_name='CI Renamed' ;;
   wrong-ci-path) ci_path='.github/workflows/other.yml' ;;
@@ -885,14 +894,26 @@ case "${scenario}" in
   wrong-ci-id) ci_id=0 ;;
   missing-ci) ci_total=0 ;;
 esac
+if [[ "${scenario}" == 'wrong-artifact' ]]; then
+  if [[ "${evidence_kind}" == 'plan' ]]; then
+    artifact_name="terraform-plan-staging-${artifact_sha}-no_changes"
+  else
+    artifact_name="terraform-apply-staging-${artifact_sha}"
+  fi
+fi
 case "$*" in
   *'/git/ref/heads/main'*)
     printf '{"ref":"refs/heads/main","object":{"type":"commit","sha":"%s"}}\n' "${valid_sha}"
     if [[ "${scenario}" == 'trailing-main-json' ]]; then printf '{}\n'; fi
     ;;
   *'/actions/runs/123/artifacts?per_page=100'*)
-    printf '{"total_count":%s,"artifacts":[{"id":456,"name":"terraform-apply-staging-%s","expired":%s,"workflow_run":{"id":%s}}]}\n' \
-      "${artifact_total}" "${artifact_sha}" "${artifact_expired}" "${artifact_run_id}"
+    if [[ "${artifact_extra}" == true ]]; then
+      printf '{"total_count":2,"artifacts":[{"id":456,"name":"%s","expired":%s,"workflow_run":{"id":%s}},{"id":457,"name":"terraform-plan-staging-%s-changes_present","expired":false,"workflow_run":{"id":123}}]}\n' \
+        "${artifact_name}" "${artifact_expired}" "${artifact_run_id}" "${valid_sha}"
+    else
+      printf '{"total_count":%s,"artifacts":[{"id":456,"name":"%s","expired":%s,"workflow_run":{"id":%s}}]}\n' \
+        "${artifact_total}" "${artifact_name}" "${artifact_expired}" "${artifact_run_id}"
+    fi
     ;;
   *'/actions/runs/123'*)
     printf '{"id":123,"name":"%s","path":"%s","event":"%s","status":"%s","conclusion":"%s","head_sha":"%s","head_branch":"%s","head_repository":{"full_name":"%s"}}\n' \
@@ -916,17 +937,19 @@ FAKE_GH
     local scenario="$1"
     local mode="$2"
     local dispatch_sha="$3"
-    local apply_run_id=123
-    if [[ "${mode}" == 'recovery' ]]; then apply_run_id=''; fi
+    local evidence_kind="${4:-apply}"
+    local infra_evidence_run_id=123
+    if [[ "${mode}" == 'recovery' ]]; then infra_evidence_run_id=''; fi
     : >"${github_output}"
     env -i \
       PATH="${fake_bin}:/usr/bin:/bin" \
+      FAKE_EVIDENCE_KIND="${evidence_kind}" \
       FAKE_SCENARIO="${scenario}" \
-      APPLY_RUN_ID="${apply_run_id}" \
       DISPATCH_SHA="${dispatch_sha}" \
       GH_TOKEN=fake \
       GITHUB_REPOSITORY=fukamu/cycle \
       GITHUB_OUTPUT="${github_output}" \
+      INFRA_EVIDENCE_RUN_ID="${infra_evidence_run_id}" \
       MODE="${mode}" \
       bash "${resolve_script}" >"${output}" 2>&1
   }
@@ -936,10 +959,25 @@ FAKE_GH
     return 1
   fi
   require_nonblank_lines "${github_output}" \
-    "apply_artifact_name=terraform-apply-staging-${valid_sha}" \
-    "apply_run_id=123" \
     "ci_run_id=789" \
-    "commit_sha=${valid_sha}" || return 1
+    "commit_sha=${valid_sha}" \
+    "infra_evidence_artifact_name=terraform-apply-staging-${valid_sha}" \
+    "infra_evidence_kind=applied_plan" \
+    "infra_evidence_run_id=123" || return 1
+  if ! run_deploy_resolver success normal "${valid_sha}" plan; then
+    violation "Deploy Staging resolver rejected valid no-change Plan evidence"
+    return 1
+  fi
+  require_nonblank_lines "${github_output}" \
+    "ci_run_id=789" \
+    "commit_sha=${valid_sha}" \
+    "infra_evidence_artifact_name=terraform-plan-staging-${valid_sha}-no_changes" \
+    "infra_evidence_kind=no_changes_plan" \
+    "infra_evidence_run_id=123" || return 1
+  if run_deploy_resolver changes-plan normal "${valid_sha}" plan; then
+    violation "Deploy Staging resolver accepted a changes-present Plan without Apply"
+    return 1
+  fi
   if ! run_deploy_resolver success recovery "${valid_sha}"; then
     violation "Deploy Staging resolver rejected valid recovery CI evidence"
     return 1
@@ -949,7 +987,7 @@ FAKE_GH
   for scenario in \
     wrong-workflow wrong-path wrong-event incomplete-apply failed-apply stale-apply \
     wrong-apply-branch wrong-apply-repository wrong-artifact expired-artifact \
-    wrong-artifact-run paginated-artifacts wrong-ci-name wrong-ci-path wrong-ci-event \
+    wrong-artifact-run multiple-artifacts paginated-artifacts wrong-ci-name wrong-ci-path wrong-ci-event \
     incomplete-ci failed-ci stale-ci wrong-ci-repository paginated-ci wrong-ci-id missing-ci trailing-main-json; do
     if run_deploy_resolver "${scenario}" normal "${valid_sha}"; then
       violation "Deploy Staging resolver accepted invalid evidence: ${scenario}"
@@ -973,35 +1011,6 @@ FAKE_GH
     return 1
   fi
 
-  extract_named_step "${resolve_job}" "Verify approved Terraform Apply metadata" >"${metadata_step}" || {
-    violation "Deploy Staging must verify downloaded Terraform Apply metadata"
-    return 1
-  }
-  extract_literal_run_script "${metadata_step}" >"${metadata_script}" || {
-    violation "Deploy Staging Terraform Apply metadata verifier must be extractable"
-    return 1
-  }
-  local metadata_directory="${test_root}/deploy-metadata"
-  mkdir -- "${metadata_directory}"
-  printf '%s\n' "${valid_sha}" >"${metadata_directory}/commit-sha"
-  if ! env -i PATH=/usr/bin:/bin ARTIFACT_DIRECTORY="${metadata_directory}" COMMIT_SHA="${valid_sha}" \
-    bash "${metadata_script}" >"${output}" 2>&1; then
-    violation "Deploy Staging metadata verifier rejected the exact commit artifact"
-    return 1
-  fi
-  printf '%s\n' "${stale_sha}" >"${metadata_directory}/commit-sha"
-  if env -i PATH=/usr/bin:/bin ARTIFACT_DIRECTORY="${metadata_directory}" COMMIT_SHA="${valid_sha}" \
-    bash "${metadata_script}" >"${output}" 2>&1; then
-    violation "Deploy Staging metadata verifier accepted a mismatched commit"
-    return 1
-  fi
-  printf '%s\n' "${valid_sha}" >"${metadata_directory}/commit-sha"
-  touch "${metadata_directory}/unexpected"
-  if env -i PATH=/usr/bin:/bin ARTIFACT_DIRECTORY="${metadata_directory}" COMMIT_SHA="${valid_sha}" \
-    bash "${metadata_script}" >"${output}" 2>&1; then
-    violation "Deploy Staging metadata verifier accepted an extra artifact entry"
-    return 1
-  fi
 }
 
 validate_playbook_workflow_contract() {
@@ -1068,7 +1077,7 @@ validate_all_workflows() {
     validate_checkout_credential_file "${directory}/${filename}" "${expected_count}" || return 1
   done <<'WORKFLOW_CHECKOUT_INVENTORY'
 ci.yml|8|ci
-deploy.yml|1|deploy
+deploy.yml|2|deploy
 playbook.yml|1|playbook
 retire-legacy-origin.yml|1|legacy-retirement
 terraform-apply.yml|1|terraform-apply
@@ -2108,7 +2117,7 @@ assert_invalid_workflow_set "Terraform Apply parser accepting malformed trailing
 workflow_set="$(new_workflow_set_fixture terraform-apply-process-substitution-artifact-parser)"
 # shellcheck disable=SC2016 # Expected workflow/fixture command is a literal.
 replace_line_once "${workflow_set}/terraform-apply.yml" \
-  '          artifact_name="$(' \
+  '          artifact_record="$(' \
   '          mapfile -t artifact_names < <('
 assert_invalid_workflow_set "Terraform Apply process-substitution artifact parser" "${workflow_set}"
 
@@ -2125,8 +2134,9 @@ replace_line_once "${workflow_set}/terraform-apply.yml" \
 assert_invalid_workflow_set "Terraform Apply extra named step" "${workflow_set}"
 
 workflow_set="$(new_workflow_set_fixture terraform-apply-run-change)"
+# shellcheck disable=SC2016 # RUNNER_TEMP is an intentional workflow fixture literal.
 replace_line_once "${workflow_set}/terraform-apply.yml" \
-  "        run: terraform apply -input=false -no-color staging.tfplan" \
+  '        run: terraform apply -input=false -no-color "${RUNNER_TEMP}/fukamu-cycle-terraform-plan/staging.tfplan"' \
   "        run: true"
 assert_invalid_workflow_set "Terraform Apply run change" "${workflow_set}"
 
@@ -2138,7 +2148,7 @@ assert_invalid_workflow_set "Deploy missing pre-approval main identity guard" "$
 workflow_set="$(new_workflow_set_fixture deploy-pre-approval-main-identity-guard-too-early)"
 move_named_step_before "${workflow_set}/deploy.yml" \
   "Re-verify deployment commit before Staging approval" \
-  "Verify approved Terraform Apply metadata"
+  "Verify approved Terraform evidence"
 assert_invalid_workflow_set "Deploy pre-approval main identity guard placed too early" "${workflow_set}"
 
 workflow_set="$(new_workflow_set_fixture terraform-apply-missing-final-main-identity-guard)"

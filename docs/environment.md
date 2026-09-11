@@ -188,9 +188,9 @@ STAGING_DEPLOY_APPROVER
 ```
 
 - `STAGING_DEPLOY_APPROVER`: `Deploy Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorとtriggering actorの両方に照合する。`staging` Environment variableには登録しない。
-- 通常modeはinput `mode=normal`と、成功したexact-current-main `Terraform Apply Staging` runのnumeric `apply_run_id`を必須とする。`recovery_confirmation`は空でなければならない。
-- Application recovery modeはinput `mode=recovery`とexact `recovery_confirmation=RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY`を必須とし、`apply_run_id`は空でなければならない。これはsecret、credential、Terraform変更を伴わないschema-compatibleなcurrent-main Application復旧だけに使う。
-- 両modeともconfigured approver、current main SHA、同一SHAの成功`CI`をEnvironment credentialより前に検証する。通常modeはさらにApply workflow名/path/event/status/conclusion/repository/head SHAと、未失効のexact artifactを検証する。
+- 通常modeはinput `mode=normal`と、成功したexact-current-mainの`no_changes` Terraform Plan、またはApply済みTerraform Planのnumeric `infra_evidence_run_id`を必須とする。`recovery_confirmation`は空でなければならない。
+- Application recovery modeはinput `mode=recovery`とexact `recovery_confirmation=RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY`を必須とし、`infra_evidence_run_id`は空でなければならない。これはsecret、credential、Terraform変更を伴わないschema-compatibleなcurrent-main Application復旧だけに使う。
+- 両modeともconfigured approver、current main SHA、同一SHAの成功`CI`をEnvironment credentialより前に検証する。通常modeはさらにPlanまたはApply workflowのname/path/event/status/conclusion/repository/head SHA、未失効のexact artifact、Plan checksumとprovenanceを検証し、`changes_present` Planの直接Deployを拒否する。
 
 `CLOUDFLARE_API_TOKEN`はDeployに加えて、対象Worker deployment / version / trafficと対象Container application / rollout / instanceのread-only metadataを取得できる必要があります。現在のtokenで不足する権限を推測して拡張せず、Cloudflare metadataを取得できない場合はDeploy前に停止してcredential ownerの個別承認を得ます。
 

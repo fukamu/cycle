@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Select normal after Terraform Apply, or schema-compatible application recovery
+        description: Select normal after Terraform evidence, or schema-compatible application recovery
         required: true
         type: choice
         options:
           - normal
           - recovery
-      apply_run_id:
-        description: Successful exact-current-main Terraform Apply Staging run ID (normal only)
+      infra_evidence_run_id:
+        description: Successful exact-current-main no-change Plan or Apply run ID (normal only)
         required: false
         type: string
       recovery_confirmation:
@@ -34,12 +34,15 @@ jobs:
     outputs:
       ci_run_id: ${{ steps.resolve.outputs.ci_run_id }}
       commit_sha: ${{ steps.resolve.outputs.commit_sha }}
+      infra_evidence_kind: ${{ steps.resolve.outputs.infra_evidence_kind }}
+      infra_evidence_run_id: ${{ steps.resolve.outputs.infra_evidence_run_id }}
+      infra_plan_sha256: ${{ steps.verify_evidence.outputs.plan_sha256 }}
     steps:
       - name: Verify deploy dispatch preflight
         shell: bash
         env:
-          APPLY_RUN_ID: ${{ inputs.apply_run_id }}
           EXPECTED_APPROVER: ${{ vars.STAGING_DEPLOY_APPROVER }}
+          INFRA_EVIDENCE_RUN_ID: ${{ inputs.infra_evidence_run_id }}
           MODE: ${{ inputs.mode }}
           RECOVERY_CONFIRMATION: ${{ inputs.recovery_confirmation }}
         run: |
@@ -75,8 +78,8 @@ jobs:
 
           case "${MODE}" in
             normal)
-              if [[ ! "${APPLY_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
-                echo '::error::Normal deployment requires a numeric Terraform Apply workflow run ID.'
+              if [[ ! "${INFRA_EVIDENCE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+                echo '::error::Normal deployment requires a numeric Terraform infrastructure evidence run ID.'
                 exit 1
               fi
               if [[ -n "${RECOVERY_CONFIRMATION}" ]]; then
@@ -85,8 +88,8 @@ jobs:
               fi
               ;;
             recovery)
-              if [[ -n "${APPLY_RUN_ID}" ]]; then
-                echo '::error::Recovery deployment must not include a Terraform Apply workflow run ID.'
+              if [[ -n "${INFRA_EVIDENCE_RUN_ID}" ]]; then
+                echo '::error::Recovery deployment must not include a Terraform infrastructure evidence run ID.'
                 exit 1
               fi
               if [[ "${RECOVERY_CONFIRMATION}" != 'RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY' ]]; then
@@ -104,9 +107,9 @@ jobs:
         id: resolve
         shell: bash
         env:
-          APPLY_RUN_ID: ${{ inputs.apply_run_id }}
           DISPATCH_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
+          INFRA_EVIDENCE_RUN_ID: ${{ inputs.infra_evidence_run_id }}
           MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
@@ -141,15 +144,16 @@ jobs:
           fi
 
           artifact_name=''
+          infra_evidence_kind=''
           if [[ "${MODE}" == 'normal' ]]; then
-            apply_run_json="$(
+            evidence_run_json="$(
               gh api \
                 -H 'Accept: application/vnd.github+json' \
-                "/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}"
+                "/repos/${GITHUB_REPOSITORY}/actions/runs/${INFRA_EVIDENCE_RUN_ID}"
             )"
-            apply_head_sha="$(
+            evidence_run_record="$(
               jq -ser \
-                --arg run_id "${APPLY_RUN_ID}" \
+                --arg run_id "${INFRA_EVIDENCE_RUN_ID}" \
                 --arg repository "${GITHUB_REPOSITORY}" \
                 '
                   if (
@@ -159,9 +163,9 @@ jobs:
                     (.[0].id | floor) == .[0].id and
                     .[0].id > 0 and
                     (.[0].id | tostring) == $run_id and
-                    .[0].name == "Terraform Apply Staging" and
-                    .[0].path == ".github/workflows/terraform-apply.yml" and
-                    .[0].event == "workflow_dispatch" and
+                    (.[0].name | type) == "string" and
+                    (.[0].path | type) == "string" and
+                    (.[0].event | type) == "string" and
                     .[0].status == "completed" and
                     .[0].conclusion == "success" and
                     (.[0].head_sha | type) == "string" and
@@ -170,34 +174,62 @@ jobs:
                     (.[0].head_repository | type) == "object" and
                     .[0].head_repository.full_name == $repository
                   ) then
-                    .[0].head_sha
+                    if (
+                      .[0].name == "Terraform Plan Staging" and
+                      .[0].path == ".github/workflows/terraform-plan.yml" and
+                      (.[0].event == "workflow_run" or .[0].event == "workflow_dispatch")
+                    ) then
+                      [.[0].head_sha, "no_changes_plan"] | @tsv
+                    elif (
+                      .[0].name == "Terraform Apply Staging" and
+                      .[0].path == ".github/workflows/terraform-apply.yml" and
+                      .[0].event == "workflow_dispatch"
+                    ) then
+                      [.[0].head_sha, "applied_plan"] | @tsv
+                    else
+                      error("unsupported Terraform evidence workflow")
+                    end
                   else
-                    error("invalid Terraform Apply workflow run response")
+                    error("invalid Terraform evidence workflow run response")
                   end
                 ' \
-                <<< "${apply_run_json}"
+                <<< "${evidence_run_json}"
             )"
-            if [[ "${apply_head_sha}" != "${current_main_sha}" ]]; then
-              echo '::error::Terraform Apply workflow run is not for current main.'
+            IFS=$'\t' read -r evidence_head_sha infra_evidence_kind unexpected <<< "${evidence_run_record}"
+            if [[ ! "${evidence_head_sha}" =~ ^[0-9a-f]{40}$ || ! "${infra_evidence_kind}" =~ ^(no_changes_plan|applied_plan)$ || -n "${unexpected:-}" ]]; then
+              echo '::error::Terraform evidence workflow resolution was invalid.'
               exit 1
             fi
+            if [[ "${evidence_head_sha}" != "${current_main_sha}" ]]; then
+              echo '::error::Terraform evidence workflow run is not for current main.'
+              exit 1
+            fi
+
+            case "${infra_evidence_kind}" in
+              no_changes_plan)
+                expected_artifact_name="terraform-plan-staging-${evidence_head_sha}-no_changes"
+                ;;
+              applied_plan)
+                expected_artifact_name="terraform-apply-staging-${evidence_head_sha}"
+                ;;
+            esac
 
             artifacts_json="$(
               gh api \
                 -H 'Accept: application/vnd.github+json' \
-                "/repos/${GITHUB_REPOSITORY}/actions/runs/${APPLY_RUN_ID}/artifacts?per_page=100"
+                "/repos/${GITHUB_REPOSITORY}/actions/runs/${INFRA_EVIDENCE_RUN_ID}/artifacts?per_page=100"
             )"
             artifact_name="$(
               jq -ser \
-                --arg run_id "${APPLY_RUN_ID}" \
-                --arg expected_name "terraform-apply-staging-${apply_head_sha}" \
+                --arg run_id "${INFRA_EVIDENCE_RUN_ID}" \
+                --arg expected_name "${expected_artifact_name}" \
                 '
                   if (
                     length == 1 and
                     (.[0] | type) == "object" and
                     (.[0].total_count | type) == "number" and
                     (.[0].total_count | floor) == .[0].total_count and
-                    .[0].total_count >= 0 and
+                    .[0].total_count == 1 and
                     (.[0].artifacts | type) == "array" and
                     .[0].total_count == (.[0].artifacts | length) and
                     .[0].total_count <= 100 and
@@ -224,7 +256,7 @@ jobs:
                     | if ($matches | length) == 1 then
                         $matches[0].name
                       else
-                        error("expected exactly one deployment metadata artifact")
+                        error("expected exactly one Terraform evidence artifact")
                       end
                   else
                     error("invalid or paginated artifact response")
@@ -305,48 +337,62 @@ jobs:
           fi
 
           {
-            echo "apply_artifact_name=${artifact_name}"
-            echo "apply_run_id=${APPLY_RUN_ID}"
             echo "ci_run_id=${successful_ci_run_id}"
             echo "commit_sha=${current_main_sha}"
+            echo "infra_evidence_artifact_name=${artifact_name}"
+            echo "infra_evidence_kind=${infra_evidence_kind}"
+            echo "infra_evidence_run_id=${INFRA_EVIDENCE_RUN_ID}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Download approved Terraform Apply metadata
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.mode == 'normal'
+        with:
+          ref: ${{ steps.resolve.outputs.commit_sha }}
+          persist-credentials: false
+
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        if: inputs.mode == 'normal'
+        with:
+          runtime: node@24
+          install: false
+
+      - name: Download approved Terraform evidence
         if: inputs.mode == 'normal'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ steps.resolve.outputs.apply_artifact_name }}
-          path: ${{ runner.temp }}/fukamu-cycle-terraform-apply-metadata
+          name: ${{ steps.resolve.outputs.infra_evidence_artifact_name }}
+          path: ${{ runner.temp }}/fukamu-cycle-terraform-evidence
           github-token: ${{ github.token }}
-          run-id: ${{ steps.resolve.outputs.apply_run_id }}
+          run-id: ${{ steps.resolve.outputs.infra_evidence_run_id }}
 
-      - name: Verify approved Terraform Apply metadata
+      - name: Verify approved Terraform evidence
         if: inputs.mode == 'normal'
+        id: verify_evidence
         shell: bash
         env:
-          ARTIFACT_DIRECTORY: ${{ runner.temp }}/fukamu-cycle-terraform-apply-metadata
-          COMMIT_SHA: ${{ steps.resolve.outputs.commit_sha }}
+          EXPECTED_COMMIT_SHA: ${{ steps.resolve.outputs.commit_sha }}
+          EXPECTED_WORKFLOW_RUN_ID: ${{ steps.resolve.outputs.infra_evidence_run_id }}
+          INFRA_EVIDENCE_KIND: ${{ steps.resolve.outputs.infra_evidence_kind }}
+          TERRAFORM_EVIDENCE_DIRECTORY: ${{ runner.temp }}/fukamu-cycle-terraform-evidence
         run: |
           set -euo pipefail
-          if [[ ! -d "${ARTIFACT_DIRECTORY}" || -L "${ARTIFACT_DIRECTORY}" ]]; then
-            echo '::error::Terraform Apply metadata artifact directory is invalid.'
-            exit 1
-          fi
-          entry_count="$(find -P "${ARTIFACT_DIRECTORY}" -mindepth 1 -maxdepth 1 -printf '.' | wc -c)"
-          metadata_file="${ARTIFACT_DIRECTORY}/commit-sha"
-          if [[ "${entry_count}" != '1' || ! -f "${metadata_file}" || -L "${metadata_file}" ]]; then
-            echo '::error::Terraform Apply metadata artifact must contain only one regular commit-sha file.'
-            exit 1
-          fi
-          if [[ "$(wc -c < "${metadata_file}")" != '41' ]]; then
-            echo '::error::Terraform Apply metadata commit-sha has an invalid size.'
-            exit 1
-          fi
-          artifact_commit="$(tr -d '\n' < "${metadata_file}")"
-          if [[ ! "${artifact_commit}" =~ ^[0-9a-f]{40}$ || "${artifact_commit}" != "${COMMIT_SHA}" ]]; then
-            echo '::error::Terraform Apply metadata commit does not match current main.'
-            exit 1
-          fi
+          case "${INFRA_EVIDENCE_KIND}" in
+            no_changes_plan)
+              TERRAFORM_EVIDENCE_OPERATION=verify_plan
+              EXPECTED_PLAN_RESULT=no_changes
+              ;;
+            applied_plan)
+              TERRAFORM_EVIDENCE_OPERATION=verify_apply
+              EXPECTED_PLAN_RESULT=''
+              ;;
+            *)
+              echo '::error::Terraform evidence kind is invalid.'
+              exit 1
+              ;;
+          esac
+          export TERRAFORM_EVIDENCE_OPERATION EXPECTED_PLAN_RESULT
+          plan_sha256="$(node ./scripts/terraform-evidence.mjs)"
+          echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
 
       - name: Re-verify deployment commit before Staging approval
         shell: bash
@@ -393,6 +439,9 @@ jobs:
       url: https://cycle.staging.fukamu.matoruru.com
     env:
       COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
+      INFRA_EVIDENCE_KIND: ${{ needs.resolve.outputs.infra_evidence_kind }}
+      INFRA_EVIDENCE_RUN_ID: ${{ needs.resolve.outputs.infra_evidence_run_id }}
+      INFRA_PLAN_SHA256: ${{ needs.resolve.outputs.infra_plan_sha256 }}
       PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
       BETA_ADMISSION_MODE: ${{ vars.BETA_ADMISSION_MODE || 'off' }}
@@ -525,7 +574,6 @@ jobs:
         shell: bash
         env:
           DEPLOY_MODE: ${{ inputs.mode }}
-          APPLY_RUN_ID: ${{ inputs.apply_run_id }}
           EXACT_MAIN_CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}
           GH_TOKEN: ${{ github.token }}
           STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}

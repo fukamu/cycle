@@ -8,7 +8,7 @@
 |---|---|---|
 | Development | local開発 | 手動起動、local PostgreSQL、Fake AI / Turnstile可 |
 | Test | CI / E2E | job専用PostgreSQL、external providerはtest double |
-| Staging Light | external integration検証 | main SHAの成功CI → Terraform Plan → owner承認Apply → migration-first Cloudflare deploy。`cycle.staging.fukamu.matoruru.com`と専用resourceだけを使用 |
+| Staging Light | external integration検証 | main SHAの成功CI → Terraform Plan → 実infra差分時だけowner承認Apply → Plan / Apply証跡付きmigration-first Cloudflare deploy。`cycle.staging.fukamu.matoruru.com`と専用resourceだけを使用 |
 | Production | 正式公開 | 未構築。公開domainは`cycle.fukamu.com`で、Stagingとは別resource / state / credentialを使用 |
 
 Staging Lightは`APP_ENV=production`でproduction security validationを通しますが、Production相当のSLA、backup、data retentionは保証しません。破棄可能な検証dataだけを使い、StagingのDB、session、IndexedDB、credentialをProductionへ移しません。
@@ -91,7 +91,9 @@ R2はTerraform S3 lockfileが使うconditional Putを提供しますが、HashiC
 
 Turnstile EditだけにscopeしたCloudflare tokenをdeploy tokenから分離します。Repository / Environment inputのexact listとscope precedenceは [`environment.md`のGitHub Terraform inputs](environment.md#github-terraform-inputs) が正本です。
 
-`Terraform Apply Staging`は自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人が、次のvalue-free inventoryを確認してからActions画面で成功したPlan run IDとexact confirmation `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。Workflowの最初のpreflight stepはconfirmationだけを検証し、不一致なら`gh api`を含む外部accessへ進みません。その後actor / triggering actorの両方、source workflow、repository、success、main、artifact、current main HEADを検査し、不一致ならApply Environment credentialへ進みません。Rerunもconfigured approver本人だけが実行します。利用中のGitHub planでRequired reviewerを使える場合は同じownerを設定し、owner本人がdispatchとreviewを行う運用では`Prevent self-review`を有効にしません。
+`Terraform Plan Staging`は`terraform plan -detailed-exitcode`を実行し、exit 0を`no_changes`、exit 2を`changes_present`、その他をfailureとして扱います。証跡はexact commit SHA、workflow run ID、saved PlanのSHA-256を含みます。`no_changes`は通常Deployへ直接渡せるinfra evidenceであり、Apply Environment、Apply credential inventory、state snapshot / read-back / restore drillへ進みません。
+
+`Terraform Apply Staging`は`changes_present`の場合だけ使い、自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人が、次のvalue-free inventoryを確認してからActions画面で成功したPlan run IDとexact confirmation `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。Workflowの最初のpreflight stepはconfirmationだけを検証し、不一致なら`gh api`を含む外部accessへ進みません。その後actor / triggering actorの両方、source workflow、repository、success、main、`changes_present` artifact、current main HEADを検査し、不一致ならApply Environment credentialへ進みません。Rerunもconfigured approver本人だけが実行します。利用中のGitHub planでRequired reviewerを使える場合は同じownerを設定し、owner本人がdispatchとreviewを行う運用では`Prevent self-review`を有効にしません。
 
 ```bash
 gh secret list --app actions --repo fukamu/cycle --json name,updatedAt
@@ -107,9 +109,10 @@ Cloudflare DashboardのR2 API token metadataで、Plan tokenが対象state bucke
 CI (main HEAD。PR検証treeを完全一致で再利用できなければ全check)
 -> Terraform Plan Staging
    -> Object Read Only credentialでR2 stateをlockなしでread
-   -> terraform plan -lock=false -out=staging.tfplan
-   -> SHA-256 + commit SHA付きartifact（7日）
--> ownerがvalue-free credential inventoryを確認し、Plan run IDとexact confirmationを指定してTerraform Apply Stagingをmanual dispatch
+   -> terraform plan -detailed-exitcode -lock=false -out=staging.tfplan
+   -> no_changes / changes_present + SHA-256 + commit SHA + run ID付きartifact（7日）
+-> no_changes: Apply / credential inventory / state操作をskipし、Plan evidenceをDeployへ渡す
+-> changes_present: ownerがvalue-free credential inventoryを確認し、Plan run IDとexact confirmationを指定してTerraform Apply Stagingをmanual dispatch
 -> inventory confirmationを外部access前に検証
 -> actor / triggering actor / source Plan / artifact / current main HEADを検証
 -> staging-terraform-apply Environment
@@ -119,9 +122,9 @@ CI (main HEAD。PR検証treeを完全一致で再利用できなければ全chec
    -> saved plan再検証とlock対応backend init
    -> live state snapshot / checksum / isolated restore drill
    -> 同じsaved planをlock付きapply
--> Apply metadata artifact
+-> Apply metadata artifact（source Plan run ID / checksum付き）
 -> Apply完了。Deployは自動起動しない
--> configured approverが別途Deploy Stagingをmanual dispatch
+-> configured approverがno-change PlanまたはApply evidence run IDを指定し、別途Deploy Stagingをmanual dispatch
 ```
 
 Plan中にdestroy / replaceがないこと、hostnameとTurnstile modeが承認値であることを確認します。Mainが進んだ、stateが別経路で変化した、artifactがstale / expiredの場合はPlanを破棄し、新しいCI / Planからやり直します。Saved planとTerraform stateはsecret相当としてdownload・転記・長期保存しません。
@@ -130,14 +133,14 @@ Plan中にdestroy / replaceがないこと、hostnameとTurnstile modeが承認�
 
 `Deploy Staging`は`workflow_run`から自動起動しません。Dispatch inputとrepository variableのexact contractは[`environment.md`のGitHub Staging Deploy input](environment.md#github-staging-deploy-input)を正本とします。
 
-- 通常releaseはApplyとは別の明示承認とし、reviewしたexact-current-mainの成功Apply run IDを指定する。Workflowはinput形式とmodeの組合せをGitHub API accessより前に拒否し、その後configured approver、Apply workflow identity、repository、main、success、head SHA、未失効artifact内SHA、current main、同一SHAの成功CIを検証する。
+- 通常releaseはTerraform evidenceとは別の明示承認とし、reviewしたexact-current-mainの成功`no_changes` PlanまたはApply run IDを指定する。Workflowはinput形式とmodeの組合せをGitHub API accessより前に拒否し、その後configured approver、Plan / Apply workflow identity、repository、main、success、head SHA、artifact inventory、Plan checksum / provenance、current main、同一SHAの成功CIを検証し、`changes_present` Planの直接Deployを拒否する。
 - Application recoveryは通常releaseと別modeでdispatchし、Terraform Apply evidenceの代わりに専用exact confirmationを使う。Current main、configured approver、同一SHAの成功CI、schema compatibilityを満たすApplication復旧だけに限定し、Terraform変更を含む通常releaseや任意commitのDeployへ使わない。
 - Preflight成功後も`staging` Environmentのreviewer gateを維持できる。Environmentへ入る直前にcurrent mainを再取得し、検証済みSHAから進んでいればtraffic切替前に停止する。
 - Actual Apply、Deploy、secret / credential設定、権限変更、live provider smokeは、それぞれの実行時に個別承認を得る。事前のIssue / Pull Request承認をlive変更の承認として扱わない。
 
 #### Pre-Apply state snapshot and restore drill
 
-Applyは最終main HEAD確認の直後に [`backup-and-drill-terraform-state.sh`](../scripts/backup-and-drill-terraform-state.sh) を実行します。
+`changes_present` PlanのApplyは最終main HEAD確認の直後に [`backup-and-drill-terraform-state.sh`](../scripts/backup-and-drill-terraform-state.sh) を実行します。`no_changes` Plan経路ではこのscriptによるsnapshot / read-back / restore drillとstate writeを実行しません。
 
 1. `terraform state pull`をprivate runner tempへ`umask 077`で保存し、state envelopeと16 MiB上限を検証する。
 2. SHA-256を計算し、stateと`.sha256`をconditional putで新規作成する。既存objectは上書きしない。
@@ -183,14 +186,14 @@ Cloudflare application deploy tokenは対象account / zoneのWorker、Container�
 1. Terraform repository inputsと`staging-terraform-apply` Environmentを設定する。
 2. `staging` Environmentを [`environment.md`](environment.md) に従って設定する。Turnstile未作成の初回はApply後にpublic site keyとsecret keyを追加する。
 3. 対象変更を`main`へmergeし、同じcommitの`CI`成功を確認する。
-4. `Terraform Plan Staging`をreviewし、owner本人がPlan run IDを指定して`Terraform Apply Staging`をdispatchする。
-5. OptionalなEnvironment reviewer gateがある場合はpending Applyを明示Approve / Rejectし、Applyの成功を確認する。
-6. `STAGING_DEPLOY_APPROVER`本人が`mode=normal`と成功Apply run IDを指定し、`Deploy Staging`を別途manual dispatchする。
+4. `Terraform Plan Staging`をreviewする。`changes_present`の場合だけowner本人がPlan run IDを指定して`Terraform Apply Staging`をdispatchする。
+5. Applyが必要でOptionalなEnvironment reviewer gateがある場合はpending Applyを明示Approve / Rejectし、Applyの成功を確認する。
+6. `STAGING_DEPLOY_APPROVER`本人が`mode=normal`と成功したno-change PlanまたはApplyの`infra_evidence_run_id`を指定し、`Deploy Staging`を別途manual dispatchする。
 7. `staging` Environmentのreviewer gateがある場合はpending Deployを明示Approve / Rejectする。
 8. `Deploy Staging`が次の順で完了することを確認する。
 
 ```text
-configured approver / dispatch input / exact main SHA / CI / Apply evidence check
+configured approver / dispatch input / exact main SHA / CI / no-change Plan or Apply evidence check
 -> staging Environment approval
 -> staging Chromium install
 -> frontend build

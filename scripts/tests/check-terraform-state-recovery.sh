@@ -388,7 +388,7 @@ fi
 assert_exact_line "${plan_workflow}" '          terraform_wrapper: false'
 assert_exact_line "${apply_workflow}" '          terraform_wrapper: false'
 assert_exact_line "${plan_workflow}" "          terraform init -lock=false -input=false -backend-config=\"\${RUNNER_TEMP}/fukamu-cycle-staging-backend.hcl\""
-assert_exact_line "${plan_workflow}" '          terraform plan -lock=false -input=false -no-color -out=staging.tfplan'
+assert_exact_line "${plan_workflow}" '          terraform plan -detailed-exitcode -lock=false -input=false -no-color -out=staging.tfplan'
 assert_exact_line "${backend_template}" 'use_lockfile                 = true'
 assert_exact_line "${apply_workflow}" '      - name: Back up and drill Terraform state'
 assert_exact_line "${apply_workflow}" '        id: state_recovery'
@@ -416,6 +416,10 @@ assert_contains "${environment_doc}" 'CONFIRM APPLY R2 INVENTORY NO FALLBACK'
 assert_contains "${operations_doc}" 'Object Read Only'
 assert_contains "${operations_doc}" 'staging-terraform-apply'
 assert_contains "${operations_doc}" 'Object Read & Write'
+# shellcheck disable=SC2016 # Markdown code spans are intentional contract literals.
+assert_contains "${operations_doc}" '`no_changes`は通常Deployへ直接渡せるinfra evidence'
+# shellcheck disable=SC2016 # Markdown code spans are intentional contract literals.
+assert_contains "${operations_doc}" '`no_changes` Plan経路ではこのscriptによるsnapshot / read-back / restore drillとstate writeを実行しません'
 assert_contains "${operations_doc}" 'gh secret list --app actions --repo fukamu/cycle --json name,updatedAt'
 assert_contains "${operations_doc}" 'gh secret list --app actions --repo fukamu/cycle --env staging-terraform-apply --json name,updatedAt'
 assert_contains "${operations_doc}" 'gh secret list --app actions --org fukamu --json name,visibility,numSelectedRepos,selectedReposURL,updatedAt'

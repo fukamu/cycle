@@ -6029,10 +6029,12 @@ Playbook policyは`.fukamu/playbook/lock.json`のexact revisionとSHA-256、vend
 
 ## 44.4 Deploy sequence
 
-`Terraform Apply Staging`と`Deploy Staging`は別々のmanual approval boundaryとする。通常Deployはconfigured approverがexact-current-mainの成功Apply run IDを指定した場合だけ実行し、Apply成功から自動起動しない。Application recoveryは別modeとし、current main、同一SHAの成功CI、configured approver、exact confirmationを必須にする。Recoveryは通常releaseのApply gateを迂回する一般Deploy経路として使わない。
+`Terraform Plan Staging`は`terraform plan -detailed-exitcode`の結果を`no_changes`または`changes_present`へ分類し、exact commit SHA、workflow run ID、saved PlanのSHA-256とともに改変不能な証跡へ束縛する。`no_changes`ではApply Environment、Apply credential inventory、state snapshot / read-back / restore drillへ進まない。`changes_present`ではreview済みsaved Plan、別のmanual Apply approval、state保護を維持する。
+
+`Terraform Apply Staging`と`Deploy Staging`は別々のmanual approval boundaryとする。通常Deployはconfigured approverがexact-current-mainの成功した`no_changes` Plan証跡、または`changes_present` Planから生成された成功Apply証跡のrun IDを指定した場合だけ実行し、自動起動しない。Workflow identity、repository、commit、run、artifact inventory、checksumをfail-closedに照合し、`changes_present` Planの直接Deployを拒否する。Application recoveryは別modeとし、current main、同一SHAの成功CI、configured approver、exact confirmationを必須にする。Recoveryは通常releaseのinfra evidence gateを迂回する一般Deploy経路として使わない。
 
 ```text
-1. current main、manual Deploy approver、mode固有のApply evidenceまたはrecovery confirmation、同一SHAの成功CIを検証
+1. current main、manual Deploy approver、mode固有のno-change Plan / Apply evidenceまたはrecovery confirmation、同一SHAの成功CIを検証
 2. main commitをbuildし、deployment inputとBackend runtime configurationをmigration前に検証
 3. release mutation前に、現在配信中Stagingを`target=current-public`として`/healthz`、`/readyz`をhard gateで確認する
 4. Stable CSRF v1初回rolloutでは、同一Browser Context二tabとlegacy Session / tokenをprocess memoryへ保持し、同一Userで二度取得したlegacy tokenの変化と旧版unsafe request成功をrelease mutation前に確認する。この一回限りのgateがpre-mutation anonymous bootstrap / sessionを一度だけ所有する
@@ -6519,7 +6521,7 @@ MVP acceptanceは、各canonical ownerのContractと§48のverificationが同じ
 | API / validation / errors | §§19–26、40 | decoder/contract/schema、actual HTTP、real DB、Frontend parse/presentation |
 | Security / privacy / observability | §§27、41–42 | cross-user、redaction/allowlist、metric/span、aggregate KPI snapshot、S |
 | Typography / accessibility | §43 | token/lint、component/A11y、responsive E2E |
-| Infrastructure / migration / configuration | §§44–45、50–51 | empty DB、Q、I、config parity、current-public health/readiness、candidate critical journey/cleanup、safe release diagnostic |
+| Infrastructure / migration / configuration | §§44–45、50–51 | empty DB、Q、I、config parity、no-change Plan / applied Plan evidence、current-public health/readiness、candidate critical journey/cleanup、safe release diagnostic |
 
 Release candidateはA、D、S、I、Q、Eおよびstaged-tree Cのうち計画で要求されたGateを、Production/共有Dataを使わず完走する。未実行項目、外部承認待ち、Production運用値、残存riskは完了扱いにせず明記する。
 

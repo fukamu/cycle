@@ -51,9 +51,13 @@ done
 [[ "${GITHUB_ACTOR}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]] || fail
 [[ "${DEPLOY_MODE}" == "normal" || "${DEPLOY_MODE}" == "recovery" ]] || fail
 if [[ "${DEPLOY_MODE}" == "normal" ]]; then
-  [[ "${APPLY_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]] || fail
+  [[ "${INFRA_EVIDENCE_KIND:-}" == "no_changes_plan" || "${INFRA_EVIDENCE_KIND:-}" == "applied_plan" ]] || fail
+  [[ "${INFRA_EVIDENCE_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]] || fail
+  [[ "${INFRA_PLAN_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || fail
 else
-  [[ -z "${APPLY_RUN_ID:-}" ]] || fail
+  [[ -z "${INFRA_EVIDENCE_KIND:-}" ]] || fail
+  [[ -z "${INFRA_EVIDENCE_RUN_ID:-}" ]] || fail
+  [[ -z "${INFRA_PLAN_SHA256:-}" ]] || fail
 fi
 [[ "${RUNNER_TEMP}" == /* && -d "${RUNNER_TEMP}" && ! -L "${RUNNER_TEMP}" ]] || fail
 [[ "${GITHUB_STEP_SUMMARY}" == /* && ! -L "${GITHUB_STEP_SUMMARY}" ]] || fail

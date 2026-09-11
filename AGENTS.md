@@ -60,7 +60,7 @@ Cycle固有のアプリケーション要件・仕様・設計の最上位Source
 - 未リリース・空DB・既存環境互換不要というuserの明示承認に基づく`000001_fukamu_cycle_baseline`へのrebaselineは完了済みの一回限りの例外である。この例外を根拠にbaselineを再編集しない。
 - 今後のSchema変更は既存migrationを編集せず、新しいup/down pairを追加する。保存dataや挙動に影響する場合は先に仕様整合性を確認する。
 - Production deployはmigration-firstを維持し、migration成功前にapplication trafficを新versionへ移さない。
-- main CIの重いjobを省略できるのは、成功したPR CIの検証tree artifactとmain treeが完全一致する場合だけとする。直接push、artifact/API問題、tree不一致では全CIへfallbackし、main SHAの成功CI、Terraform Plan、承認付きApply、Deployの連鎖を維持する。
+- main CIの重いjobを省略できるのは、成功したPR CIの検証tree artifactとmain treeが完全一致する場合だけとする。直接push、artifact/API問題、tree不一致では全CIへfallbackし、main SHAの成功CI、Terraform Plan、実infra差分時の承認付きApply、PlanまたはApply証跡付きDeployの連鎖を維持する。
 - 未決のproduction capacity、backup、provider、budget/rate/security/alert値をexample/defaultから推測しない。
 - 実装・command・environment variable・workflowを変更したら、対応する専門文書とREADMEの導線が正しいか確認する。
 - `backend/internal/infrastructure/postgres/generated/`は手編集しない。Query/schema変更後に`./scripts/invoke-sqlc.sh compile generate`で検証・更新し、生成元と同じcommitへ含める。実行方法の詳細は[`docs/development.md`](docs/development.md)を参照する。
