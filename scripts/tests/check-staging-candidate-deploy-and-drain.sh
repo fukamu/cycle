@@ -31,7 +31,7 @@ case "$1" in
     IFS= read -r acknowledgement
     [[ "${acknowledgement}" == candidate_deploy_completed ]]
     printf '%s\n' drain-ack >>"${TEST_COMMAND_LOG}"
-    printf '{"result":"drained","commitSHA":"%s","workerDeploymentId":"00000000-0000-4000-8000-000000000001","workerVersionId":"00000000-0000-4000-8000-000000000002","drainedWorkerVersionId":"00000000-0000-4000-8000-000000000003","containerApplicationId":"00000000-0000-4000-8000-000000000004","containerRolloutId":"00000000-0000-4000-8000-000000000005","containerVersion":2,"containerImageDigest":"sha256:%s","containerInstanceId":"00000000-0000-4000-8000-000000000006","drainedContainerVersion":1,"drainedContainerImageDigest":"sha256:%s","observedAt":"2026-09-07T00:00:00.000Z"}\n' \
+    printf '{"result":"drained","commitSHA":"%s","workerDeploymentId":"00000000-0000-4000-8000-000000000001","workerVersionId":"00000000-0000-4000-8000-000000000002","drainedWorkerVersionId":"00000000-0000-4000-8000-000000000003","containerApplicationId":"00000000-0000-4000-8000-000000000004","containerRolloutId":"00000000-0000-4000-8000-000000000005","containerVersion":2,"containerImageDigest":"sha256:%s","drainedContainerVersion":1,"drainedContainerImageDigest":"sha256:%s","observedAt":"2026-09-07T00:00:00.000Z"}\n' \
       "${COMMIT_SHA}" "$(printf '1%.0s' {1..64})" "$(printf '2%.0s' {1..64})"
     ;;
   ./scripts/materialize-staging-worker-secrets.mjs)

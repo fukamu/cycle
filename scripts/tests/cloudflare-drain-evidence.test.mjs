@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 
-import { runCloudflareDrainEvidenceCLI } from "../check-cloudflare-drain-evidence.mjs";
+import {
+  resolveLocalCandidateImageDigest,
+  runCloudflareDrainEvidenceCLI,
+} from "../check-cloudflare-drain-evidence.mjs";
 import {
   CloudflareDrainFailure,
   cloudflareDrainPhases,
   cloudflareDrainReasons,
   createCloudflareRawAdapter,
   formatCloudflareDrainDiagnostic,
-  proveCloudflareDrain,
+  proveCloudflareDrain as proveCloudflareDrainImplementation,
   serializeCloudflareDrainEvidence,
 } from "../lib/cloudflare-drain-evidence.mjs";
 
@@ -27,13 +30,25 @@ const ids = Object.freeze({
   oldInstance: "00000000-0000-4000-8000-000000000004",
   oldRollout: "00000000-0000-4000-8000-000000000005",
   newDeployment: "00000000-0000-4000-8000-000000000006",
-  newWorkerVersion: "00000000-0000-4000-8000-000000000007",
+  newWorkerVersion: "10000000-0000-4000-8000-000000000007",
   newRollout: "00000000-0000-4000-8000-000000000008",
   newInstance: "00000000-0000-4000-8000-000000000009",
   otherInstance: "00000000-0000-4000-8000-00000000000a",
+  unrelatedRollout: "00000000-0000-4000-8000-00000000000d",
+  ambiguousRollout: "00000000-0000-4000-8000-00000000000e",
+  changedWorkerVersion: "00000000-0000-4000-8000-00000000000f",
 });
 const oldImage = `registry.cloudflare.com/${accountID}/cycle:${previousSHA}@sha256:${"1".repeat(64)}`;
 const newImage = `registry.cloudflare.com/${accountID}/cycle:${candidateSHA}@sha256:${"2".repeat(64)}`;
+const unrelatedImage = `registry.cloudflare.com/${accountID}/cycle:${"c".repeat(40)}@sha256:${"3".repeat(64)}`;
+const candidateImageDigest = `sha256:${"2".repeat(64)}`;
+
+function proveCloudflareDrain(options) {
+  return proveCloudflareDrainImplementation({
+    resolveCandidateImageDigest: async () => candidateImageDigest,
+    ...options,
+  });
+}
 
 function rollout({
   id = ids.oldRollout,
@@ -65,12 +80,20 @@ function observation({
   candidate = false,
   activeRolloutId = null,
   rolloutStatus = "completed",
+  candidateVersion = 2,
+  rollouts,
   instances,
 } = {}) {
   const currentInstances =
     instances ??
     (candidate
-      ? [instance({ id: ids.newInstance, version: 2, image: newImage })]
+      ? [
+          instance({
+            id: ids.newInstance,
+            version: candidateVersion,
+            image: newImage,
+          }),
+        ]
       : [instance()]);
   return {
     worker: {
@@ -81,21 +104,23 @@ function observation({
     },
     container: {
       applicationId: ids.application,
-      version: candidate ? 2 : 1,
+      version: candidate ? candidateVersion : 1,
       image: candidate ? newImage : oldImage,
       activeRolloutId,
-      rollouts: candidate
-        ? [
-            rollout({
-              id: ids.newRollout,
-              status: rolloutStatus,
-              currentVersion: 1,
-              targetVersion: 2,
-              targetImage: newImage,
-            }),
-            rollout(),
-          ]
-        : [rollout()],
+      rollouts:
+        rollouts ??
+        (candidate
+          ? [
+              rollout({
+                id: ids.newRollout,
+                status: rolloutStatus,
+                currentVersion: 1,
+                targetVersion: candidateVersion,
+                targetImage: newImage,
+              }),
+              rollout(),
+            ]
+          : [rollout()]),
       instances: currentInstances,
     },
   };
@@ -147,8 +172,8 @@ test("requires two identical authoritative observations after waking the deploy"
   assert.deepEqual(adapter.calls, [
     { phase: "baseline", attempt: 0 },
     { phase: "drain", attempt: 0, timeoutMilliseconds: 1_190_000 },
-    { phase: "drain", attempt: 1, timeoutMilliseconds: 1_170_000 },
-    { phase: "drain", attempt: 2, timeoutMilliseconds: 1_150_000 },
+    { phase: "drain", attempt: 1, timeoutMilliseconds: 1_160_000 },
+    { phase: "drain", attempt: 2, timeoutMilliseconds: 1_140_000 },
   ]);
   assert.equal(wakeInputs.length, 1);
   assert.equal(wakeInputs[0].workerVersionId, ids.oldWorkerVersion);
@@ -164,10 +189,9 @@ test("requires two identical authoritative observations after waking the deploy"
     containerRolloutId: ids.newRollout,
     containerVersion: 2,
     containerImageDigest: `sha256:${"2".repeat(64)}`,
-    containerInstanceId: ids.newInstance,
     drainedContainerVersion: 1,
     drainedContainerImageDigest: `sha256:${"1".repeat(64)}`,
-    observedAt: "1970-01-01T00:01:10.000Z",
+    observedAt: "1970-01-01T00:01:20.000Z",
   });
   assert.equal(
     JSON.parse(serializeCloudflareDrainEvidence(evidence)).result,
@@ -197,7 +221,7 @@ test("does not accept scale-to-zero, mixed old instances, or one observation", a
       sleep: async () => undefined,
       wake: async () => undefined,
       pollIntervalMilliseconds: 1,
-      timeoutMilliseconds: 7,
+      timeoutMilliseconds: 8,
     }),
     (error) =>
       error instanceof CloudflareDrainFailure &&
@@ -224,9 +248,9 @@ test("rejects an already-active candidate and never wakes deployment", async () 
   assert.equal(woke, false);
 });
 
-test("fails closed when a stable projection changes or rollout reverts", async () => {
+test("fails closed when a stable semantic projection changes or rollout reverts", async () => {
   const changed = observation({ candidate: true });
-  changed.container.instances[0].id = ids.otherInstance;
+  changed.worker.versionId = ids.changedWorkerVersion;
   await assert.rejects(
     proveCloudflareDrain({
       candidateCommitSHA: candidateSHA,
@@ -245,26 +269,134 @@ test("fails closed when a stable projection changes or rollout reverts", async (
       error.reason === "evidence_changed",
   );
 
-  await assert.rejects(
-    proveCloudflareDrain({
-      candidateCommitSHA: candidateSHA,
-      rawAdapter: sequenceAdapter([
-        observation(),
-        observation({
-          candidate: true,
-          activeRolloutId: ids.newRollout,
-          rolloutStatus: "reverted",
-        }),
-      ]),
-      now: tickingClock(),
-      sleep: async () => undefined,
-      wake: async () => undefined,
+  for (const rolloutStatus of ["reverted", "replaced"]) {
+    await assert.rejects(
+      proveCloudflareDrain({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: sequenceAdapter([
+          observation(),
+          observation({
+            candidate: true,
+            activeRolloutId: ids.newRollout,
+            rolloutStatus,
+          }),
+        ]),
+        now: tickingClock(),
+        sleep: async () => undefined,
+        wake: async () => undefined,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "drain" &&
+        error.reason === "rollout_failed",
+    );
+  }
+});
+
+test("accepts version gaps, unrelated rollouts, and reordered candidate instances", async () => {
+  const unrelated = rollout({
+    id: ids.unrelatedRollout,
+    currentVersion: 1,
+    targetVersion: 2,
+    targetImage: unrelatedImage,
+  });
+  const candidateRollout = rollout({
+    id: ids.newRollout,
+    currentVersion: 1,
+    targetVersion: 4,
+    targetImage: newImage,
+  });
+  const first = observation({
+    candidate: true,
+    candidateVersion: 4,
+    rollouts: [unrelated, candidateRollout, rollout()],
+    instances: [
+      instance({ id: ids.newInstance, version: 4, image: newImage }),
+      instance({ id: ids.otherInstance, version: 4, image: newImage }),
+    ],
+  });
+  const second = structuredClone(first);
+  second.container.instances.reverse();
+  second.container.instances[0].id = ids.changedWorkerVersion;
+
+  const evidence = await proveCloudflareDrain({
+    candidateCommitSHA: candidateSHA,
+    rawAdapter: sequenceAdapter([observation(), first, second]),
+    now: tickingClock(),
+    sleep: async () => undefined,
+    wake: async () => undefined,
+  });
+  assert.equal(evidence.containerVersion, 4);
+  assert.equal(evidence.containerRolloutId, ids.newRollout);
+  assert.equal(Object.hasOwn(evidence, "containerInstanceId"), false);
+});
+
+test("rejects zero running instances, mixed images, and ambiguous candidate rollouts", async () => {
+  const invalidCandidates = [
+    observation({ candidate: true, instances: [] }),
+    observation({
+      candidate: true,
+      instances: [
+        instance({ id: ids.newInstance, version: 2, image: newImage }),
+        instance(),
+      ],
     }),
-    (error) =>
-      error instanceof CloudflareDrainFailure &&
-      error.phase === "drain" &&
-      error.reason === "rollout_failed",
-  );
+    observation({
+      candidate: true,
+      rollouts: [
+        rollout({
+          id: ids.newRollout,
+          currentVersion: 1,
+          targetVersion: 2,
+          targetImage: newImage,
+        }),
+        rollout({
+          id: ids.ambiguousRollout,
+          currentVersion: 1,
+          targetVersion: 2,
+          targetImage: newImage,
+        }),
+        rollout(),
+      ],
+    }),
+    observation({
+      candidate: true,
+      activeRolloutId: ids.unrelatedRollout,
+      rollouts: [
+        rollout({
+          id: ids.unrelatedRollout,
+          status: "progressing",
+          currentVersion: 1,
+          targetVersion: 3,
+          targetImage: unrelatedImage,
+        }),
+        rollout({
+          id: ids.newRollout,
+          currentVersion: 1,
+          targetVersion: 2,
+          targetImage: newImage,
+        }),
+        rollout(),
+      ],
+    }),
+  ];
+
+  for (const invalid of invalidCandidates) {
+    await assert.rejects(
+      proveCloudflareDrain({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: sequenceAdapter([observation(), invalid]),
+        now: tickingClock(1),
+        sleep: async () => undefined,
+        wake: async () => undefined,
+        pollIntervalMilliseconds: 1,
+        timeoutMilliseconds: 3,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        ["evidence_changed", "evidence_timeout"].includes(error.reason),
+    );
+  }
 });
 
 test("polls a placed candidate but rejects known terminal instance states", async () => {
@@ -327,7 +459,7 @@ test("polls a placed candidate but rejects known terminal instance states", asyn
 
 test("starts the drain deadline after wake and rejects a late final read", async () => {
   const wakeExcludedClock = [
-    0, 1_000_000, 1_000_001, 1_000_002, 1_000_003, 1_000_004,
+    0, 1_000_000, 1_000_001, 1_000_002, 1_000_003, 1_000_004, 1_000_005,
   ];
   const evidence = await proveCloudflareDrain({
     candidateCommitSHA: candidateSHA,
@@ -342,7 +474,7 @@ test("starts the drain deadline after wake and rejects a late final read", async
     pollIntervalMilliseconds: 1,
     timeoutMilliseconds: 10,
   });
-  assert.equal(evidence.observedAt, "1970-01-01T00:16:40.004Z");
+  assert.equal(evidence.observedAt, "1970-01-01T00:16:40.005Z");
 
   const lateReadClock = [0, 100, 101, 102, 109, 110];
   await assert.rejects(
@@ -406,6 +538,31 @@ test("rejects unknown schemas, enums, oversized raw input, and clock regression"
   );
 });
 
+test("binds the rollout to the locally pushed candidate image digest", async () => {
+  for (const digest of [
+    `sha256:${"1".repeat(64)}`,
+    `sha256:${"3".repeat(64)}`,
+  ]) {
+    await assert.rejects(
+      proveCloudflareDrainImplementation({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: sequenceAdapter([
+          observation(),
+          observation({ candidate: true }),
+        ]),
+        resolveCandidateImageDigest: async () => digest,
+        now: tickingClock(),
+        sleep: async () => undefined,
+        wake: async () => undefined,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "drain" &&
+        ["evidence_changed", "invalid_evidence"].includes(error.reason),
+    );
+  }
+});
+
 function response(value, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(value), {
     status,
@@ -420,6 +577,76 @@ function envelope(result, resultInfo = undefined) {
     ...(resultInfo === undefined ? {} : { result_info: resultInfo }),
   };
 }
+
+test("resolves one exact candidate RepoDigest without inheriting secrets", async () => {
+  const calls = [];
+  const digest = await resolveLocalCandidateImageDigest({
+    accountId: accountID,
+    applicationName,
+    workerVersionId: ids.newWorkerVersion,
+    execFileImpl: (...values) => {
+      calls.push(values.slice(0, 3));
+      values[3](
+        null,
+        `${JSON.stringify([
+          `registry.cloudflare.com/${accountID}/${applicationName}@${candidateImageDigest}`,
+          `example.invalid/other@sha256:${"4".repeat(64)}`,
+        ])}\n`,
+        "ignored bounded warning",
+      );
+    },
+  });
+  assert.equal(digest, candidateImageDigest);
+  assert.deepEqual(calls[0][0], "docker");
+  assert.deepEqual(calls[0][1], [
+    "image",
+    "inspect",
+    "--format",
+    "{{json .RepoDigests}}",
+    `${applicationName}:10000000`,
+  ]);
+  assert.deepEqual(Object.keys(calls[0][2].env), ["PATH"]);
+  assert.equal(calls[0][2].maxBuffer, 64 * 1024);
+  assert.equal(calls[0][2].timeout, 30_000);
+});
+
+test("rejects missing, ambiguous, malformed, or failed local image evidence", async () => {
+  const outputs = [
+    [],
+    [
+      `registry.cloudflare.com/${accountID}/${applicationName}@${candidateImageDigest}`,
+      `registry.cloudflare.com/${accountID}/${applicationName}@sha256:${"4".repeat(64)}`,
+    ],
+    [
+      `registry.cloudflare.com/${accountID}/${applicationName}@${candidateImageDigest}`,
+      `registry.cloudflare.com/${accountID}/${applicationName}@${candidateImageDigest}`,
+    ],
+    [`registry.cloudflare.com/${accountID}/${applicationName}@not-a-digest`],
+    "not-an-array",
+  ];
+  for (const output of outputs) {
+    await assert.rejects(
+      resolveLocalCandidateImageDigest({
+        accountId: accountID,
+        applicationName,
+        workerVersionId: ids.newWorkerVersion,
+        execFileImpl: (_file, _args, _options, callback) =>
+          callback(null, JSON.stringify(output), ""),
+      }),
+      /local candidate image evidence is invalid/,
+    );
+  }
+  await assert.rejects(
+    resolveLocalCandidateImageDigest({
+      accountId: accountID,
+      applicationName,
+      workerVersionId: ids.newWorkerVersion,
+      execFileImpl: (_file, _args, _options, callback) =>
+        callback(new Error(token), token, token),
+    }),
+    (error) => error instanceof Error,
+  );
+});
 
 function workerDeploymentEnvelope(candidate = false) {
   return envelope({
@@ -500,6 +727,13 @@ function rolloutEnvelope(candidate = false) {
       ]
     : [];
   return envelope(values);
+}
+
+function rawRollout(index) {
+  const value = structuredClone(rolloutEnvelope(true).result[0]);
+  value.id = `10000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+  value.created_at = `2026-09-07T00:${String(index % 60).padStart(2, "0")}:00.000Z`;
+  return value;
 }
 
 function instanceEnvelope(
@@ -670,6 +904,87 @@ test("production adapter follows bounded cursor pagination and rejects cycles", 
       error instanceof CloudflareDrainFailure &&
       error.reason === "invalid_evidence",
   );
+});
+
+test("production adapter accepts exactly 50 rollouts and follows rollout pagination", async () => {
+  for (const extraRollouts of [0, 1]) {
+    const fake = productionFetch();
+    const firstPage = Array.from({ length: 50 }, (_, index) =>
+      rawRollout(index + 1),
+    );
+    const secondPage = Array.from({ length: extraRollouts }, (_, index) =>
+      rawRollout(index + 51),
+    );
+    let rolloutPage = 0;
+    const adapter = createCloudflareRawAdapter({
+      accountId: accountID,
+      apiToken: token,
+      workerName,
+      containerApplicationName: applicationName,
+      fetchImpl: async (url, options) => {
+        const parsed = new URL(url);
+        if (
+          parsed.pathname.endsWith(
+            `/containers/applications/${ids.application}/rollouts`,
+          )
+        ) {
+          rolloutPage += 1;
+          assert.equal(parsed.searchParams.get("limit"), "50");
+          if (rolloutPage === 1) {
+            assert.equal(parsed.searchParams.has("last"), false);
+            return response(envelope(firstPage));
+          }
+          assert.equal(parsed.searchParams.get("last"), firstPage.at(-1).id);
+          return response(envelope(secondPage));
+        }
+        return fake.fetchImpl(url, options);
+      },
+    });
+
+    const value = await adapter.readObservation({ phase: "baseline" });
+    assert.equal(value.container.rollouts.length, 50 + extraRollouts);
+    assert.equal(rolloutPage, 2);
+  }
+});
+
+test("production adapter rejects repeated and unbounded rollout pages", async () => {
+  for (const mode of ["duplicate", "unbounded"]) {
+    const fake = productionFetch();
+    let rolloutPage = 0;
+    const adapter = createCloudflareRawAdapter({
+      accountId: accountID,
+      apiToken: token,
+      workerName,
+      containerApplicationName: applicationName,
+      fetchImpl: async (url, options) => {
+        const parsed = new URL(url);
+        if (
+          parsed.pathname.endsWith(
+            `/containers/applications/${ids.application}/rollouts`,
+          )
+        ) {
+          rolloutPage += 1;
+          const start = (rolloutPage - 1) * 50 + 1;
+          const page = Array.from({ length: 50 }, (_, index) =>
+            rawRollout(start + index),
+          );
+          if (mode === "duplicate" && rolloutPage === 2) {
+            page[0] = rawRollout(50);
+          }
+          return response(envelope(page));
+        }
+        return fake.fetchImpl(url, options);
+      },
+    });
+
+    await assert.rejects(
+      adapter.readObservation({ phase: "baseline" }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.reason === "invalid_evidence",
+    );
+    assert.equal(rolloutPage, mode === "duplicate" ? 2 : 4);
+  }
 });
 
 test("production adapter rejects worker or container changes inside one observation", async () => {
@@ -905,6 +1220,10 @@ test("argumentless CLI keeps the wake protocol and result free of raw payloads",
     output: stdout.stream,
     errorOutput: stderr.stream,
     fetchImpl,
+    resolveCandidateImageDigest: async ({ workerVersionId }) => {
+      assert.equal(workerVersionId, ids.newWorkerVersion);
+      return candidateImageDigest;
+    },
     now: tickingClock(),
     sleep: async () => undefined,
   });

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -15,6 +16,85 @@ const containerApplicationName = "fukamu-cycle-staging-backend";
 const wakeSignal = "cloudflare_drain_baseline_ready\n";
 const wakeAcknowledgement = "candidate_deploy_completed\n";
 const maximumAcknowledgementBytes = 64;
+const maximumDockerOutputBytes = 64 * 1024;
+const accountIDPattern = /^[0-9a-f]{32}$/;
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const namePattern = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+const imageDigestPattern = /^sha256:[0-9a-f]{64}$/;
+
+export async function resolveLocalCandidateImageDigest({
+  accountId,
+  applicationName,
+  workerVersionId,
+  execFileImpl = execFile,
+}) {
+  if (
+    typeof accountId !== "string" ||
+    !accountIDPattern.test(accountId) ||
+    typeof applicationName !== "string" ||
+    !namePattern.test(applicationName) ||
+    typeof workerVersionId !== "string" ||
+    !uuidPattern.test(workerVersionId) ||
+    typeof execFileImpl !== "function"
+  ) {
+    throw new Error("local candidate image identity is invalid");
+  }
+
+  const localImageTag = `${applicationName}:${workerVersionId.split("-")[0]}`;
+  const stdout = await new Promise((resolve, reject) => {
+    execFileImpl(
+      "docker",
+      ["image", "inspect", "--format", "{{json .RepoDigests}}", localImageTag],
+      {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH ?? "" },
+        killSignal: "SIGTERM",
+        maxBuffer: maximumDockerOutputBytes,
+        timeout: 30_000,
+        windowsHide: true,
+      },
+      (error, output) => {
+        if (error !== null) reject(error);
+        else resolve(output);
+      },
+    );
+  });
+  if (
+    typeof stdout !== "string" ||
+    Buffer.byteLength(stdout, "utf8") > maximumDockerOutputBytes
+  ) {
+    throw new Error("local candidate image evidence is invalid");
+  }
+
+  let repositoryDigests;
+  try {
+    repositoryDigests = JSON.parse(stdout);
+  } catch {
+    throw new Error("local candidate image evidence is invalid");
+  }
+  if (!Array.isArray(repositoryDigests) || repositoryDigests.length > 32) {
+    throw new Error("local candidate image evidence is invalid");
+  }
+  const expectedPrefix = `registry.cloudflare.com/${accountId}/${applicationName}@`;
+  const matches = [];
+  for (const value of repositoryDigests) {
+    if (typeof value !== "string" || value.length > 1024) {
+      throw new Error("local candidate image evidence is invalid");
+    }
+    if (value.startsWith(expectedPrefix)) {
+      const digest = value.slice(expectedPrefix.length);
+      if (!imageDigestPattern.test(digest)) {
+        throw new Error("local candidate image evidence is invalid");
+      }
+      matches.push(digest);
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error("local candidate image evidence is invalid");
+  }
+  return matches[0];
+}
 
 function metadata(env) {
   return {
@@ -97,6 +177,7 @@ export async function runCloudflareDrainEvidenceCLI({
   output = process.stdout,
   errorOutput = process.stderr,
   fetchImpl = fetch,
+  resolveCandidateImageDigest,
   now,
   sleep,
 } = {}) {
@@ -109,8 +190,9 @@ export async function runCloudflareDrainEvidenceCLI({
       );
     }
     const candidateCommitSHA = env.COMMIT_SHA;
+    const accountId = env.CLOUDFLARE_ACCOUNT_ID;
     const adapter = createCloudflareRawAdapter({
-      accountId: env.CLOUDFLARE_ACCOUNT_ID,
+      accountId,
       apiToken: env.CLOUDFLARE_API_TOKEN,
       workerName,
       containerApplicationName,
@@ -125,6 +207,14 @@ export async function runCloudflareDrainEvidenceCLI({
     const evidence = await proveCloudflareDrain({
       candidateCommitSHA,
       rawAdapter: adapter,
+      resolveCandidateImageDigest:
+        resolveCandidateImageDigest ??
+        (({ workerVersionId }) =>
+          resolveLocalCandidateImageDigest({
+            accountId,
+            applicationName: containerApplicationName,
+            workerVersionId,
+          })),
       ...(now === undefined ? {} : { now }),
       ...(sleep === undefined ? {} : { sleep }),
       wake: async () => {

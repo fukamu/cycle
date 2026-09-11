@@ -3,7 +3,7 @@ const apiPrefix = "/client/v4/accounts";
 const maximumResponseBytes = 64 * 1024;
 const maximumPages = 4;
 const pageSize = 50;
-const maximumRollouts = 50;
+const maximumRollouts = pageSize * maximumPages;
 const defaultPollIntervalMilliseconds = 10_000;
 const defaultTimeoutMilliseconds = 20 * 60_000;
 const requestRetryDelaysMilliseconds = Object.freeze([250, 1_000, 2_000]);
@@ -15,6 +15,7 @@ const accountIDPattern = /^[0-9a-f]{32}$/;
 const namePattern = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const imagePattern =
   /^(?=.{1,512}$)[a-z0-9.-]+(?::[0-9]+)?\/[A-Za-z0-9._/@:-]+@sha256:[0-9a-f]{64}$/;
+const imageDigestPattern = /^sha256:[0-9a-f]{64}$/;
 const cursorPattern = /^[A-Za-z0-9._~-]{1,512}$/;
 
 export const cloudflareDrainPhases = Object.freeze([
@@ -235,10 +236,13 @@ function baselineProjection(observation, candidateCommitSHA) {
   }
   if (
     container.activeRolloutId !== null ||
-    container.instances.length !== 1 ||
-    container.instances[0].status !== "running" ||
-    container.instances[0].version !== container.version ||
-    container.instances[0].image !== container.image
+    container.instances.length === 0 ||
+    container.instances.some(
+      (instance) =>
+        instance.status !== "running" ||
+        instance.version !== container.version ||
+        instance.image !== container.image,
+    )
   ) {
     fail("baseline", "baseline_not_stable");
   }
@@ -250,12 +254,17 @@ function baselineProjection(observation, candidateCommitSHA) {
     containerVersion: container.version,
     containerImage: container.image,
     containerImageDigest: imageDigest(container.image),
-    containerInstanceId: container.instances[0].id,
     rolloutIds: Object.freeze(container.rollouts.map(({ id }) => id)),
   });
 }
 
-function candidateProjection(observation, baseline, candidateCommitSHA) {
+function candidateProjection(
+  observation,
+  baseline,
+  candidateCommitSHA,
+  candidateRolloutIdentity,
+  expectedCandidateImageDigest,
+) {
   const { worker, container } = observation;
   if (
     worker.tag !== candidateCommitSHA ||
@@ -266,30 +275,24 @@ function candidateProjection(observation, baseline, candidateCommitSHA) {
     return undefined;
   }
 
-  const newRollouts = container.rollouts.filter(
-    ({ id }) => !baseline.rolloutIds.includes(id),
+  const rollout = container.rollouts.find(
+    ({ id }) => id === candidateRolloutIdentity?.id,
   );
-  const rollout = newRollouts[0];
   if (
-    newRollouts.length !== 1 ||
+    rollout === undefined ||
     rollout.status !== "completed" ||
-    rollout.currentVersion !== baseline.containerVersion ||
-    rollout.targetVersion !== container.version ||
-    rollout.targetImage !== container.image ||
+    imageDigest(rollout.targetImage) !== expectedCandidateImageDigest ||
     container.activeRolloutId !== null ||
-    container.version !== baseline.containerVersion + 1 ||
+    container.version === baseline.containerVersion ||
     container.image === baseline.containerImage ||
-    container.instances.length !== 1
-  ) {
-    return undefined;
-  }
-
-  const instance = container.instances[0];
-  if (
-    instance.status !== "running" ||
-    instance.id === baseline.containerInstanceId ||
-    instance.version !== container.version ||
-    instance.image !== container.image
+    imageDigest(container.image) !== expectedCandidateImageDigest ||
+    container.instances.length === 0 ||
+    container.instances.some(
+      (instance) =>
+        instance.status !== "running" ||
+        instance.version !== container.version ||
+        instance.image !== container.image,
+    )
   ) {
     return undefined;
   }
@@ -304,13 +307,27 @@ function candidateProjection(observation, baseline, candidateCommitSHA) {
     containerRolloutId: rollout.id,
     containerVersion: container.version,
     containerImageDigest: imageDigest(container.image),
-    containerInstanceId: instance.id,
     drainedContainerVersion: baseline.containerVersion,
     drainedContainerImageDigest: baseline.containerImageDigest,
   });
 }
 
-function validateDrainTransition(observation, baseline, candidateCommitSHA) {
+function rolloutIdentity(rollout) {
+  return Object.freeze({
+    id: rollout.id,
+    currentVersion: rollout.currentVersion,
+    targetVersion: rollout.targetVersion,
+    targetImage: rollout.targetImage,
+  });
+}
+
+function validateDrainTransition(
+  observation,
+  baseline,
+  candidateCommitSHA,
+  expectedCandidateRollout,
+  expectedCandidateImageDigest,
+) {
   const { worker, container } = observation;
   const workerIsBaseline =
     worker.tag === baseline.workerTag &&
@@ -330,29 +347,97 @@ function validateDrainTransition(observation, baseline, candidateCommitSHA) {
   const newRollouts = container.rollouts.filter(
     ({ id }) => !baseline.rolloutIds.includes(id),
   );
-  if (newRollouts.length > 1) {
-    fail("drain", "evidence_changed");
-  }
   if (newRollouts.length === 0) {
     if (
+      expectedCandidateRollout !== undefined ||
       container.activeRolloutId !== null ||
       container.version !== baseline.containerVersion ||
       container.image !== baseline.containerImage
     ) {
       fail("drain", "evidence_changed");
     }
-    return;
+    return undefined;
   }
 
-  const rollout = newRollouts[0];
-  if (rollout.status === "reverted" || rollout.status === "replaced") {
+  const activeRollout =
+    container.activeRolloutId === null
+      ? undefined
+      : newRollouts.find(({ id }) => id === container.activeRolloutId);
+  if (container.activeRolloutId !== null && activeRollout === undefined) {
+    fail("drain", "evidence_changed");
+  }
+
+  const applicationMatches = newRollouts.filter(
+    (rollout) =>
+      rollout.currentVersion === baseline.containerVersion &&
+      rollout.targetVersion === container.version &&
+      rollout.targetImage === container.image,
+  );
+  if (
+    container.version !== baseline.containerVersion &&
+    applicationMatches.length !== 1
+  ) {
+    fail("drain", "evidence_changed");
+  }
+
+  let candidateRollout;
+  if (expectedCandidateRollout !== undefined) {
+    candidateRollout = newRollouts.find(
+      ({ id }) => id === expectedCandidateRollout.id,
+    );
+    if (
+      !workerIsCandidate ||
+      candidateRollout === undefined ||
+      candidateRollout.currentVersion !==
+        expectedCandidateRollout.currentVersion ||
+      candidateRollout.targetVersion !==
+        expectedCandidateRollout.targetVersion ||
+      candidateRollout.targetImage !== expectedCandidateRollout.targetImage
+    ) {
+      fail("drain", "evidence_changed");
+    }
+  } else if (workerIsCandidate) {
+    candidateRollout = activeRollout ?? applicationMatches[0];
+  } else if (activeRollout !== undefined) {
+    fail("drain", "evidence_changed");
+  }
+
+  if (
+    candidateRollout !== undefined &&
+    (candidateRollout.currentVersion !== baseline.containerVersion ||
+      candidateRollout.targetVersion === baseline.containerVersion ||
+      candidateRollout.targetImage === baseline.containerImage ||
+      imageDigest(candidateRollout.targetImage) !==
+        expectedCandidateImageDigest)
+  ) {
+    fail("drain", "evidence_changed");
+  }
+  if (
+    activeRollout !== undefined &&
+    (candidateRollout === undefined || activeRollout.id !== candidateRollout.id)
+  ) {
+    fail("drain", "evidence_changed");
+  }
+  if (
+    applicationMatches.length === 1 &&
+    (candidateRollout === undefined ||
+      applicationMatches[0].id !== candidateRollout.id)
+  ) {
+    fail("drain", "evidence_changed");
+  }
+  if (
+    candidateRollout !== undefined &&
+    (candidateRollout.status === "reverted" ||
+      candidateRollout.status === "replaced")
+  ) {
     fail("drain", "rollout_failed");
   }
   if (
+    candidateRollout !== undefined &&
     container.instances.some(
       (instance) =>
-        instance.version === rollout.targetVersion &&
-        instance.image === rollout.targetImage &&
+        instance.version === candidateRollout.targetVersion &&
+        instance.image === candidateRollout.targetImage &&
         ["failed", "stopped", "stopping", "unhealthy"].includes(
           instance.status,
         ),
@@ -361,20 +446,17 @@ function validateDrainTransition(observation, baseline, candidateCommitSHA) {
     fail("drain", "rollout_failed");
   }
   if (
-    rollout.currentVersion !== baseline.containerVersion ||
-    rollout.targetVersion !== baseline.containerVersion + 1 ||
-    rollout.targetImage === baseline.containerImage ||
-    (container.activeRolloutId !== null &&
-      container.activeRolloutId !== rollout.id) ||
-    (container.version !== baseline.containerVersion &&
-      container.version !== rollout.targetVersion) ||
     (container.version === baseline.containerVersion &&
       container.image !== baseline.containerImage) ||
-    (container.version === rollout.targetVersion &&
-      container.image !== rollout.targetImage)
+    (activeRollout !== undefined &&
+      (activeRollout.currentVersion !== baseline.containerVersion ||
+        activeRollout.targetImage === baseline.containerImage))
   ) {
     fail("drain", "evidence_changed");
   }
+  return candidateRollout === undefined
+    ? undefined
+    : rolloutIdentity(candidateRollout);
 }
 
 function sameProjection(left, right) {
@@ -392,6 +474,7 @@ function readClock(now, previous) {
 export async function proveCloudflareDrain({
   candidateCommitSHA,
   rawAdapter,
+  resolveCandidateImageDigest,
   now = () => Date.now(),
   sleep = (milliseconds) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -407,6 +490,7 @@ export async function proveCloudflareDrain({
   if (
     !isRecord(rawAdapter) ||
     typeof rawAdapter.readObservation !== "function" ||
+    typeof resolveCandidateImageDigest !== "function" ||
     typeof now !== "function" ||
     typeof sleep !== "function" ||
     typeof wake !== "function" ||
@@ -439,6 +523,8 @@ export async function proveCloudflareDrain({
 
   currentTime = readClock(now, currentTime);
   const deadline = currentTime + timeoutMilliseconds;
+  let candidateImageDigest;
+  let candidateRolloutIdentity;
   let firstStable;
   let attempt = 0;
   while (attempt < 256) {
@@ -464,12 +550,44 @@ export async function proveCloudflareDrain({
       fail(firstStable ? "stability" : "drain", "evidence_timeout");
     }
 
-    validateDrainTransition(observation, baseline, candidateCommitSHA);
+    if (
+      observation.worker.tag === candidateCommitSHA &&
+      candidateImageDigest === undefined
+    ) {
+      try {
+        candidateImageDigest = await resolveCandidateImageDigest({
+          workerVersionId: observation.worker.versionId,
+        });
+        if (
+          typeof candidateImageDigest !== "string" ||
+          !imageDigestPattern.test(candidateImageDigest) ||
+          candidateImageDigest === baseline.containerImageDigest
+        ) {
+          throw new Error("candidate image digest is invalid");
+        }
+      } catch {
+        fail("drain", "invalid_evidence");
+      }
+      currentTime = readClock(now, currentTime);
+      if (currentTime >= deadline) {
+        fail(firstStable ? "stability" : "drain", "evidence_timeout");
+      }
+    }
+
+    candidateRolloutIdentity = validateDrainTransition(
+      observation,
+      baseline,
+      candidateCommitSHA,
+      candidateRolloutIdentity,
+      candidateImageDigest,
+    );
 
     const candidate = candidateProjection(
       observation,
       baseline,
       candidateCommitSHA,
+      candidateRolloutIdentity,
+      candidateImageDigest,
     );
     if (candidate !== undefined) {
       if (firstStable === undefined) {
@@ -932,21 +1050,50 @@ export function createCloudflareRawAdapter({
           endpoint(accountId, `containers/applications/${applicationID}`),
           phase,
         ),
-        fetchJSON(
-          fetchImpl,
-          requestSleep,
-          requestNow,
-          deadlineMilliseconds,
-          apiToken,
-          endpoint(
-            accountId,
-            `containers/applications/${applicationID}/rollouts`,
-            {
-              limit: maximumRollouts,
-            },
-          ),
-          phase,
-        ),
+        (async () => {
+          const values = [];
+          const rolloutIDs = new Set();
+          let last = null;
+          for (let page = 0; page < maximumPages; page += 1) {
+            const raw = await fetchJSON(
+              fetchImpl,
+              requestSleep,
+              requestNow,
+              deadlineMilliseconds,
+              apiToken,
+              endpoint(
+                accountId,
+                `containers/applications/${applicationID}/rollouts`,
+                { limit: pageSize, last },
+              ),
+              phase,
+            );
+            let pageValues;
+            try {
+              pageValues = parseV4Envelope(raw).result;
+              if (!Array.isArray(pageValues) || pageValues.length > pageSize) {
+                throw new Error("rollout page is invalid");
+              }
+              for (const value of pageValues) {
+                const normalized = normalizeRollout(value);
+                if (rolloutIDs.has(normalized.id)) {
+                  throw new Error("rollout pagination repeated an item");
+                }
+                rolloutIDs.add(normalized.id);
+                values.push(normalized);
+              }
+              if (pageValues.length < pageSize) return values;
+              const nextLast = values.at(-1)?.id;
+              if (nextLast === undefined || nextLast === last) {
+                throw new Error("rollout pagination did not advance");
+              }
+              last = nextLast;
+            } catch {
+              fail(phase, "invalid_evidence");
+            }
+          }
+          fail(phase, "invalid_evidence");
+        })(),
       ]);
       const instanceValues = await readPaginated(
         `containers/dash/applications/${applicationID}/instances`,
@@ -1025,13 +1172,6 @@ export function createCloudflareRawAdapter({
         ) {
           fail(phase, "evidence_changed");
         }
-        const rolloutValues = parseV4Envelope(rolloutEnvelope).result;
-        if (
-          !Array.isArray(rolloutValues) ||
-          rolloutValues.length >= maximumRollouts
-        ) {
-          throw new Error("rollout history is not bounded");
-        }
         return {
           worker: {
             ...worker,
@@ -1043,7 +1183,7 @@ export function createCloudflareRawAdapter({
             version: application.version,
             image: application.configuration.image,
             activeRolloutId: application.active_rollout_id ?? null,
-            rollouts: rolloutValues.map(normalizeRollout),
+            rollouts: rolloutEnvelope,
             instances: instanceValues.map(normalizeInstance),
           },
         };
@@ -1080,7 +1220,6 @@ export function serializeCloudflareDrainEvidence(evidence) {
       "containerRolloutId",
       "containerVersion",
       "containerImageDigest",
-      "containerInstanceId",
       "drainedContainerVersion",
       "drainedContainerImageDigest",
       "observedAt",
@@ -1094,10 +1233,9 @@ export function serializeCloudflareDrainEvidence(evidence) {
     !parseIdentifier(evidence.containerApplicationId) ||
     !parseIdentifier(evidence.containerRolloutId) ||
     !isPositiveInteger(evidence.containerVersion) ||
-    !/^sha256:[0-9a-f]{64}$/.test(evidence.containerImageDigest) ||
-    !parseIdentifier(evidence.containerInstanceId) ||
+    !imageDigestPattern.test(evidence.containerImageDigest) ||
     !isPositiveInteger(evidence.drainedContainerVersion) ||
-    !/^sha256:[0-9a-f]{64}$/.test(evidence.drainedContainerImageDigest) ||
+    !imageDigestPattern.test(evidence.drainedContainerImageDigest) ||
     !parseTimestamp(evidence.observedAt)
   ) {
     throw new Error("cloudflare drain success evidence is invalid");

@@ -16,7 +16,6 @@ const safeDrainEvidence = Object.freeze({
   containerRolloutId: "00000000-0000-4000-8000-000000000005",
   containerVersion: 2,
   containerImageDigest: `sha256:${"1".repeat(64)}`,
-  containerInstanceId: "00000000-0000-4000-8000-000000000006",
   drainedContainerVersion: 1,
   drainedContainerImageDigest: `sha256:${"2".repeat(64)}`,
   observedAt: "2026-09-07T00:00:00.000Z",
