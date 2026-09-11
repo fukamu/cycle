@@ -13,6 +13,8 @@ import {
   parseStagingCriticalMode,
   retryPublicAccountDelete,
   runStagingCritical,
+  stagingCriticalCleanupStates,
+  stagingCriticalExecution,
   StagingCriticalFailure,
   stagingCriticalFailureReasons,
   stagingCriticalPhases,
@@ -82,6 +84,7 @@ test("derives a deterministic UUIDv7 with the supplied stable timestamp", () => 
 });
 
 test("accepts only closed staging mode enums", () => {
+  assert.equal(parseStagingCriticalMode("preflight"), "preflight");
   assert.equal(parseStagingCriticalMode("baseline"), "baseline");
   assert.equal(parseStagingCriticalMode("full"), "full");
   assert.equal(parseStagingAdmissionMode("auto"), "auto");
@@ -152,7 +155,7 @@ test("keeps the browser harness free of secret-bearing diagnostics and artifacts
   assert.doesNotMatch(browserSources, /\bcatch\s*\(\s*[A-Za-z_$]/);
   assert.equal(
     source.match(/process\.env\.STAGING_E2E_INVITE_TOKEN/g)?.length,
-    2,
+    4,
   );
   for (const name of [
     "DEBUG",
@@ -327,7 +330,7 @@ function fakeAdapter(overrides = {}) {
 
 async function runFake(mode, admissionMode, overrides = {}) {
   const fake = fakeAdapter(overrides);
-  const failures = await runStagingCritical({
+  const result = await runStagingCritical({
     mode,
     admissionMode,
     adapter: fake.adapter,
@@ -336,13 +339,53 @@ async function runFake(mode, admissionMode, overrides = {}) {
       sleep: async () => undefined,
     },
   });
-  return { ...fake, failures };
+  return { ...fake, ...result };
 }
+
+test("limits the blocking preflight to health and readiness", async () => {
+  const { calls, failures, cleanupState } = await runFake(
+    "preflight",
+    undefined,
+  );
+  assert.deepEqual(failures, []);
+  assert.equal(cleanupState, "not_applicable");
+  assert.deepEqual(calls, ["launch", "health", "readiness", "close"]);
+});
+
+test("fails the preflight before any anonymous operation", async () => {
+  const unhealthy = await runFake("preflight", undefined, {
+    async checkHealth() {
+      return 503;
+    },
+  });
+  assert.deepEqual(
+    unhealthy.failures.map(({ phase, reason }) => ({ phase, reason })),
+    [{ phase: "health", reason: "unexpected_status" }],
+  );
+  assert.equal(unhealthy.cleanupState, "not_applicable");
+  assert.deepEqual(unhealthy.calls, ["launch", "close"]);
+
+  const unready = await runFake("preflight", undefined, {
+    async checkReadiness() {
+      return 503;
+    },
+  });
+  assert.deepEqual(
+    unready.failures.map(({ phase, reason }) => ({ phase, reason })),
+    [{ phase: "readiness", reason: "unexpected_status" }],
+  );
+  assert.equal(unready.cleanupState, "not_applicable");
+  assert.deepEqual(unready.calls, ["launch", "health", "close"]);
+});
 
 test("runs off and closed baselines with discovery and public cleanup", async () => {
   for (const admissionMode of ["off", "closed"]) {
-    const { calls, failures } = await runFake("baseline", admissionMode);
+    const { calls, failures, cleanupState } = await runFake(
+      "baseline",
+      admissionMode,
+    );
     assert.deepEqual(failures, []);
+    assert.equal(cleanupState, "verified");
     assert.deepEqual(calls, [
       "launch",
       "health",
@@ -425,10 +468,26 @@ test("off entry skips invite handling and opens New Goal directly", async () => 
 });
 
 test("retains the post-deploy full journey", async () => {
-  const { calls, failures } = await runFake("full", "closed");
+  const { calls, failures, cleanupState } = await runFake("full", "closed");
   assert.deepEqual(failures, []);
+  assert.equal(cleanupState, "verified");
   assert.equal(calls.includes("full"), true);
   assert.ok(calls.indexOf("full") < calls.indexOf("before-cleanup"));
+});
+
+test("keeps candidate cleanup hard after a full journey failure", async () => {
+  const result = await runFake("full", "closed", {
+    async runFullJourney(setPhase) {
+      setPhase("review_transition");
+      throw new Error("private candidate response body");
+    },
+  });
+  assert.deepEqual(
+    result.failures.map(({ phase, reason }) => ({ phase, reason })),
+    [{ phase: "review_transition", reason: "unexpected_status" }],
+  );
+  assert.equal(result.cleanupState, "verified");
+  assert.ok(result.calls.indexOf("delete") < result.calls.indexOf("verify"));
 });
 
 test("maps entry and anonymous bootstrap failures to closed reasons and still cleans", async () => {
@@ -441,6 +500,7 @@ test("maps entry and anonymous bootstrap failures to closed reasons and still cl
     timedOut.failures.map(({ phase, reason }) => ({ phase, reason })),
     [{ phase: "entry", reason: "entry_cta_timeout" }],
   );
+  assert.equal(timedOut.cleanupState, "verified");
   assert.equal(timedOut.calls.includes("delete"), true);
 
   const notObserved = await runFake("baseline", "closed", {
@@ -452,6 +512,7 @@ test("maps entry and anonymous bootstrap failures to closed reasons and still cl
     notObserved.failures.map(({ phase, reason }) => ({ phase, reason })),
     [{ phase: "entry", reason: "anonymous_session_not_observed" }],
   );
+  assert.equal(notObserved.cleanupState, "verified");
   assert.equal(notObserved.calls.includes("delete"), true);
 });
 
@@ -465,6 +526,7 @@ test("fails closed when public deletion or the final 401 proof fails", async () 
     deletionFailure.failures.map(({ phase, reason }) => ({ phase, reason })),
     [{ phase: "account_delete", reason: "account_delete_failed" }],
   );
+  assert.equal(deletionFailure.cleanupState, "unverified");
 
   const proofFailure = await runFake("baseline", "off", {
     async verifyDeleted() {
@@ -475,6 +537,7 @@ test("fails closed when public deletion or the final 401 proof fails", async () 
     proofFailure.failures.map(({ phase, reason }) => ({ phase, reason })),
     [{ phase: "cleanup_verification", reason: "cleanup_unverified" }],
   );
+  assert.equal(proofFailure.cleanupState, "unverified");
 });
 
 test("uses the validated session for cleanup when rediscovery fails", async () => {
@@ -499,7 +562,7 @@ test("uses the validated session for cleanup when rediscovery fails", async () =
       return { status: 204, authenticatedUserIDVerified: true };
     },
   });
-  const failures = await runStagingCritical({
+  const { failures, cleanupState } = await runStagingCritical({
     mode: "baseline",
     admissionMode: "auto",
     adapter: fake.adapter,
@@ -508,6 +571,7 @@ test("uses the validated session for cleanup when rediscovery fails", async () =
       sleep: async () => undefined,
     },
   });
+  assert.equal(cleanupState, "verified");
   assert.deepEqual(
     failures.map(({ phase, reason }) => ({ phase, reason })),
     [
@@ -546,7 +610,7 @@ test("never promotes a mismatched initial discovery to the deletion target", asy
       return { status: 204, authenticatedUserIDVerified: true };
     },
   });
-  const failures = await runStagingCritical({
+  const { failures, cleanupState } = await runStagingCritical({
     mode: "baseline",
     admissionMode: "auto",
     adapter: fake.adapter,
@@ -555,6 +619,7 @@ test("never promotes a mismatched initial discovery to the deletion target", asy
       sleep: async () => undefined,
     },
   });
+  assert.equal(cleanupState, "verified");
   assert.deepEqual(
     failures.map(({ phase, reason }) => ({ phase, reason })),
     [
@@ -599,7 +664,7 @@ test("never promotes a mismatched cleanup discovery after validation", async () 
       return { status: 204, authenticatedUserIDVerified: true };
     },
   });
-  const failures = await runStagingCritical({
+  const { failures, cleanupState } = await runStagingCritical({
     mode: "baseline",
     admissionMode: "auto",
     adapter: fake.adapter,
@@ -608,6 +673,7 @@ test("never promotes a mismatched cleanup discovery after validation", async () 
       sleep: async () => undefined,
     },
   });
+  assert.equal(cleanupState, "verified");
   assert.deepEqual(
     failures.map(({ phase, reason }) => ({ phase, reason })),
     [
@@ -631,6 +697,7 @@ test("classifies health and session discovery failures without exception details
     unhealthy.failures.map(({ phase, reason }) => ({ phase, reason })),
     [{ phase: "health", reason: "unexpected_status" }],
   );
+  assert.equal(unhealthy.cleanupState, "not_started");
 
   const discoveryFailure = await runFake("baseline", "closed", {
     async discoverSession() {
@@ -664,11 +731,31 @@ test("formats only closed-enum diagnostics and validated run metadata", () => {
       runID: "123",
       runAttempt: "2",
       commitSHA: "a".repeat(40),
+      target: "current-public",
+      mutationStarted: false,
+      diagnosticLevel: "warning",
+      cleanupState: "unverified",
     },
   );
   assert.equal(
     line,
-    `::error::Staging critical failed; phase=entry; reason=entry_cta_timeout; run_id=123; run_attempt=2; commit_sha=${"a".repeat(40)}.`,
+    `::warning::Staging critical diagnostic failed; target=current-public; mutation_started=false; cleanup_state=unverified; phase=entry; reason=entry_cta_timeout; run_id=123; run_attempt=2; candidate_sha=${"a".repeat(40)}.`,
+  );
+  const candidateLine = formatStagingCriticalDiagnostic(
+    new StagingCriticalFailure("cleanup_verification", "cleanup_unverified"),
+    {
+      runID: "123",
+      runAttempt: "2",
+      commitSHA: "a".repeat(40),
+      target: "candidate-public",
+      mutationStarted: true,
+      diagnosticLevel: "error",
+      cleanupState: "unverified",
+    },
+  );
+  assert.equal(
+    candidateLine,
+    `::error::Staging critical failed; target=candidate-public; mutation_started=true; cleanup_state=unverified; phase=cleanup_verification; reason=cleanup_unverified; run_id=123; run_attempt=2; candidate_sha=${"a".repeat(40)}.`,
   );
   for (const value of privateValues) assert.equal(line.includes(value), false);
   assert.deepEqual(stagingCriticalFailureReasons, [
@@ -695,6 +782,27 @@ test("formats only closed-enum diagnostics and validated run metadata", () => {
     "account_delete",
     "cleanup_verification",
   ]);
+  assert.deepEqual(stagingCriticalCleanupStates, [
+    "not_applicable",
+    "not_started",
+    "unverified",
+    "verified",
+  ]);
+  assert.deepEqual(stagingCriticalExecution("preflight"), {
+    target: "current-public",
+    mutationStarted: false,
+    diagnosticLevel: "error",
+  });
+  assert.deepEqual(stagingCriticalExecution("baseline"), {
+    target: "current-public",
+    mutationStarted: false,
+    diagnosticLevel: "warning",
+  });
+  assert.deepEqual(stagingCriticalExecution("full"), {
+    target: "candidate-public",
+    mutationStarted: true,
+    diagnosticLevel: "error",
+  });
   assert.throws(() =>
     formatStagingCriticalDiagnostic(
       new StagingCriticalFailure("entry", "entry_cta_timeout"),
@@ -703,15 +811,15 @@ test("formats only closed-enum diagnostics and validated run metadata", () => {
   );
 });
 
-test("keeps the pre-switch baseline before every deployment mutation", () => {
+test("avoids duplicating the current journey before the one-time rollout gate", () => {
   const workflow = readFileSync(
     fileURLToPath(
       new URL("../../.github/workflows/deploy.yml", import.meta.url),
     ),
     "utf8",
   );
-  const baseline = workflow.indexOf(
-    "- name: Verify current Staging baseline before migration",
+  const preflight = workflow.indexOf(
+    "- name: Verify current Staging health and readiness before migration",
   );
   const rollout = workflow.indexOf(
     "- name: Run stable CSRF initial rollout and authoritative drain",
@@ -719,12 +827,15 @@ test("keeps the pre-switch baseline before every deployment mutation", () => {
   const postDeploy = workflow.indexOf(
     "- name: Run post-deploy staging critical journey",
   );
-  assert.ok(0 <= baseline && baseline < rollout && rollout < postDeploy);
-  const baselineStep = workflow.slice(baseline, rollout);
-  assert.match(baselineStep, /STAGING_CRITICAL_MODE: baseline/);
-  assert.match(baselineStep, /STAGING_ADMISSION_MODE: auto/);
-  assert.doesNotMatch(baselineStep, /STAGING_ADMISSION_MODE: \$\{\{/);
-  assert.doesNotMatch(baselineStep, /continue-on-error:/);
+  assert.ok(0 <= preflight && preflight < rollout && rollout < postDeploy);
+  const preflightStep = workflow.slice(preflight, rollout);
+  assert.match(preflightStep, /STAGING_CRITICAL_MODE: preflight/);
+  assert.doesNotMatch(preflightStep, /STAGING_ADMISSION_MODE:/);
+  assert.doesNotMatch(preflightStep, /STAGING_E2E_INVITE_TOKEN:/);
+  assert.doesNotMatch(preflightStep, /continue-on-error:/);
+  assert.doesNotMatch(workflow, /STAGING_CRITICAL_MODE: baseline/);
+  const rolloutStep = workflow.slice(rollout, postDeploy);
+  assert.doesNotMatch(rolloutStep, /continue-on-error:/);
   const child = readFileSync(
     fileURLToPath(
       new URL("../run-staging-candidate-deploy-and-drain.sh", import.meta.url),
@@ -753,6 +864,7 @@ test("keeps the pre-switch baseline before every deployment mutation", () => {
   );
   const postDeployStep = workflow.slice(postDeploy);
   assert.match(postDeployStep, /STAGING_CRITICAL_MODE: full/);
+  assert.doesNotMatch(postDeployStep, /continue-on-error:/);
   assert.match(
     postDeployStep,
     /STAGING_ADMISSION_MODE: \$\{\{ env\.BETA_ADMISSION_MODE \}\}/,

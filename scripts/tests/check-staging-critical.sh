@@ -31,19 +31,24 @@ set -Eeuo pipefail
 [[ "$#" == "1" ]]
 [[ "$1" == "${EXPECTED_HARNESS_PATH}" ]]
 [[ "${STAGING_BASE_URL}" == "https://cycle.staging.fukamu.matoruru.com" ]]
-[[ "${STAGING_CRITICAL_MODE}" == "baseline" || "${STAGING_CRITICAL_MODE}" == "full" ]]
-[[ "${STAGING_ADMISSION_MODE}" == "auto" || "${STAGING_ADMISSION_MODE}" == "off" || "${STAGING_ADMISSION_MODE}" == "closed" ]]
-if [[ "${STAGING_ADMISSION_MODE}" != "off" ]]; then
-  [[ "${STAGING_E2E_INVITE_TOKEN}" =~ ^fukamu_cycle_beta_[A-Za-z0-9_-]{43}$ ]]
-else
+[[ "${STAGING_CRITICAL_MODE}" == "preflight" || "${STAGING_CRITICAL_MODE}" == "baseline" || "${STAGING_CRITICAL_MODE}" == "full" ]]
+if [[ "${STAGING_CRITICAL_MODE}" == "preflight" ]]; then
+  [[ -z "${STAGING_ADMISSION_MODE+x}" ]]
   [[ -z "${STAGING_E2E_INVITE_TOKEN+x}" ]]
+else
+  [[ "${STAGING_ADMISSION_MODE}" == "auto" || "${STAGING_ADMISSION_MODE}" == "off" || "${STAGING_ADMISSION_MODE}" == "closed" ]]
+  if [[ "${STAGING_ADMISSION_MODE}" != "off" ]]; then
+    [[ "${STAGING_E2E_INVITE_TOKEN}" =~ ^fukamu_cycle_beta_[A-Za-z0-9_-]{43}$ ]]
+  else
+    [[ -z "${STAGING_E2E_INVITE_TOKEN+x}" ]]
+  fi
 fi
 [[ -z "${DEBUG+x}" ]]
 [[ -z "${NODE_DEBUG+x}" ]]
 [[ -z "${NODE_OPTIONS+x}" ]]
 [[ -z "${PWDEBUG+x}" ]]
 printf 'node %s\n' "$1" >"${TEST_COMMAND_LOG}"
-printf 'mode=%s admission=%s\n' "${STAGING_CRITICAL_MODE}" "${STAGING_ADMISSION_MODE}" >>"${TEST_COMMAND_LOG}"
+printf 'mode=%s admission=%s\n' "${STAGING_CRITICAL_MODE}" "${STAGING_ADMISSION_MODE:-unset}" >>"${TEST_COMMAND_LOG}"
 EOF
 chmod +x -- "${bin}/node"
 
@@ -93,6 +98,28 @@ assert_failure "staging wrapper with blank invite token" \
   STAGING_CRITICAL_MODE="full" STAGING_ADMISSION_MODE="closed" \
   STAGING_E2E_INVITE_TOKEN=$' \t ' \
   bash "${repo_root}/scripts/check-staging-critical.sh"
+
+env \
+  -u STAGING_ADMISSION_MODE \
+  -u STAGING_E2E_INVITE_TOKEN \
+  PATH="${bin}:${PATH}" \
+  TEST_COMMAND_LOG="${log}" \
+  EXPECTED_HARNESS_PATH="${repo_root}/frontend/e2e/staging-critical.mjs" \
+  STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="preflight" \
+  bash "${repo_root}/scripts/check-staging-critical.sh" >"${output}" 2>&1
+[[ "$(tail -n 1 "${log}")" == "mode=preflight admission=unset" ]] || fail "preflight wrapper contract failed"
+
+assert_failure "preflight wrapper with admission mode" \
+  env STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="preflight" STAGING_ADMISSION_MODE="off" \
+  bash "${repo_root}/scripts/check-staging-critical.sh"
+grep -Fq -- "target=current-public; mutation_started=false; cleanup_state=not_applicable" "${test_root}/last-output" || fail "preflight configuration diagnostic omitted safe state"
+assert_failure "preflight wrapper with invite token" \
+  env -u STAGING_ADMISSION_MODE \
+  STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
+  STAGING_CRITICAL_MODE="preflight" STAGING_E2E_INVITE_TOKEN="${token}" \
+  bash "${repo_root}/scripts/check-staging-critical.sh"
 env \
   PATH="${bin}:${PATH}" \
   TEST_COMMAND_LOG="${log}" \
@@ -119,6 +146,7 @@ assert_failure "auto-mode staging wrapper without invite token" \
   STAGING_BASE_URL="https://cycle.staging.fukamu.matoruru.com" \
   STAGING_CRITICAL_MODE="baseline" STAGING_ADMISSION_MODE="auto" \
   bash "${repo_root}/scripts/check-staging-critical.sh"
+grep -Fq -- "::warning::Staging critical diagnostic failed; target=current-public; mutation_started=false; cleanup_state=not_started" "${test_root}/last-output" || fail "baseline configuration failure was not a safe warning"
 
 assert_failure "staging wrapper without critical mode" \
   env -u STAGING_CRITICAL_MODE STAGING_ADMISSION_MODE="off" \

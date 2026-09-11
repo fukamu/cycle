@@ -449,9 +449,11 @@ Playwright自身の既定portは55432です。このリポジトリのDocker例�
 
 ### Staging pre-switch baseline / post-deploy critical journey
 
-`./scripts/check-staging-critical.sh`は通常のlocal checkではなく、`Deploy Staging`が2回実行します。最初の`baseline`は現在配信中のStagingを対象に、migration、Worker secretのmaterialize、Wrangler deployより前にhealth / readiness、anonymous bootstrap、session discovery、公開account-delete、削除後401を確認します。Admissionは`auto`で、現在のUIが`off`ならNew Goalへ直接進み、`closed`なら招待fragmentをmemory上で消費して「利用を開始する」を選択します。2回目の`full`はtraffic切替とsmoke testの後にcandidateのAdmission modeを使い、Goal / Cycle / Review / History journeyと同じcleanup proofまで確認します。
+`./scripts/check-staging-critical.sh`は通常のlocal checkではありません。`Deploy Staging`は最初に`preflight`で現在配信中のStagingのhealth / readinessだけをblocking確認し、traffic切替とsmoke test後に`full`でcandidateのGoal / Cycle / Review / History journeyとcleanup proofをblocking確認します。
 
-`STAGING_BASE_URL`、`STAGING_CRITICAL_MODE`、`STAGING_ADMISSION_MODE`と、`auto` / `closed`の場合だけ必要な`STAGING_E2E_INVITE_TOKEN`はGitHub `staging` Environmentからstep scopeで渡し、引数にはしません。`off`ではwrapperがInvite TokenをHarnessへ渡しません。HarnessはPlaywright test reporterを使わず、trace、screenshot、video、artifactを作らず、debug modeを無効化します。成功・失敗にかかわらず、検証済みsessionがあれば一時的なcleanup rediscovery失敗時にも公開account-delete APIを試行し、失敗はclosed-enum診断に残します。
+`baseline`は現在配信中Stagingのanonymous bootstrap、session discovery、公開account-delete、削除後401を確認するmanual / 別runのnon-blocking diagnosticです。検出した失敗はwarning annotationを出してprocessをnon-zero終了させますが、Deploy workflowへ接続しないためcandidate releaseをblockしません。Admissionは`auto`で、現在のUIが`off`ならNew Goalへ直接進み、`closed`なら招待fragmentをmemory上で消費して「利用を開始する」を選択できます。Stable CSRF初回rollout中の`Deploy Staging`では#139 harnessが同じanonymous / legacy Sessionを一度だけ所有します。同じrunner / IPでTurnstileやanonymous-create rate-limitを重複消費しないよう、generic `baseline`を自動実行しません。Manual diagnosticの失敗は候補releaseの成功証拠ではなく、#139 gateをwaiveしません。
+
+`STAGING_BASE_URL`と`STAGING_CRITICAL_MODE`はstep scopeで渡し、`preflight`ではAdmission設定とInvite Tokenを渡しません。`baseline` / `full`だけ`STAGING_ADMISSION_MODE`を渡し、`auto` / `closed`の場合だけ`STAGING_E2E_INVITE_TOKEN`をGitHub `staging` Environmentから注入します。値を引数にはせず、`off`ではwrapperがInvite TokenをHarnessへ渡しません。HarnessはPlaywright test reporterを使わず、trace、screenshot、video、artifactを作らず、debug modeを無効化します。成功・失敗にかかわらず、検証済みsessionがあれば一時的なcleanup rediscovery失敗時にも公開account-delete APIを試行し、失敗はtarget / release mutation / cleanup stateを含むclosed-enum診断に残します。
 
 Localから日常的に実行せず、Production originやProduction dataへ向けません。障害調査でOperations ownerが直接実行する場合も、承認済みsecret managerから環境へ注入し、shell history、process argument、terminal recordingへRaw Invite Tokenを残さず、[`operations.md`](operations.md#staging-critical-journey-cleanup)のcleanup確認まで完了させます。
 

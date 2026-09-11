@@ -117,10 +117,10 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 | `MIGRATIONS_DIR` | migration directory、`migrations` | GitHub Actionsで明示 |
 | `NEON_MIGRATION_DATABASE_URL` | Staging direct URL | **GitHub secret**、workflowが`DATABASE_URL`へ一時mapping |
 | `KPI_DATABASE_URL` | Survivor funnel KPI report専用PostgreSQL URL | **secret**。引数、`DATABASE_URL`、`TEST_DATABASE_URL`、ambient `PG*`へfallbackしない。現在は破棄可能なlocal `*_test` DBだけに手動設定し、Production / Staging source、owner、schedulerは未決 |
-| `STAGING_BASE_URL` | pre-switch baseline / post-deploy critical journeyのcanonical origin | workflowが`PUBLIC_ORIGIN`からstep scopeで設定。固定Staging HTTPS originだけを許可 |
-| `STAGING_CRITICAL_MODE` | `baseline`でpre-switch最小journey、`full`でpost-deploy全journey | workflowがstep scopeで固定し、未知値を拒否 |
-| `STAGING_ADMISSION_MODE` | critical journeyのAdmission entry処理 | Pre-switchは現在配信中revisionをcandidate設定から推測しない`auto`、post-deployは`BETA_ADMISSION_MODE`由来の`off` / `closed`をstep scopeで設定し、未知値を拒否 |
-| `STAGING_E2E_INVITE_TOKEN` | pre-switch auto baseline / post-deploy closed journeyのClosed Beta admission | **GitHub `staging` Environment secret**。生成済みRaw Token形式を必須とし、専用harnessだけへstep scopeで渡す。argv/log/trace/screenshot/artifact、Frontend bundle、Worker/Containerへ渡さない。Post-deploy `off`ではharnessへ渡さない |
+| `STAGING_BASE_URL` | pre-switch health / manual current-public diagnostic / post-deploy critical journeyのcanonical origin | workflowが`PUBLIC_ORIGIN`からstep scopeで設定。固定Staging HTTPS originだけを許可 |
+| `STAGING_CRITICAL_MODE` | `preflight`でcurrent-public health/readiness、`baseline`でmanual current-public diagnostic、`full`でcandidate post-deploy全journey | workflowまたは承認済みmanual diagnosticがstep scopeで固定し、未知値を拒否。Deploy workflowは`baseline`を実行しない |
+| `STAGING_ADMISSION_MODE` | `baseline` / `full` critical journeyのAdmission entry処理 | Manual `baseline`は現在配信中revisionをcandidate設定から推測しない`auto`、post-deployは`BETA_ADMISSION_MODE`由来の`off` / `closed`をstep scopeで設定し、未知値を拒否。`preflight`へ渡さない |
+| `STAGING_E2E_INVITE_TOKEN` | manual auto baseline / post-deploy closed journey / #139初回rolloutのClosed Beta admission | **GitHub `staging` Environment secret**。生成済みRaw Token形式を必須とし、専用harnessだけへstep scopeで渡す。argv/log/trace/screenshot/artifact、Frontend bundle、Worker/Container、`preflight`へ渡さない。Post-deploy `off`ではharnessへ渡さない |
 | `TEST_DATABASE_URL` | disposable integration/E2E DB | runtime/Production DBを指定禁止 |
 | `FUKAMU_CYCLE_GO_BINARY` | Playwright用Go executable | optional |
 | `FUKAMU_CYCLE_SERVER_BINARY` | prebuilt E2E server | optional、指定時は事前migration必要 |
@@ -210,7 +210,7 @@ LEGACY_RETIREMENT_APPROVER
 
 ## GitHub `staging` Environment
 
-Runtime/deployのexact required listは [`deploy.yml`](../.github/workflows/deploy.yml) の`Validate required deployment inputs`がenforceします。Critical journey専用`STAGING_E2E_INVITE_TOKEN`はtraffic切替前後の`./scripts/check-staging-critical.sh`が値を表示せず検証します。
+Runtime/deployのexact required listは [`deploy.yml`](../.github/workflows/deploy.yml) の`Validate required deployment inputs`がenforceします。Critical journey専用`STAGING_E2E_INVITE_TOKEN`は#139初回rollout、manual `baseline` diagnostic、traffic切替後の`full`が値を表示せず検証し、pre-switch health / readiness `preflight`へは渡しません。
 
 Secrets:
 
