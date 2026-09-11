@@ -207,14 +207,18 @@ trusted_git_no_replace_count="$(awk 'index($0, "GIT_NO_REPLACE_OBJECTS=1") { cou
   || fail "trusted Git wrapper does not clear ambient inputs and disable repository execution hooks"
 commit_gate_trusted_git_count="$(awk 'index($0, "trusted_git") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-before-commit.sh")"
 check_trusted_git_count="$(awk 'index($0, "trusted_git") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check.sh")"
+check_runner_trusted_git_count="$(awk 'index($0, "trusted_git") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/lib/check-runner.sh")"
+control_plane_trusted_git_count="$(awk 'index($0, "trusted_git") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-control-plane-fixtures.sh")"
 docs_snapshot_trusted_git_count="$(awk 'index($0, "trusted_git") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/lib/docs-config-candidate-snapshot.sh")"
 security_snapshot_trusted_git_count="$(awk 'index($0, "trusted_git") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/lib/security-tools.sh")"
 security_entry_trusted_git_count="$(awk 'index($0, "trusted_git") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-security.sh")"
-[[ "${commit_gate_trusted_git_count}" -eq 14 && "${check_trusted_git_count}" -eq 1 &&
+[[ "${commit_gate_trusted_git_count}" -eq 12 && "${check_trusted_git_count}" -eq 0 &&
+  "${check_runner_trusted_git_count}" -eq 1 &&
+  "${control_plane_trusted_git_count}" -eq 5 &&
   "${docs_snapshot_trusted_git_count}" -eq 3 && "${security_snapshot_trusted_git_count}" -eq 3 &&
   "${security_entry_trusted_git_count}" -eq 2 ]] \
   || fail "a repository check bypasses the trusted Git wrapper"
-unset trusted_git_body trusted_git_clean_environment_count trusted_git_git_pager_count trusted_git_pager_count trusted_git_no_pager_count trusted_git_fsmonitor_count trusted_git_untracked_cache_count trusted_git_hooks_count trusted_git_no_lazy_fetch_count trusted_git_no_replace_count commit_gate_trusted_git_count check_trusted_git_count docs_snapshot_trusted_git_count security_snapshot_trusted_git_count security_entry_trusted_git_count
+unset trusted_git_body trusted_git_clean_environment_count trusted_git_git_pager_count trusted_git_pager_count trusted_git_no_pager_count trusted_git_fsmonitor_count trusted_git_untracked_cache_count trusted_git_hooks_count trusted_git_no_lazy_fetch_count trusted_git_no_replace_count commit_gate_trusted_git_count check_trusted_git_count check_runner_trusted_git_count control_plane_trusted_git_count docs_snapshot_trusted_git_count security_snapshot_trusted_git_count security_entry_trusted_git_count
 pass "host Git calls clear ambient Git inputs and disable fsmonitor, untracked-cache, hooks, and replacement objects"
 
 git_mount_body="$(declare -f security_append_git_repository_mount)" || fail "could not inspect Git metadata mount helper"
@@ -246,10 +250,16 @@ pass "Git consumers mount normal and linked-worktree metadata through one fixed 
 
 commit_gate_trusted_diff_count="$(awk 'index($0, "trusted_git diff ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-before-commit.sh")"
 commit_gate_hardened_diff_count="$(awk 'index($0, "trusted_git diff --no-ext-diff --no-textconv ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-before-commit.sh")"
-[[ "${commit_gate_trusted_diff_count}" -eq 8 && "${commit_gate_hardened_diff_count}" -eq 8 ]] \
+[[ "${commit_gate_trusted_diff_count}" -eq 7 && "${commit_gate_hardened_diff_count}" -eq 7 ]] \
   || fail "commit gate Git diffs permit external diff or textconv execution"
 unset commit_gate_trusted_diff_count commit_gate_hardened_diff_count
 pass "commit gate disables external diff and textconv helpers on all trusted Git diffs"
+
+control_plane_hardened_diff_count="$(awk 'index($0, "--no-ext-diff --no-textconv") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check-control-plane-fixtures.sh")"
+[[ "${control_plane_hardened_diff_count}" -eq 1 ]] \
+  || fail "control-plane classifier Git diff permits external diff or textconv execution"
+unset control_plane_hardened_diff_count
+pass "control-plane classifier disables external diff and textconv helpers"
 
 for gitleaks_helper in \
   security_run_gitleaks_history \

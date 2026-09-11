@@ -1148,29 +1148,16 @@ validate_full_job_fallback() {
     violation "${job} job must exist exactly once"
     return 1
   }
-  if [[ "${job}" == "quality" ]]; then
-    require_exact_line "${job_file}" "    needs: reuse_pr_ci" || return 1
-  else
-    require_exact_line "${job_file}" "    needs: [reuse_pr_ci, quality]" || return 1
-  fi
+  require_exact_line "${job_file}" "    needs: reuse_pr_ci" || return 1
   extract_job_if "${job_file}" >"${if_file}" || {
     violation "${job} must define one fallback condition"
     return 1
   }
-  if [[ "${job}" == "quality" ]]; then
-    require_nonblank_lines "${if_file}" \
-      "    if: >-" \
-      "      always() &&" \
-      "      (github.event_name == 'pull_request' ||" \
-      "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')"
-  else
-    require_nonblank_lines "${if_file}" \
-      "    if: >-" \
-      "      always() &&" \
-      "      (github.event_name == 'pull_request' ||" \
-      "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&" \
-      "      needs.quality.result == 'success'"
-  fi
+  require_nonblank_lines "${if_file}" \
+    "    if: >-" \
+    "      always() &&" \
+    "      (github.event_name == 'pull_request' ||" \
+    "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')"
 }
 
 validate_job_structure() {
@@ -1202,7 +1189,7 @@ validate_job_structure() {
         ;;
       workflow)
         require_nonblank_lines "${fields_file}" \
-          "    needs: [reuse_pr_ci, quality]" \
+          "    needs: reuse_pr_ci" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    steps:" || return 1
@@ -1218,14 +1205,14 @@ validate_job_structure() {
         ;;
       frontend | infrastructure)
         require_nonblank_lines "${fields_file}" \
-          "    needs: [reuse_pr_ci, quality]" \
+          "    needs: reuse_pr_ci" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    steps:" || return 1
         ;;
       backend)
         require_nonblank_lines "${fields_file}" \
-          "    needs: [reuse_pr_ci, quality]" \
+          "    needs: reuse_pr_ci" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    services:" \
@@ -1235,7 +1222,7 @@ validate_job_structure() {
         ;;
       e2e)
         require_nonblank_lines "${fields_file}" \
-          "    needs: [reuse_pr_ci, workflow, quality, frontend, backend, infrastructure]" \
+          "    needs: reuse_pr_ci" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    services:" \
@@ -1587,6 +1574,7 @@ validate_workflow() {
   local quality_job="${test_root}/quality.job"
   local quality_steps="${test_root}/quality-steps.block"
   local quality_shell_step="${test_root}/quality-shell.step"
+  local quality_control_plane_step="${test_root}/quality-control-plane.step"
   local quality_docs_step="${test_root}/quality-docs.step"
   local quality_config_step="${test_root}/quality-config.step"
   local quality_security_step="${test_root}/quality-security.step"
@@ -1751,19 +1739,35 @@ validate_workflow() {
     "          git diff --cached --quiet --" \
     '          untracked_files="$(git ls-files --others --exclude-standard)"' \
     '          [[ -z "${untracked_files}" ]]' \
-    "      - name: Validate Bash scripts and negative fixtures" \
+    "      - name: Validate Bash scripts" \
     "        run: bash ./scripts/check-shell.sh" \
+    "      - name: Validate control-plane negative fixtures when applicable" \
+    "        env:" \
+    '          CONTROL_PLANE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}' \
+    '          CONTROL_PLANE_HEAD_SHA: ${{ github.sha }}' \
+    '        run: bash ./scripts/check-control-plane-fixtures.sh --range "${CONTROL_PLANE_BASE_SHA}" "${CONTROL_PLANE_HEAD_SHA}"' \
     "      - name: Validate documentation" \
     "        run: bash ./scripts/check-docs.sh" \
     "      - name: Validate configuration parity" \
     "        run: bash ./scripts/check-config-parity.sh" || return 1
-  extract_named_step "${quality_job}" "Validate Bash scripts and negative fixtures" >"${quality_shell_step}" || {
+  extract_named_step "${quality_job}" "Validate Bash scripts" >"${quality_shell_step}" || {
     violation "quality must contain exactly one canonical Bash validation step"
     return 1
   }
   require_nonblank_lines "${quality_shell_step}" \
-    "      - name: Validate Bash scripts and negative fixtures" \
+    "      - name: Validate Bash scripts" \
     "        run: bash ./scripts/check-shell.sh" || return 1
+  extract_named_step "${quality_job}" "Validate control-plane negative fixtures when applicable" >"${quality_control_plane_step}" || {
+    violation "quality must contain exactly one conservative control-plane fixture step"
+    return 1
+  }
+  # shellcheck disable=SC2016 # Expected workflow expressions and shell variables are literals.
+  require_nonblank_lines "${quality_control_plane_step}" \
+    "      - name: Validate control-plane negative fixtures when applicable" \
+    "        env:" \
+    '          CONTROL_PLANE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}' \
+    '          CONTROL_PLANE_HEAD_SHA: ${{ github.sha }}' \
+    '        run: bash ./scripts/check-control-plane-fixtures.sh --range "${CONTROL_PLANE_BASE_SHA}" "${CONTROL_PLANE_HEAD_SHA}"' || return 1
   extract_named_step "${quality_job}" "Validate documentation" >"${quality_docs_step}" || {
     violation "quality must contain exactly one canonical documentation validation step"
     return 1
@@ -1797,8 +1801,7 @@ validate_workflow() {
     violation "e2e job must exist exactly once"
     return 1
   }
-  require_exact_line "${e2e_job}" \
-    "    needs: [reuse_pr_ci, workflow, quality, frontend, backend, infrastructure]" || return 1
+  require_exact_line "${e2e_job}" "    needs: reuse_pr_ci" || return 1
   extract_job_if "${e2e_job}" >"${e2e_if}" || {
     violation "e2e must define one dependency condition"
     return 1
@@ -1807,12 +1810,7 @@ validate_workflow() {
     "    if: >-" \
     "      always() &&" \
     "      (github.event_name == 'pull_request' ||" \
-    "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&" \
-    "      needs.workflow.result == 'success' &&" \
-    "      needs.quality.result == 'success' &&" \
-    "      needs.frontend.result == 'success' &&" \
-    "      needs.backend.result == 'success' &&" \
-    "      needs.infrastructure.result == 'success'" || return 1
+    "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')" || return 1
 
   extract_job "${file}" attest_pr_ci >"${attestation_job}" || {
     violation "attest_pr_ci job must exist exactly once"
@@ -2407,13 +2405,9 @@ replace_job_line "${fixture}" quality "          runtime: node@24" \
   $'          runtime: node@24\n          fetch-depth: 0'
 assert_invalid "full-history fetch-depth outside checkout" "${fixture}"
 
-for full_job in workflow quality frontend backend infrastructure; do
+for full_job in workflow quality frontend backend infrastructure e2e; do
   fallback_line="      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')"
   bypassed_fallback_line="      needs.reuse_pr_ci.outputs.reuse_pr_ci == 'false')"
-  if [[ "${full_job}" != "quality" ]]; then
-    fallback_line+=" &&"
-    bypassed_fallback_line+=" &&"
-  fi
 
   fixture="$(new_fixture "${full_job}-without-main-fallback")"
   replace_job_line "${fixture}" "${full_job}" \
@@ -2482,29 +2476,29 @@ replace_job_line "${fixture}" backend \
   "    runs-on: self-hosted"
 assert_invalid "self-hosted functional runner" "${fixture}"
 
-fixture="$(new_fixture omitted-workflow-quality-dependency)"
+fixture="$(new_fixture serialized-workflow-behind-quality)"
 replace_job_line "${fixture}" workflow \
-  "    needs: [reuse_pr_ci, quality]" \
-  "    needs: reuse_pr_ci"
-assert_invalid "workflow without quality dependency" "${fixture}"
+  "    needs: reuse_pr_ci" \
+  "    needs: [reuse_pr_ci, quality]"
+assert_invalid "workflow serialized behind quality" "${fixture}"
 
-fixture="$(new_fixture bypassed-frontend-quality-result)"
+fixture="$(new_fixture serialized-frontend-behind-quality)"
 replace_job_line "${fixture}" frontend \
-  "      needs.quality.result == 'success'" \
-  "      needs.quality.result != 'failure'"
-assert_invalid "frontend with bypassed quality result" "${fixture}"
+  "    needs: reuse_pr_ci" \
+  "    needs: [reuse_pr_ci, quality]"
+assert_invalid "frontend serialized behind quality" "${fixture}"
 
-fixture="$(new_fixture omitted-backend-quality-result)"
+fixture="$(new_fixture serialized-backend-behind-quality)"
 replace_job_line "${fixture}" backend \
-  "      needs.quality.result == 'success'" \
-  "      true"
-assert_invalid "backend without quality result requirement" "${fixture}"
+  "    needs: reuse_pr_ci" \
+  "    needs: [reuse_pr_ci, quality]"
+assert_invalid "backend serialized behind quality" "${fixture}"
 
-fixture="$(new_fixture omitted-infrastructure-quality-dependency)"
+fixture="$(new_fixture serialized-infrastructure-behind-quality)"
 replace_job_line "${fixture}" infrastructure \
-  "    needs: [reuse_pr_ci, quality]" \
-  "    needs: [reuse_pr_ci]"
-assert_invalid "infrastructure without quality dependency" "${fixture}"
+  "    needs: reuse_pr_ci" \
+  "    needs: [reuse_pr_ci, quality]"
+assert_invalid "infrastructure serialized behind quality" "${fixture}"
 
 for install_job in frontend infrastructure e2e; do
   fixture="$(new_fixture "${install_job}-install-scripts-enabled")"
@@ -2557,7 +2551,12 @@ replace_job_line "${fixture}" workflow \
   $'      - if: false\n        name: Validate GitHub Actions workflows'
 assert_invalid "skipped actionlint step" "${fixture}"
 
+# shellcheck disable=SC2016 # Expected workflow shell variables are literals.
+control_plane_gate_run='bash ./scripts/check-control-plane-fixtures.sh --range "${CONTROL_PLANE_BASE_SHA}" "${CONTROL_PLANE_HEAD_SHA}"'
 while IFS='|' read -r gate_slug gate_name gate_run; do
+  if [[ "${gate_slug}" == "control" ]]; then
+    gate_run="${control_plane_gate_run}"
+  fi
   fixture="$(new_fixture "duplicate-${gate_slug}-gate")"
   duplicate_gate_step="$(printf '      - name: %s\n        run: %s\n      - name: %s' \
     "${gate_name}" "${gate_run}" "${gate_name}")"
@@ -2566,11 +2565,27 @@ while IFS='|' read -r gate_slug gate_name gate_run; do
     "${duplicate_gate_step}"
   assert_invalid "duplicate ${gate_name} quality gate" "${fixture}"
 done <<'QUALITY_GATES'
-shell|Validate Bash scripts and negative fixtures|bash ./scripts/check-shell.sh
+shell|Validate Bash scripts|bash ./scripts/check-shell.sh
+control|Validate control-plane negative fixtures when applicable|CONTROL_PLANE_GATE_RUN
 docs|Validate documentation|bash ./scripts/check-docs.sh
 config|Validate configuration parity|bash ./scripts/check-config-parity.sh
 security|Run security gates|bash ./scripts/check-security.sh
 QUALITY_GATES
+unset control_plane_gate_run
+
+fixture="$(new_fixture replaced-control-plane-classifier)"
+# shellcheck disable=SC2016 # Expected workflow shell variables are literals.
+replace_job_line "${fixture}" quality \
+  '        run: bash ./scripts/check-control-plane-fixtures.sh --range "${CONTROL_PLANE_BASE_SHA}" "${CONTROL_PLANE_HEAD_SHA}"' \
+  "        run: true"
+assert_invalid "replaced control-plane fixture classifier" "${fixture}"
+
+fixture="$(new_fixture altered-control-plane-base)"
+# shellcheck disable=SC2016 # Expected workflow expressions are literals.
+replace_job_line "${fixture}" quality \
+  '          CONTROL_PLANE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}' \
+  '          CONTROL_PLANE_BASE_SHA: ${{ github.sha }}'
+assert_invalid "altered control-plane fixture base" "${fixture}"
 
 fixture="$(new_fixture reordered-security-gate)"
 replace_job_line "${fixture}" quality \
@@ -2698,11 +2713,11 @@ replace_job_line "${fixture}" quality \
   $'      - name: Run security gates\n        <<: *bypass_step'
 assert_invalid "merged quality step" "${fixture}"
 
-fixture="$(new_fixture e2e-quality-bypass)"
+fixture="$(new_fixture serialized-e2e-behind-quality)"
 replace_job_line "${fixture}" e2e \
-  "      needs.quality.result == 'success' &&" \
-  "      needs.quality.result != 'failure' &&"
-assert_invalid "E2E quality bypass" "${fixture}"
+  "    needs: reuse_pr_ci" \
+  "    needs: [reuse_pr_ci, quality]"
+assert_invalid "E2E serialized behind quality" "${fixture}"
 
 fixture="$(new_fixture attestation-quality-bypass)"
 replace_job_line "${fixture}" attest_pr_ci \

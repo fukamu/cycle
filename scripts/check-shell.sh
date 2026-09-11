@@ -54,4 +54,5 @@ docker run --rm \
   --workdir /src \
   "${SUPPLY_CHAIN_SHFMT_IMAGE}" \
   -d -i 2 -ci -bn "${relative_files[@]}"
-bash "${script_dir}/tests/run.sh"
+
+printf '%s\n' "Bash syntax, ShellCheck, and shfmt checks completed successfully."

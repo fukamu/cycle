@@ -6019,6 +6019,8 @@ Mermaid/Markdown link/fence validation
 Docker/Container build
 ```
 
+Full CIではreuse resolverの判定後、workflow、quality、Frontend、Backend、Infrastructure、E2Eの各jobを並列に開始する。最終attestationは適用される全jobの成功を待ち、一つでも失敗または不正にskipされたtreeを検証済みとして扱わない。
+
 main pushでは、PR CIが実際に検証したmerge treeとmain commitのtreeが完全一致すると証明できる場合だけ、上記の重いcheck結果を再利用してよい。main SHA自身の成功CI runは残し、Terraform Plan / Deployの同一SHA gateを維持する。直接push、base更新、検証記録の欠落・期限切れ、API障害、tree不一致など、再利用を証明できない場合はmainで全checkを実行する。
 
 External OpenAI / Google / Turnstileの実callを通常PR必須testにしない。Fake adapterを使い、limited contract testはStaging/manualで行う。
@@ -6199,6 +6201,8 @@ Testはcanonical ownerを検証するconsumerであり、Product Rule、API値�
 | Governance / Policy | vendored validator + Cycle trace validator + negative fixtures | Playbook integrity、owner境界、required gateの迂回防止 |
 
 PostgreSQL固有のconstraint、deferred FK、row lock、transactionをSQLiteで代用しない。
+
+Governance / Policyの大規模negative fixture suiteは、gate / CI control-planeの変更または変更分類が確定できない場合に適用し、既知のapplication-only変更では省略できる。この分類は本体security profileや、変更に適用されるformat、lint、typecheck、unit / integration / E2E、buildを省略しない。
 
 ## 48.2 Test determinism
 

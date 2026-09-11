@@ -197,6 +197,15 @@ test_full_check_quality_order() {
     "${fixture}/cloudflare"
   touch "${fixture}/frontend/dist/index.html"
 
+  mv -- \
+    "${fixture}/scripts/lib/check-runner.sh" \
+    "${fixture}/scripts/lib/check-runner-impl.sh"
+  cat >"${fixture}/scripts/lib/check-runner.sh" <<'EOF'
+printf '%s\n' 'runner-source' >>"${TEST_COMMAND_LOG}"
+# shellcheck source=/dev/null
+source "${script_dir}/lib/check-runner-impl.sh"
+EOF
+
   cat >"${fixture}/scripts/check-security.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' 'security' >>"${TEST_COMMAND_LOG}"
@@ -208,6 +217,10 @@ EOF
   cat >"${fixture}/scripts/check-config-parity.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' 'config' >>"${TEST_COMMAND_LOG}"
+EOF
+  cat >"${fixture}/scripts/check-control-plane-fixtures.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'control-plane' >>"${TEST_COMMAND_LOG}"
 EOF
   cat >"${fixture}/scripts/invoke-sqlc.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -275,6 +288,7 @@ EOF
     "${fixture}/scripts/check-security.sh" \
     "${fixture}/scripts/check-docs.sh" \
     "${fixture}/scripts/check-config-parity.sh" \
+    "${fixture}/scripts/check-control-plane-fixtures.sh" \
     "${fixture}/scripts/invoke-sqlc.sh" \
     "${fixture}/scripts/check-docker-context.sh" \
     "${fixture}/scripts/check-shell.sh" \
@@ -283,15 +297,22 @@ EOF
 
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
     bash "${fixture}/scripts/check.sh" >/dev/null
-  [[ "$(sed -n '1,3p' "${log}")" == $'security\ndocs\nconfig' ]] \
-    || fail "full check did not run security, documentation, and configuration before candidate commands"
+  [[ "$(sed -n '1,5p' "${log}")" == $'security\nrunner-source\ndocs\nconfig\ncontrol-plane' ]] \
+    || fail "full check did not run security, documentation, configuration, and applicable fixtures before candidate commands"
   assert_lines_in_order "${log}" \
     "security" \
+    "runner-source" \
     "docs" \
     "config" \
+    "control-plane" \
     "pnpm --filter fukamu-cycle-frontend --fail-if-no-match run format:check" \
     "go vet ./..." \
     "docker-context"
+
+  local removed_security_option="--security-validated"'-tree'
+  assert_failure "removed public security bypass" \
+    bash "${fixture}/scripts/check.sh" \
+    "${removed_security_option}" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   pass "full check runs security first and all repository quality gates before candidate commands"
 }
 
@@ -338,20 +359,20 @@ test_backend_command_build_targets() {
   local backend_build_count
   local backend_build_without_vcs_count
 
-  assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go vet ./..."
-  assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go test -count=1 ./..."
-  assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/server\" ./cmd/server"
-  assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/migrate\" ./cmd/migrate"
-  assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/cleanup\" ./cmd/cleanup"
-  assert_file_contains "${repo_root}/scripts/check.sh" \
-    "    GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/configcheck\" ./cmd/configcheck"
-  backend_build_count="$(awk 'index($0, "go build ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check.sh")"
-  backend_build_without_vcs_count="$(awk 'index($0, "go build -buildvcs=false ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/check.sh")"
+  assert_file_contains "${repo_root}/scripts/lib/check-runner.sh" \
+    "      GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go vet ./..."
+  assert_file_contains "${repo_root}/scripts/lib/check-runner.sh" \
+    "      GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go test -count=1 ./..."
+  assert_file_contains "${repo_root}/scripts/lib/check-runner.sh" \
+    "      GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/server\" ./cmd/server"
+  assert_file_contains "${repo_root}/scripts/lib/check-runner.sh" \
+    "      GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/migrate\" ./cmd/migrate"
+  assert_file_contains "${repo_root}/scripts/lib/check-runner.sh" \
+    "      GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/cleanup\" ./cmd/cleanup"
+  assert_file_contains "${repo_root}/scripts/lib/check-runner.sh" \
+    "      GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build -buildvcs=false -o \"\${repo_root}/.tmp/check/configcheck\" ./cmd/configcheck"
+  backend_build_count="$(awk 'index($0, "go build ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/lib/check-runner.sh")"
+  backend_build_without_vcs_count="$(awk 'index($0, "go build -buildvcs=false ") { count += 1 } END { print count + 0 }' "${repo_root}/scripts/lib/check-runner.sh")"
   [[ "${backend_build_count}" -eq 4 && "${backend_build_without_vcs_count}" -eq 4 ]] \
     || fail "check compile targets can invoke unisolated VCS stamping"
   pass "check builds every backend command without VCS stamping"
@@ -392,7 +413,13 @@ case "$*" in
     [[ -e "${fixture_root}/fake-untracked-files" ]] && printf '%s\n' 'untracked.txt'
     exit 0
     ;;
-  'write-tree') printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
+  'write-tree')
+    if [[ -e "${fixture_root}/fake-index-changed" ]]; then
+      printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    else
+      printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    fi
+    ;;
   'diff --no-ext-diff --no-textconv --check' | 'diff --no-ext-diff --no-textconv --cached --check')
     if [[ -e "${fixture_root}/fake-diff-check-secret-output" ]]; then
       printf '%s\n' '+SENSITIVE_SENTINEL' >&2
@@ -449,20 +476,30 @@ EOF
 #!/usr/bin/env bash
 printf '%s\n' 'resolve-ci-reuse test' >>"${TEST_COMMAND_LOG}"
 EOF
-  cat >"${fixture}/scripts/check.sh" <<'EOF'
-#!/usr/bin/env bash
-printf 'check CI=%s %s\n' "${CI:-}" "$*" >>"${TEST_COMMAND_LOG}"
+  cat >"${fixture}/scripts/lib/check-runner.sh" <<'EOF'
+printf '%s\n' 'runner-source' >>"${TEST_COMMAND_LOG}"
+run_cycle_checks_after_security() {
+  printf 'runner CI=%s %s %s %s %s\n' \
+    "${CI:-}" "$1" "$2" "$3" "$4" >>"${TEST_COMMAND_LOG}"
+}
 EOF
   cat >"${fixture}/scripts/check-security.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ "$#" -eq 0 ]]
 printf '%s\n' 'security' >>"${TEST_COMMAND_LOG}"
+case "${FAKE_SECURITY_MUTATION:-none}" in
+  none) ;;
+  index) : >"$(dirname -- "${TEST_COMMAND_LOG}")/fake-index-changed" ;;
+  working) : >"$(dirname -- "${TEST_COMMAND_LOG}")/fake-unstaged-changes" ;;
+  untracked) : >"$(dirname -- "${TEST_COMMAND_LOG}")/fake-untracked-files" ;;
+  *) exit 2 ;;
+esac
 [[ "${FAKE_SECURITY_FAILURE:-false}" != "true" ]]
 EOF
   chmod +x \
     "${bin}/git" "${bin}/node" "${bin}/pnpm" "${bin}/go" "${bin}/docker" \
-    "${bin}/jq" "${bin}/terraform" "${fixture}/scripts/check.sh" \
-    "${fixture}/scripts/check-security.sh" \
+    "${bin}/jq" "${bin}/terraform" "${fixture}/scripts/check-security.sh" \
     "${fixture}/.github/scripts/resolve-ci-reuse.test.sh"
 
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" TEST_DATABASE_URL="${test_database_url}" \
@@ -471,21 +508,53 @@ EOF
   assert_file_contains "${log}" "resolve-ci-reuse test"
   grep -Fq -- "${SUPPLY_CHAIN_ACTIONLINT_IMAGE} -color" "${log}" \
     || fail "before-commit check did not run pinned actionlint"
-  assert_file_contains "${log}" "check CI=true --e2e"
+  assert_file_contains "${log}" \
+    "runner CI=true ${fixture} ${fixture}/scripts all true"
+  [[ "$(sed -n '1,5p' "${log}")" == $'git diff --no-ext-diff --no-textconv --cached --quiet --\ngit diff --no-ext-diff --no-textconv --quiet --\ngit ls-files --others --exclude-standard\ngit write-tree\nsecurity' ]] \
+    || fail "before-commit did not freeze the clean staged tree before starting security"
   assert_lines_in_order "${log}" \
     "security" \
-    "git write-tree" \
+    "runner-source" \
     "git diff --no-ext-diff --no-textconv --check" \
     "git diff --no-ext-diff --no-textconv --cached --check" \
     "go env GOVERSION GOENV=off GOTOOLCHAIN=local" \
     "pnpm install --frozen-lockfile --ignore-scripts" \
     "resolve-ci-reuse test" \
     "docker run --rm --volume ${fixture}:/repo:ro --workdir /repo ${SUPPLY_CHAIN_ACTIONLINT_IMAGE} -color" \
-    "check CI=true --e2e"
+    "runner CI=true ${fixture} ${fixture}/scripts all true"
+  [[ "$(grep -Fxc -- security "${log}")" == "1" ]] \
+    || fail "before-commit check did not run the full security profile exactly once"
+  [[ "$(grep -Fxc -- runner-source "${log}")" == "1" ]] \
+    || fail "before-commit check did not source the internal runner exactly once after security"
   [[ "$(grep -Fxc -- 'git diff --no-ext-diff --no-textconv --check' "${log}")" == "2" ]] \
     || fail "before-commit check did not validate unstaged whitespace before and after checks"
   [[ "$(grep -Fxc -- 'git diff --no-ext-diff --no-textconv --cached --check' "${log}")" == "2" ]] \
     || fail "before-commit check did not validate staged whitespace before and after checks"
+
+  local security_mutation
+  for security_mutation in index working untracked; do
+    : >"${log}"
+    rm -f -- \
+      "${fixture}/fake-index-changed" \
+      "${fixture}/fake-unstaged-changes" \
+      "${fixture}/fake-untracked-files"
+    assert_failure "security-time ${security_mutation} mutation" \
+      env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+      TEST_DATABASE_URL="${test_database_url}" \
+      FAKE_SECURITY_MUTATION="${security_mutation}" \
+      bash "${fixture}/scripts/check-before-commit.sh"
+    [[ "$(grep -Fxc -- security "${log}")" == "1" ]] \
+      || fail "security-time ${security_mutation} mutation did not run security exactly once"
+    [[ "$(grep -Fxc -- runner-source "${log}")" == "0" ]] \
+      || fail "security-time ${security_mutation} mutation sourced the internal runner"
+    if grep -Fq -- "pnpm install" "${log}"; then
+      fail "security-time ${security_mutation} mutation reached dependency installation"
+    fi
+  done
+  rm -f -- \
+    "${fixture}/fake-index-changed" \
+    "${fixture}/fake-unstaged-changes" \
+    "${fixture}/fake-untracked-files"
 
   # shellcheck disable=SC2016 # The exact source contract must remain literal.
   assert_file_contains "${repo_root}/scripts/lib/common.sh" \
@@ -498,6 +567,9 @@ EOF
     TEST_DATABASE_URL="${test_database_url}" FAKE_SECURITY_FAILURE=true \
     bash "${fixture}/scripts/check-before-commit.sh"
   assert_file_contains "${log}" "security"
+  if grep -Fq -- "runner-source" "${log}"; then
+    fail "before-commit sourced the internal runner before security passed"
+  fi
   if grep -Fq -- "go env GOVERSION" "${log}"; then
     fail "before-commit probed the candidate-selected Go toolchain before security passed"
   fi
@@ -537,8 +609,8 @@ EOF
     TEST_DATABASE_URL="${test_database_url}" \
     bash "${fixture}/scripts/check-before-commit.sh"
   rm -- "${fixture}/fake-staged-inspection-error"
-  [[ "$(grep -Fxc -- 'security' "${log}")" == "1" ]] \
-    || fail "before-commit did not run exactly one secret gate before the staged inspection"
+  [[ "$(grep -Fxc -- 'security' "${log}")" == "0" ]] \
+    || fail "before-commit ran security after the staged inventory became indeterminate"
   if grep -Fq -- 'go env GOVERSION' "${log}" || grep -Fq -- 'pnpm install' "${log}"; then
     fail "before-commit continued to candidate-selected tools after an abnormal staged-diff status"
   fi
@@ -787,6 +859,7 @@ test_sqlc_runner
 test_clean
 test_reset_local_db
 test_admission_helpers
+bash "${script_dir}/check-control-plane-fixtures.sh"
 bash "${script_dir}/check-terraform-state-recovery.sh"
 node --test "${script_dir}/staging-critical.test.mjs"
 bash "${script_dir}/check-staging-critical.sh"

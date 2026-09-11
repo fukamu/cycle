@@ -53,12 +53,11 @@ jobs:
           fi
 
   workflow:
-    needs: [reuse_pr_ci, quality]
+    needs: reuse_pr_ci
     if: >-
       always() &&
       (github.event_name == 'pull_request' ||
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
-      needs.quality.result == 'success'
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,20 +102,24 @@ jobs:
           git diff --cached --quiet --
           untracked_files="$(git ls-files --others --exclude-standard)"
           [[ -z "${untracked_files}" ]]
-      - name: Validate Bash scripts and negative fixtures
+      - name: Validate Bash scripts
         run: bash ./scripts/check-shell.sh
+      - name: Validate control-plane negative fixtures when applicable
+        env:
+          CONTROL_PLANE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CONTROL_PLANE_HEAD_SHA: ${{ github.sha }}
+        run: bash ./scripts/check-control-plane-fixtures.sh --range "${CONTROL_PLANE_BASE_SHA}" "${CONTROL_PLANE_HEAD_SHA}"
       - name: Validate documentation
         run: bash ./scripts/check-docs.sh
       - name: Validate configuration parity
         run: bash ./scripts/check-config-parity.sh
 
   frontend:
-    needs: [reuse_pr_ci, quality]
+    needs: reuse_pr_ci
     if: >-
       always() &&
       (github.event_name == 'pull_request' ||
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
-      needs.quality.result == 'success'
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -142,12 +145,11 @@ jobs:
       - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
 
   backend:
-    needs: [reuse_pr_ci, quality]
+    needs: reuse_pr_ci
     if: >-
       always() &&
       (github.event_name == 'pull_request' ||
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
-      needs.quality.result == 'success'
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -190,12 +192,11 @@ jobs:
       - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build ./cmd/configcheck
 
   infrastructure:
-    needs: [reuse_pr_ci, quality]
+    needs: reuse_pr_ci
     if: >-
       always() &&
       (github.event_name == 'pull_request' ||
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
-      needs.quality.result == 'success'
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -231,16 +232,11 @@ jobs:
       - run: pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match run deploy:dry-run
 
   e2e:
-    needs: [reuse_pr_ci, workflow, quality, frontend, backend, infrastructure]
+    needs: reuse_pr_ci
     if: >-
       always() &&
       (github.event_name == 'pull_request' ||
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
-      needs.workflow.result == 'success' &&
-      needs.quality.result == 'success' &&
-      needs.frontend.result == 'success' &&
-      needs.backend.result == 'success' &&
-      needs.infrastructure.result == 'success'
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
     runs-on: ubuntu-latest
     services:
       postgres:
