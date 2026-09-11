@@ -349,6 +349,11 @@ printf '%s\n' '#!/usr/bin/env python3' \
   >"${text_policy_fixture}/candidate/.fukamu/playbook/validate.py"
 security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
   || fail "exact vendored Playbook validator path was rejected"
+mkdir -p -- "${text_policy_fixture}/candidate/scripts"
+printf '%s\n' '#!/usr/bin/env python3' \
+  >"${text_policy_fixture}/candidate/scripts/classify-change-profile.py"
+security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
+  || fail "exact change classifier path was rejected"
 printf '%s\n' '#!/usr/bin/env python3' \
   >"${text_policy_fixture}/candidate/other.py"
 expect_failure \

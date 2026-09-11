@@ -303,7 +303,7 @@ validate_exact_workflow_structure() {
       expected_root_fields="$(printf '%s\n' name on permissions jobs)"
       expected_jobs="$(
         printf '%s\n' \
-          reuse_pr_ci workflow quality frontend backend infrastructure e2e attest_pr_ci
+          reuse_pr_ci classify workflow quality frontend backend infrastructure e2e required_pr_ci attest_pr_ci
       )"
       ;;
     deploy)
@@ -1188,7 +1188,7 @@ validate_all_workflows() {
     validate_secret_workflow_exact_digest "${directory}/${filename}" "${structure_contract}" || return 1
     validate_checkout_credential_file "${directory}/${filename}" "${expected_count}" || return 1
   done <<'WORKFLOW_CHECKOUT_INVENTORY'
-ci.yml|8|ci
+ci.yml|10|ci
 deploy.yml|2|deploy
 playbook.yml|1|playbook
 retire-legacy-origin.yml|1|legacy-retirement
@@ -1206,12 +1206,14 @@ validate_checkout_steps() {
   local file="$1"
   local -a checkout_jobs=(
     reuse_pr_ci
+    classify
     workflow
     quality
     frontend
     backend
     infrastructure
     e2e
+    required_pr_ci
     attest_pr_ci
   )
   local checkout_uses
@@ -1246,14 +1248,14 @@ validate_checkout_steps() {
 
     local fetch_depth_count
     fetch_depth_count="$(awk '/fetch-depth[[:space:]]*:/ { count++ } END { print count + 0 }' "${checkout_step}")"
-    if [[ "${job}" == "quality" ]]; then
+    if [[ "${job}" == "quality" || "${job}" == "classify" ]]; then
       [[ "${fetch_depth_count}" == "1" ]] || {
         violation "quality checkout must define fetch-depth exactly once"
         return 1
       }
       require_exact_line "${checkout_with}" "          fetch-depth: 0" || return 1
     elif [[ "${fetch_depth_count}" != "0" ]]; then
-      violation "only the full-history quality checkout may override fetch-depth"
+      violation "only the full-history quality and classifier checkouts may override fetch-depth"
       return 1
     fi
   done
@@ -1269,16 +1271,65 @@ validate_full_job_fallback() {
     violation "${job} job must exist exactly once"
     return 1
   }
-  require_exact_line "${job_file}" "    needs: reuse_pr_ci" || return 1
+  require_exact_line "${job_file}" "    needs: [reuse_pr_ci, classify]" || return 1
   extract_job_if "${job_file}" >"${if_file}" || {
     violation "${job} must define one fallback condition"
     return 1
   }
-  require_nonblank_lines "${if_file}" \
-    "    if: >-" \
-    "      always() &&" \
-    "      (github.event_name == 'pull_request' ||" \
-    "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')"
+  case "${job}" in
+    quality)
+      require_nonblank_lines "${if_file}" \
+        "    if: >-" \
+        "      always() &&" \
+        "      needs.classify.result == 'success' &&" \
+        "      (github.event_name == 'pull_request' ||" \
+        "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')"
+      ;;
+    workflow | infrastructure)
+      require_nonblank_lines "${if_file}" \
+        "    if: >-" \
+        "      always() &&" \
+        "      needs.classify.result == 'success' &&" \
+        "      (github.event_name == 'pull_request' ||" \
+        "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&" \
+        "      needs.classify.outputs.change_profile == 'full'"
+      ;;
+    frontend)
+      require_nonblank_lines "${if_file}" \
+        "    if: >-" \
+        "      always() &&" \
+        "      needs.classify.result == 'success' &&" \
+        "      (github.event_name == 'pull_request' ||" \
+        "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&" \
+        "      (needs.classify.outputs.change_profile == 'frontend' ||" \
+        "      needs.classify.outputs.change_profile == 'application' ||" \
+        "      needs.classify.outputs.change_profile == 'full')"
+      ;;
+    backend)
+      require_nonblank_lines "${if_file}" \
+        "    if: >-" \
+        "      always() &&" \
+        "      needs.classify.result == 'success' &&" \
+        "      (github.event_name == 'pull_request' ||" \
+        "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&" \
+        "      (needs.classify.outputs.change_profile == 'backend' ||" \
+        "      needs.classify.outputs.change_profile == 'application' ||" \
+        "      needs.classify.outputs.change_profile == 'full')"
+      ;;
+    e2e)
+      require_nonblank_lines "${if_file}" \
+        "    if: >-" \
+        "      always() &&" \
+        "      needs.classify.result == 'success' &&" \
+        "      (github.event_name == 'pull_request' ||" \
+        "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&" \
+        "      needs.classify.outputs.change_profile != 'docs'"
+      ;;
+    *)
+      violation "unknown scoped CI job: ${job}"
+      return 1
+      ;;
+  esac
 }
 
 validate_job_structure() {
@@ -1290,7 +1341,7 @@ validate_job_structure() {
   local env_file
   local defaults_file
 
-  for job in reuse_pr_ci workflow quality frontend backend infrastructure e2e attest_pr_ci; do
+  for job in reuse_pr_ci classify workflow quality frontend backend infrastructure e2e required_pr_ci attest_pr_ci; do
     job_file="${test_root}/${job}-structure.job"
     fields_file="${test_root}/${job}-fields.block"
     extract_job "${file}" "${job}" >"${job_file}" || {
@@ -1308,9 +1359,18 @@ validate_job_structure() {
           "    outputs:" \
           "    steps:" || return 1
         ;;
+      classify)
+        require_nonblank_lines "${fields_file}" \
+          "    name: Classify candidate changes" \
+          "    needs: reuse_pr_ci" \
+          "    if: >-" \
+          "    runs-on: ubuntu-latest" \
+          "    outputs:" \
+          "    steps:" || return 1
+        ;;
       workflow)
         require_nonblank_lines "${fields_file}" \
-          "    needs: reuse_pr_ci" \
+          "    needs: [reuse_pr_ci, classify]" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    steps:" || return 1
@@ -1318,7 +1378,7 @@ validate_job_structure() {
       quality)
         require_nonblank_lines "${fields_file}" \
           "    name: Security, configuration, and documentation" \
-          "    needs: reuse_pr_ci" \
+          "    needs: [reuse_pr_ci, classify]" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    timeout-minutes: 30" \
@@ -1326,14 +1386,14 @@ validate_job_structure() {
         ;;
       frontend | infrastructure)
         require_nonblank_lines "${fields_file}" \
-          "    needs: reuse_pr_ci" \
+          "    needs: [reuse_pr_ci, classify]" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    steps:" || return 1
         ;;
       backend)
         require_nonblank_lines "${fields_file}" \
-          "    needs: reuse_pr_ci" \
+          "    needs: [reuse_pr_ci, classify]" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    services:" \
@@ -1343,16 +1403,25 @@ validate_job_structure() {
         ;;
       e2e)
         require_nonblank_lines "${fields_file}" \
-          "    needs: reuse_pr_ci" \
+          "    needs: [reuse_pr_ci, classify]" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    services:" \
           "    steps:" || return 1
         ;;
+      required_pr_ci)
+        require_nonblank_lines "${fields_file}" \
+          "    name: Required PR CI" \
+          "    needs:" \
+          "    if: >-" \
+          "    runs-on: ubuntu-latest" \
+          "    outputs:" \
+          "    steps:" || return 1
+        ;;
       attest_pr_ci)
         require_nonblank_lines "${fields_file}" \
           "    name: Attest tested PR tree" \
-          "    needs:" \
+          "    needs: [reuse_pr_ci, classify, required_pr_ci]" \
           "    if: >-" \
           "    runs-on: ubuntu-latest" \
           "    steps:" || return 1
@@ -1403,6 +1472,8 @@ validate_job_structure() {
   local step_shells="${test_root}/ci-step-shells.block"
   awk '/^      - shell:|^        shell:/ { print }' "${file}" >"${step_shells}"
   require_nonblank_lines "${step_shells}" \
+    "        shell: bash" \
+    "        shell: bash" \
     "        shell: bash" \
     "        shell: bash" \
     "        shell: bash" || return 1
@@ -1559,9 +1630,15 @@ validate_exact_control_steps() {
   local file="$1"
   local reuse_job="${test_root}/control-reuse.job"
   local reuse_steps="${test_root}/control-reuse-steps.block"
+  local classify_job="${test_root}/control-classify.job"
+  local classify_steps="${test_root}/control-classify-steps.block"
+  local required_job="${test_root}/control-required.job"
+  local required_steps="${test_root}/control-required-steps.block"
   local attest_job="${test_root}/control-attest.job"
   local attest_steps="${test_root}/control-attest-steps.block"
   local expected_reuse_steps
+  local expected_classify_steps
+  local expected_required_steps
   local expected_attest_steps
 
   extract_job "${file}" reuse_pr_ci >"${reuse_job}" || {
@@ -1606,6 +1683,87 @@ EOF
   )"
   require_nonblank_block "${reuse_steps}" "${expected_reuse_steps}" || return 1
 
+  extract_job "${file}" classify >"${classify_job}" || {
+    violation "classify must exist exactly once for control-step validation"
+    return 1
+  }
+  extract_job_mapping "${classify_job}" steps >"${classify_steps}" || {
+    violation "classify must define exactly one steps mapping"
+    return 1
+  }
+  expected_classify_steps="$(
+    cat <<'EOF'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve conservative change profile
+        id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            {
+              echo 'change_profile=full'
+              echo 'change_reason=main_reuse_fallback'
+            } >> "${GITHUB_OUTPUT}"
+          else
+            bash ./scripts/check-control-plane-fixtures.sh \
+              --classify-only --range "${BASE_SHA}" "${HEAD_SHA}" >> "${GITHUB_OUTPUT}"
+          fi
+EOF
+  )"
+  require_nonblank_block "${classify_steps}" "${expected_classify_steps}" || return 1
+
+  extract_job "${file}" required_pr_ci >"${required_job}" || {
+    violation "required_pr_ci must exist exactly once for control-step validation"
+    return 1
+  }
+  extract_job_mapping "${required_job}" steps >"${required_steps}" || {
+    violation "required_pr_ci must define exactly one steps mapping"
+    return 1
+  }
+  expected_required_steps="$(
+    cat <<'EOF'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Verify exact required job matrix
+        id: verify
+        shell: bash
+        env:
+          CHANGE_PROFILE: ${{ needs.classify.outputs.change_profile }}
+          REUSE_RESULT: ${{ needs.reuse_pr_ci.result }}
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          WORKFLOW_RESULT: ${{ needs.workflow.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          node ./scripts/verify-ci-change-profile.mjs \
+            "${CHANGE_PROFILE}" \
+            "reuse_pr_ci=${REUSE_RESULT}" \
+            "classify=${CLASSIFY_RESULT}" \
+            "workflow=${WORKFLOW_RESULT}" \
+            "quality=${QUALITY_RESULT}" \
+            "frontend=${FRONTEND_RESULT}" \
+            "backend=${BACKEND_RESULT}" \
+            "infrastructure=${INFRASTRUCTURE_RESULT}" \
+            "e2e=${E2E_RESULT}" >> "${GITHUB_OUTPUT}"
+EOF
+  )"
+  require_nonblank_block "${required_steps}" "${expected_required_steps}" || return 1
+
   extract_job "${file}" attest_pr_ci >"${attest_job}" || {
     violation "attest_pr_ci must exist exactly once for control-step validation"
     return 1
@@ -1626,6 +1784,8 @@ EOF
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGE_PROFILE: ${{ needs.classify.outputs.change_profile }}
+          REQUIRED_JOBS: ${{ needs.required_pr_ci.outputs.required_jobs }}
         run: |
           set -euo pipefail
           tested_tree="$(git rev-parse 'HEAD^{tree}')"
@@ -1637,6 +1797,8 @@ EOF
             echo "tested_commit=${GITHUB_SHA}"
             echo "tested_tree=${tested_tree}"
             echo "workflow_run=${GITHUB_RUN_ID}"
+            echo "change_profile=${CHANGE_PROFILE}"
+            echo "required_jobs=${REQUIRED_JOBS}"
           } > "${RUNNER_TEMP}/fukamu-cycle-pr-ci-attestation/attestation.txt"
           echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
       - name: Upload tested tree attestation
@@ -1690,6 +1852,12 @@ validate_workflow() {
   local reuse_permissions="${test_root}/reuse-permissions.block"
   local reuse_outputs="${test_root}/reuse-outputs.block"
   local reuse_resolver_step="${test_root}/reuse-resolver.step"
+  local classify_job="${test_root}/classify.job"
+  local classify_if="${test_root}/classify-if.block"
+  local classify_outputs="${test_root}/classify-outputs.block"
+  local required_job="${test_root}/required.job"
+  local required_if="${test_root}/required-if.block"
+  local required_outputs="${test_root}/required-outputs.block"
   local workflow_job="${test_root}/workflow.job"
   local actionlint_step="${test_root}/actionlint.step"
   local quality_job="${test_root}/quality.job"
@@ -1786,6 +1954,52 @@ validate_workflow() {
     '          GH_TOKEN: ${{ github.token }}' \
     '        run: bash .github/scripts/resolve-ci-reuse.sh "${GITHUB_SHA}" "${GITHUB_REPOSITORY}" "${GITHUB_OUTPUT}"' || return 1
   require_exact_line "${reuse_job}" "        id: resolve" || return 1
+
+  extract_job "${file}" classify >"${classify_job}" || {
+    violation "classify job must exist exactly once"
+    return 1
+  }
+  require_exact_line "${classify_job}" "    needs: reuse_pr_ci" || return 1
+  extract_job_if "${classify_job}" >"${classify_if}" || {
+    violation "classify must define one fallback condition"
+    return 1
+  }
+  require_nonblank_lines "${classify_if}" \
+    "    if: >-" \
+    "      always() &&" \
+    "      (github.event_name == 'pull_request' ||" \
+    "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')" || return 1
+  extract_job_mapping "${classify_job}" outputs >"${classify_outputs}" || {
+    violation "classify must define one outputs mapping"
+    return 1
+  }
+  # shellcheck disable=SC2016 # Expected workflow expressions are literals.
+  require_nonblank_lines "${classify_outputs}" \
+    '      change_profile: ${{ steps.classify.outputs.change_profile }}' \
+    '      change_reason: ${{ steps.classify.outputs.change_reason }}' || return 1
+
+  extract_job "${file}" required_pr_ci >"${required_job}" || {
+    violation "required_pr_ci job must exist exactly once"
+    return 1
+  }
+  require_exact_line "${required_job}" "    needs:" || return 1
+  require_exact_line "${required_job}" \
+    "      [reuse_pr_ci, classify, workflow, quality, frontend, backend, infrastructure, e2e]" || return 1
+  extract_job_if "${required_job}" >"${required_if}" || {
+    violation "required_pr_ci must define one PR condition"
+    return 1
+  }
+  require_nonblank_lines "${required_if}" \
+    "    if: >-" \
+    "      always() &&" \
+    "      github.event_name == 'pull_request'" || return 1
+  extract_job_mapping "${required_job}" outputs >"${required_outputs}" || {
+    violation "required_pr_ci must define one outputs mapping"
+    return 1
+  }
+  # shellcheck disable=SC2016 # Expected workflow expression is literal.
+  require_nonblank_lines "${required_outputs}" \
+    '      required_jobs: ${{ steps.verify.outputs.required_jobs }}' || return 1
 
   validate_checkout_steps "${file}" || return 1
   validate_job_structure "${file}" || return 1
@@ -1922,7 +2136,7 @@ validate_workflow() {
     violation "e2e job must exist exactly once"
     return 1
   }
-  require_exact_line "${e2e_job}" "    needs: reuse_pr_ci" || return 1
+  require_exact_line "${e2e_job}" "    needs: [reuse_pr_ci, classify]" || return 1
   extract_job_if "${e2e_job}" >"${e2e_if}" || {
     violation "e2e must define one dependency condition"
     return 1
@@ -1930,16 +2144,17 @@ validate_workflow() {
   require_nonblank_lines "${e2e_if}" \
     "    if: >-" \
     "      always() &&" \
+    "      needs.classify.result == 'success' &&" \
     "      (github.event_name == 'pull_request' ||" \
-    "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')" || return 1
+    "      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&" \
+    "      needs.classify.outputs.change_profile != 'docs'" || return 1
 
   extract_job "${file}" attest_pr_ci >"${attestation_job}" || {
     violation "attest_pr_ci job must exist exactly once"
     return 1
   }
-  require_exact_line "${attestation_job}" "    needs:" || return 1
   require_exact_line "${attestation_job}" \
-    "      [reuse_pr_ci, workflow, quality, frontend, backend, infrastructure, e2e]" || return 1
+    "    needs: [reuse_pr_ci, classify, required_pr_ci]" || return 1
   extract_job_if "${attestation_job}" >"${attestation_if}" || {
     violation "attest_pr_ci must define one dependency condition"
     return 1
@@ -1949,12 +2164,8 @@ validate_workflow() {
     "      always() &&" \
     "      github.event_name == 'pull_request' &&" \
     "      needs.reuse_pr_ci.result == 'skipped' &&" \
-    "      needs.workflow.result == 'success' &&" \
-    "      needs.quality.result == 'success' &&" \
-    "      needs.frontend.result == 'success' &&" \
-    "      needs.backend.result == 'success' &&" \
-    "      needs.infrastructure.result == 'success' &&" \
-    "      needs.e2e.result == 'success'" || return 1
+    "      needs.classify.result == 'success' &&" \
+    "      needs.required_pr_ci.result == 'success'" || return 1
 }
 
 replace_line_once() {
@@ -2510,6 +2721,39 @@ replace_job_line "${fixture}" attest_pr_ci \
   $'      - run: true\n      - name: Write tested tree attestation'
 assert_invalid "attestation anonymous step" "${fixture}"
 
+fixture="$(new_fixture classifier-base-is-head)"
+# shellcheck disable=SC2016 # GitHub expression is an intentional fixture literal.
+replace_job_line "${fixture}" classify \
+  '          BASE_SHA: ${{ github.event.pull_request.base.sha }}' \
+  '          BASE_SHA: ${{ github.sha }}'
+assert_invalid "classifier without PR base revision" "${fixture}"
+
+fixture="$(new_fixture classifier-main-not-full)"
+replace_job_line "${fixture}" classify \
+  "              echo 'change_profile=full'" \
+  "              echo 'change_profile=docs'"
+assert_invalid "classifier without full main fallback" "${fixture}"
+
+fixture="$(new_fixture classifier-command-bypass)"
+# shellcheck disable=SC2016 # Runtime variables are intentional fixture literals.
+replace_job_line "${fixture}" classify \
+  '              --classify-only --range "${BASE_SHA}" "${HEAD_SHA}" >> "${GITHUB_OUTPUT}"' \
+  '              echo "change_profile=docs" >> "${GITHUB_OUTPUT}"'
+assert_invalid "classifier command bypass" "${fixture}"
+
+fixture="$(new_fixture required-verifier-bypass)"
+replace_raw_line_once "${fixture}" \
+  "          node ./scripts/verify-ci-change-profile.mjs \\" \
+  "          true \\"
+assert_invalid "required job matrix verifier bypass" "${fixture}"
+
+fixture="$(new_fixture required-checkout-ref-change)"
+# shellcheck disable=SC2016 # GitHub expression is an intentional fixture literal.
+replace_job_line "${fixture}" required_pr_ci \
+  '          ref: ${{ github.sha }}' \
+  "          ref: refs/heads/main"
+assert_invalid "required aggregator checkout ref change" "${fixture}"
+
 fixture="$(new_fixture persisted-checkout-credentials)"
 replace_line_once "${fixture}" "          persist-credentials: false" \
   "          persist-credentials: true"
@@ -2528,8 +2772,13 @@ replace_job_line "${fixture}" quality "          runtime: node@24" \
 assert_invalid "full-history fetch-depth outside checkout" "${fixture}"
 
 for full_job in workflow quality frontend backend infrastructure e2e; do
-  fallback_line="      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')"
-  bypassed_fallback_line="      needs.reuse_pr_ci.outputs.reuse_pr_ci == 'false')"
+  if [[ "${full_job}" == "quality" ]]; then
+    fallback_line="      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')"
+    bypassed_fallback_line="      needs.reuse_pr_ci.outputs.reuse_pr_ci == 'false')"
+  else
+    fallback_line="      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&"
+    bypassed_fallback_line="      needs.reuse_pr_ci.outputs.reuse_pr_ci == 'false') &&"
+  fi
 
   fixture="$(new_fixture "${full_job}-without-main-fallback")"
   replace_job_line "${fixture}" "${full_job}" \
@@ -2600,26 +2849,26 @@ assert_invalid "self-hosted functional runner" "${fixture}"
 
 fixture="$(new_fixture serialized-workflow-behind-quality)"
 replace_job_line "${fixture}" workflow \
-  "    needs: reuse_pr_ci" \
-  "    needs: [reuse_pr_ci, quality]"
+  "    needs: [reuse_pr_ci, classify]" \
+  "    needs: [reuse_pr_ci, classify, quality]"
 assert_invalid "workflow serialized behind quality" "${fixture}"
 
 fixture="$(new_fixture serialized-frontend-behind-quality)"
 replace_job_line "${fixture}" frontend \
-  "    needs: reuse_pr_ci" \
-  "    needs: [reuse_pr_ci, quality]"
+  "    needs: [reuse_pr_ci, classify]" \
+  "    needs: [reuse_pr_ci, classify, quality]"
 assert_invalid "frontend serialized behind quality" "${fixture}"
 
 fixture="$(new_fixture serialized-backend-behind-quality)"
 replace_job_line "${fixture}" backend \
-  "    needs: reuse_pr_ci" \
-  "    needs: [reuse_pr_ci, quality]"
+  "    needs: [reuse_pr_ci, classify]" \
+  "    needs: [reuse_pr_ci, classify, quality]"
 assert_invalid "backend serialized behind quality" "${fixture}"
 
 fixture="$(new_fixture serialized-infrastructure-behind-quality)"
 replace_job_line "${fixture}" infrastructure \
-  "    needs: reuse_pr_ci" \
-  "    needs: [reuse_pr_ci, quality]"
+  "    needs: [reuse_pr_ci, classify]" \
+  "    needs: [reuse_pr_ci, classify, quality]"
 assert_invalid "infrastructure serialized behind quality" "${fixture}"
 
 for install_job in frontend infrastructure e2e; do
@@ -2837,15 +3086,15 @@ assert_invalid "merged quality step" "${fixture}"
 
 fixture="$(new_fixture serialized-e2e-behind-quality)"
 replace_job_line "${fixture}" e2e \
-  "    needs: reuse_pr_ci" \
-  "    needs: [reuse_pr_ci, quality]"
+  "    needs: [reuse_pr_ci, classify]" \
+  "    needs: [reuse_pr_ci, classify, quality]"
 assert_invalid "E2E serialized behind quality" "${fixture}"
 
-fixture="$(new_fixture attestation-quality-bypass)"
+fixture="$(new_fixture attestation-aggregator-bypass)"
 replace_job_line "${fixture}" attest_pr_ci \
-  "      needs.quality.result == 'success' &&" \
-  "      needs.quality.result != 'failure' &&"
-assert_invalid "attestation quality bypass" "${fixture}"
+  "      needs.required_pr_ci.result == 'success'" \
+  "      needs.required_pr_ci.result != 'failure'"
+assert_invalid "attestation required aggregator bypass" "${fixture}"
 
 fixture="$(new_fixture omitted-cleanup-build)"
 replace_job_line "${fixture}" backend \

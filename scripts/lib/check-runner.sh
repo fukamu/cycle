@@ -14,8 +14,8 @@ run_cycle_checks_after_security() {
   local run_infrastructure=false
   local run_repository_quality=false
 
-  [[ "${scope}" == "all" || "${scope}" == "frontend" ]] && run_frontend=true
-  [[ "${scope}" == "all" || "${scope}" == "backend" ]] && run_backend=true
+  [[ "${scope}" == "all" || "${scope}" == "frontend" || "${scope}" == "application" ]] && run_frontend=true
+  [[ "${scope}" == "all" || "${scope}" == "backend" || "${scope}" == "application" ]] && run_backend=true
   [[ "${scope}" == "all" || "${scope}" == "infrastructure" ]] && run_infrastructure=true
   [[ "${scope}" == "all" ]] && run_repository_quality=true
 

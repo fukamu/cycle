@@ -6007,19 +6007,11 @@ Production data/secretをStagingへcopyしない。Staging dataは破棄可能�
 
 ## 44.3 CI
 
-PR:
+PR CIはbase commitからGitHub merge refのexact treeまでの完全な変更inventoryを、`docs`、`frontend`、`backend`、`application`（Frontend + Backend）、`full`のclosed profileへ分類する。`docs`はquality、`frontend`はquality / Frontend / E2E、`backend`はquality / Backend / E2E、`application`はquality / Frontend / Backend / E2E、`full`はworkflow / quality / Frontend / Backend / Infrastructure / E2Eを必須とする。qualityのfull security profileと専用Playbook policy workflowはG7で別Decisionが行われるまで全PR candidateで維持する。
 
-```text
-frontend format/lint/typecheck/unit/component/build
-backend gofmt/go vet/unit/application/repository/API tests/build
-migration lint + empty-DB apply test
-sqlc generated diff check
-security/static analysis
-Mermaid/Markdown link/fence validation
-Docker/Container build
-```
+通常のFrontend / Backend codeとMarkdownだけを既知scopeとしてunionできる。Cloudflare / Infrastructure、dependency / lock、workflow、gate / classifier、security / Playbook policy、configuration ownerの変更、およびunknown path、rename / copy / file type変更、100件超、空または不完全なinventoryは`full`へfallbackする。main pushでPR CIを安全に再利用できない場合も変更内容にかかわらず`full`とする。
 
-Full CIではreuse resolverの判定後、workflow、quality、Frontend、Backend、Infrastructure、E2Eの各jobを並列に開始する。最終attestationは適用される全jobの成功を待ち、一つでも失敗または不正にskipされたtreeを検証済みとして扱わない。
+各functional jobはclassifier成功後にprofileに従って並列開始する。stableなrequired aggregatorは常に完了し、適用jobが`success`、非適用jobが`skipped`であるclosed matrixをexactに照合する。classifier、required job、または結果matrixが不明・失敗・不一致ならattestationを作らない。FrontendまたはBackendへ影響するPRはGitHub merge refでE2Eを必須とし、local commitごとに同じPlaywright E2Eを重ねない。
 
 main pushでは、PR CIが実際に検証したmerge treeとmain commitのtreeが完全一致すると証明できる場合だけ、上記の重いcheck結果を再利用してよい。main SHA自身の成功CI runは残し、Terraform Plan / Deployの同一SHA gateを維持する。直接push、base更新、検証記録の欠落・期限切れ、API障害、tree不一致など、再利用を証明できない場合はmainで全checkを実行する。
 
@@ -6208,7 +6200,7 @@ Testはcanonical ownerを検証するconsumerであり、Product Rule、API値�
 
 PostgreSQL固有のconstraint、deferred FK、row lock、transactionをSQLiteで代用しない。
 
-Governance / Policyの大規模negative fixture suiteは、gate / CI control-planeの変更または変更分類が確定できない場合に適用し、既知のapplication-only変更では省略できる。この分類は本体security profileや、変更に適用されるformat、lint、typecheck、unit / integration / E2E、buildを省略しない。
+Governance / Policyの大規模negative fixture suiteは、gate / CI control-planeの変更または変更分類が確定できない場合に適用し、既知のapplication-only変更では省略できる。Commit前gateはfull securityとstaged tree guardを全candidateへ適用した後、`docs`では文書、`frontend`ではFrontend、`backend`ではBackendと実PostgreSQL integration、`application`ではFrontend + Backend、`full`では全scopeとPlaywright E2Eを実行する。Frontend / BackendのPR merge refではE2Eを追加し、無関係なTerraform / Wrangler / Playwright E2Eを全local commitへ重ねない。手動の`check.sh` full / scope CLIの意味は変更しない。
 
 ## 48.2 Test determinism
 
@@ -6278,6 +6270,8 @@ E2Eは§6のuser flowと§§20–25のpublic contractを投影し、内部module
 - Save/AI/provider failure、response loss、session identity transition。
 
 Exact scenario manifestはversioned Playwright suiteを正とし、同じjourney一覧を文書へ複製しない。
+
+E2Eの実行頻度は§§44.3、48.1のchange profileに従う。Frontend / Backend / SQL / migrationのPR latest merge treeと`full` local fallbackではrequiredとし、docs-only local / PRおよび通常Frontend / Backend local commitでは省略できる。
 
 Staging release fixtureは、current-publicのblocking preflightがhealth / readinessだけを呼び、Stable CSRF初回rollout中はgeneric anonymous diagnosticを同じDeploy runで重複実行せず、#139のlegacy Session gateとcandidate-publicのfull journey / cleanupがhard gateのままであることを固定する。Manual `baseline` failureは`target=current-public` / `mutation_started=false`のwarning、candidate `full` failureは`target=candidate-public` / `mutation_started=true`のerrorとし、全modeのcleanup state遷移とsecret-safe field allowlistをunit / workflow contractで検証する。
 
@@ -6496,7 +6490,7 @@ Environment固有のDomain、capacity、provider availability/price、credential
 3. `仕様変更`ではProduct Ownerの承認証跡を確認する。その他の分類では承認が不要な理由を記録する。
 4. ownerを変更後の現在形へ更新し、summary/index/traceは参照先だけを同期する。
 5. DDL/API/Prompt/Test等のenforcement mirrorと実装を同じ変更で更新する。
-6. §48の検証と§53のacceptance traceを通し、理由・影響・trade-off・実行結果を記録する。
+6. §48で変更に適用される検証と§53のacceptance traceを通し、理由・影響・trade-off・実行結果を記録する。
 
 共通Playbook ruleを更新する場合は中央repositoryでその変更手続きとversionを確定した後、Cycle側で新しいexact revisionをreviewする。Cycle adoption更新はbundle、validator、lock、override、config trace、影響するlocal consumerとgateを同じPull Requestへ含め、通常offline検証に加えてsource-backed検証を完走する。中央`main`、floating tag、短縮SHAを採用根拠にしない。
 
@@ -6511,7 +6505,7 @@ Environment固有のDomain、capacity、provider availability/price、credential
 
 # 53. MVP Acceptance Trace
 
-MVP acceptanceは、各canonical ownerのContractと§48のverificationが同じcandidate treeで成功していることとする。この節はbehaviorや数値を再掲せず、release evidenceの欠落を検出する。
+MVP acceptanceは、各canonical ownerのContractと§48で変更に適用されるverificationが同じcandidate treeで成功していることとする。非適用gateはrequired aggregatorで`skipped`として照合し、判定不能を非適用扱いしない。この節はbehaviorや数値を再掲せず、release evidenceの欠落を検出する。
 
 | Acceptance area | Canonical owner | Minimum evidence |
 |---|---|---|

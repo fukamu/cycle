@@ -72,10 +72,10 @@ Cycle固有のアプリケーション要件・仕様・設計の最上位Source
 - 全体: `./scripts/check.sh`
 - Gate / CI control-plane負例: `./scripts/check-control-plane-fixtures.sh --working-tree`（既知のapplication-only変更は省略し、control-plane変更または分類不能時はfull fixture suiteを実行）
 - E2E込み: 消去可能な`TEST_DATABASE_URL`を設定して `./scripts/check.sh --e2e`
-- Commit前の必須gate: 全変更をstageし、消去可能なlocal `*_test` DBを`TEST_DATABASE_URL`へ設定して `./scripts/check-before-commit.sh`（full securityを外部dependency access前に同じstaged treeへ1回実行）
+- Commit前の必須gate: 全変更をstageして `./scripts/check-before-commit.sh`（full securityとtree guardは全candidate、残りは保守的change profile。Backendを含むprofileと`full`では消去可能なlocal `*_test` DBを`TEST_DATABASE_URL`へ設定）
 - Safe cleanの対象確認: `./scripts/clean.sh --dry-run`
 - DB reset guardのdry-run: `./scripts/reset-local-db.sh --database-name fukamu_cycle --confirm-database-name fukamu_cycle --dry-run`
 
 Host tool不足で一部checkを実行できない場合は、実行できたcheck、未実行のcheck、理由を明記してください。ただし、Commit前の必須gateを完走できない場合はcommitしてはいけません。Data消失やproduction変更を伴う操作をvalidationのために実行してはいけません。
 
-Commit前に`./scripts/check-before-commit.sh`を完走し、成功後はindexとworking treeを変えずにcommitします。変更した場合は全gateを再実行します。Gate / control-plane負例suiteの省略可否は保守的なpath分類に委ね、分類不能を成功扱いしません。加えてSecret/旧仕様の混入を確認し、意味のある単位でcommitします。詳細は[`docs/development.md`](docs/development.md)を参照します。
+Commit前に`./scripts/check-before-commit.sh`を完走し、成功後はindexとworking treeを変えずにcommitします。変更した場合は全gateを再実行します。Gate / control-plane負例、Application scope、local E2Eの適用は保守的なpath分類に委ね、分類不能を成功扱いしません。加えてSecret/旧仕様の混入を確認し、意味のある単位でcommitします。詳細は[`docs/development.md`](docs/development.md)を参照します。

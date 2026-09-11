@@ -51,15 +51,13 @@ trusted_git() {
     "$@"
 }
 
-require_standard_tool_versions() {
+require_node_pnpm_versions() {
   require_command node
   require_command pnpm
-  require_command go
 
   local node_version
   local node_major
   local pnpm_version
-  local go_version
 
   node_version="$(node --version)"
   node_version="${node_version#v}"
@@ -71,11 +69,22 @@ require_standard_tool_versions() {
   pnpm_version="$(pnpm --version)"
   [[ "${pnpm_version}" == "11.22.0" ]] \
     || die "pnpm 11.22.0 is required for reproducible local/CI builds; found ${pnpm_version}."
+}
+
+require_go_version() {
+  require_command go
+
+  local go_version
 
   go_version="$(GOENV=off GOTOOLCHAIN=local go env GOVERSION)"
   go_version="${go_version#go}"
   [[ "${go_version}" == "1.27.0" ]] \
     || die "Go 1.27.0 is required for reproducible local/CI builds; found ${go_version}."
+}
+
+require_standard_tool_versions() {
+  require_node_pnpm_versions
+  require_go_version
 }
 
 require_terraform_version() {

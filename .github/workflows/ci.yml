@@ -52,12 +52,48 @@ jobs:
             echo 'PR CI could not be safely reused; the full CI suite will run.' >> "${GITHUB_STEP_SUMMARY}"
           fi
 
-  workflow:
+  classify:
+    name: Classify candidate changes
     needs: reuse_pr_ci
     if: >-
       always() &&
       (github.event_name == 'pull_request' ||
       needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      change_profile: ${{ steps.classify.outputs.change_profile }}
+      change_reason: ${{ steps.classify.outputs.change_reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve conservative change profile
+        id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            {
+              echo 'change_profile=full'
+              echo 'change_reason=main_reuse_fallback'
+            } >> "${GITHUB_OUTPUT}"
+          else
+            bash ./scripts/check-control-plane-fixtures.sh \
+              --classify-only --range "${BASE_SHA}" "${HEAD_SHA}" >> "${GITHUB_OUTPUT}"
+          fi
+
+  workflow:
+    needs: [reuse_pr_ci, classify]
+    if: >-
+      always() &&
+      needs.classify.result == 'success' &&
+      (github.event_name == 'pull_request' ||
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
+      needs.classify.outputs.change_profile == 'full'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,9 +107,10 @@ jobs:
           args: -color
   quality:
     name: Security, configuration, and documentation
-    needs: reuse_pr_ci
+    needs: [reuse_pr_ci, classify]
     if: >-
       always() &&
+      needs.classify.result == 'success' &&
       (github.event_name == 'pull_request' ||
       needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
     runs-on: ubuntu-latest
@@ -115,11 +152,15 @@ jobs:
         run: bash ./scripts/check-config-parity.sh
 
   frontend:
-    needs: reuse_pr_ci
+    needs: [reuse_pr_ci, classify]
     if: >-
       always() &&
+      needs.classify.result == 'success' &&
       (github.event_name == 'pull_request' ||
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
+      (needs.classify.outputs.change_profile == 'frontend' ||
+      needs.classify.outputs.change_profile == 'application' ||
+      needs.classify.outputs.change_profile == 'full')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -145,11 +186,15 @@ jobs:
       - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
 
   backend:
-    needs: reuse_pr_ci
+    needs: [reuse_pr_ci, classify]
     if: >-
       always() &&
+      needs.classify.result == 'success' &&
       (github.event_name == 'pull_request' ||
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
+      (needs.classify.outputs.change_profile == 'backend' ||
+      needs.classify.outputs.change_profile == 'application' ||
+      needs.classify.outputs.change_profile == 'full')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -192,11 +237,13 @@ jobs:
       - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go build ./cmd/configcheck
 
   infrastructure:
-    needs: reuse_pr_ci
+    needs: [reuse_pr_ci, classify]
     if: >-
       always() &&
+      needs.classify.result == 'success' &&
       (github.event_name == 'pull_request' ||
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
+      needs.classify.outputs.change_profile == 'full'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -232,11 +279,13 @@ jobs:
       - run: pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match run deploy:dry-run
 
   e2e:
-    needs: reuse_pr_ci
+    needs: [reuse_pr_ci, classify]
     if: >-
       always() &&
+      needs.classify.result == 'success' &&
       (github.event_name == 'pull_request' ||
-      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true')
+      needs.reuse_pr_ci.outputs.reuse_pr_ci != 'true') &&
+      needs.classify.outputs.change_profile != 'docs'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -281,20 +330,59 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable
 
+  required_pr_ci:
+    name: Required PR CI
+    needs:
+      [reuse_pr_ci, classify, workflow, quality, frontend, backend, infrastructure, e2e]
+    if: >-
+      always() &&
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      required_jobs: ${{ steps.verify.outputs.required_jobs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Verify exact required job matrix
+        id: verify
+        shell: bash
+        env:
+          CHANGE_PROFILE: ${{ needs.classify.outputs.change_profile }}
+          REUSE_RESULT: ${{ needs.reuse_pr_ci.result }}
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          WORKFLOW_RESULT: ${{ needs.workflow.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          node ./scripts/verify-ci-change-profile.mjs \
+            "${CHANGE_PROFILE}" \
+            "reuse_pr_ci=${REUSE_RESULT}" \
+            "classify=${CLASSIFY_RESULT}" \
+            "workflow=${WORKFLOW_RESULT}" \
+            "quality=${QUALITY_RESULT}" \
+            "frontend=${FRONTEND_RESULT}" \
+            "backend=${BACKEND_RESULT}" \
+            "infrastructure=${INFRASTRUCTURE_RESULT}" \
+            "e2e=${E2E_RESULT}" >> "${GITHUB_OUTPUT}"
+
   attest_pr_ci:
     name: Attest tested PR tree
-    needs:
-      [reuse_pr_ci, workflow, quality, frontend, backend, infrastructure, e2e]
+    needs: [reuse_pr_ci, classify, required_pr_ci]
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
       needs.reuse_pr_ci.result == 'skipped' &&
-      needs.workflow.result == 'success' &&
-      needs.quality.result == 'success' &&
-      needs.frontend.result == 'success' &&
-      needs.backend.result == 'success' &&
-      needs.infrastructure.result == 'success' &&
-      needs.e2e.result == 'success'
+      needs.classify.result == 'success' &&
+      needs.required_pr_ci.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -307,6 +395,8 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGE_PROFILE: ${{ needs.classify.outputs.change_profile }}
+          REQUIRED_JOBS: ${{ needs.required_pr_ci.outputs.required_jobs }}
         run: |
           set -euo pipefail
           tested_tree="$(git rev-parse 'HEAD^{tree}')"
@@ -318,6 +408,8 @@ jobs:
             echo "tested_commit=${GITHUB_SHA}"
             echo "tested_tree=${tested_tree}"
             echo "workflow_run=${GITHUB_RUN_ID}"
+            echo "change_profile=${CHANGE_PROFILE}"
+            echo "required_jobs=${REQUIRED_JOBS}"
           } > "${RUNNER_TEMP}/fukamu-cycle-pr-ci-attestation/attestation.txt"
           echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
       - name: Upload tested tree attestation
