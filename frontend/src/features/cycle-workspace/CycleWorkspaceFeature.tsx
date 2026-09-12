@@ -58,6 +58,7 @@ import {
   usePostCommitCleanup,
 } from "../../shared/cleanup/postCommitCleanupContext";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
+import { TextCounter } from "../../shared/components/TextCounter";
 import {
   cycleActionCopy,
   cycleDoQuickEntryCopy,
@@ -2213,9 +2214,12 @@ function CycleWorkspace({
           ) : !editable || workspaceMoved ? (
             <span className="read-only-badge">読み取り専用</span>
           ) : null}
-          <span>
-            {boundedInput.count} / {FRAME_TEXT_MAX_CODE_POINTS}
-          </span>
+          <TextCounter
+            subject={`${frameCopy[selected].label} — ${frameCopy[selected].name}`}
+            count={boundedInput.count}
+            limit={FRAME_TEXT_MAX_CODE_POINTS}
+            invalid={boundedInput.count > FRAME_TEXT_MAX_CODE_POINTS}
+          />
         </div>
         {editable && !frameEditorReadOnly && nextFrame && (
           <div className="button-row cycle-next-frame">

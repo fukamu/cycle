@@ -45,6 +45,7 @@ import {
   SaveBadge,
 } from "../../shared/components/AsyncState";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
+import { TextCounter } from "../../shared/components/TextCounter";
 import {
   frameCopy,
   goalActionCopy,
@@ -994,9 +995,12 @@ function ReviewEditor({
               retry={conflictRetryBlocked ? undefined : editor.retry}
             />
           )}
-          <span>
-            {boundedInput.count} / {GOAL_TEXT_MAX_CODE_POINTS}
-          </span>
+          <TextCounter
+            subject="次のサイクルで目指す目標"
+            count={boundedInput.count}
+            limit={GOAL_TEXT_MAX_CODE_POINTS}
+            invalid={boundedInput.count > GOAL_TEXT_MAX_CODE_POINTS}
+          />
         </div>
         <div className="button-row">
           <button

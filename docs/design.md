@@ -568,7 +568,7 @@ Route: `/goals/new`
 - 単一Textarea。Label: `あなたの目標`。
 - Guide: `これから良くしたいことや、目指したい状態を書いてみましょう。最初から完璧である必要はありません。`
 - Placeholder: `例：仕事の優先順位を整理し、平日に余裕を持てるようになりたい。`
-- Character counter: `現在のcode point数 / §14.1の上限`。
+- Character counter: visible textは`{現在のcode point数} / {§14.1の上限}文字`、accessible nameは`あなたの目標は上限{上限}文字中{現在数}文字です`とする。入力中の1文字ごとの読み上げを避けるためlive announcementは行わない。
 - Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 - Save state: `保存中` / `保存済み` / `保存失敗`。
 - Controls: `AIで目標を整える` / `この目標で始める` / `下書きを破棄`。
@@ -604,7 +604,7 @@ Goal v2 · Cycle 3
 2026/08/18 〜
 ```
 
-Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のcode point数 / §14.5の上限`counter、Guide、Placeholder、Auto Save stateで構成する。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Completed / Canceledで選択中Frameが空文字またはUnicode whitespaceだけの場合は編集用Placeholderを表示せず、Textareaの近接textとaccessible descriptionで`未入力`と示す。Active Cycleの通常編集およびAI、Browser Draft Recovery、workspace移動、command処理による一時Read-onlyでは編集用Placeholderを維持し、`未入力`を表示しない。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
+Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、文字数counter、Guide、Placeholder、Auto Save stateで構成する。Counterのvisible textは`{現在のcode point数} / {§14.5の上限}文字`、accessible nameは`{Frame label} — {Frame name}は上限{上限}文字中{現在数}文字です`とし、入力中の1文字ごとのlive announcementは行わない。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Completed / Canceledで選択中Frameが空文字またはUnicode whitespaceだけの場合は編集用Placeholderを表示せず、Textareaの近接textとaccessible descriptionで`未入力`と示す。Active Cycleの通常編集およびAI、Browser Draft Recovery、workspace移動、command処理による一時Read-onlyでは編集用Placeholderを維持し、`未入力`を表示しない。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 
 Active Cycleでは任意の`見直す日`を`YYYY-MM-DD`のcalendar dateとして表示し、未設定、設定/変更、明示Clearを区別する。設定/変更とClearはFrame Auto Saveへ混ぜず、各操作を明示確定してから送る。設定済み日はBrowser local calendar dateとの比較からToday / Upcoming / Overdueをtextで併記し、timezone/offsetを日付値へ保存しない。Completed / Canceledでは確定時点の値をRead-onlyで表示し、変更controlを出さない。
 
@@ -754,7 +754,7 @@ Route: `/goals/:goalId/review`
 
 1. `現在の目標`とCurrent Goal Version番号。
 2. `判断の材料`として、直前Completed CycleのCを`分かったこと`、Aを`次に続ける・変えること`として常時表示する。P/Dも同じ場所から折りたたみ表示で確認でき、decisionのために別tabやrouteへの往復を要求しない。
-3. Goal Review Draft Textarea。文字数超過時は§40.2の共通入力feedbackに従う。
+3. Goal Review Draft Textarea。文字数counterのvisible textは`{現在のcode point数} / {§14.1の上限}文字`、accessible nameは`次のサイクルで目指す目標は上限{上限}文字中{現在数}文字です`とし、入力中の1文字ごとのlive announcementは行わない。文字数超過時は§40.2の共通入力feedbackに従う。
 4. Review DraftがCurrent Versionと同一か変更案かを示す説明とSave state。この説明はTextareaへ関連付け、同一の場合は現在のVersionを維持すること、変更案は次Cycleを開始する場合だけ次のVersionとして保存されることを示す。
 5. Goal Refine controls / suggestion comparison。
 6. Outcome controls。

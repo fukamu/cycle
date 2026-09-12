@@ -486,7 +486,11 @@ describe("GoalReviewPage", () => {
     fireEvent.change(editor, { target: { value: eightyCodePoints } });
 
     expect(editor).toHaveValue(eightyCodePoints);
-    expect(screen.getByText("80 / 80")).toBeInTheDocument();
+    const counter = screen.getByRole("status", {
+      name: "次のサイクルで目指す目標は上限80文字中80文字です",
+    });
+    expect(counter).toHaveTextContent("80 / 80文字");
+    expect(counter).toHaveAttribute("aria-live", "off");
     const saveCallsBeforeRejection = vi.mocked(saveReview).mock.calls.length;
     const cacheCallsBeforeRejection =
       vi.mocked(putBrowserDraft).mock.calls.length;
@@ -496,7 +500,7 @@ describe("GoalReviewPage", () => {
     });
 
     expect(editor).toHaveValue(eightyCodePoints);
-    expect(screen.getByText("80 / 80")).toBeInTheDocument();
+    expect(counter).toHaveTextContent("80 / 80文字");
     const feedback = screen.getByText(
       "入力後は81文字になるため反映できませんでした。上限80文字まで、入力内容をあと1文字減らしてください。",
     );

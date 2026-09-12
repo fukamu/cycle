@@ -214,6 +214,28 @@ describe("GoalWorkspacePage", () => {
     vi.useRealTimers();
   });
 
+  it("labels the text count for every P/D/C/A Frame without announcing each keystroke", async () => {
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    for (const frame of ["plan", "do", "check", "action"] as const) {
+      const copy = frameCopy[frame];
+      fireEvent.click(
+        await screen.findByRole("tab", {
+          name: new RegExp(`${copy.label}\\s*${copy.name}`),
+        }),
+      );
+      const count = frame === "plan" ? 5 : 0;
+      const counter = screen.getByRole("status", {
+        name: `${copy.label} — ${copy.name}は上限200文字中${count}文字です`,
+      });
+      expect(counter).toHaveTextContent(`${count} / 200文字`);
+      expect(counter).toHaveAttribute("aria-live", "off");
+    }
+  });
+
   it("moves the eligible Cycle 1 guide from Plan to Do without stealing tab focus or saving", async () => {
     activateFirstUseGuide();
     const user = userEvent.setup();
@@ -1203,9 +1225,12 @@ describe("GoalWorkspacePage", () => {
         expect(
           document.querySelector('label[for="cycle-frame-editor"]'),
         ).toHaveTextContent(frameCopy[frame].name);
+        const count = Array.from(terminalCycle[frame]).length;
         expect(
-          screen.getByText(`${Array.from(terminalCycle[frame]).length} / 200`),
-        ).toBeVisible();
+          screen.getByRole("status", {
+            name: `${textbox}は上限200文字中${count}文字です`,
+          }),
+        ).toHaveTextContent(`${count} / 200文字`);
         const describedBy =
           editor.getAttribute("aria-describedby")?.split(/\s+/) ?? [];
         expect(describedBy).toContain("cycle-frame-guide");
@@ -2122,7 +2147,10 @@ describe("GoalWorkspacePage", () => {
     fireEvent.change(editor, { target: { value: twoHundredCodePoints } });
 
     expect(editor).toHaveValue(twoHundredCodePoints);
-    expect(screen.getByText("200 / 200")).toBeInTheDocument();
+    const counter = screen.getByRole("status", {
+      name: "P — Planは上限200文字中200文字です",
+    });
+    expect(counter).toHaveTextContent("200 / 200文字");
     const saveCallsBeforeRejection =
       vi.mocked(saveCycleFrame).mock.calls.length;
     const cacheCallsBeforeRejection =
@@ -2133,7 +2161,7 @@ describe("GoalWorkspacePage", () => {
     });
 
     expect(editor).toHaveValue(twoHundredCodePoints);
-    expect(screen.getByText("200 / 200")).toBeInTheDocument();
+    expect(counter).toHaveTextContent("200 / 200文字");
     const feedback = screen.getByText(
       "入力後は201文字になるため反映できませんでした。上限200文字まで、入力内容をあと1文字減らしてください。",
     );

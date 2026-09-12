@@ -198,6 +198,12 @@ export const textLimitCopy = {
     `入力後は${requiredCodePoints}文字になるため反映できませんでした。上限${maximumCodePoints}文字まで、入力内容をあと${excessCodePoints}文字減らしてください。`,
 } as const;
 
+export const textCounterCopy = {
+  visible: (count: number, limit: number) => `${count} / ${limit}文字`,
+  accessible: (subject: string, count: number, limit: number) =>
+    `${subject}は上限${limit}文字中${count}文字です`,
+} as const;
+
 export const cycleActionCopy = {
   disabled: {
     commandPending:
