@@ -2404,7 +2404,6 @@ e2e|      - run: pnpm install --frozen-lockfile --ignore-scripts
 e2e|          git diff --cached --quiet --
 e2e|      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
 e2e|      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run test:e2e
-required_pr_ci|          node ./scripts/verify-ci-change-profile.mjs \
 attest_pr_ci|          tested_tree="$(git rev-parse 'HEAD^{tree}')"
 attest_pr_ci|          artifact_name="pr-ci-${PR_NUMBER}-${HEAD_SHA}-${tested_tree}"
 attest_pr_ci|        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -2426,6 +2425,8 @@ validate_workflow() {
   local required_job="${test_root}/required.job"
   local required_if="${test_root}/required-if.block"
   local required_outputs="${test_root}/required-outputs.block"
+  local required_verify_step="${test_root}/required-verify.step"
+  local required_verify_script="${test_root}/required-verify.sh"
   local workflow_job="${test_root}/workflow.job"
   local quality_job="${test_root}/quality.job"
   local quality_steps="${test_root}/quality-steps.block"
@@ -2566,6 +2567,36 @@ validate_workflow() {
   # shellcheck disable=SC2016 # Expected workflow expression is literal.
   require_nonblank_lines "${required_outputs}" \
     '      required_jobs: ${{ steps.verify.outputs.required_jobs }}' || return 1
+  extract_named_step "${required_job}" "Verify exact required job matrix" >"${required_verify_step}" || {
+    violation "required_pr_ci must run the required-job matrix verifier"
+    return 1
+  }
+  extract_literal_run_script "${required_verify_step}" >"${required_verify_script}" || return 1
+  if ! grep -Eq '^node[[:space:]]+\./scripts/verify-ci-change-profile[.]mjs[[:space:]]+\\$' "${required_verify_script}"; then
+    violation "required_pr_ci must execute the required-job matrix verifier"
+    return 1
+  fi
+  local required_verifier_argument
+  for required_verifier_argument in \
+    CHANGE_PROFILE \
+    REUSE_RESULT \
+    CLASSIFY_RESULT \
+    WORKFLOW_RESULT \
+    QUALITY_RESULT \
+    FRONTEND_RESULT \
+    BACKEND_RESULT \
+    INFRASTRUCTURE_RESULT \
+    E2E_RESULT \
+    GITHUB_OUTPUT; do
+    grep -Fq -- "\${${required_verifier_argument}}" "${required_verify_script}" || {
+      violation "required_pr_ci verifier is missing ${required_verifier_argument}"
+      return 1
+    }
+  done
+  if grep -Eq '\|\||(^|[[:space:]])continue([[:space:]]|$)' "${required_verify_script}"; then
+    violation "required_pr_ci verifier must fail closed"
+    return 1
+  fi
 
   validate_checkout_steps "${file}" || return 1
   validate_required_ci_commands "${file}" || return 1
