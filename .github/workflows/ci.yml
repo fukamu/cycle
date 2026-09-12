@@ -160,6 +160,7 @@ jobs:
       - name: Validate Bash scripts
         run: bash ./scripts/check-shell.sh
       - name: Validate control-plane negative fixtures when applicable
+        if: needs.classify.outputs.change_profile == 'full'
         env:
           CONTROL_PLANE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           CONTROL_PLANE_HEAD_SHA: ${{ github.sha }}
