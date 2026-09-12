@@ -87,12 +87,67 @@ const thirdGoal = makeGoal({
   cycleId: "20000000-0000-7000-8000-000000000003",
 });
 
+const progressingGoalCountCases: readonly {
+  readonly caseName: string;
+  readonly progressingGoals: Goal[];
+  readonly limit: number;
+  readonly visible: string;
+  readonly accessible: string;
+}[] = [
+  {
+    caseName: "empty Free collection",
+    progressingGoals: [],
+    limit: 2,
+    visible: "0 / 2件",
+    accessible: "取り組んでいる目標は上限2件中0件です",
+  },
+  {
+    caseName: "one Free Goal",
+    progressingGoals: [firstGoal],
+    limit: 2,
+    visible: "1 / 2件",
+    accessible: "取り組んでいる目標は上限2件中1件です",
+  },
+  {
+    caseName: "full Free collection",
+    progressingGoals: [firstGoal, secondGoal],
+    limit: 2,
+    visible: "2 / 2件",
+    accessible: "取り組んでいる目標は上限2件中2件です",
+  },
+  {
+    caseName: "future paid collection",
+    progressingGoals: [firstGoal, secondGoal, thirdGoal],
+    limit: 3,
+    visible: "3 / 3件",
+    accessible: "取り組んでいる目標は上限3件中3件です",
+  },
+];
+
 describe("HomePage progressing goal collection", () => {
   beforeEach(() => {
     window.localStorage.clear();
     vi.mocked(createGoalDraft).mockReset();
     vi.mocked(getHome).mockReset();
   });
+
+  it.each(progressingGoalCountCases)(
+    "labels the Goal count for $caseName",
+    async ({ progressingGoals, limit, visible, accessible }) => {
+      vi.mocked(getHome).mockResolvedValue({
+        progressingGoals,
+        creationDraft: null,
+        canCreateGoalDraft: true,
+        progressingGoalLimit: limit,
+        canStartProgressingGoal: progressingGoals.length < limit,
+      });
+
+      renderHome();
+
+      const count = await screen.findByRole("status", { name: accessible });
+      expect(count).toHaveTextContent(visible);
+    },
+  );
 
   it("reconciles selected Frames against the current Active Cycles", async () => {
     rememberSelectedCycleFrame(firstGoal.currentWork.cycleId, "do");
@@ -113,7 +168,7 @@ describe("HomePage progressing goal collection", () => {
 
     renderHome();
 
-    expect(await screen.findByText("2 / 2")).toBeInTheDocument();
+    expect(await screen.findByText("2 / 2件")).toBeInTheDocument();
     await waitFor(() => expect(window.localStorage.length).toBe(1));
     expect(
       readSelectedCycleFrame(firstGoal.currentWork.cycleId, "active"),
@@ -136,7 +191,7 @@ describe("HomePage progressing goal collection", () => {
 
     renderHome();
 
-    expect(await screen.findByText("2 / 2")).toBeInTheDocument();
+    expect(await screen.findByText("2 / 2件")).toBeInTheDocument();
     expect(getHome).toHaveBeenCalledWith(sessionLease, expect.any(AbortSignal));
     const cards = screen.getAllByRole("article");
     expect(cards).toHaveLength(2);
@@ -170,7 +225,7 @@ describe("HomePage progressing goal collection", () => {
 
     renderHome();
 
-    expect(await screen.findByText("3 / 3")).toBeInTheDocument();
+    expect(await screen.findByText("3 / 3件")).toBeInTheDocument();
     expect(
       screen.getAllByRole("link", { name: "Cycle 1を続ける" })[1],
     ).toHaveAttribute(

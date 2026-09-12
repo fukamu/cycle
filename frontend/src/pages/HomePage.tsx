@@ -16,6 +16,7 @@ import {
 } from "../features/goal-collection";
 import { getHome } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
+import { homeCopy } from "../shared/copy/ja";
 import { reconcileSelectedCycleFrames } from "../shared/preferences/selectedFramePreference";
 import { hasNonWhitespace } from "../shared/text/semantics";
 
@@ -83,8 +84,18 @@ export function HomePage() {
       >
         <div className="section-heading">
           <h2 id="progressing-heading">取り組んでいる目標</h2>
-          <span>
-            {home.progressingGoals.length} / {home.progressingGoalLimit}
+          <span
+            className="progressing-goal-count"
+            role="status"
+            aria-label={homeCopy.progressingGoalCountAccessible(
+              home.progressingGoals.length,
+              home.progressingGoalLimit,
+            )}
+          >
+            {homeCopy.progressingGoalCount(
+              home.progressingGoals.length,
+              home.progressingGoalLimit,
+            )}
           </span>
         </div>
         {home.progressingGoals.length === 0 && (

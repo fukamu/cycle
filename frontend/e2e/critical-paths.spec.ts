@@ -4,6 +4,7 @@ import {
   cycleFrameCopy,
   cycleFrameTemplateCopy,
   frameCopy,
+  homeCopy,
 } from "../src/shared/copy/ja";
 import { newUUIDv7 } from "../src/shared/id/uuid";
 import { expectAPIError, getSession, requestFromPage } from "./support/api";
@@ -133,6 +134,62 @@ async function expectActionGuidanceAtNarrowWidths(
     document.documentElement.style.setProperty("zoom", "2"),
   );
   await assertLayout();
+}
+
+async function expectHomeGoalCountAtNarrowWidths(
+  page: Page,
+  count: number,
+  limit: number,
+) {
+  const assertLayout = async () => {
+    const indicator = page.getByRole("status", {
+      name: homeCopy.progressingGoalCountAccessible(count, limit),
+    });
+    await expect(indicator).toHaveText(
+      homeCopy.progressingGoalCount(count, limit),
+    );
+    expect(
+      await page.evaluate(() => {
+        const heading = document.querySelector("#progressing-heading");
+        const goalCount = document.querySelector(".progressing-goal-count");
+        if (!(heading instanceof HTMLElement))
+          throw new Error("progressing Goal heading is missing");
+        if (!(goalCount instanceof HTMLElement))
+          throw new Error("progressing Goal count is missing");
+        const headingRect = heading.getBoundingClientRect();
+        const countRect = goalCount.getBoundingClientRect();
+        const overlaps = !(
+          headingRect.right <= countRect.left ||
+          countRect.right <= headingRect.left ||
+          headingRect.bottom <= countRect.top ||
+          countRect.bottom <= headingRect.top
+        );
+        return {
+          overlaps,
+          horizontalOverflow:
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        };
+      }),
+    ).toEqual({ overlaps: false, horizontalOverflow: false });
+  };
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await assertLayout();
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await assertLayout();
+
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
 }
 
 async function expectReviewSuggestionAtNarrowWidths(
@@ -1658,7 +1715,7 @@ test("free users can progress two goals while a third start is rejected without 
   await createProgressingGoal(page, firstGoal);
   await createProgressingGoal(page, secondGoal);
   await page.goto("/");
-  await expect(page.getByText("2 / 2")).toBeVisible();
+  await expectHomeGoalCountAtNarrowWidths(page, 2, 2);
   await expect(
     page.getByRole("article", { name: new RegExp(firstGoal) }),
   ).toBeVisible();
