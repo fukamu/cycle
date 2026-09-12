@@ -9,7 +9,7 @@ import {
   useState,
   type PropsWithChildren,
 } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { useFirstUseGuideControls } from "../features/first-use-guide";
 import { firstUseGuideCopy } from "../shared/copy/ja";
@@ -241,18 +241,44 @@ export function AppLayout() {
             aria-label="メインメニュー"
           >
             <p className="drawer__label">メニュー</p>
-            <Link
+            <NavLink
               to="/history"
+              className={({ isActive }) =>
+                isActive ? "drawer__link drawer__link--current" : "drawer__link"
+              }
+              end={false}
               onClick={() => closeMenu(pathname === "/history")}
             >
-              目標の履歴
-            </Link>
-            <Link
+              {({ isActive }) => (
+                <>
+                  <span className="drawer__link-label">目標の履歴</span>
+                  {isActive && (
+                    <span className="drawer__current" aria-hidden="true">
+                      現在地
+                    </span>
+                  )}
+                </>
+              )}
+            </NavLink>
+            <NavLink
               to="/settings"
+              className={({ isActive }) =>
+                isActive ? "drawer__link drawer__link--current" : "drawer__link"
+              }
+              end
               onClick={() => closeMenu(pathname === "/settings")}
             >
-              設定
-            </Link>
+              {({ isActive }) => (
+                <>
+                  <span className="drawer__link-label">設定</span>
+                  {isActive && (
+                    <span className="drawer__current" aria-hidden="true">
+                      現在地
+                    </span>
+                  )}
+                </>
+              )}
+            </NavLink>
             <button
               className="drawer__action"
               type="button"

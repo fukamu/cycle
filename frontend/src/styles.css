@@ -231,6 +231,30 @@ summary:focus-visible {
   font-weight: var(--font-weight-medium);
 }
 
+.drawer a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drawer__link-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.drawer__current {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  color: var(--brand-dark);
+  background: var(--paper);
+  border: 1px solid var(--brand-light);
+  border-radius: 999px;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-bold);
+  line-height: 1.4;
+}
+
 .drawer__action {
   color: inherit;
   background: transparent;
@@ -240,6 +264,7 @@ summary:focus-visible {
 }
 
 .drawer a:hover,
+.drawer a[aria-current="page"],
 .drawer__action:hover {
   color: var(--brand-dark);
   background: var(--brand-soft);
