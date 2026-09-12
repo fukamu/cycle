@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../auth";
+import { FirstUseGuide } from "../first-use-guide";
 import {
   cacheCycleFrame,
   cacheGoal,
@@ -1899,6 +1900,12 @@ function CycleWorkspace({
   const copy = frameCopy[selected];
   const selectedConflict = recoveryConflicts.get(selected);
   const workspaceMoved = movedWorkspace !== undefined;
+  const firstUseGuideEligible =
+    editable &&
+    !coordinator.isHydrating() &&
+    !workspaceMoved &&
+    recoveryConflicts.size === 0 &&
+    cycleRevisionConflictsRef.current.size === 0;
   const frameEditorReadOnly =
     workspaceMoved ||
     !editable ||
@@ -2124,6 +2131,11 @@ function CycleWorkspace({
             <label htmlFor="cycle-frame-editor">{copy.name}</label>
           </h2>
         </div>
+        <FirstUseGuide
+          stage={selected}
+          autoEligible={firstUseGuideEligible && cycle.sequenceNumber === 1}
+          replayEligible={firstUseGuideEligible}
+        />
         <p className="frame-guide" id="cycle-frame-guide">
           {copy.guide}
         </p>

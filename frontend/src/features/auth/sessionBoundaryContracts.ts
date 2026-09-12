@@ -8,9 +8,16 @@ export type RuntimeRecoveryState = {
   readonly scopesQuiesced: boolean;
 };
 
+export type GuidePreferencesReconciliation =
+  | "local-shared-safe"
+  | "local-document-only"
+  | "external"
+  | "deferred";
+
 export type PublishSessionOptions = {
   readonly scopesAlreadyQuiesced: boolean;
   readonly remountSameIdentity: boolean;
+  readonly guidePreferencesReconciliation?: GuidePreferencesReconciliation;
   readonly isCurrent?: () => boolean;
 };
 

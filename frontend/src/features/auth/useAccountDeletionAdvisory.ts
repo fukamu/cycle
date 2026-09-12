@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { Session } from "../../shared/api/schemas";
 import type { AutoSaveScopeRegistry } from "../../shared/autosave/AutoSaveScopeProvider";
 import { clearUserDrafts } from "../../shared/drafts/browserDraftCache";
+import { clearFirstUseGuidePreferences } from "../../shared/preferences/firstUseGuidePreference";
 import { clearSelectedCycleFrames } from "../../shared/preferences/selectedFramePreference";
 import {
   createAccountDeletionAdvisory,
@@ -34,6 +35,7 @@ export function useAccountDeletionAdvisory({
   const advisoryRef = useRef<AccountDeletionAdvisory | null>(null);
   const cleanupAttemptRef = useRef<Promise<void> | undefined>(undefined);
   const cleanupRetryRequestedRef = useRef(false);
+  const guideFenceUserIdRef = useRef<string | undefined>(undefined);
   const mountedRef = useRef(false);
 
   useEffect(() => {
@@ -75,6 +77,10 @@ export function useAccountDeletionAdvisory({
       if (currentSession.user.id !== deletedUserId) return;
 
       suspendInteractionAndInvalidateLease();
+      if (guideFenceUserIdRef.current !== deletedUserId) {
+        guideFenceUserIdRef.current = deletedUserId;
+        clearFirstUseGuidePreferences();
+      }
       if (cleanupAttemptRef.current !== undefined) {
         cleanupRetryRequestedRef.current = true;
         return;

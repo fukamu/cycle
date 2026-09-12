@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   Link,
@@ -10,6 +10,10 @@ import {
   useNavigate,
 } from "react-router-dom";
 
+import {
+  FirstUseGuide,
+  FirstUseGuideProvider,
+} from "../features/first-use-guide";
 import { AutoSaveScopeProvider } from "../shared/autosave/AutoSaveScopeProvider";
 import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBoundary";
 import {
@@ -17,6 +21,11 @@ import {
   usePostCommitCleanup,
   type PostCommitSessionOperationRunner,
 } from "../shared/cleanup/postCommitCleanupContext";
+import {
+  activateFirstUseGuide,
+  clearFirstUseGuidePreferences,
+  readFirstUseGuidePreferences,
+} from "../shared/preferences/firstUseGuidePreference";
 import {
   readSelectedCycleFrame,
   rememberSelectedCycleFrame,
@@ -36,6 +45,30 @@ function SamePathPage() {
         </button>
         {saved && <p>保存しました</p>}
       </div>
+    </main>
+  );
+}
+
+function FirstUseGuideRoute() {
+  return (
+    <main>
+      <h1>ガイド対象画面</h1>
+      <FirstUseGuide stage="goal" autoEligible={false} replayEligible={true} />
+    </main>
+  );
+}
+
+function GuideRouteWaitingForData() {
+  const [ready, setReady] = useState(false);
+  return (
+    <main>
+      <h1>ガイド読込画面</h1>
+      <button type="button" onClick={() => setReady(true)}>
+        データ解決
+      </button>
+      {ready ? (
+        <FirstUseGuide stage="goal" autoEligible={true} replayEligible={true} />
+      ) : null}
     </main>
   );
 }
@@ -256,7 +289,10 @@ const runCurrentSessionOperation: PostCommitSessionOperationRunner = async (
 ) => operation(() => true);
 
 describe("AppLayout", () => {
-  beforeEach(() => window.localStorage.clear());
+  beforeEach(() => {
+    window.localStorage.clear();
+    clearFirstUseGuidePreferences();
+  });
 
   it("resets only the displayed Cycle when the Header logo opens Home", async () => {
     const currentCycleId = "40000000-0000-7000-8000-000000000001";
@@ -293,7 +329,7 @@ describe("AppLayout", () => {
     expect(readSelectedCycleFrame(otherCycleId, "active")).toBe("check");
   });
 
-  it("opens an accessible menu with goal history and settings", async () => {
+  it("opens an accessible menu with navigation and first-use help", async () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
@@ -345,6 +381,9 @@ describe("AppLayout", () => {
       "href",
       "/settings",
     );
+    const firstUseHelp = screen.getByRole("button", {
+      name: "はじめてガイドを表示",
+    });
     const history = screen.getByRole("link", { name: "目標の履歴" });
     const settings = screen.getByRole("link", { name: "設定" });
     await waitFor(() => expect(history).toHaveFocus());
@@ -364,9 +403,11 @@ describe("AppLayout", () => {
     await user.tab();
     expect(settings).toHaveFocus();
     await user.tab();
+    expect(firstUseHelp).toHaveFocus();
+    await user.tab();
     expect(trigger).toHaveFocus();
     await user.tab({ shift: true });
-    expect(settings).toHaveFocus();
+    expect(firstUseHelp).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(
@@ -414,6 +455,98 @@ describe("AppLayout", () => {
     await user.click(screen.getByRole("link", { name: "設定" }));
     await waitFor(() => expect(trigger).toHaveFocus());
     expect(settingsDestination).not.toHaveFocus();
+  });
+
+  it("arms Help without navigation and replays it in the next safe context", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <FirstUseGuideProvider>
+          <RouteHeadingFocusProvider>
+            <Routes>
+              <Route element={<AppLayout />}>
+                <Route
+                  index
+                  element={
+                    <main>
+                      <h1>ホーム</h1>
+                      <Link to="/guide">ガイド対象画面へ</Link>
+                    </main>
+                  }
+                />
+                <Route path="guide" element={<FirstUseGuideRoute />} />
+              </Route>
+            </Routes>
+          </RouteHeadingFocusProvider>
+        </FirstUseGuideProvider>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "メニューを開く" }));
+    await user.click(
+      screen.getByRole("button", { name: "はじめてガイドを表示" }),
+    );
+
+    expect(
+      screen.getByText(
+        "目標作成、サイクル、目標の見直し画面を開くと、その場に合うガイドを表示します。",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "はじめてガイド" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "ガイドの再表示を取り消す" }),
+    );
+    await user.click(screen.getByRole("link", { name: "ガイド対象画面へ" }));
+
+    expect(
+      screen.queryByRole("heading", { name: "はじめてガイド" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "メニューを開く" }));
+    await user.click(
+      screen.getByRole("button", { name: "はじめてガイドを表示" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "はじめてガイド" }),
+    ).toBeInTheDocument();
+    expect(window.localStorage).toHaveLength(0);
+  });
+
+  it("does not consume an automatic guide while the open drawer makes main inert", async () => {
+    activateFirstUseGuide();
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <FirstUseGuideProvider>
+          <RouteHeadingFocusProvider>
+            <Routes>
+              <Route element={<AppLayout />}>
+                <Route index element={<GuideRouteWaitingForData />} />
+              </Route>
+            </Routes>
+          </RouteHeadingFocusProvider>
+        </FirstUseGuideProvider>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "メニューを開く" }));
+    fireEvent.click(screen.getByRole("button", { name: "データ解決" }));
+
+    expect(
+      screen.queryByRole("heading", { name: "はじめてガイド" }),
+    ).not.toBeInTheDocument();
+    expect(readFirstUseGuidePreferences().shown.goal).toBe(false);
+
+    await user.keyboard("{Escape}");
+
+    expect(
+      await screen.findByRole("heading", { name: "はじめてガイド" }),
+    ).toBeVisible();
+    expect(readFirstUseGuidePreferences().shown.goal).toBe(true);
   });
 
   it.each([

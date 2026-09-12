@@ -3,6 +3,7 @@ import { useCallback, useRef, type PropsWithChildren } from "react";
 import { deleteAccount } from "../../shared/api/account";
 import { usePostCommitCleanup } from "../../shared/cleanup/postCommitCleanupContext";
 import { clearUserDrafts } from "../../shared/drafts/browserDraftCache";
+import { clearFirstUseGuidePreferences } from "../../shared/preferences/firstUseGuidePreference";
 import { clearSelectedCycleFrames } from "../../shared/preferences/selectedFramePreference";
 import {
   AccountDeletionContext,
@@ -40,6 +41,7 @@ export function AccountDeletionProvider({
           { isCurrent: () => sessionOwnership.isCurrent() },
           async () => {
             await deleteAccount(lease, currentSession.csrfToken);
+            clearFirstUseGuidePreferences();
             clearSelectedCycleFrames();
             publishAccountDeletion(currentSession.user.id);
             return true as const;

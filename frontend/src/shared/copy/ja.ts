@@ -1,5 +1,47 @@
 import type { Frame } from "../api/schemas";
 
+export const firstUseGuideCopy = {
+  heading: "はじめてガイド",
+  close: "閉じる",
+  skip: "ガイドをスキップ",
+  menuLabel: "はじめてガイドを表示",
+  pending:
+    "目標作成、サイクル、目標の見直し画面を開くと、その場に合うガイドを表示します。",
+  cancelReplay: "ガイドの再表示を取り消す",
+  stages: {
+    goal: {
+      location: "現在地：目標を決める",
+      guide:
+        "これから良くしたいことを、自分の言葉で書きます。短い文でも始められます。AIで整える操作は任意です。保存されたら「この目標で始める」でCycle 1へ進みます。",
+    },
+    plan: {
+      location: "現在地：P — 今回試すことを決める",
+      guide:
+        "目標に向けて、今回試すことと、できたと考える目安を書きます。書けたらTabまたは「D — Doへ進む」で実行の記録へ進めます。",
+    },
+    do: {
+      location: "現在地：D — 実際にしたことを記録する",
+      guide:
+        "実際にしたことや起きたことを、予定と違った点も含めて書きます。書けたらTabまたは「C — Checkへ進む」で振り返りへ進めます。",
+    },
+    check: {
+      location: "現在地：C — 試した結果を振り返る",
+      guide:
+        "Pで考えたこととDで起きたことを比べ、分かったことを書きます。書けたらTabまたは「A — Actionへ進む」で次の動きを決めます。",
+    },
+    action: {
+      location: "現在地：A — 次に続ける・変えることを決める",
+      guide:
+        "今回の学びから、次に続けること、変えること、やめることを書きます。自分で書いても、任意でAIを使ってもかまいません。P/D/C/Aが保存されたら「サイクルを完了」で目標の見直しへ進みます。",
+    },
+    review: {
+      location: "現在地：目標を見直す",
+      guide:
+        "Cycle 1で分かったことを確認し、同じ目標で次へ進む、目標を変えて次へ進む、達成または終了を選びます。AIで整える操作は任意です。",
+    },
+  },
+} as const;
+
 export const frameCopy: Record<
   Frame,
   { label: string; name: string; guide: string; placeholder: string }

@@ -19,6 +19,10 @@ import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
 import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import {
+  FirstUseGuideProvider,
+  useFirstUseGuideControls,
+} from "../features/first-use-guide";
+import {
   GoalDeletionAdvisoryContext,
   type GoalDeletionAdvisoryRegistry,
   type GoalDeletionCleanupOutcome,
@@ -55,6 +59,8 @@ import {
   tombstoneDeletedGoalAndClearDrafts,
 } from "../shared/drafts/browserDraftCache";
 import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBoundary";
+import { firstUseGuideCopy } from "../shared/copy/ja";
+import { activateFirstUseGuide } from "../shared/preferences/firstUseGuidePreference";
 import { GoalWorkspacePage } from "./GoalWorkspacePage";
 import { GoalReviewPage } from "./GoalReviewPage";
 
@@ -286,6 +292,16 @@ function IdentityQuiesceControl() {
   );
 }
 
+function FirstUseGuideReplayControl() {
+  const controls = useFirstUseGuideControls();
+  if (!controls.canReplay) return null;
+  return (
+    <button type="button" onClick={controls.replayCurrentGuide}>
+      はじめてガイドを再表示
+    </button>
+  );
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -320,6 +336,7 @@ function expectNotDescribedBy(element: HTMLElement, descriptionId: string) {
 
 describe("GoalReviewPage", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.clearAllMocks();
     goalDeletionAdvisoryHarness = createGoalDeletionAdvisoryHarness();
     vi.mocked(getReview).mockResolvedValue(review);
@@ -361,6 +378,29 @@ describe("GoalReviewPage", () => {
       },
       canceledCycle: null,
     });
+  });
+
+  it("shows the eligible Cycle 1 Review guide without changing the draft or autosave", async () => {
+    activateFirstUseGuide();
+
+    renderPage();
+
+    const guide = await screen.findByRole("complementary", {
+      name: firstUseGuideCopy.heading,
+    });
+    expect(
+      within(guide).getByText(firstUseGuideCopy.stages.review.location),
+    ).toBeInTheDocument();
+    expect(
+      within(guide).getByText(firstUseGuideCopy.stages.review.guide),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("textbox", {
+        name: "次のサイクルで目指す目標",
+      }),
+    ).toHaveValue(reviewDraft.body);
+    expect(saveReview).not.toHaveBeenCalled();
+    expect(refineReview).not.toHaveBeenCalled();
   });
 
   it("turns the initial Review GET GOAL_NOT_FOUND into durable deletion cleanup", async () => {
@@ -1280,6 +1320,7 @@ describe("GoalReviewPage", () => {
     };
     vi.mocked(getReview)
       .mockResolvedValueOnce(review)
+      .mockRejectedValueOnce(new TypeError("network"))
       .mockResolvedValueOnce({ ...review, reviewDraft: latestDraft });
     vi.mocked(saveReview)
       .mockRejectedValueOnce(
@@ -1294,13 +1335,32 @@ describe("GoalReviewPage", () => {
         reviewDraft: { ...latestDraft, body: nextBody, revision: 2 },
       });
 
-    renderPage();
+    renderPage(createCache(), false, false, false, false, true);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "はじめてガイドを再表示",
+      }),
+    );
+    expect(
+      await screen.findByRole("complementary", {
+        name: firstUseGuideCopy.heading,
+      }),
+    ).toBeInTheDocument();
     const editor = await screen.findByRole("textbox", {
       name: "次のサイクルで目指す目標",
     });
     fireEvent.change(editor, { target: { value: localBody } });
     fireEvent.blur(editor);
 
+    const retry = await screen.findByRole("button", { name: "再試行" });
+    expect(
+      screen.queryByRole("complementary", {
+        name: firstUseGuideCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
+    expect(editor).toHaveAttribute("readonly");
+
+    fireEvent.click(retry);
     expect(
       await screen.findByText("別の更新が見つかりました"),
     ).toBeInTheDocument();
@@ -1326,7 +1386,7 @@ describe("GoalReviewPage", () => {
       ),
     ).not.toBeInTheDocument();
     expect(editor).toHaveValue(localBody);
-    expect(getReview).toHaveBeenCalledTimes(2);
+    expect(getReview).toHaveBeenCalledTimes(3);
     expect(putBrowserDraft).toHaveBeenCalledWith(
       expect.objectContaining({
         body: localBody,
@@ -1334,6 +1394,11 @@ describe("GoalReviewPage", () => {
       }),
     );
     expect(deleteBrowserDraft).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("complementary", {
+        name: firstUseGuideCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", { name: "サーバーの内容を使用" }),
@@ -1342,6 +1407,11 @@ describe("GoalReviewPage", () => {
     expect(saveReview).toHaveBeenCalledOnce();
     expect(screen.getByText("保存済み")).toBeInTheDocument();
     expect(editor).not.toHaveAttribute("readonly");
+    expect(
+      await screen.findByRole("complementary", {
+        name: firstUseGuideCopy.heading,
+      }),
+    ).toBeInTheDocument();
 
     fireEvent.change(editor, { target: { value: nextBody } });
     fireEvent.blur(editor);
@@ -3437,6 +3507,7 @@ function renderPage(
   identityQuiesceControl = false,
   cleanupRouteSwitch = false,
   canonicalGoalRoundTrip = false,
+  guideReplayControl = false,
 ) {
   return render(
     <QueryClientProvider client={cache}>
@@ -3449,41 +3520,44 @@ function renderPage(
             lease={sessionLease}
             session={session}
           >
-            <MemoryRouter initialEntries={[`/goals/${goal.id}/review`]}>
-              {cleanupRouteSwitch ? (
-                <Link to="/external">クリーンアップ中に別routeへ移動</Link>
-              ) : null}
-              <PostCommitCleanupBoundary
-                runSessionOperation={async (_expectedUserId, operation) =>
-                  operation(() => true)
-                }
-              >
-                <Routes>
-                  <Route path="/" element={<CacheInspectingHome />} />
-                  <Route
-                    path="/goals/:goalId/review"
-                    element={<GoalReviewPage />}
-                  />
-                  <Route
-                    path="/goals/:goalId"
-                    element={
-                      realCanonicalRoutes ? (
-                        <GoalWorkspacePage />
-                      ) : canonicalGoalRoundTrip ? (
-                        <CanonicalGoalRoundTrip />
-                      ) : (
-                        <p>現在のワークスペース</p>
-                      )
-                    }
-                  />
-                  <Route
-                    path="/history/goals/:goalId"
-                    element={<p>canonical goal history</p>}
-                  />
-                  <Route path="/external" element={<p>外部route</p>} />
-                </Routes>
-              </PostCommitCleanupBoundary>
-            </MemoryRouter>
+            <FirstUseGuideProvider>
+              {guideReplayControl ? <FirstUseGuideReplayControl /> : null}
+              <MemoryRouter initialEntries={[`/goals/${goal.id}/review`]}>
+                {cleanupRouteSwitch ? (
+                  <Link to="/external">クリーンアップ中に別routeへ移動</Link>
+                ) : null}
+                <PostCommitCleanupBoundary
+                  runSessionOperation={async (_expectedUserId, operation) =>
+                    operation(() => true)
+                  }
+                >
+                  <Routes>
+                    <Route path="/" element={<CacheInspectingHome />} />
+                    <Route
+                      path="/goals/:goalId/review"
+                      element={<GoalReviewPage />}
+                    />
+                    <Route
+                      path="/goals/:goalId"
+                      element={
+                        realCanonicalRoutes ? (
+                          <GoalWorkspacePage />
+                        ) : canonicalGoalRoundTrip ? (
+                          <CanonicalGoalRoundTrip />
+                        ) : (
+                          <p>現在のワークスペース</p>
+                        )
+                      }
+                    />
+                    <Route
+                      path="/history/goals/:goalId"
+                      element={<p>canonical goal history</p>}
+                    />
+                    <Route path="/external" element={<p>外部route</p>} />
+                  </Routes>
+                </PostCommitCleanupBoundary>
+              </MemoryRouter>
+            </FirstUseGuideProvider>
           </AuthenticatedSessionTestProvider>
         </GoalDeletionAdvisoryContext.Provider>
       </AutoSaveScopeProvider>

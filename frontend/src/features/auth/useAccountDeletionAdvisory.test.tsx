@@ -5,6 +5,13 @@ import { StrictMode, type PropsWithChildren } from "react";
 import type { Session } from "../../shared/api/schemas";
 import type { AutoSaveScopeRegistry } from "../../shared/autosave/AutoSaveScopeProvider";
 import { clearUserDrafts } from "../../shared/drafts/browserDraftCache";
+import {
+  activateFirstUseGuide,
+  clearFirstUseGuidePreferences,
+  markFirstUseGuideStageShown,
+  readFirstUseGuidePreferences,
+  skipFirstUseGuide,
+} from "../../shared/preferences/firstUseGuidePreference";
 import type {
   AccountDeletionAdvisoryChannelLike,
   AccountDeletionAdvisoryFactory,
@@ -27,13 +34,38 @@ const session: Session = {
 const otherUserId = "00000000-0000-7000-8000-000000000003";
 const clearUserDraftsMock = vi.mocked(clearUserDrafts);
 
+function seedFirstUseGuidePreferences() {
+  activateFirstUseGuide();
+  markFirstUseGuideStageShown("goal");
+  markFirstUseGuideStageShown("review");
+  skipFirstUseGuide();
+  return readFirstUseGuidePreferences();
+}
+
+function expectFirstUseGuidePreferencesCleared() {
+  expect(readFirstUseGuidePreferences()).toEqual({
+    eligible: false,
+    skipped: false,
+    shown: {
+      goal: false,
+      plan: false,
+      do: false,
+      check: false,
+      action: false,
+      review: false,
+    },
+  });
+}
+
 beforeEach(() => {
+  clearFirstUseGuidePreferences();
   clearUserDraftsMock.mockReset();
   clearUserDraftsMock.mockResolvedValue(undefined);
 });
 
 describe("useAccountDeletionAdvisory", () => {
   it("synchronously fences only the deleted identity before discarding drafts and reloading", async () => {
+    const preferencesBeforeAdvisory = seedFirstUseGuidePreferences();
     const quiesceGate = deferredVoid();
     const quiesce = vi.fn(async () => quiesceGate.promise);
     const suspendInteractionAndInvalidateLease = vi.fn();
@@ -58,23 +90,30 @@ describe("useAccountDeletionAdvisory", () => {
     });
     expect(suspendInteractionAndInvalidateLease).not.toHaveBeenCalled();
     expect(quiesce).not.toHaveBeenCalled();
+    expect(readFirstUseGuidePreferences()).toEqual(preferencesBeforeAdvisory);
 
     act(() => {
       channel.dispatch({ version: 1, deletedUserId: session.user.id });
     });
     expect(suspendInteractionAndInvalidateLease).toHaveBeenCalledOnce();
+    expectFirstUseGuidePreferencesCleared();
     expect(quiesce).toHaveBeenCalledWith({ preserveDrafts: false });
     expect(clearUserDraftsMock).not.toHaveBeenCalled();
     expect(reloadApplication).not.toHaveBeenCalled();
+
+    activateFirstUseGuide();
+    const nextUserPreferences = readFirstUseGuidePreferences();
 
     quiesceGate.resolve();
     await waitFor(() =>
       expect(clearUserDraftsMock).toHaveBeenCalledWith(session.user.id),
     );
     await waitFor(() => expect(reloadApplication).toHaveBeenCalledOnce());
+    expect(readFirstUseGuidePreferences()).toEqual(nextUserPreferences);
   });
 
   it("hands an unbound advisory to initial-session cancellation without guessing an identity", () => {
+    const preferencesBeforeAdvisory = seedFirstUseGuidePreferences();
     const queryClient = new QueryClient();
     const onUnboundAccountDeletionAdvisory = vi.fn();
     const suspendInteractionAndInvalidateLease = vi.fn();
@@ -99,6 +138,7 @@ describe("useAccountDeletionAdvisory", () => {
     });
 
     expect(onUnboundAccountDeletionAdvisory).toHaveBeenCalledOnce();
+    expect(readFirstUseGuidePreferences()).toEqual(preferencesBeforeAdvisory);
     expect(suspendInteractionAndInvalidateLease).not.toHaveBeenCalled();
     expect(quiesce).not.toHaveBeenCalled();
     expect(clearUserDraftsMock).not.toHaveBeenCalled();
@@ -169,12 +209,15 @@ describe("useAccountDeletionAdvisory", () => {
       channel.dispatch({ version: 1, deletedUserId: session.user.id });
     });
     await waitFor(() => expect(clearUserDraftsMock).toHaveBeenCalledOnce());
+    activateFirstUseGuide();
+    const nextUserPreferences = readFirstUseGuidePreferences();
 
     act(() => {
       channel.dispatch({ version: 1, deletedUserId: session.user.id });
     });
     expect(clearUserDraftsMock).toHaveBeenCalledOnce();
     expect(reloadApplication).not.toHaveBeenCalled();
+    expect(readFirstUseGuidePreferences()).toEqual(nextUserPreferences);
 
     act(() => {
       rejectFirstClear(new Error("private indexeddb failure detail"));
@@ -183,6 +226,7 @@ describe("useAccountDeletionAdvisory", () => {
     await waitFor(() => expect(clearUserDraftsMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(reloadApplication).toHaveBeenCalledOnce());
     expect(quiesce).toHaveBeenCalledTimes(2);
+    expect(readFirstUseGuidePreferences()).toEqual(nextUserPreferences);
   });
 
   it("keeps a completed clear authoritative after the hook unmounts", async () => {

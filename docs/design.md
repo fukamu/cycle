@@ -130,6 +130,7 @@ Initial Schema、空Database、forward Migration、変換禁止のContractは§5
 10. AI費用・AbuseをMVPから制御する。
 11. MVPからUser : N Goalsを表現し、Progressing Goalのplan別上限を基本Data Model変更なしで拡張できる。
 12. 日本語UI・日本語長文入力で読みやすく、将来Locale / Script追加時にTypographyを差し替え可能にする。
+13. 新しいAnonymous利用者が、短い文脈別Guideにより現在地と次の既存操作を理解し、最初のGoal、Cycle 1のP/D/C/A、Cycle 1後のGoal ReviewをAIなしでも完遂できる。
 
 ## 2.2 UX Principles
 
@@ -145,6 +146,8 @@ Initial Schema、空Database、forward Migration、変換禁止のContractは§5
 - 回復可能なErrorで入力を失わせない。
 - Mobile Firstとし、Desktopでも基本機能が破綻しない。
 - 通知・Error・確認操作はApplication内のUIとして表示し、Browser標準の`window.alert()` / `window.confirm()`へ依存しない。
+- 初回Guideは通常のdocument flowに置く短い補助情報とし、現在地、今すること、次の既存操作を一段階ずつ示す。
+- 初回Guideを閉じる、全体をskipする、またはHelpから再表示しても、入力、保存、AI利用の任意性、Frame / Route移動、Goal / Cycleの操作可能性を変えない。
 - 将来拡張を理由にMVPを過剰設計しない。
 
 ## 2.3 Non-goals
@@ -168,6 +171,11 @@ Initial Schema、空Database、forward Migration、変換禁止のContractは§5
 - Realtime Collaboration / CRDT / OT / 高度なMerge UI
 - i18n framework導入、複数言語UI、全言語Font asset配信
 - Anonymous cleanup batch本実装
+- 画面を覆うTutorial、modal tour、spotlight、強制focus / scroll移動
+- Guideを完了条件にするwizard、入力内容の自動生成・自動入力・上書き・採点・自動確定
+- Guideの完了badge、point、連続日数等のgamification
+- 有効な既存Sessionに対する、browser-local Guide stateが存在しないことだけを理由とした強制表示
+- Guide専用のServer preference、cross-device同期、randomized experiment、Browser event ledger
 
 ---
 
@@ -366,6 +374,26 @@ flowchart TD
 - `active_cycle`から終了: Active CycleをCanceledにし、Goalを`achieved`または`ended`へ遷移する。
 - `goal_review`から終了: Review Draftを破棄し、Goalを現在Versionのまま`achieved`または`ended`へ遷移する。
 - Terminal Goalは再Open不可。
+
+## 6.5 初回Guide
+
+初回Guideは§§6.1–6.4のUser Flowへ重ねるFrontendだけのpresentationであり、Goal / Cycle / SessionのDomain state、API、DB、AI contractを追加または変更しない。表示、close、skip、Helpからの再表示はScreen遷移またはUse Caseではなく、§11.6のUI stateだけを変更する。
+
+この機能のためにBackend、public API、DB schema / data、AI request / response、Cloudflare configuration / routingを追加または変更しない。
+
+自動表示対象となる利用は、次のfresh Anonymous bootstrap attemptでだけ開始する。
+
+1. Clientがauthoritativeな`GET /api/v1/session`から`SESSION_MISSING`または`SESSION_EXPIRED`を受ける。
+2. §27.4のCookie writer Web Lockを取得し、ownershipを再確認した後、lock内で`GET /api/v1/session`を再実行する。
+3. 再実行でも同じunavailable Sessionである場合だけ`POST /api/v1/session/anonymous`を送る。
+4. ResponseのSession DTO検証とrequest ownership確認に成功した場合だけ、同じlock内で既存の初回Guide booleanを消し、`eligible=true`を保存する。
+5. SessionがApplicationへauthoritativeにpublishされた後だけ、その利用のGuideを描画する。
+
+最初またはlock内再確認の`GET /api/v1/session`が有効なSessionを返した場合、Guide stateの欠落は`eligible=false`として扱い、既存のbooleanを追加、削除、上書きしない。したがって、Guide導入前から有効な既存Sessionへ欠落だけを理由に自動表示しない。Anonymous bootstrapの短命idempotency recordによる再開は、新しいDB rowかどうかではなく上記attemptの一部として扱う。
+
+初回Session discoveryとruntime Session recoveryは同じ判定を使う。Recoveryの`GET /session`が同じUserを返した場合は既存Guide stateを維持し、別の既存Userを返した場合は§§27.4、41.13に従って旧stateをclearするが`eligible`を立てない。Recovery中にunavailable Sessionを確認してAnonymous bootstrapに成功した場合だけ、新しいAnonymous利用としてGuide stateをresetしてeligibleにする。
+
+Eligibleな利用では、Goal Creation Draft、Active Cycle 1の現在選択中P / D / C / A、Cycle 1完了後のGoal Reviewへ進んだ時点で、§9.10の対応する段階を自動表示する。GuideはUser Flowの順序を説明するが、未入力Frameを飛ばす自由なTab移動、Route移動、AIを使わない経路を妨げず、前段階のGuideを見たことを後段階の表示条件にしない。
 
 ---
 
@@ -768,6 +796,37 @@ Route: `/settings`
 - Account Delete。
 - Billing / Upgrade Plan UIは表示しない。
 
+## 9.10 初回Guide
+
+初回Guideは既存の画面Guide、Textarea、Auto Save、AIの任意性、P/D/Cのnext-frame CTA、自由なTab移動、Recovery notice、Cycle completion / Goal Review controlsを置換しない。次の補助領域を通常のdocument flowへ追加し、modal、tour overlay、spotlight、sticky UIにしない。
+
+| Stage    | 自動表示context                                                                                  | 表示する現在地と案内                                                                                                                                                                                                                |
+| -------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `goal`   | §11.6でeligibleな利用が、Recovery確認待ちでない編集可能なGoal Creation Draftを最初に表示したとき | `現在地：目標を決める`。`これから良くしたいことを、自分の言葉で書きます。短い文でも始められます。AIで整える操作は任意です。保存されたら「この目標で始める」でCycle 1へ進みます。`                                                   |
+| `plan`   | canonicalなActive Cycle 1でPを選択したとき                                                       | `現在地：P — 今回試すことを決める`。`目標に向けて、今回試すことと、できたと考える目安を書きます。書けたらTabまたは「D — Doへ進む」で実行の記録へ進めます。`                                                                         |
+| `do`     | canonicalなActive Cycle 1でDを選択したとき                                                       | `現在地：D — 実際にしたことを記録する`。`実際にしたことや起きたことを、予定と違った点も含めて書きます。書けたらTabまたは「C — Checkへ進む」で振り返りへ進めます。`                                                                  |
+| `check`  | canonicalなActive Cycle 1でCを選択したとき                                                       | `現在地：C — 試した結果を振り返る`。`Pで考えたこととDで起きたことを比べ、分かったことを書きます。書けたらTabまたは「A — Actionへ進む」で次の動きを決めます。`                                                                       |
+| `action` | canonicalなActive Cycle 1でAを選択したとき                                                       | `現在地：A — 次に続ける・変えることを決める`。`今回の学びから、次に続けること、変えること、やめることを書きます。自分で書いても、任意でAIを使ってもかまいません。P/D/C/Aが保存されたら「サイクルを完了」で目標の見直しへ進みます。` |
+| `review` | Cycle 1を完了したcanonicalなGoal Reviewを表示したとき                                            | `現在地：目標を見直す`。`Cycle 1で分かったことを確認し、同じ目標で次へ進む、目標を変えて次へ進む、達成または終了を選びます。AIで整える操作は任意です。`                                                                             |
+
+各領域はheading `はじめてガイド`、上表の現在地、案内、`閉じる`、`ガイドをスキップ`をこのreading orderで持つ。`閉じる`は現在Stageだけを閉じ、`ガイドをスキップ`は全Stageの今後の自動表示を止める。Guide内にGoal / Frame本文を表示せず、Goal開始、Frame移動、AI、保存、Cycle完了、Goal Review outcomeを実行する複製buttonを作らない。
+
+配置は、Goal Creationではpage headingとeditorの間、Cycle Workspaceでは選択中Frame titleと既存Frame Guideの間、Goal ReviewではGoal contextと既存`判断の材料`の間とする。既存GuideとTextareaの`aria-describedby`関係は維持し、初回GuideをTextareaの新しいvalidation説明にしない。
+
+Auto表示では、次のいずれかに該当する間は領域を表示せず、対応Stageを`shown`にしない。
+
+- ApplicationのSession identityが未publish、Recovery中、またはinteractionをhidden / inertにしている。
+- Route dataがloading / error、Goal Creation Draftの作成前、editor hydration中。
+- Browser Draft Recoveryまたはrevision conflictの確認・解決待ち。
+- Goal Creation Draft、Cycle、Goal Reviewのcanonical workspaceが別の場所へ移動済み。
+- Completed / Canceled Cycleまたはterminal Goalのread-only画面。
+
+Hamburger Menuには既存項目の後へ`はじめてガイドを表示`buttonを追加する。この操作は永続化済みの`eligible`、`skipped`、各Stageの`shown`を変更せず、§11.6のmemory-only replayをarmする。現在の画面が安全なGuide contextなら対応Stageを直ちに再表示し、Home、History、Settings、loading / error、Recovery、workspace moved、terminal detail等で該当contextがなければRouteを強制変更せず、次に安全なGoal Creation / Active Cycle / Goal Review contextへ入ったときに表示する。
+
+Replay中は、Goal Creationでは`goal`、任意番号のActive Cycleでは現在選択中Frame、任意番号のactive Goal Reviewでは`review`を表示できる。`閉じる`はそのreplay arm内の現在Stageだけを閉じ、別Stageへ移れば対応Guideを表示できる。Menu操作を再度行うとmemory-onlyの閉じたStageをresetして再armする。`ガイドをスキップ`はreplayを終了し、永続`skipped=true`にする。
+
+Guideの自動表示、Menuからのarm、Stage切替ではfocusやscroll位置を移動しない。Drawerを閉じると既存のsame-path規則どおりMenu triggerへfocusを戻す。Guide領域、`閉じる`、`ガイドをスキップ`、Menu buttonはKeyboardとscreen readerから識別・操作でき、Guideが追加されても既存controlのDOM順とaccessible nameを変えない。
+
 ---
 
 # 10. Screen Transition
@@ -781,6 +840,8 @@ Route: `/settings`
 - replay後に収束すべきworkspaceは§20.4。
 
 Frontend routerはこれらのownerから遷移先を導出し、ここに別の遷移表を追加しない。
+
+初回Guideの表示、close、skip、Help replayは§§9.10、11.6が所有するpresentation stateであり、Route変更、P/D/C/Aの順序、Goal / Cycle transition、保存eligibilityを追加しない。
 
 ---
 
@@ -884,6 +945,53 @@ canTerminateGoal = (
                    )
                    AND no AI operation running
 ```
+
+## 11.6 初回Guide State
+
+初回GuideがBrowserへ永続化できるstateは、固定versionを含むstatic keyに分けた次のbooleanだけとする。Logical shapeは説明用であり、User単位objectやJSON recordとして保存しない。
+
+```ts
+type FirstGuideStage = "goal" | "plan" | "do" | "check" | "action" | "review";
+
+type FirstGuidePersistentState = {
+  readonly eligible: boolean;
+  readonly skipped: boolean;
+  readonly shown: Readonly<Record<FirstGuideStage, boolean>>;
+};
+```
+
+- `eligible`、`skipped`、各Stageの`shown`を、それぞれversionedな固定keyとして独立して保存する。Keyのvalueはliteral `true`だけとし、`false`はkeyの欠落で表す。JSON recordを保存しない。Key、valueのどちらにもUser / Session / Goal / Cycle / Draft ID、本文、日時、revision、Email、telemetry識別子を含めない。
+- `eligible`のkey欠落、不正value、読取不能は`false`とする。有効な既存Sessionのdiscoveryは欠落を`true`へ補完しない。`skipped`と各`shown`の欠落は`false`だが、`eligible=false`の間は自動表示判定へ使わない。
+- §6.5、§27.4のfresh Anonymous bootstrap attemptだけが全Guide keyをresetして`eligible=true`にできる。通常の画面表示、Goal開始、Cycle完了、Review確定、reloadは`eligible`を変更しない。
+- Stageの安全な初回領域が実際にvisibleになった時点で、そのStageをmemory上で直ちに`shown=true`とし、下記のidentity guardを通じて永続stateの`shown=true`を試みる。抑止中、またはHelp replayによる表示では`shown`を変更しない。永続書込みに失敗しても同じdocument lifecycleではmemory上の`shown`により自動再表示を繰り返さない。
+- `ガイドをスキップ`ではmemory上の`skipped=true`を直ちに反映し、下記のidentity guardを通じて永続stateの`skipped=true`を試みる。`skipped=true`は未表示Stageを含むすべての自動表示を停止し、各Stageの`shown`は書き換えない。
+
+`shown`と`skipped`の永続書込みだけは、別tabのSession Cookie変更と競合させないため、次のidentity guardを必須とする。
+
+1. Guideを表示するUIは、対象contextにbindされたApplication User ID、identity generation、Guide registration / route generationをcaptureする。自動Stageの初回visibleまたは`ガイドをスキップ`の操作ではmemory transitionを同期的に完了し、focus、scroll、入力、保存、navigation、command eligibilityを待たせない。
+2. Application compositionは§27.4の既存Web Lockを取得し、取得後もcaptured identity / registration / route generationがcurrentであることを確認してから、同じlock内で既存の`GET /api/v1/session`を一度だけ実行する。
+3. Session DTO検証に成功し、ResponseのApplication User IDがcaptured User IDとexactに一致し、書込み直前にもcaptured identity / registration / route generationがcurrentである場合だけ、対応する固定keyへliteral `true`を保存する。User ID不一致、Session unavailable、network / abort / DTO error、Web Lock利用不能、ownership失効、storage write失敗ではpersistent writeをno-opとし、memory transitionを巻き戻さない。
+4. Fresh Anonymous bootstrapのGuide resetも同じWeb Lock内で行うため、旧identityのwriteが先なら後続resetが消去し、resetが先なら後続writeのSession照合がUser ID不一致としてno-opになる。BrowserへUser IDまたはgenerationを永続化せずに、この順序を保証する。
+
+Identity guardによる`GET /api/v1/session`は、自動表示された各Stageの最初の`shown`書込みと、同じdocument lifecycleで最初の`skipped`書込みにだけ許可する。同じStageまたはskipを同じdocumentで自動Retryせず、Stageごと最大1回の6件とskip最大1件の合計最大7件とする。`閉じる`、Helpのarm / re-arm、replay表示はRequestを行わない。Stage切替だけではRequestを行わず、切替先の未表示Stageで自動Guideが実際にvisibleになった場合だけ`shown`のidentity guardを開始する。Replay中に同じdocumentで初めて`ガイドをスキップ`を選んだ場合も、同じskip永続書込みとしてidentity guardを通す。
+
+Auto表示は次で導出する。
+
+```text
+autoVisible(stage) = eligible
+                     AND NOT skipped
+                     AND NOT shown(stage)
+                     AND automaticContext(stage)
+                     AND safeGuideContext
+
+automaticContext(goal) = editable Goal Creation Draft
+automaticContext(plan/do/check/action) = canonical Active Cycle 1のselected Frame
+automaticContext(review) = Cycle 1完了後のcanonical active Goal Review
+```
+
+前Stageの`shown`、入力の有無、Save State、AI利用、next-frame CTA利用は後Stageの条件にしない。Frameを自由移動してAを先に表示した場合も、Aだけを`shown`とする。
+
+Help replayは`armed`と、そのarm内で閉じたStage集合だけをmemoryに持つ。永続stateをresetせず、`eligible=false`または`skipped=true`でも§9.10のmanual contextと安全条件を満たせば表示する。Route / Frame変更、reload、identity generation変更後の旧callbackは、現在のSession / Route generationに属さないGuide stateを表示または書き込まない。
 
 ---
 
@@ -3965,11 +4073,13 @@ Google Upgrade / Login成功時はSession tokenを必ずrotateし、更新前Ses
 
 ## 27.4 Same-origin Session Cookie writer coordination
 
-同一originのtabはSession Cookieを共有するため、Cookieを書き換え得るanonymous bootstrap、Google Upgrade / Login、Account Deleteを固定名`fukamu-session-cookie-writer-v1`のorigin-wide exclusive Web Lockで直列化する。
+同一originのtabはSession Cookieを共有するため、Cookieを書き換え得るanonymous bootstrap、Google Upgrade / Login、Account Deleteを固定名`fukamu-session-cookie-writer-v1`のorigin-wide exclusive Web Lockで直列化する。§11.6の初回Guide `shown` / `skipped`永続書込みも、Cookie自体は変更しないが、captured Userとlock内のauthoritative Sessionを照合してこれらのCookie writerと順序付けるために同じlockを再利用する。
 
 - Request dispatch前にlockを取得し、取得後にcaptured ownership / generationを再確認する。待機中のAbortSignalはlock requestへ伝播する。
 - Web Locks APIが存在しない、壊れている、またはcallbackを実行せず完了するBrowserではCookie変更Requestをdispatchせずfail-closedにする。Web Locksは本Applicationの必須Browser capabilityとする。
-- Anonymous bootstrapはlock取得後のownership確認からResponse検証までlockを保持する。
+- Anonymous bootstrapはlock取得後にcaptured ownership / generationを再確認し、同じlock内で`GET /api/v1/session`を再実行する。再実行が有効な既存Sessionを返した場合はPOSTせず、そのSessionをpublishし、§11.6の初回Guide stateを作成・変更・削除しない。
+- 再実行でもSessionが利用不能な場合だけ`POST /api/v1/session/anonymous`をdispatchする。Session DTO検証とrequest ownership確認に成功したresponseについて、lock解放前に初回Guideのversioned booleanをresetして`eligible=true`を保存し、その後にauthoritativeなApplication Sessionとしてpublishする。POSTがBackend上の有効なbootstrapをidempotentに再開した場合も、このBrowserのfresh anonymous bootstrap attemptとして同じ扱いにする。
+- 初回Guideの永続書込みは§11.6のidentity guardだけを行い、Session Cookie、CSRF token、Session cacheを変更しない。Guardの`GET /api/v1/session`失敗またはidentity不一致を理由に別UserのGuide keyへ書き込まず、Guide専用のSession recoveryやCookie writerを追加しない。
 - Google Upgrade / Loginはsource identity確認からtarget sessionのadvisory・cache publication完了までlockを保持する。
 - Account Deleteは`204`と最初のversioned deletion advisory publishまでlockを保持する。時間のかかるBrowser Draft cleanupは他tabのsession recoveryを妨げないようlock解放後に行う。
 - Cookieを共有するtabは同じactive Sessionについて同じstable CSRF tokenをdiscoveryする。CSRF tokenをtab間通知で配布せず、通知欠落時も各tabのauthoritativeな`GET /session`が同値へ収束する。
@@ -3985,6 +4095,7 @@ Web Lockは同一origin内の協調境界であり、BackendのExpected User gua
 - Googleが検証済みとしたEmailだけを、current User自身の設定画面で連携Accountを識別するために表示する。Email claimがない、または未検証の場合は`googleEmail=null`とする。
 - Google tokenをApplication Sessionとして使わない。
 - Google Account Upgrade成功後もApplication User IDを変えない。
+- 同じApplication UserのAnonymousからGoogleへのupgradeでは§11.6の初回Guide stateを保持する。Google LoginまたはSession recoveryで別Application Userへの切替がauthoritativeにcommitした場合は、切替前Userの初回Guide stateをすべて削除し、切替後Userを自動表示eligibleにしない。
 
 ## 27.6 Authorization
 
@@ -4148,8 +4259,13 @@ Server resource取得後:
 
 Reviewからachieve/endする際、Frontendはqueued saveをcancelする。既にin-flightのsaveが先に完了しても、その本文を含めてDraft全体を破棄してterminal transitionを続行する。Terminal transactionが先に完了した後のlate PATCHは、Draft削除またはGoal state不一致により拒否され、terminal stateを変えない。
 
----
+## 28.8 初回Guideとの分離
 
+初回GuideはDraftまたはAuto Save stateではない。Guideの表示、close、skip、stage表示済み、Help replayの操作により、Textarea value、dirty snapshot、revision、queue、IndexedDB Draft Cache、save gatingを作成・変更しない。Guideは未保存本文、復元本文、競合本文を読み取って分岐せず、保存成功、reload recovery、Goal / Cycle transitionを待たせない。
+
+§9.10の安全抑止中は自動表示を保留し、`shown`を消費しない。Recoveryまたはhydrationが同じUser / route generationの編集可能なauthoritative stateへ確定した場合だけ通常の表示判定をやり直し、別User、別workspace、terminalまたはread-onlyへ確定した場合は旧判定を破棄する。
+
+---
 
 # 29. Frontend Architecture
 
@@ -4202,6 +4318,7 @@ Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTa
 | Action eligibility | Generate / Refine / Completeのpredicateをpure logicとして算出し、UI文言で判定しない |
 | Goal history timeline | Cycleの`goalVersionId`変化からVersion change markerを生成し、Completed / Canceled detailをread-only表示する |
 | Session / account UI | Anonymous state、Google connection、identity collision、Account Deleteを扱う。Anonymous bootstrapの`429 RATE_LIMIT_EXCEEDED`は自動再送せず、待ってからの手動Retryを案内する |
+| 初回Guide | §11.6のBrowser-local state、§9.10の安全な表示判定、close / skip / Help replay、identity transition cleanupを統合し、既存入力・保存・AI・navigation contractへ介入しない |
 
 Route-level UIまたは汎用ComponentへProduct Ruleを直接埋め込まず、Feature-level model / reducer / predicateまたはshared domain-facing clientへ分離する。
 
@@ -4317,8 +4434,17 @@ Actions:
 - Button disabled理由を近接textで示す。
 - SPA内で`pathname`が実際に変わった場合は、初回document loadを除き、Keyboard / screen readerが遷移先を識別できるよう、render済みのdestination `h1`へ一度だけprogrammatic focusを置く。Loading / Errorから同じ`pathname`の最終`h1`へ置換される場合とbrowser back / forwardも同じ対象とし、hashだけの遷移と同じ`pathname`内のFrame / tab / autosave / Dialog操作ではfocusを奪わない。
 
----
+## 29.12 初回Guide Architecture
 
+初回GuideはFrontendの独立したFeature責務とし、Application compositionがSession discoveryのoutcome、identity generation、現在のroute / workspace contextを公開Contract経由で渡す。Featureは表示predicateとruntime replay stateを所有し、固定versionのbooleanだけを扱う専用Browser storage adapterを通じて§11.6を実装する。Application compositionは§11.6の永続書込みportを提供し、そのidentity guardに限って既存のSession clientとCookie writer Web Lockを再利用する。Guide専用endpoint、request / response field、TanStack Query cache、Backend DTO、DB schema、AI、Cloudflare bindingを追加または変更しない。
+
+Goal Creation、Cycle editor、Goal ReviewはFeatureの公開する現在stageの表示modelだけを組み込み、互いの内部実装をdeep importしない。日本語copyは§43.6のlocale-specific copy moduleへ置き、Component logicへ散在させない。Header Drawerの`はじめてガイドを表示`はlinkと同じKeyboard循環、accessible name、close後focus contractへ含める。
+
+Session discovery / recoveryは、通常のlock外GETと、Cookie writer lock内でGuide stateの調停が完了したoutcomeを内部provenanceとして区別する。Lock内POST成功ではeligibility writerがresetと`eligible=true`を行い、lock内GET再利用ではGuide stateを変更しないが、いずれも後続publicationによる重複clearを抑止する。Cookie writerで調停済みのidentity advisoryはtarget User IDとbooleanの調停markerだけをversionedな一時messageとして渡し、受信tabは新しいauthoritativeなSession GETがexact target Userを返した場合だけshared persistent stateを保持して旧document-memory fenceをresetする。Target不一致、通常のdifferent-user advisory、malformed / stale message、GET失敗は調停済みと扱わない。Identity callbackはcaptured User / generationを検証し、same-user upgradeでは保持し、different-user commitまたはAccount Delete commitではexactなGuide keyだけを削除する。遅延したbootstrap、route、storage callbackが新しいidentityへstateを書き戻してはならない。
+
+初回Guide FeatureはSession clientまたはWeb Lockをdeep importせず、Application compositionから注入された永続書込みportへcaptured User / identity / registration / route generationと対象booleanだけを渡す。Portは§11.6、§27.4のidentity guardを完了した場合だけBrowser storage adapterへ書込みを委譲し、UI memoryの即時反映、close / Help / replayのrequest-free動作、既存Session recoveryとの依存方向を保つ。
+
+---
 
 # 30. Backend Architecture
 
@@ -5397,6 +5523,14 @@ Revision conflictではServer本文でLocal本文を自動上書きしない。
 
 Stack trace、SQL、Provider raw body、Goal/P/D/C/A本文、tokenをResponseへ含めない。
 
+## 40.7 初回Guide Browser state failure
+
+初回GuideのBrowser storage readが利用不能、不正、または例外の場合は`eligible=false`として自動表示をfail-safeに抑止する。write / remove失敗はApplication Session、画面、入力、Auto Save、AI、navigation、Goal / Cycle command、Account Deleteのserver結果を失敗へ変換しない。自動Guideが一度visibleになった後のwrite失敗は§11.6のdocument-memory fenceで同一document中の再表示を防ぐ。Identity cleanupで固定keyを1件でも削除できない場合はdocument-memoryを抑止状態に保ち、固定`skipped=true`をbest effortで保存する。残存した`eligible=true`だけから次Userへ自動表示せず、全固定keyを削除できた後のfresh Anonymous bootstrapだけがこの抑止を解除できる。
+
+§11.6の永続書込みidentity guardでWeb Lock取得、captured ownership、`GET /api/v1/session`、Session DTO検証、User ID一致、またはstorage writeのいずれかを確認できない場合は、そのpersistent writeだけをno-opとする。すでに同期反映したUI memoryを戻さず、Guide内の待機表示、Error、Retry、操作gateを追加せず、同じdocumentで自動再試行しない。既存Session boundaryが独立して扱うidentity failureをGuideの成功または失敗へ読み替えない。
+
+Help replayのruntime stateだけで安全に表示できる場合はBrowser storage failure中も利用できる。Account Delete `204`後のGuide cleanup失敗はlocal cleanupとして扱い、server DELETEを再送せず、入力内容、識別子、storage valueまたは例外detailをlog / telemetryへ送らない。
+
 ---
 
 # 41. Security / Privacy
@@ -5575,6 +5709,19 @@ Static retirement pageは起動ごとにcleanupを試行する。Writer fence後
 
 Retirement Workerへの切替は、Product OwnerのB2承認、成功したcurrent main CI、exact main SHA、設定済みapprover、破壊的確認phraseをすべて検証する専用manual workflowだけで行う。通常のTerraform Apply / Application Deployから自動起動せず、DB migration、Container rollout、現行Worker、runtime secret変更を含めない。切替後に旧interactive Applicationをrollbackしてversion `1` writerを再有効化せず、問題時はversion `2`以上を維持したretirement pageのforward fixだけを行う。
 
+## 41.13 初回Guide Browser state privacy
+
+初回Guideは§11.6の固定versioned keyごとのliteral `true`またはkey欠落で表すbooleanだけを`localStorage`へ保存する。User / Session / Goal / Cycle / Draft ID、Google identity / Email、Goal / P/D/C/A / Review本文、日時、revision、route履歴、表示回数、端末情報、telemetry識別子をkeyまたはvalueへ保存しない。`localStorage`はXSSに対する暗号化境界ではないため、本文やidentityを後から追加してはならない。
+
+- §11.6の永続書込みidentity guardが扱うoperationごとのcaptured Application User IDと各generationは、その非同期operationのmemoryにだけ保持する。既存`GET /api/v1/session`はGuide state、Guide操作、本文、captured User IDをrequest body、query、headerへ追加せず、Responseの既存User IDをClient内で比較する。個別の照合値・照合結果と`eligible` / `skipped` / `shown`のGuide booleanは、localStorage以外のBrowser storage、URL、BroadcastChannel、Backend record、log、trace、metric、telemetryへ保存または送信しない。唯一、§29.12のversionedな一時identity advisoryに限り、target User IDと「Cookie writer内でGuide stateを調停済みか」のboolean markerをBroadcastChannelで渡せる。このmarkerは個別のGuide booleanを含めず、受信側のauthoritativeなSession GET検証を省略させず、Browser storage、Backend record、log、trace、metric、telemetryへ残さない。
+- 同じApplication UserのAnonymousからGoogleへのupgrade、同一UserのSession recovery、通常reloadではGuide stateを保持する。
+- Google LoginまたはSession recoveryによる別Application Userへの切替がauthoritativeにcommitした時点で、切替前のGuide keyをすべて削除し、切替後Userの`eligible`は設定しない。切替待機中、失敗、identity未確定時はUserを推測して移送または再作成しない。
+- Account Deleteのsenderはserver `204`を確認した後にGuide keyを一度だけ削除する。同じdeleted Userを表示するadvisory receiverもidentity fence後に一度だけ削除し、Session未確定receiverはunbound abort時に削除する。Browser Draftの遅延cleanup、cleanup retry、重複advisoryはGuide stateを再削除せず、別Userのadvisoryは無視する。
+- Goal Delete、Goal terminal、Cycle completion、Guide close / skipはGuide state全体のidentity cleanupではない。§11.6が定める対象booleanだけを変更する。
+- `Storage.clear()`を使わず、既知のGuide keyだけを削除する。遅延callbackはcaptured identity / generationを再確認し、different-user switchまたはAccount Delete後に旧Guide stateを書き戻さない。
+
+Guide stateはTTL、cross-device同期、server backup、Browser Draft tombstoneの対象にしない。Browser site dataを利用者が削除した場合は欠落へ戻り、有効な既存Sessionでは`eligible=false`となる。これはGuideだけの表示抑止であり、Application dataやSessionを削除しない。
+
 ---
 
 # 42. Observability
@@ -5719,6 +5866,12 @@ rate_limit_rejected_total{scope}
 turnstile_verification_total{result}
 error_code_total{code}
 ```
+
+### 初回Guide
+
+初回Guideの表示、close、skip、Help replay、Stage到達を表すBrowser event、beacon、専用API / metric / log / span / durable event ledgerを追加しない。§11.6で許可する既存`GET /api/v1/session`は永続書込み前のidentity guardであり、Guide操作、Guide state、本文、識別子を観測payloadとして送らず、Guide telemetryまたはProduct評価eventとして扱わない。User / Session / Goal / Cycle ID、本文、timestamp、pseudonymをGuide評価のために収集または送信せず、Guide表示有無を既存server recordへ付加しない。
+
+Product評価は§42.4のsurvivor-onlyなActivation 48hとFirst Goal funnel 168hだけを、Guide導入前後の明示したUTC cohortで比較する。各cohortの分子・分母、maturity、削除による変動、運用上の同時変更を併記し、Guide exposureへjoinせず、因果効果、randomized comparison、User単位のskip / reopen / impression率とは表現しない。Guide telemetryがないことを表示0件、skip 0件または完了率100%と解釈しない。
 
 ## 42.4 Product analysis queries
 
@@ -5944,6 +6097,12 @@ MVP UIは日本語のみだが、将来次のように差し替え可能にす�
 - Logo conceptの環状Symbolを装飾として再描画せず、3層の視覚表現をP/D/C/Aや特定Domain概念へ対応付けない。
 - AuthoritativeなLogo/Favicon/Icon assetが存在しない間は、Raster Logo、SVG Logo、Favicon、App Icon、PWA Icon、OG ImageをRepositoryへ生成・設定しない。
 - Motionは操作理解に必要な短いtransitionだけとし、`prefers-reduced-motion`で実質無効化する。
+
+## 43.9 初回Guide copy / responsive behavior
+
+初回Guideは§9.10の日本語copyを§43.6のlocale-specific copy moduleから描画し、既存のSystem Font、Brand palette、1px境界、共通radius、WCAG 2.2 AA相当のcontrastを使う。本文は14px未満にせず、装飾gradient、通常Surfaceのshadow、hover浮上、独自Web Font、Logo風装飾を追加しない。
+
+320px幅、200% zoom、長い日本語copyでも見出し、本文、`閉じる`、`ガイドをスキップ`がreading orderどおり縦へreflowし、横scroll、nested scroll、sticky overlay、既存Textareaや主要Actionの欠落を生じさせない。Pointer操作のbutton targetは44px以上とし、Keyboardだけでclose / skip / Help replayを実行でき、visible focus、accessible name、状態を文字で取得できるようにする。表示または非表示でfocusを移動せず、scrollを発生させず、motionを必須にしない。
 
 ---
 
@@ -6215,6 +6374,7 @@ Governance / Policyの大規模negative fixture suiteは、gate / CI control-pla
 | Contract area | Canonical owner | Required verification family |
 |---|---|---|
 | Bootstrap、Session、Google、Account Delete | §§18.2、21、25、27、41.10 | Domain/Application、HTTP matrix、実DB concurrency、Frontend identity fence、E2E |
+| 初回Guide / Browser-local state | §§2.2–2.3、6.5、9.10、11.6、27.4–27.5、28.8、29.12、40.7、41.13、42.3、43.9 | Frontend predicate/storage/identity unit、component/A11y/responsive、two-tab race、AI-free E2E、privacy/telemetry negative assertion |
 | Goal Draft、Start、limit、Version | §§12、14、18.3、22 | Domain boundary、HTTP、real-DB rollback/concurrency、Frontend editor、E2E |
 | Cycle save、P/D template、review schedule、complete、Review、termination、full Cycle predecessor read | §§9.6–9.7、13–14、18.4–18.6、23–24、28 | template preview / blank・non-blank・terminal・IME・recovery・UndoのFrontend、content / schedule revision・transition・read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model unit、authz/API、real-DB cascade/CAS/cleanup、E2E |
@@ -6246,6 +6406,14 @@ Review scheduleは、unset / set / change / clear、Gregorian dateの最小・�
 
 Browser Draft privacy境界では、Goalに紐づくDraft putとdelete cleanupの両直列化順、Goal cleanupとAccount cleanupの両直列化順、別User / Goal isolation、旧schema writer、advisoryのsender / receiver / 重複 / 未達を決定的に検証する。
 
+初回Guide境界では、初回Session GETが有効な既存Sessionを返す場合とGuide key欠落、初回GETがunavailableでもWeb Lock内再GETが既存Sessionを返す場合、lock内再GETもunavailableでAnonymous POSTが成功する場合を分け、前二者がGuide stateを作成・変更・削除せず、最後だけが旧booleanをresetして`eligible=true`にすることを検証する。二tabをbarrier同期し、一方のbootstrap成功後に他方のlock内再GETが新Sessionへ収束してPOSTしないこと、Backendが短命bootstrapをidempotentに再開しても成功attemptとして一度だけ初期化すること、state writeがlock解放とSession publishより前に完了すること、identity generation変更後のlate callbackがclear済みstateを復活させないことを固定する。
+
+Runtime recoveryは同一User GETで保持、別の既存Userへのcommitted switchでclearかつineligible、unavailableからのAnonymous bootstrap成功でresetかつeligible、identity未確定で表示・書込みなしを検証する。さらにinvalid / missing / unavailable storage、各Stageの独立した初回表示と自由なFrame移動、安全抑止中の`shown`非消費、close、skip、reload、Help arm / re-arm、same-user Google upgrade、different-user login、Account Delete sender / matching receiver / unbound receiver / other-user advisory、late route callbackをunit / component / E2Eで覆う。
+
+初回Guideの永続書込みidentity guardは二tabをbarrier同期し、旧identityの`shown` / `skipped`書込みがfresh bootstrap resetより先ならresetで消えること、resetが先ならlock内`GET /api/v1/session`のUser ID不一致で旧writeがno-opになること、同一Userかつcurrentなidentity / registration / route generationだけが対応booleanを保存することを決定的に検証する。Web Lock unavailable / callback未実行、ownership失効、Session unavailable、network / abort / DTO error、User ID不一致、storage write失敗ではUI memoryだけを即時反映してpersistent no-opとなり、同じdocumentで再試行しないことを固定する。
+
+既存画面Guide、Textarea、Auto Save、AIなしの操作、CTA、focus、scroll、operation gatingが変わらないことも検証する。Guide起因のNetwork Requestは、自動表示されたStageごと最大1回の6件と最初のskip最大1件で使う既存`GET /api/v1/session`だけに限定し、close、Help arm / re-arm、replay表示ではRequestがないこと、Stage切替では切替先の未表示Stageの自動Guideが実際にvisibleになった場合だけ1件発生することをassertする。このidentity guard以外のGET、全POST / PATCH / DELETE、Browser event、beacon、metric、log、span、永続event ledgerがないことをnegative assertionで確認する。
+
 Legacy PDCAI retirement境界では、current-user fresh、other-user fresh、expired、invalid / future timestamp、deleted-userのoutcome、version `1` writer fence、blocked / Retry / late success、transaction abort / error、repeat実行、現行origin DB非変更をfake IndexedDB unitで検証する。加えて実Browserの同一origin二tabで、旧version connectionがupgradeをblockし、旧tab close後の明示Retryだけがversion `2` cleanupへ進むことを検証する。
 
 Anonymous create rate limitでは、UTC hour境界の両端包含、23.5時間離れたbucketの24時間上限、guard待機後のcanonical time、future bucket除外、hour rollover並行request、guard / bucket expiryの単調性、sentinel更新失敗時のrollback、blocked attemptの永続化、limiterとcleanupの競合を実PostgreSQLで追加検証する。Frontendはrate-limit 429を自動再送しないこと、手動Retryと専用案内が残ることを検証する。
@@ -6261,6 +6429,7 @@ Shared full `CycleView`の`previousCompletedCycleAction`は、Cycle 1の`null`�
 E2Eは§6のuser flowと§§20–25のpublic contractを投影し、内部module名へ依存しない。少なくとも次のjourney familyをpublic UI/APIで通す。
 
 - Fresh anonymous bootstrapからGoal開始。
+- Fresh anonymous bootstrapから初回Guideを通り、AIを使わずGoal開始、Cycle 1のP→D→C→A、Cycle完了、Goal Reviewへ進む。自由なFrame移動、Stage close、全体skip、Hamburgerからのreplay、reload、same-user upgrade / different-user login / Account Delete、320px幅とKeyboard操作をjourney family内で検証する。
 - Goal Refineの比較・明示採用とmanual path。
 - P/D/C/A autosave、reload recovery、Action AI、Cycle completion。
 - Goal維持/変更、terminal、History/Timeline。
@@ -6512,6 +6681,7 @@ MVP acceptanceは、各canonical ownerのContractと§48で変更に適用され
 | Document authority / scope | §§0、2–3、50、52、54 | D、owner/legacy trace review |
 | Shared engineering method adoption | vendored Product Engineering Playbook、§§0、44.3、48、50、52、54 | offline hash/validator、empty override、38 rule trace、workflow/security fixtures、source-backed adoption evidence |
 | Bootstrap / Goal collection / Start | §§6、9、12、14、18.2–18.3、21–23 | Domain/API/real-DB concurrency、Frontend、E2E |
+| 初回Guide / Browser-local state | §§2.2–2.3、6.5、9.10、11.6、27.4–29.12、40.7、41.13、42.3、43.9 | Frontend state/storage/identity race、copy/A11y/responsive、AI-free E2E、privacy/telemetry negative assertion |
 | Version / Cycle / Review / terminal | §§12–14、18.4–18.6、23–24 | Domain/full-Cycle API predecessor contract/real-DB scope・replay・rollback、Frontend、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model/authz/CAS/cleanup、E2E |
 | Autosave / recovery / identity isolation | §§20.1、27–28 | Frontend fake-timer/component、HTTP identity matrix、E2E |

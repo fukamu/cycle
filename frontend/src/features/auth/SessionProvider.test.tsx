@@ -34,6 +34,15 @@ import {
   tombstoneDeletedGoalAndClearDrafts,
 } from "../../shared/drafts/browserDraftCache";
 import { PostCommitCleanupBoundary } from "../../shared/cleanup/PostCommitCleanupBoundary";
+import { useInteractionAvailability } from "../../shared/interaction/interactionAvailabilityContext";
+import {
+  activateFirstUseGuide,
+  firstUseGuideStages,
+  markFirstUseGuideStageShown,
+  readFirstUseGuidePreferences,
+  shouldShowFirstUseGuideStage,
+  skipFirstUseGuide,
+} from "../../shared/preferences/firstUseGuidePreference";
 import { userQueryKeys } from "../goal-collection";
 import {
   GoalDeletionFenceBoundary,
@@ -99,8 +108,52 @@ const latestSession: Session = {
   },
   csrfToken: csrfTokenFixture("latest"),
 };
+const freshAnonymousSession: Session = {
+  user: {
+    id: "00000000-0000-7000-8000-000000000005",
+    googleConnected: false,
+    googleEmail: null,
+  },
+  csrfToken: csrfTokenFixture("fresh-anonymous"),
+};
+
+const clearedFirstUseGuidePreferences = {
+  eligible: false,
+  skipped: false,
+  shown: {
+    goal: false,
+    plan: false,
+    do: false,
+    check: false,
+    action: false,
+    review: false,
+  },
+} as const;
+
+const freshFirstUseGuidePreferences = {
+  ...clearedFirstUseGuidePreferences,
+  eligible: true,
+} as const;
+
+function seedAllFirstUseGuidePreferences() {
+  activateFirstUseGuide();
+  for (const stage of firstUseGuideStages) {
+    markFirstUseGuideStageShown(stage);
+  }
+  skipFirstUseGuide();
+  return readFirstUseGuidePreferences();
+}
+
+function simulateSiblingFreshGuideReconciliation(): void {
+  window.localStorage.clear();
+  window.localStorage.setItem(
+    "fukamu-cycle-first-use-guide-v1:eligible",
+    "true",
+  );
+}
 
 beforeEach(() => {
+  window.localStorage.clear();
   vi.stubGlobal("BroadcastChannel", undefined);
   cleanupExpiredBrowserDraftsMock.mockReset();
   cleanupExpiredBrowserDraftsMock.mockResolvedValue(undefined);
@@ -188,6 +241,7 @@ describe("SessionProvider admission boundary", () => {
 
   it("keeps the normal anonymous bootstrap flow independent of admission", async () => {
     const requests: { method: string; path: string }[] = [];
+    const advisory = createAdvisoryChannelHarness();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -204,7 +258,9 @@ describe("SessionProvider admission boundary", () => {
       }),
     );
 
-    renderProvider();
+    renderProvider(undefined, undefined, {
+      advisoryFactory: () => advisory.channel,
+    });
 
     expect(await screen.findByText("application ready")).toBeInTheDocument();
     expect(
@@ -214,8 +270,14 @@ describe("SessionProvider admission boundary", () => {
     ).not.toBeInTheDocument();
     expect(requests).toEqual([
       { method: "GET", path: "/api/v1/session" },
+      { method: "GET", path: "/api/v1/session" },
       { method: "POST", path: "/api/v1/session/anonymous" },
     ]);
+    expect(advisory.postMessage).toHaveBeenCalledWith({
+      version: 2,
+      targetUserId: session.user.id,
+      guidePreferencesReconciled: true,
+    });
   });
 
   it("does not automatically retry a rate-limited anonymous bootstrap and keeps an explicit retry", async () => {
@@ -250,7 +312,7 @@ describe("SessionProvider admission boundary", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "時間を空けてから再試行してください。再試行を繰り返すと、待ち時間が延びる場合があります。",
     );
-    expect(sessionRequests).toBe(1);
+    expect(sessionRequests).toBe(2);
     expect(anonymousRequests).toBe(1);
     expect(screen.queryByText("application ready")).not.toBeInTheDocument();
 
@@ -259,11 +321,12 @@ describe("SessionProvider admission boundary", () => {
       .click(screen.getByRole("button", { name: "再試行" }));
 
     expect(await screen.findByText("application ready")).toBeInTheDocument();
-    expect(sessionRequests).toBe(2);
+    expect(sessionRequests).toBe(4);
     expect(anonymousRequests).toBe(2);
   });
 
   it("aborts a lock-waiting anonymous bootstrap when another tab changes identity", async () => {
+    const previousGuidePreferences = seedAllFirstUseGuidePreferences();
     const advisory = createAdvisoryChannelHarness();
     const reloadApplication = vi.fn();
     let writerSignal: AbortSignal | undefined;
@@ -304,21 +367,91 @@ describe("SessionProvider admission boundary", () => {
       reloadApplication,
     });
     await waitFor(() => expect(lockRequest).toHaveBeenCalledOnce());
+    expect(readFirstUseGuidePreferences()).toEqual(previousGuidePreferences);
 
     act(() => {
       advisory.dispatch({
-        version: 1,
+        version: 2,
         targetUserId: switchedSession.user.id,
+        guidePreferencesReconciled: false,
       });
     });
 
     await waitFor(() => expect(writerSignal?.aborted).toBe(true));
     expect(reloadApplication).toHaveBeenCalledOnce();
     expect(anonymousRequests).toBe(0);
+    expect(readFirstUseGuidePreferences()).toEqual(
+      clearedFirstUseGuidePreferences,
+    );
     expect(
       screen.queryByText("must not publish anonymous session"),
     ).not.toBeInTheDocument();
   });
+
+  it.each([
+    ["preserves", freshAnonymousSession, true],
+    ["clears", latestSession, false],
+  ] as const)(
+    "%s a sibling fresh Guide reconciliation for an unbound tab only after the authoritative User matches",
+    async (_expectedAction, authoritativeSession, targetMatches) => {
+      seedAllFirstUseGuidePreferences();
+      simulateSiblingFreshGuideReconciliation();
+      const advisory = createAdvisoryChannelHarness();
+      const reloadApplication = vi.fn();
+      const initialRequestAborted = vi.fn();
+      let sessionRequests = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const path = typeof input === "string" ? input : input.toString();
+            if (path !== "/api/v1/session") {
+              throw new Error("unexpected request: " + path);
+            }
+            sessionRequests += 1;
+            if (sessionRequests === 1) {
+              return new Promise<Response>((_resolve, reject) => {
+                init?.signal?.addEventListener(
+                  "abort",
+                  () => {
+                    initialRequestAborted();
+                    reject(new DOMException("discovery aborted", "AbortError"));
+                  },
+                  { once: true },
+                );
+              });
+            }
+            return Promise.resolve(sessionResponse(authoritativeSession));
+          },
+        ),
+      );
+
+      renderProvider(undefined, createClient(), {
+        advisoryFactory: () => advisory.channel,
+        reloadApplication,
+      });
+      await waitFor(() => expect(sessionRequests).toBe(1));
+      await waitFor(() => expect(advisory.addEventListener).toHaveBeenCalled());
+
+      act(() => {
+        advisory.dispatch({
+          version: 2,
+          targetUserId: freshAnonymousSession.user.id,
+          guidePreferencesReconciled: true,
+        });
+      });
+
+      await waitFor(() => expect(initialRequestAborted).toHaveBeenCalledOnce());
+      await waitFor(() => expect(sessionRequests).toBe(2));
+      await waitFor(() => expect(reloadApplication).toHaveBeenCalledOnce());
+      expect(readFirstUseGuidePreferences()).toEqual(
+        targetMatches
+          ? freshFirstUseGuidePreferences
+          : clearedFirstUseGuidePreferences,
+      );
+      expect(shouldShowFirstUseGuideStage("goal")).toBe(targetMatches);
+    },
+  );
 
   it("bootstraps exactly once when an initial-session retry finds no session", async () => {
     let sessionRequests = 0;
@@ -367,7 +500,7 @@ describe("SessionProvider admission boundary", () => {
     expect(
       await screen.findByText("application ready after retry"),
     ).toBeInTheDocument();
-    expect(sessionRequests).toBe(4);
+    expect(sessionRequests).toBe(5);
     expect(anonymousRequests).toBe(1);
     expect(lifecycle).not.toHaveBeenCalled();
   });
@@ -442,6 +575,7 @@ describe("SessionProvider identity boundary", () => {
 
   it("preserves query and mutation caches when the same user session is upgraded", async () => {
     stubSession(session);
+    const previousGuidePreferences = seedAllFirstUseGuidePreferences();
     const client = createClient();
     const { cachedHome, cachedMutation } = seedUserCaches(client);
     const upgradedSession: Session = {
@@ -481,6 +615,7 @@ describe("SessionProvider identity boundary", () => {
     expect(
       screen.getByRole("textbox", { name: "identity-bound editor" }),
     ).toHaveValue("same-user local input");
+    expect(readFirstUseGuidePreferences()).toEqual(previousGuidePreferences);
   });
 
   it("keeps the active autosave lease for a same-user upgrade", async () => {
@@ -526,6 +661,7 @@ describe("SessionProvider identity boundary", () => {
 
   it("awaits draft-preserving autosave quiescence before publishing a changed user", async () => {
     stubSession(session);
+    const previousGuidePreferences = seedAllFirstUseGuidePreferences();
     const client = createClient();
     const releaseQuiesce = deferredVoid();
     const cancelQueries = vi.spyOn(client, "cancelQueries");
@@ -569,6 +705,7 @@ describe("SessionProvider identity boundary", () => {
     expect(screen.getByTestId("session-observation")).toHaveTextContent(
       session.user.id,
     );
+    expect(readFirstUseGuidePreferences()).toEqual(previousGuidePreferences);
 
     releaseQuiesce.resolve();
 
@@ -580,6 +717,9 @@ describe("SessionProvider identity boundary", () => {
     expect(cancelQueries).toHaveBeenCalledWith({
       queryKey: ["user", session.user.id],
     });
+    expect(readFirstUseGuidePreferences()).toEqual(
+      clearedFirstUseGuidePreferences,
+    );
   });
 
   it("holds the cookie-writer lock through changed-user publication", async () => {
@@ -696,7 +836,11 @@ describe("SessionProvider identity boundary", () => {
     await waitFor(() => expect(lifecycle).toHaveBeenCalledOnce());
 
     act(() => {
-      advisory.dispatch({ version: 1, targetUserId: latestSession.user.id });
+      advisory.dispatch({
+        version: 2,
+        targetUserId: latestSession.user.id,
+        guidePreferencesReconciled: false,
+      });
     });
 
     expect(observation.closest("div[hidden][inert]")).not.toBeNull();
@@ -973,6 +1117,7 @@ describe("SessionProvider runtime recovery", () => {
       );
       const leases: AutoSaveScopeLease[] = [];
       const client = createClient();
+      const advisory = createAdvisoryChannelHarness();
       seedUserCaches(client);
       let sessionRequests = 0;
       let anonymousRequests = 0;
@@ -1001,17 +1146,22 @@ describe("SessionProvider runtime recovery", () => {
       renderProvider(
         <>
           <RuntimeRecoveryProbe showEditor />
+          <InteractionAvailabilityProbe />
           <AutoSaveScopeProbe
             onLease={(lease) => leases.push(lease)}
             onQuiesce={lifecycle}
           />
         </>,
         client,
+        { advisoryFactory: () => advisory.channel },
       );
 
       expect(
         await screen.findByTestId("runtime-session-user"),
       ).toHaveTextContent(session.user.id);
+      expect(screen.getByLabelText("session interaction")).toHaveTextContent(
+        "available",
+      );
       const user = userEvent.setup();
       const editor = screen.getByRole("textbox", {
         name: "runtime identity-bound editor",
@@ -1031,6 +1181,9 @@ describe("SessionProvider runtime recovery", () => {
       await waitFor(() => expect(lifecycle).toHaveBeenCalledOnce());
       expect(editor).toHaveValue("input captured before quiesce");
       expect(editor.closest("div[hidden][inert]")).not.toBeNull();
+      expect(screen.getByLabelText("session interaction")).toHaveTextContent(
+        "blocked",
+      );
       expect(leases).toHaveLength(1);
       expect(sessionRequests).toBe(1);
       expect(anonymousRequests).toBe(0);
@@ -1042,9 +1195,20 @@ describe("SessionProvider runtime recovery", () => {
           switchedSession.user.id,
         ),
       );
-      expect(sessionRequests).toBe(2);
+      expect(sessionRequests).toBe(3);
       expect(anonymousRequests).toBe(1);
       expect(lifecycle).toHaveBeenCalledOnce();
+      expect(readFirstUseGuidePreferences()).toEqual(
+        freshFirstUseGuidePreferences,
+      );
+      expect(advisory.postMessage).toHaveBeenCalledWith({
+        version: 2,
+        targetUserId: switchedSession.user.id,
+        guidePreferencesReconciled: true,
+      });
+      expect(screen.getByLabelText("session interaction")).toHaveTextContent(
+        "available",
+      );
       expect(
         screen.getByRole("textbox", {
           name: "runtime identity-bound editor",
@@ -1229,7 +1393,7 @@ describe("SessionProvider runtime recovery", () => {
           switchedSession.user.id,
         ),
       );
-      expect(sessionRequests).toBe(3);
+      expect(sessionRequests).toBe(4);
       expect(anonymousRequests).toBe(1);
       expect(lifecycle).toHaveBeenCalledOnce();
     },
@@ -1286,8 +1450,9 @@ describe("SessionProvider runtime recovery", () => {
 
     act(() => {
       advisory.dispatch({
-        version: 1,
+        version: 2,
         targetUserId: switchedSession.user.id,
+        guidePreferencesReconciled: false,
       });
       resolveLostRecovery(sessionResponse(session));
     });
@@ -1300,6 +1465,74 @@ describe("SessionProvider runtime recovery", () => {
       ),
     );
     expect(sessionRequests).toBe(3);
+  });
+
+  it("preempts an in-flight unmarked identity advisory with a reconciled sibling transition", async () => {
+    seedAllFirstUseGuidePreferences();
+    const advisory = createAdvisoryChannelHarness();
+    const firstRecoveryAborted = vi.fn();
+    let sessionRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = typeof input === "string" ? input : input.toString();
+        if (path !== "/api/v1/session") {
+          throw new Error("unexpected request: " + path);
+        }
+        sessionRequests += 1;
+        if (sessionRequests === 1) {
+          return Promise.resolve(sessionResponse(session));
+        }
+        if (sessionRequests === 2) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                firstRecoveryAborted();
+                reject(new DOMException("recovery superseded", "AbortError"));
+              },
+              { once: true },
+            );
+          });
+        }
+        return Promise.resolve(sessionResponse(freshAnonymousSession));
+      }),
+    );
+
+    renderProvider(<RuntimeRecoveryProbe />, createClient(), {
+      advisoryFactory: () => advisory.channel,
+    });
+    await screen.findByTestId("runtime-session-user");
+
+    act(() => {
+      advisory.dispatch({
+        version: 2,
+        targetUserId: switchedSession.user.id,
+        guidePreferencesReconciled: false,
+      });
+    });
+    await waitFor(() => expect(sessionRequests).toBe(2));
+
+    simulateSiblingFreshGuideReconciliation();
+    act(() => {
+      advisory.dispatch({
+        version: 2,
+        targetUserId: freshAnonymousSession.user.id,
+        guidePreferencesReconciled: true,
+      });
+    });
+
+    await waitFor(() => expect(firstRecoveryAborted).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.getByTestId("runtime-session-user")).toHaveTextContent(
+        freshAnonymousSession.user.id,
+      ),
+    );
+    expect(sessionRequests).toBe(3);
+    expect(readFirstUseGuidePreferences()).toEqual(
+      freshFirstUseGuidePreferences,
+    );
+    expect(shouldShowFirstUseGuideStage("goal")).toBe(true);
   });
 
   it("keeps a dirty editor on CSRF recovery failure until an explicit retry", async () => {
@@ -1399,6 +1632,9 @@ describe("SessionProvider runtime recovery", () => {
           if (sessionRequests === 2) {
             return errorResponse(401, "SESSION_EXPIRED");
           }
+          if (sessionRequests === 3) {
+            return errorResponse(401, "SESSION_EXPIRED");
+          }
           return sessionResponse(refreshedSession);
         }
         if (path === "/api/v1/session/anonymous") {
@@ -1449,7 +1685,7 @@ describe("SessionProvider runtime recovery", () => {
         refreshedSession.csrfToken,
       ),
     );
-    expect(sessionRequests).toBe(3);
+    expect(sessionRequests).toBe(4);
     expect(anonymousRequests).toBe(1);
     expect(lifecycle).toHaveBeenCalledOnce();
     expect(leases).toHaveLength(2);
@@ -1949,7 +2185,10 @@ describe("SessionProvider runtime recovery", () => {
           if (sessionRequests === 2) {
             return errorResponse(401, "SESSION_EXPIRED");
           }
-          if (sessionRequests === 3) return sessionResponse(session);
+          if (sessionRequests === 3) {
+            return errorResponse(401, "SESSION_EXPIRED");
+          }
+          if (sessionRequests === 4) return sessionResponse(session);
           return sessionResponse(latestSession);
         }
         if (path === "/api/v1/session/anonymous") {
@@ -1998,7 +2237,7 @@ describe("SessionProvider runtime recovery", () => {
         </SessionProvider>
       </QueryClientProvider>,
     );
-    await waitFor(() => expect(sessionRequests).toBe(3));
+    await waitFor(() => expect(sessionRequests).toBe(4));
     expect(await screen.findByTestId("runtime-session-user")).toHaveTextContent(
       session.user.id,
     );
@@ -2010,7 +2249,7 @@ describe("SessionProvider runtime recovery", () => {
         latestSession.user.id,
       ),
     );
-    expect(sessionRequests).toBe(4);
+    expect(sessionRequests).toBe(5);
     expect(anonymousRequests).toBe(1);
     expect(secondLifecycle).toHaveBeenCalledOnce();
     expect(publishedUserIds).not.toContain(switchedSession.user.id);
@@ -2211,7 +2450,11 @@ describe("SessionProvider runtime recovery", () => {
 
     await act(async () => {
       await Promise.resolve();
-      advisory.dispatch({ version: 1, targetUserId: switchedSession.user.id });
+      advisory.dispatch({
+        version: 2,
+        targetUserId: switchedSession.user.id,
+        guidePreferencesReconciled: false,
+      });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -2267,8 +2510,9 @@ describe("SessionProvider runtime recovery", () => {
     });
     act(() => {
       advisory.dispatch({
-        version: 1,
+        version: 2,
         targetUserId: switchedSession.user.id,
+        guidePreferencesReconciled: false,
       });
     });
 
@@ -2287,7 +2531,63 @@ describe("SessionProvider runtime recovery", () => {
     expect(sessionRequests).toBe(2);
   });
 
+  it.each([
+    ["adopts", freshAnonymousSession, true],
+    ["rejects", latestSession, false],
+  ] as const)(
+    "%s a sibling fresh Guide reconciliation for a bound tab only when recovery GET matches its User",
+    async (_expectedAction, recoveredSession, targetMatches) => {
+      seedAllFirstUseGuidePreferences();
+      const advisory = createAdvisoryChannelHarness();
+      let sessionRequests = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const path = typeof input === "string" ? input : input.toString();
+          if (path === "/api/v1/session") {
+            sessionRequests += 1;
+            return sessionResponse(
+              sessionRequests === 1 ? session : recoveredSession,
+            );
+          }
+          throw new Error("unexpected request: " + path);
+        }),
+      );
+
+      renderProvider(<RuntimeRecoveryProbe />, createClient(), {
+        advisoryFactory: () => advisory.channel,
+      });
+      await screen.findByTestId("runtime-session-user");
+
+      // A sibling cookie writer owns the persistent reconciliation. Keep this
+      // tab's previous identity memory fence to prove adoption resets only it.
+      simulateSiblingFreshGuideReconciliation();
+      expect(shouldShowFirstUseGuideStage("goal")).toBe(false);
+      act(() => {
+        advisory.dispatch({
+          version: 2,
+          targetUserId: freshAnonymousSession.user.id,
+          guidePreferencesReconciled: true,
+        });
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("runtime-session-user")).toHaveTextContent(
+          recoveredSession.user.id,
+        ),
+      );
+      expect(sessionRequests).toBe(2);
+      expect(readFirstUseGuidePreferences()).toEqual(
+        targetMatches
+          ? freshFirstUseGuidePreferences
+          : clearedFirstUseGuidePreferences,
+      );
+      expect(shouldShowFirstUseGuideStage("goal")).toBe(targetMatches);
+    },
+  );
+
   it("stops a deleted-account lease synchronously and discards drafts before reloading", async () => {
+    const previousGuidePreferences = seedAllFirstUseGuidePreferences();
     const releaseQuiesce = deferredVoid();
     const lifecycle = vi.fn<AutoSaveQuiesceCallback>(
       async ({ preserveDrafts }) => {
@@ -2329,6 +2629,7 @@ describe("SessionProvider runtime recovery", () => {
     expect(requestLeases[0]?.isCurrent()).toBe(true);
     expect(lifecycle).not.toHaveBeenCalled();
     expect(clearUserDraftsMock).not.toHaveBeenCalled();
+    expect(readFirstUseGuidePreferences()).toEqual(previousGuidePreferences);
 
     act(() => {
       advisory.dispatch({ version: 1, deletedUserId: session.user.id });
@@ -2338,6 +2639,9 @@ describe("SessionProvider runtime recovery", () => {
     expect(editor.closest("div[hidden][inert]")).not.toBeNull();
     expect(clearUserDraftsMock).not.toHaveBeenCalled();
     expect(reloadApplication).not.toHaveBeenCalled();
+    expect(readFirstUseGuidePreferences()).toEqual(
+      clearedFirstUseGuidePreferences,
+    );
     await waitFor(() => expect(lifecycle).toHaveBeenCalledOnce());
 
     act(() => releaseQuiesce.resolve());
@@ -2937,7 +3241,11 @@ describe("SessionProvider runtime recovery", () => {
 
     await screen.findByTestId("runtime-session-csrf");
     act(() => {
-      advisory.dispatch({ version: 1, targetUserId: session.user.id });
+      advisory.dispatch({
+        version: 2,
+        targetUserId: session.user.id,
+        guidePreferencesReconciled: false,
+      });
     });
 
     await waitFor(() =>
@@ -3417,6 +3725,15 @@ function createClient() {
   return new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+}
+
+function InteractionAvailabilityProbe() {
+  const available = useInteractionAvailability();
+  return (
+    <output aria-label="session interaction">
+      {available ? "available" : "blocked"}
+    </output>
+  );
 }
 
 function renderProvider(

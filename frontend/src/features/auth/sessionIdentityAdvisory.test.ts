@@ -10,16 +10,28 @@ describe("session identity advisory", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses a fixed versioned channel and emits only a canonical target user ID", () => {
+  it("uses a fixed versioned channel and emits only the strict reconciliation payload", () => {
     const fake = createFakeChannel();
     const factory = vi.fn(() => fake.channel);
     const advisory = createSessionIdentityAdvisory(vi.fn(), factory);
 
     advisory?.publish(userId);
+    advisory?.publish(userId, { guidePreferencesReconciled: true });
     advisory?.publish("not-a-user-id");
 
-    expect(factory).toHaveBeenCalledWith("fukamu-cycle-session-identity-v1");
-    expect(fake.posted).toEqual([{ version: 1, targetUserId: userId }]);
+    expect(factory).toHaveBeenCalledWith("fukamu-cycle-session-identity-v2");
+    expect(fake.posted).toEqual([
+      {
+        version: 2,
+        targetUserId: userId,
+        guidePreferencesReconciled: false,
+      },
+      {
+        version: 2,
+        targetUserId: userId,
+        guidePreferencesReconciled: true,
+      },
+    ]);
   });
 
   it("accepts only the fixed version and canonical target user ID", () => {
@@ -27,14 +39,40 @@ describe("session identity advisory", () => {
     const listener = vi.fn();
     createSessionIdentityAdvisory(listener, () => fake.channel);
 
-    fake.dispatch({ version: 1, targetUserId: userId });
+    fake.dispatch({
+      version: 2,
+      targetUserId: userId,
+      guidePreferencesReconciled: true,
+    });
+    fake.dispatch({
+      version: 1,
+      targetUserId: userId,
+      guidePreferencesReconciled: true,
+    });
+    fake.dispatch({
+      version: 2,
+      targetUserId: "invalid",
+      guidePreferencesReconciled: true,
+    });
     fake.dispatch({ version: 2, targetUserId: userId });
-    fake.dispatch({ version: 1, targetUserId: "invalid" });
-    fake.dispatch({ version: 1, targetUserId: userId, token: "private" });
+    fake.dispatch({
+      version: 2,
+      targetUserId: userId,
+      guidePreferencesReconciled: "true",
+    });
+    fake.dispatch({
+      version: 2,
+      targetUserId: userId,
+      guidePreferencesReconciled: true,
+      token: "private",
+    });
     fake.dispatch(null);
 
     expect(listener).toHaveBeenCalledOnce();
-    expect(listener).toHaveBeenNthCalledWith(1, userId);
+    expect(listener).toHaveBeenNthCalledWith(1, {
+      targetUserId: userId,
+      guidePreferencesReconciled: true,
+    });
   });
 
   it("ignores a payload whose properties cannot be inspected", () => {
@@ -64,7 +102,11 @@ describe("session identity advisory", () => {
 
     advisory?.close();
     advisory?.close();
-    fake.dispatch({ version: 1, targetUserId: userId });
+    fake.dispatch({
+      version: 2,
+      targetUserId: userId,
+      guidePreferencesReconciled: false,
+    });
     advisory?.publish(userId);
 
     expect(listener).not.toHaveBeenCalled();

@@ -5,8 +5,14 @@ export type SessionRecoveryReason =
   | "SESSION_IDENTITY_DRIFT"
   | "SESSION_IDENTITY_UNVERIFIED";
 
+export type SessionRecoveryIdentityAdvisory = {
+  readonly targetUserId: string;
+  readonly guidePreferencesReconciled: boolean;
+};
+
 export type SessionRecoveryEvent = {
   readonly reason: SessionRecoveryReason;
+  readonly identityAdvisory?: SessionRecoveryIdentityAdvisory;
   readonly isCurrent: () => boolean;
 };
 
@@ -16,7 +22,10 @@ type SessionRecoveryRegistration = {
   active: boolean;
   generation: number;
 };
-type SessionRecoveryPublisher = (reason: SessionRecoveryReason) => void;
+type SessionRecoveryPublisher = (
+  reason: SessionRecoveryReason,
+  identityAdvisory?: SessionRecoveryIdentityAdvisory,
+) => void;
 
 export type SessionRecoverySubscription = {
   readonly advanceGeneration: () => void;
@@ -60,14 +69,18 @@ export function createSessionRecoveryEventBus(): SessionRecoveryEventBus {
         registration,
         generation: registration.generation,
       }));
-      return (reason) => {
+      return (reason, identityAdvisory) => {
         for (const entry of captured) {
           const isCurrent = () =>
             entry.registration.active &&
             entry.registration.generation === entry.generation;
           if (!isCurrent()) continue;
           try {
-            entry.registration.listener({ reason, isCurrent });
+            entry.registration.listener({
+              reason,
+              ...(identityAdvisory === undefined ? {} : { identityAdvisory }),
+              isCurrent,
+            });
           } catch {
             // Surface a fixed technical failure without leaking observer data.
             queueMicrotask(() => {

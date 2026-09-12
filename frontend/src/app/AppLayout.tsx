@@ -11,6 +11,9 @@ import {
 } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 
+import { useFirstUseGuideControls } from "../features/first-use-guide";
+import { firstUseGuideCopy } from "../shared/copy/ja";
+import { InteractionAvailabilityProvider } from "../shared/interaction/InteractionAvailabilityProvider";
 import { forgetSelectedCycleFrameFromWorkspacePath } from "../shared/preferences/selectedFramePreference";
 
 type RouteHeadingFocusRequest = Readonly<{
@@ -68,6 +71,7 @@ export function RouteHeadingFocusProvider({ children }: PropsWithChildren) {
 
 export function AppLayout() {
   const { pathname } = useLocation();
+  const firstUseGuide = useFirstUseGuideControls();
   const routeHeadingFocus = useContext(RouteHeadingFocusContext);
   const [open, setOpen] = useState(false);
   const mainContent = useRef<HTMLDivElement>(null);
@@ -77,7 +81,12 @@ export function AppLayout() {
   const trigger = useRef<HTMLButtonElement>(null);
   const closeMenu = useCallback((restoreFocus: boolean) => {
     setOpen(false);
-    if (restoreFocus) window.setTimeout(() => trigger.current?.focus(), 0);
+    if (restoreFocus) {
+      window.setTimeout(
+        () => trigger.current?.focus({ preventScroll: true }),
+        0,
+      );
+    }
   }, []);
 
   useLayoutEffect(() => {
@@ -155,7 +164,11 @@ export function AppLayout() {
 
       const focusable = [
         trigger.current,
-        ...Array.from(menu.current?.querySelectorAll<HTMLElement>("a") ?? []),
+        ...Array.from(
+          menu.current?.querySelectorAll<HTMLElement>(
+            "a, button:not([disabled])",
+          ) ?? [],
+        ),
       ].filter((element): element is HTMLElement => element !== null);
       if (!focusable.length) return;
 
@@ -240,17 +253,41 @@ export function AppLayout() {
             >
               設定
             </Link>
+            <button
+              className="drawer__action"
+              type="button"
+              onClick={() => {
+                firstUseGuide.replayCurrentGuide();
+                closeMenu(true);
+              }}
+            >
+              {firstUseGuideCopy.menuLabel}
+            </button>
           </nav>
         </>
       )}
-      <div
-        ref={mainContent}
-        id="main-content"
-        tabIndex={-1}
-        inert={open || undefined}
-      >
-        <Outlet />
-      </div>
+      <InteractionAvailabilityProvider available={!open}>
+        <div
+          ref={mainContent}
+          id="main-content"
+          tabIndex={-1}
+          inert={open || undefined}
+        >
+          {firstUseGuide.replayPending && !firstUseGuide.canReplay && (
+            <div
+              className="first-use-guide-pending"
+              role="status"
+              aria-live="polite"
+            >
+              <p>{firstUseGuideCopy.pending}</p>
+              <button type="button" onClick={firstUseGuide.cancelReplay}>
+                {firstUseGuideCopy.cancelReplay}
+              </button>
+            </div>
+          )}
+          <Outlet />
+        </div>
+      </InteractionAvailabilityProvider>
     </div>
   );
 }

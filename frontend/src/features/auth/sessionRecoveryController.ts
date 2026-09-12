@@ -19,9 +19,11 @@ import {
 import type { AutoSaveScopeRegistry } from "../../shared/autosave/AutoSaveScopeProvider";
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
 import type {
+  GuidePreferencesReconciliation,
   PublishSession,
   RuntimeRecoveryState,
 } from "./sessionBoundaryContracts";
+import type { PublishSessionIdentityAdvisory } from "./sessionIdentityAdvisory";
 import {
   runSessionRecoveryAttempt,
   type QuiescedRecovery,
@@ -45,11 +47,15 @@ type SessionRecoveryControllerOptions = {
     SetStateAction<RuntimeRecoveryState | null>
   >;
   readonly publishSession: PublishSession;
-  readonly publishIdentityAdvisory: (targetUserId: string) => void;
+  readonly publishIdentityAdvisory: PublishSessionIdentityAdvisory;
   readonly requestCurrentSession: (signal?: AbortSignal) => Promise<Session>;
   readonly createAnonymousSession: (
     isCurrent: () => boolean,
     signal?: AbortSignal,
+    onGuidePreferencesReconciled?: (
+      reconciliation: GuidePreferencesReconciliation,
+      session: Session,
+    ) => void,
   ) => Promise<Session | null>;
   readonly isUnavailableSession: (error: unknown) => boolean;
 };
@@ -156,16 +162,16 @@ export function useSessionRecoveryController({
       if (identityUnverifiedRef.current) return Promise.resolve();
       const activeRecovery = recoveryRef.current;
       if (activeRecovery?.event.isCurrent() === true) {
-        if (
-          recoveryPriority(event.reason) >
-          recoveryPriority(activeRecovery.event.reason)
-        ) {
+        if (shouldPreemptRecovery(activeRecovery.event, event)) {
           if (requiresLeaseInvalidation(event.reason)) {
             suspendChildrenAndInvalidateLeaseForRecovery(event);
           }
           activeRecovery.abortController.abort();
           advanceRecoveryGeneration();
-          sessionRecoveryEvents.capturePublisher()(event.reason);
+          sessionRecoveryEvents.capturePublisher()(
+            event.reason,
+            event.identityAdvisory,
+          );
         }
         return activeRecovery.promise;
       }
@@ -308,4 +314,23 @@ function recoveryPriority(reason: SessionRecoveryEvent["reason"]): number {
   if (reason === "SESSION_IDENTITY_DRIFT") return 3;
   if (reason === "CSRF_INVALID") return 1;
   return 2;
+}
+
+function shouldPreemptRecovery(
+  active: SessionRecoveryEvent,
+  candidate: SessionRecoveryEvent,
+): boolean {
+  const activePriority = recoveryPriority(active.reason);
+  const candidatePriority = recoveryPriority(candidate.reason);
+  if (candidatePriority !== activePriority) {
+    return candidatePriority > activePriority;
+  }
+
+  const candidateAdvisory = candidate.identityAdvisory;
+  if (candidateAdvisory?.guidePreferencesReconciled !== true) return false;
+  const activeAdvisory = active.identityAdvisory;
+  return (
+    activeAdvisory?.guidePreferencesReconciled !== true ||
+    activeAdvisory.targetUserId !== candidateAdvisory.targetUserId
+  );
 }

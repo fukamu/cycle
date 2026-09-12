@@ -16,6 +16,7 @@ import type {
 } from "./sessionContext";
 import type { PublishSession } from "./sessionBoundaryContracts";
 import { runSessionCookieWriter } from "./sessionCookieWriter";
+import type { PublishSessionIdentityAdvisory } from "./sessionIdentityAdvisory";
 
 type EnqueueTransition = <Result>(
   operation: () => Promise<Result>,
@@ -30,7 +31,7 @@ type SessionOperationRunnerOptions = {
   readonly suspendInteractionAndInvalidateLease: () => void;
   readonly markSessionRecoveryRequired: () => void;
   readonly handoffStaleRecovery: () => void;
-  readonly publishIdentityAdvisory: (targetUserId: string) => void;
+  readonly publishIdentityAdvisory: PublishSessionIdentityAdvisory;
   readonly publishSession: PublishSession;
 };
 

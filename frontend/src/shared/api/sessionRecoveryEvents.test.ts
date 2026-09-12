@@ -78,6 +78,25 @@ describe("session recovery event bus", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("carries an identity advisory only with the captured recovery event", () => {
+    const bus = createSessionRecoveryEventBus();
+    const listener = vi.fn();
+    bus.subscribe(listener);
+    const identityAdvisory = {
+      targetUserId: otherUserId,
+      guidePreferencesReconciled: true,
+    } as const;
+
+    bus.capturePublisher()("SESSION_IDENTITY_DRIFT", identityAdvisory);
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "SESSION_IDENTITY_DRIFT",
+        identityAdvisory,
+      }),
+    );
+  });
+
   it("reports subscriber failures asynchronously without skipping remaining subscribers", () => {
     const bus = createSessionRecoveryEventBus();
     const listener = vi.fn();

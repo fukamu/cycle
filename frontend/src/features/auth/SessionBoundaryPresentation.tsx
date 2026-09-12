@@ -14,6 +14,7 @@ import type { SessionRecoveryEvent } from "../../shared/api/sessionRecoveryEvent
 import { BetaAdmissionGate } from "../beta-admission/BetaAdmissionGate";
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
 import type { RuntimeRecoveryState } from "./sessionBoundaryContracts";
+import { InteractionAvailabilityProvider } from "../../shared/interaction/InteractionAvailabilityProvider";
 import {
   isBetaAdmissionRequired,
   isInitialSessionRateLimited,
@@ -76,9 +77,11 @@ export function SessionIdentityBoundary({ children }: PropsWithChildren) {
           retryRecovery={retryRecovery}
           reloadApplication={reloadApplication}
         />
-        <div ref={childrenWrapperRef} hidden={suspended} inert={suspended}>
-          {children}
-        </div>
+        <InteractionAvailabilityProvider available={!suspended}>
+          <div ref={childrenWrapperRef} hidden={suspended} inert={suspended}>
+            {children}
+          </div>
+        </InteractionAvailabilityProvider>
       </AuthenticatedRequestLeaseContext.Provider>
     </SessionContext.Provider>
   );

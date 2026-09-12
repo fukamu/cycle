@@ -5,15 +5,19 @@ import type { Session } from "../../shared/api/schemas";
 import { sessionRecoveryEvents } from "../../shared/api/sessionRecoveryEvents";
 import {
   createSessionIdentityAdvisory,
+  type PublishSessionIdentityAdvisory,
   type SessionIdentityAdvisory,
   type SessionIdentityAdvisoryFactory,
+  type SessionIdentityAdvisoryMessage,
 } from "./sessionIdentityAdvisory";
 
 type SessionIdentityAdvisoryOptions = {
   readonly queryClient: QueryClient;
   readonly sessionQueryKey: QueryKey;
   readonly factory: SessionIdentityAdvisoryFactory | undefined;
-  readonly onUnboundIdentityAdvisory: () => void;
+  readonly onUnboundIdentityAdvisory: (
+    advisory: SessionIdentityAdvisoryMessage,
+  ) => void;
 };
 
 export function useSessionIdentityAdvisory({
@@ -21,20 +25,24 @@ export function useSessionIdentityAdvisory({
   sessionQueryKey,
   factory,
   onUnboundIdentityAdvisory,
-}: SessionIdentityAdvisoryOptions): (targetUserId: string) => void {
+}: SessionIdentityAdvisoryOptions): PublishSessionIdentityAdvisory {
   const advisoryRef = useRef<SessionIdentityAdvisory | null>(null);
 
   useEffect(() => {
-    const advisory = createSessionIdentityAdvisory((targetUserId) => {
+    const advisory = createSessionIdentityAdvisory((message) => {
       const currentSession = queryClient.getQueryData<Session>(sessionQueryKey);
       if (currentSession === undefined) {
-        onUnboundIdentityAdvisory();
+        onUnboundIdentityAdvisory(message);
         return;
       }
       sessionRecoveryEvents.capturePublisher()(
-        currentSession.user.id === targetUserId
+        currentSession.user.id === message.targetUserId
           ? "CSRF_INVALID"
           : "SESSION_IDENTITY_DRIFT",
+        {
+          targetUserId: message.targetUserId,
+          guidePreferencesReconciled: message.guidePreferencesReconciled,
+        },
       );
     }, factory);
     advisoryRef.current = advisory;
@@ -44,7 +52,10 @@ export function useSessionIdentityAdvisory({
     };
   }, [factory, onUnboundIdentityAdvisory, queryClient, sessionQueryKey]);
 
-  return useCallback((targetUserId: string) => {
-    advisoryRef.current?.publish(targetUserId);
-  }, []);
+  return useCallback<PublishSessionIdentityAdvisory>(
+    (targetUserId, options) => {
+      advisoryRef.current?.publish(targetUserId, options);
+    },
+    [],
+  );
 }
