@@ -484,7 +484,7 @@ test("header drawer contains focus and deactivates the background", async ({
   await menuButton.click();
   await expect(menuButton).toHaveAccessibleName("メニューを閉じる");
   const history = page.getByRole("link", { name: "目標の履歴" });
-  const settings = page.getByRole("link", { name: "設定" });
+  const settings = page.getByRole("link", { name: "設定", exact: true });
   const firstUseHelp = page.getByRole("button", {
     name: "はじめてガイドを表示",
   });
