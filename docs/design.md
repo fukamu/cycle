@@ -560,7 +560,7 @@ Required behavior:
 - Infinite Scrollのpage境界をまたいでも、各Cycle itemが持つ`goalVersion`を使って正しいVersion groupを維持する。
 - Goal Aggregate Delete後は当該GoalをHistoryに残さない。Goal終了とは区別する。
 
-History Listは`/history`でGoalを新しい順にCursor Paginationし、進行中・見直し中・terminalのすべてをGoal単位で表示する。各rowにはCurrentまたはFinal Goal本文Preview、状態、Cycle数、開始日、terminal時の終了日を含める。Historyは「終了済みだけ」の画面ではない。
+History Listは`/history`でGoalを新しい順にCursor Paginationし、進行中・見直し中・terminalのすべてをGoal単位で表示する。各rowにはCurrentまたはFinal Goal本文Preview、状態、Cycle数、開始日、terminal時の終了日を含める。Historyは「終了済みだけ」の画面ではない。Goalが0件の場合は「まだ目標はありません。」と、既存Creation Draftの再開を含む`/goals/new`への「目標を設定する」linkを表示する。Goalが1件以上ある場合、このempty stateを表示しない。
 
 ## 9.5 Goal Creation
 
@@ -4408,7 +4408,7 @@ Actions:
 
 - Goal History / Goal Cyclesのpage sizeはそれぞれ§§23.1、24.1のAPI contractを使用する。
 - `useInfiniteQuery` + IntersectionObserver。
-- Goal History Listは自動読み込みを維持したまま、次pageがある間はlist末尾に`続きを読み込む`buttonを表示し、同じsingle-flight取得をkeyboardからも明示実行できるようにする。取得中はbuttonをdisabledにして近接するloading状態と関連付け、失敗時は既存itemを保持してretry操作、最終page取得後はend状態を文字で示す。空listでは既存のempty状態だけを表示する。
+- Goal History Listは自動読み込みを維持したまま、次pageがある間はlist末尾に`続きを読み込む`buttonを表示し、同じsingle-flight取得をkeyboardからも明示実行できるようにする。取得中はbuttonをdisabledにして近接するloading状態と関連付け、失敗時は既存itemを保持してretry操作、最終page取得後はend状態を文字で示す。空listでは§9.4のempty stateだけを表示し、pagination controlとend状態を表示しない。
 - Same cursor fetchをdedupe。
 - Error/retry UIをlist末尾へ。
 - 全履歴を一括取得しない。

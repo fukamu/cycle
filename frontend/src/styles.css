@@ -374,6 +374,16 @@ summary:focus-visible {
   min-width: 0;
 }
 
+.history-empty-state {
+  display: grid;
+  justify-items: start;
+  gap: 16px;
+}
+
+.history-empty-state p {
+  margin: 0;
+}
+
 .goal-card__goal {
   margin: 0;
   color: var(--brand-deep);

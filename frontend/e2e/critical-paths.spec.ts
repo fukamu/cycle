@@ -602,6 +602,43 @@ test("header drawer contains focus and deactivates the background", async ({
   ).toBe(false);
 });
 
+test("empty History offers Goal setup at narrow widths", async ({ page }) => {
+  await page.goto("/history");
+  const emptyState = page.locator(".history-empty-state");
+  const action = page.getByRole("link", { name: "目標を設定する" });
+  const assertLayout = async () => {
+    await expect(emptyState).toContainText("まだ目標はありません。");
+    await expect(action).toHaveAttribute("href", "/goals/new");
+    expect((await action.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(false);
+  };
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await assertLayout();
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await assertLayout();
+
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await page.setViewportSize({ width: 320, height: 844 });
+  await action.click();
+  await expect(page).toHaveURL(/\/goals\/new$/);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "新しい目標" }),
+  ).toBeFocused();
+});
+
 test("Home preserves Creation Draft preview meaning at narrow widths", async ({
   page,
 }) => {

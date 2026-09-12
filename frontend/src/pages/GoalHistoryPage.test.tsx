@@ -71,6 +71,9 @@ describe("GoalHistoryPage pagination recovery", () => {
 
     expect(await screen.findByText("最初の目標")).toBeVisible();
     expect(
+      screen.queryByRole("link", { name: "目標を設定する" }),
+    ).not.toBeInTheDocument();
+    expect(
       screen.getByRole("button", { name: "続きを読み込む" }),
     ).toHaveAttribute("aria-controls", "goal-history-list");
     act(() => {
@@ -193,6 +196,9 @@ describe("GoalHistoryPage pagination recovery", () => {
     renderHistory();
 
     expect(await screen.findByText("まだ目標はありません。")).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "目標を設定する" }),
+    ).toHaveAttribute("href", "/goals/new");
     expect(
       screen.queryByRole("button", { name: "続きを読み込む" }),
     ).not.toBeInTheDocument();
