@@ -237,6 +237,9 @@ test("legacy deployment is static, manual, origin-bound, and data-silent", () =>
     /^  (?:pull_request|push|schedule|workflow_run):/m,
   );
   assert.match(workflow, /LEGACY_RETIREMENT_APPROVER/);
+  assert.match(workflow, /DISPATCH_SHA: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /GITHUB_TRIGGERING_ACTOR/);
+  assert.doesNotMatch(workflow, /inputs\.commit_sha/);
   assert.match(workflow, /RETIRE pdcai\.matoruru\.com WITHOUT RECOVERY/);
   assert.match(workflow, /legacy-retirement\/wrangler\.jsonc/);
   assert.match(workflow, /--containers-rollout=none/);

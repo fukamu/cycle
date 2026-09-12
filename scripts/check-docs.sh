@@ -33,5 +33,7 @@ assert_docs_config_snapshot_regular_file \
   "${candidate_root}" \
   "package.json" \
   "DOCUMENTATION_CANDIDATE_FILE_REQUIRED"
+# Full repository checks validate Playbook adoption through this one local path;
+# the dedicated Playbook workflow remains the independent adoption gate.
 bash "${candidate_root}/scripts/check-playbook-adoption.sh"
 node "${script_dir}/check-docs.mjs" "${candidate_root}"

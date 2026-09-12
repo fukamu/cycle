@@ -486,9 +486,17 @@ EOF
   cat >"${fixture}/scripts/check-security.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$#" -eq 0 ]]
-printf '%s\n' 'security' >>"${TEST_COMMAND_LOG}"
-case "${FAKE_SECURITY_MUTATION:-none}" in
+[[ "$#" -eq 2 && "$1" == "--profile" ]]
+case "$2" in
+  candidate | extended) ;;
+  *) exit 2 ;;
+esac
+printf 'security %s\n' "$2" >>"${TEST_COMMAND_LOG}"
+security_mutation="${FAKE_SECURITY_MUTATION:-none}"
+if [[ "$2" == "extended" ]]; then
+  security_mutation="${FAKE_EXTENDED_SECURITY_MUTATION:-none}"
+fi
+case "${security_mutation}" in
   none) ;;
   index) : >"$(dirname -- "${TEST_COMMAND_LOG}")/fake-index-changed" ;;
   working) : >"$(dirname -- "${TEST_COMMAND_LOG}")/fake-unstaged-changes" ;;
@@ -525,12 +533,13 @@ EOF
     || fail "before-commit check did not run pinned actionlint"
   assert_file_contains "${log}" \
     "runner CI=true ${fixture} ${fixture}/scripts all true"
-  [[ "$(sed -n '1,5p' "${log}")" == $'git diff --no-ext-diff --no-textconv --cached --quiet --\ngit diff --no-ext-diff --no-textconv --quiet --\ngit ls-files --others --exclude-standard\ngit write-tree\nsecurity' ]] \
+  [[ "$(sed -n '1,5p' "${log}")" == $'git diff --no-ext-diff --no-textconv --cached --quiet --\ngit diff --no-ext-diff --no-textconv --quiet --\ngit ls-files --others --exclude-standard\ngit write-tree\nsecurity candidate' ]] \
     || fail "before-commit did not freeze the clean staged tree before starting security"
   assert_lines_in_order "${log}" \
-    "security" \
+    "security candidate" \
     "runner-source" \
     "classifier" \
+    "security extended" \
     "git diff --no-ext-diff --no-textconv --check" \
     "git diff --no-ext-diff --no-textconv --cached --check" \
     "pnpm install --frozen-lockfile --ignore-scripts" \
@@ -538,8 +547,10 @@ EOF
     "resolve-ci-reuse test" \
     "docker run --rm --volume ${fixture}:/repo:ro --workdir /repo ${SUPPLY_CHAIN_ACTIONLINT_IMAGE} -color" \
     "runner CI=true ${fixture} ${fixture}/scripts all true"
-  [[ "$(grep -Fxc -- security "${log}")" == "1" ]] \
-    || fail "before-commit check did not run the full security profile exactly once"
+  [[ "$(grep -Fxc -- 'security candidate' "${log}")" == "1" ]] \
+    || fail "before-commit check did not run the candidate security profile exactly once"
+  [[ "$(grep -Fxc -- 'security extended' "${log}")" == "1" ]] \
+    || fail "before-commit check did not run the extended security profile exactly once for a full candidate"
   [[ "$(grep -Fxc -- runner-source "${log}")" == "1" ]] \
     || fail "before-commit check did not source the internal runner exactly once after security"
   [[ "$(grep -Fxc -- 'git diff --no-ext-diff --no-textconv --check' "${log}")" == "2" ]] \
@@ -550,9 +561,9 @@ EOF
   : >"${log}"
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" FAKE_CHANGE_PROFILE=docs \
     bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
-  assert_lines_in_order "${log}" security runner-source classifier docs
+  assert_lines_in_order "${log}" "security candidate" runner-source classifier docs
   assert_file_contains "${log}" "pnpm install --frozen-lockfile --ignore-scripts"
-  if grep -Eq 'resolve-ci-reuse test|runner CI=|terraform|docker run' "${log}"; then
+  if grep -Eq 'security extended|resolve-ci-reuse test|runner CI=|terraform|docker run' "${log}"; then
     fail "docs commit profile ran an unrelated build, infrastructure, or E2E gate"
   fi
 
@@ -560,10 +571,10 @@ EOF
   PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" FAKE_CHANGE_PROFILE=frontend \
     bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
   assert_lines_in_order "${log}" \
-    security runner-source classifier \
+    "security candidate" runner-source classifier \
     "pnpm install --frozen-lockfile --ignore-scripts" docs \
     "runner CI=true ${fixture} ${fixture}/scripts frontend false"
-  if grep -Eq 'resolve-ci-reuse test|runner CI=.* all true|terraform|docker run' "${log}"; then
+  if grep -Eq 'security extended|resolve-ci-reuse test|runner CI=.* all true|terraform|docker run' "${log}"; then
     fail "frontend commit profile ran an unrelated backend, infrastructure, or E2E gate"
   fi
 
@@ -572,11 +583,11 @@ EOF
     FAKE_CHANGE_PROFILE=backend \
     bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
   assert_lines_in_order "${log}" \
-    security runner-source classifier \
+    "security candidate" runner-source classifier \
     "go env GOVERSION GOENV=off GOTOOLCHAIN=local" docs \
     "runner CI=true ${fixture} ${fixture}/scripts backend false"
   assert_file_contains "${log}" "pnpm install --frozen-lockfile --ignore-scripts"
-  if grep -Eq 'resolve-ci-reuse test|runner CI=.* all true|terraform|docker run' "${log}"; then
+  if grep -Eq 'security extended|resolve-ci-reuse test|runner CI=.* all true|terraform|docker run' "${log}"; then
     fail "backend commit profile ran an unrelated frontend, infrastructure, or Playwright E2E gate"
   fi
 
@@ -585,10 +596,10 @@ EOF
     FAKE_CHANGE_PROFILE=application \
     bash "${fixture}/scripts/check-before-commit.sh" >/dev/null
   assert_lines_in_order "${log}" \
-    security runner-source classifier \
+    "security candidate" runner-source classifier \
     "pnpm install --frozen-lockfile --ignore-scripts" docs \
     "runner CI=true ${fixture} ${fixture}/scripts application false"
-  if grep -Eq 'resolve-ci-reuse test|runner CI=.* all true|terraform|docker run' "${log}"; then
+  if grep -Eq 'security extended|resolve-ci-reuse test|runner CI=.* all true|terraform|docker run' "${log}"; then
     fail "application union profile ran infrastructure or Playwright E2E gates"
   fi
 
@@ -609,7 +620,7 @@ EOF
       TEST_DATABASE_URL="${test_database_url}" \
       FAKE_SECURITY_MUTATION="${security_mutation}" \
       bash "${fixture}/scripts/check-before-commit.sh"
-    [[ "$(grep -Fxc -- security "${log}")" == "1" ]] \
+    [[ "$(grep -Fxc -- 'security candidate' "${log}")" == "1" ]] \
       || fail "security-time ${security_mutation} mutation did not run security exactly once"
     [[ "$(grep -Fxc -- runner-source "${log}")" == "0" ]] \
       || fail "security-time ${security_mutation} mutation sourced the internal runner"
@@ -622,6 +633,21 @@ EOF
     "${fixture}/fake-unstaged-changes" \
     "${fixture}/fake-untracked-files"
 
+  : >"${log}"
+  assert_failure "extended-security-time working mutation" \
+    env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
+    TEST_DATABASE_URL="${test_database_url}" \
+    FAKE_EXTENDED_SECURITY_MUTATION=working \
+    bash "${fixture}/scripts/check-before-commit.sh"
+  rm -f -- "${fixture}/fake-unstaged-changes"
+  assert_lines_in_order "${log}" "security candidate" runner-source classifier "security extended"
+  [[ "$(grep -Fxc -- 'security candidate' "${log}")" == "1" &&
+  "$(grep -Fxc -- 'security extended' "${log}")" == "1" ]] \
+    || fail "full commit candidate did not run each security phase exactly once"
+  if grep -Fq -- "pnpm install" "${log}"; then
+    fail "extended security mutation reached dependency installation"
+  fi
+
   # shellcheck disable=SC2016 # The exact source contract must remain literal.
   assert_file_contains "${repo_root}/scripts/lib/common.sh" \
     '  go_version="$(GOENV=off GOTOOLCHAIN=local go env GOVERSION)"'
@@ -632,7 +658,7 @@ EOF
     env PATH="${bin}:${PATH}" TEST_COMMAND_LOG="${log}" \
     TEST_DATABASE_URL="${test_database_url}" FAKE_SECURITY_FAILURE=true \
     bash "${fixture}/scripts/check-before-commit.sh"
-  assert_file_contains "${log}" "security"
+  assert_file_contains "${log}" "security candidate"
   if grep -Fq -- "runner-source" "${log}"; then
     fail "before-commit sourced the internal runner before security passed"
   fi
@@ -675,7 +701,7 @@ EOF
     TEST_DATABASE_URL="${test_database_url}" \
     bash "${fixture}/scripts/check-before-commit.sh"
   rm -- "${fixture}/fake-staged-inspection-error"
-  [[ "$(grep -Fxc -- 'security' "${log}")" == "0" ]] \
+  [[ "$(grep -Fc -- 'security ' "${log}")" == "0" ]] \
     || fail "before-commit ran security after the staged inventory became indeterminate"
   if grep -Fq -- 'go env GOVERSION' "${log}" || grep -Fq -- 'pnpm install' "${log}"; then
     fail "before-commit continued to candidate-selected tools after an abnormal staged-diff status"
@@ -939,10 +965,11 @@ node --test "${script_dir}/terraform-evidence.test.mjs"
 bash "${script_dir}/check-staging-csrf-rollout.sh"
 bash "${script_dir}/check-staging-candidate-deploy-and-drain.sh"
 bash "${script_dir}/check-supply-chain.sh"
-bash "${script_dir}/check-playbook-adoption.sh"
 bash "${script_dir}/check-ci-security-model.sh"
+bash "${repo_root}/.github/scripts/verify-security-audit-release-gate.test.sh"
 bash "${script_dir}/check-security.sh"
 bash "${script_dir}/check-docs-config.sh"
+bash "${script_dir}/check-playbook-adoption.sh"
 node --test "${script_dir}/repository-metrics.test.mjs"
 
 printf '%s\n' "Bash script tests passed."

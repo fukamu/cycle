@@ -252,6 +252,12 @@ jobs:
           ref: ${{ env.COMMIT_SHA }}
           persist-credentials: false
 
+      - name: Verify security audit release gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/verify-security-audit-release-gate.sh "${COMMIT_SHA}"
+
       - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
         with:
           runtime: node@24

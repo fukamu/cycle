@@ -67,10 +67,11 @@ assert_candidate_state() {
     || die "The staged tree changed while confirming it ${phase}."
 }
 
-# Run the full security profile exactly once, before printable diagnostics,
-# candidate-selected tool probes, dependency access, or candidate commands.
-bash ./scripts/check-security.sh
-assert_candidate_state "while the security profile was running"
+# Run the candidate security profile exactly once, before classification,
+# printable diagnostics, candidate-selected tool probes, dependency access,
+# or candidate commands.
+bash ./scripts/check-security.sh --profile candidate
+assert_candidate_state "while the candidate security profile was running"
 # shellcheck source=scripts/lib/check-runner.sh
 source "${script_dir}/lib/check-runner.sh"
 
@@ -98,6 +99,11 @@ case "${change_profile}" in
 esac
 assert_candidate_state "while changes were being classified"
 printf 'Commit change profile: %s (%s).\n' "${change_profile}" "${change_reason}"
+
+if [[ "${change_profile}" == "full" ]]; then
+  bash ./scripts/check-security.sh --profile extended
+  assert_candidate_state "while the extended security profile was running"
+fi
 
 trusted_git diff --no-ext-diff --no-textconv --check
 trusted_git diff --no-ext-diff --no-textconv --cached --check

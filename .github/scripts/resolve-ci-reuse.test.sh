@@ -425,24 +425,28 @@ case "$endpoint" in
       esac
       reuse_conclusion=skipped
       classify_conclusion=success
+      release_security_conclusion=skipped
       required_conclusion=success
       attest_conclusion=success
       case "${FAKE_JOBS_MODE:-valid}" in
         reuse_succeeded) reuse_conclusion=success ;;
         classifier_failed) classify_conclusion=failure ;;
+        release_security_succeeded) release_security_conclusion=success ;;
         required_failed) required_conclusion=failure ;;
         attest_failed) attest_conclusion=failure ;;
         required_skipped) backend_conclusion=skipped ;;
         nonrequired_succeeded) infrastructure_conclusion=success ;;
       esac
       if [[ "${FAKE_JOBS_MODE:-valid}" == "missing_attest" ]]; then
-        printf '{"total_count":9,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"%s"},{"name":"Classify candidate changes","status":"completed","conclusion":"%s"},{"name":"workflow","status":"completed","conclusion":"%s"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"frontend","status":"completed","conclusion":"%s"},{"name":"backend","status":"completed","conclusion":"%s"},{"name":"infrastructure","status":"completed","conclusion":"%s"},{"name":"e2e","status":"completed","conclusion":"%s"},{"name":"Required PR CI","status":"completed","conclusion":"%s"}]}\n' \
+        printf '{"total_count":10,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"%s"},{"name":"Classify candidate changes","status":"completed","conclusion":"%s"},{"name":"workflow","status":"completed","conclusion":"%s"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"Release security","status":"completed","conclusion":"%s"},{"name":"frontend","status":"completed","conclusion":"%s"},{"name":"backend","status":"completed","conclusion":"%s"},{"name":"infrastructure","status":"completed","conclusion":"%s"},{"name":"e2e","status":"completed","conclusion":"%s"},{"name":"Required PR CI","status":"completed","conclusion":"%s"}]}\n' \
           "$reuse_conclusion" "$classify_conclusion" "$workflow_conclusion" \
+          "$release_security_conclusion" \
           "$frontend_conclusion" "$backend_conclusion" "$infrastructure_conclusion" \
           "$e2e_conclusion" "$required_conclusion"
       else
-        printf '{"total_count":10,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"%s"},{"name":"Classify candidate changes","status":"completed","conclusion":"%s"},{"name":"workflow","status":"completed","conclusion":"%s"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"frontend","status":"completed","conclusion":"%s"},{"name":"backend","status":"completed","conclusion":"%s"},{"name":"infrastructure","status":"completed","conclusion":"%s"},{"name":"e2e","status":"completed","conclusion":"%s"},{"name":"Required PR CI","status":"completed","conclusion":"%s"},{"name":"Attest tested PR tree","status":"completed","conclusion":"%s"}]}\n' \
+        printf '{"total_count":11,"jobs":[{"name":"Reuse verified PR CI","status":"completed","conclusion":"%s"},{"name":"Classify candidate changes","status":"completed","conclusion":"%s"},{"name":"workflow","status":"completed","conclusion":"%s"},{"name":"Security, configuration, and documentation","status":"completed","conclusion":"success"},{"name":"Release security","status":"completed","conclusion":"%s"},{"name":"frontend","status":"completed","conclusion":"%s"},{"name":"backend","status":"completed","conclusion":"%s"},{"name":"infrastructure","status":"completed","conclusion":"%s"},{"name":"e2e","status":"completed","conclusion":"%s"},{"name":"Required PR CI","status":"completed","conclusion":"%s"},{"name":"Attest tested PR tree","status":"completed","conclusion":"%s"}]}\n' \
           "$reuse_conclusion" "$classify_conclusion" "$workflow_conclusion" \
+          "$release_security_conclusion" \
           "$frontend_conclusion" "$backend_conclusion" "$infrastructure_conclusion" \
           "$e2e_conclusion" "$required_conclusion" "$attest_conclusion"
       fi
@@ -718,6 +722,7 @@ assert_fallback jobs_missing_attest valid code missing_attest
 assert_fallback jobs_attest_failed valid code attest_failed
 assert_fallback jobs_reuse_not_skipped valid code reuse_succeeded
 assert_fallback jobs_classifier_failed valid code classifier_failed
+assert_fallback jobs_release_security_not_skipped valid code release_security_succeeded
 assert_fallback jobs_aggregator_failed valid code required_failed
 assert_fallback jobs_required_scope_skipped valid code required_skipped
 assert_fallback jobs_nonrequired_scope_succeeded valid code nonrequired_succeeded
