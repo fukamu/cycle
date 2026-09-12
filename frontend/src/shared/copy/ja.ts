@@ -341,6 +341,11 @@ export const statusLabel = {
   canceled: "Canceled",
 } as const;
 
+export const goalHistoryEmptyCopy = {
+  description: "まだ目標はありません。",
+  action: "目標を設定する",
+} as const;
+
 export const goalHistoryPaginationCopy = {
   loadMore: "続きを読み込む",
   error: "続きを読み込めませんでした。",

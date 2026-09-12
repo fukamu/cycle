@@ -6,7 +6,11 @@ import { useAuthenticatedRequestLease, useSession } from "../auth";
 import { cacheGoals, userQueryKeys } from "../goal-collection";
 import { listGoals } from "../../shared/api/workspace";
 import { PageError, PageLoading } from "../../shared/components/AsyncState";
-import { goalHistoryPaginationCopy, statusLabel } from "../../shared/copy/ja";
+import {
+  goalHistoryEmptyCopy,
+  goalHistoryPaginationCopy,
+  statusLabel,
+} from "../../shared/copy/ja";
 import {
   formatActivePeriod,
   formatCompletedPeriod,
@@ -67,7 +71,12 @@ export function GoalHistoryFeature() {
         aria-label="目標一覧"
       >
         {goals.length === 0 && (
-          <div className="empty-card">まだ目標はありません。</div>
+          <div className="empty-card history-empty-state">
+            <p>{goalHistoryEmptyCopy.description}</p>
+            <Link className="button button--primary" to="/goals/new">
+              {goalHistoryEmptyCopy.action}
+            </Link>
+          </div>
         )}
         {goals.map((goal) => (
           <Link
