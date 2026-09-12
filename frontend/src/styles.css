@@ -664,16 +664,14 @@ button:disabled {
 
 .frame-templates {
   display: grid;
-  gap: 14px;
   min-width: 0;
-  padding: 16px;
   background: var(--brand-soft);
   border: 1px solid var(--line);
   border-radius: 12px;
 }
 
-.frame-templates__intro h3,
-.frame-templates__intro p,
+.frame-templates__heading,
+.frame-templates__guide,
 .frame-template h4,
 .frame-template__purpose,
 .frame-template__preview p,
@@ -681,21 +679,60 @@ button:disabled {
   margin: 0;
 }
 
-.frame-templates__intro h3 {
-  color: var(--brand-deep);
-  font-size: 1rem;
+.frame-templates__heading {
+  font-size: inherit;
 }
 
-.frame-templates__intro p,
+.frame-templates__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 14px 16px;
+  color: var(--brand-deep);
+  background: transparent;
+  border: 0;
+  border-radius: 11px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: var(--font-weight-bold);
+  text-align: left;
+}
+
+.frame-templates__toggle:hover {
+  background: rgb(255 255 255 / 55%);
+}
+
+.frame-templates__toggle:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.frame-templates__toggle-icon {
+  flex: 0 0 auto;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.frame-templates__content {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 0 16px 16px;
+}
+
+.frame-templates__content[hidden] {
+  display: none;
+}
+
+.frame-templates__guide,
 .frame-template__purpose,
 .frame-templates__status {
   color: var(--muted);
   font-size: var(--font-size-small);
   overflow-wrap: anywhere;
-}
-
-.frame-templates__intro p {
-  margin-top: 5px;
 }
 
 .frame-templates__list {
@@ -1796,7 +1833,7 @@ textarea[readonly] {
   .action-controls__ai > .button,
   .do-quick-entry__actions > .button,
   .frame-template > .button,
-  .frame-templates > .button,
+  .frame-templates__undo,
   .action-controls__complete {
     flex: 1 1 100%;
     width: 100%;

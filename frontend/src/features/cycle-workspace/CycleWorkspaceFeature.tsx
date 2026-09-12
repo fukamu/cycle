@@ -2149,6 +2149,7 @@ function CycleWorkspace({
         {(editable || (workspaceMoved && initiallyEditableRef.current)) &&
           templateFrame && (
             <CycleFrameTemplatePicker
+              key={templateFrame}
               frame={templateFrame}
               disabledReason={templateDisabledReason}
               canUndo={templateUndoAvailable}

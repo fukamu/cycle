@@ -2097,6 +2097,20 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
     name: cycleFrameTemplateCopy.heading,
   });
   await expect(templatePicker).toBeVisible();
+  const templateToggle = templatePicker.getByRole("button", {
+    name: cycleFrameTemplateCopy.toggle,
+  });
+  await expect(templateToggle).toHaveAttribute("aria-expanded", "false");
+  expect((await templateToggle.boundingBox())?.height).toBeGreaterThanOrEqual(
+    44,
+  );
+  await expect(
+    templatePicker.locator(".frame-template__preview p").nth(0),
+  ).toBeHidden();
+
+  await templateToggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(templateToggle).toHaveAttribute("aria-expanded", "true");
   await expect(
     templatePicker.locator(".frame-template__preview p").nth(0),
   ).toHaveText(planTemplate.content);
@@ -2180,6 +2194,10 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   await page.keyboard.press("Enter");
   await expect(doTab).toBeFocused();
   await expect(doTab).toHaveAttribute("aria-selected", "true");
+  await expect(templateToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(
+    templatePicker.locator(".frame-template__preview p").nth(0),
+  ).toBeHidden();
   await page.keyboard.press("ArrowRight");
   const checkTab = page.getByRole("tab", { name: /^C/ });
   await expect(checkTab).toBeFocused();
