@@ -2,7 +2,14 @@ import {
   clearBootstrapID,
   getOrCreateBootstrapID,
 } from "./bootstrapRepository";
-import { createAnonymousSession } from "./sessionDiscovery";
+import {
+  activateFirstUseGuide,
+  firstUseGuideStages,
+  markFirstUseGuideStageShown,
+  readFirstUseGuidePreferences,
+  skipFirstUseGuide,
+} from "../../shared/preferences/firstUseGuidePreference";
+import { createAnonymousSession, loadInitialSession } from "./sessionDiscovery";
 import { getAnonymousBootstrapToken } from "./turnstile";
 
 vi.mock("./bootstrapRepository", () => ({
@@ -28,6 +35,7 @@ const anonymousSession = {
 
 describe("anonymous session discovery", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     clearBootstrapIDMock.mockReset();
     clearBootstrapIDMock.mockResolvedValue(undefined);
     getOrCreateBootstrapIDMock.mockReset();
@@ -47,6 +55,7 @@ describe("anonymous session discovery", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -66,6 +75,73 @@ describe("anonymous session discovery", () => {
     await expect(discovery).resolves.toBeNull();
     expect(getAnonymousBootstrapTokenMock).not.toHaveBeenCalled();
     expect(clearBootstrapIDMock).not.toHaveBeenCalled();
+  });
+
+  it("returns an outer-GET existing Session without changing any Guide boolean", async () => {
+    activateFirstUseGuide();
+    for (const stage of firstUseGuideStages) {
+      markFirstUseGuideStageShown(stage);
+    }
+    skipFirstUseGuide();
+    const beforeDiscovery = readFirstUseGuidePreferences();
+    const setItem = vi.spyOn(window.localStorage, "setItem");
+    const removeItem = vi.spyOn(window.localStorage, "removeItem");
+    const fetchMock = vi.fn(async () =>
+      Response.json(anonymousSession, {
+        headers: {
+          "X-Fukamu-Authenticated-User-ID": anonymousSession.user.id,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      loadInitialSession(new AbortController().signal),
+    ).resolves.toEqual(anonymousSession);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(getOrCreateBootstrapIDMock).not.toHaveBeenCalled();
+    expect(getAnonymousBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(clearBootstrapIDMock).not.toHaveBeenCalled();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(removeItem).not.toHaveBeenCalled();
+    expect(readFirstUseGuidePreferences()).toEqual(beforeDiscovery);
+  });
+
+  it("does not infer Guide eligibility from missing keys after an outer-GET existing Session", async () => {
+    const setItem = vi.spyOn(window.localStorage, "setItem");
+    const removeItem = vi.spyOn(window.localStorage, "removeItem");
+    const fetchMock = vi.fn(async () =>
+      Response.json(anonymousSession, {
+        headers: {
+          "X-Fukamu-Authenticated-User-ID": anonymousSession.user.id,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      loadInitialSession(new AbortController().signal),
+    ).resolves.toEqual(anonymousSession);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(getOrCreateBootstrapIDMock).not.toHaveBeenCalled();
+    expect(getAnonymousBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(clearBootstrapIDMock).not.toHaveBeenCalled();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(removeItem).not.toHaveBeenCalled();
+    expect(readFirstUseGuidePreferences()).toEqual({
+      eligible: false,
+      skipped: false,
+      shown: {
+        goal: false,
+        plan: false,
+        do: false,
+        check: false,
+        action: false,
+        review: false,
+      },
+    });
   });
 
   it("forwards the owner abort signal to the anonymous bootstrap request", async () => {
@@ -106,11 +182,21 @@ describe("anonymous session discovery", () => {
   });
 
   it("waits for the exclusive cookie-writer lock before dispatching bootstrap", async () => {
+    activateFirstUseGuide();
+    markFirstUseGuideStageShown("goal");
+    skipFirstUseGuide();
     getOrCreateBootstrapIDMock.mockResolvedValue(
       "00000000-0000-7000-8000-000000000001",
     );
     getAnonymousBootstrapTokenMock.mockResolvedValue("token");
-    const fetchMock = vi.fn(async () => Response.json(anonymousSession));
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = typeof input === "string" ? input : input.toString();
+        return path === "/api/v1/session" && (init?.method ?? "GET") === "GET"
+          ? errorResponse(401, "SESSION_MISSING")
+          : Response.json(anonymousSession);
+      },
+    );
     vi.stubGlobal("fetch", fetchMock);
     let grantLock!: () => void;
     const lockRequest = vi.fn(
@@ -132,8 +218,13 @@ describe("anonymous session discovery", () => {
         }),
     );
     vi.stubGlobal("navigator", { locks: { request: lockRequest } });
+    const guidePreferencesReconciled = vi.fn();
 
-    const discovery = createAnonymousSession();
+    const discovery = createAnonymousSession(
+      () => true,
+      undefined,
+      guidePreferencesReconciled,
+    );
 
     await vi.waitFor(() => expect(lockRequest).toHaveBeenCalledOnce());
     expect(fetchMock).not.toHaveBeenCalled();
@@ -141,7 +232,24 @@ describe("anonymous session discovery", () => {
     grantLock();
 
     await expect(discovery).resolves.toEqual(anonymousSession);
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(readFirstUseGuidePreferences()).toEqual({
+      eligible: true,
+      skipped: false,
+      shown: {
+        goal: false,
+        plan: false,
+        do: false,
+        check: false,
+        action: false,
+        review: false,
+      },
+    });
+    expect(guidePreferencesReconciled).toHaveBeenCalledOnce();
+    expect(guidePreferencesReconciled).toHaveBeenCalledWith(
+      "local-shared-safe",
+      anonymousSession,
+    );
     expect(clearBootstrapIDMock).toHaveBeenCalledWith(
       "00000000-0000-7000-8000-000000000001",
     );
@@ -153,16 +261,18 @@ describe("anonymous session discovery", () => {
     );
     getAnonymousBootstrapTokenMock.mockResolvedValue("token");
     let resolveResponse!: (response: Response) => void;
-    const fetchMock = vi.fn(
-      () =>
-        new Promise<Response>((resolve) => {
-          resolveResponse = resolve;
-        }),
-    );
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : input.toString();
+      if (path === "/api/v1/session")
+        return Promise.resolve(errorResponse(401, "SESSION_MISSING"));
+      return new Promise<Response>((resolve) => {
+        resolveResponse = resolve;
+      });
+    });
     vi.stubGlobal("fetch", fetchMock);
     let current = true;
     const discovery = createAnonymousSession(() => current);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
     current = false;
     resolveResponse(Response.json(anonymousSession));
@@ -178,7 +288,12 @@ describe("anonymous session discovery", () => {
     getAnonymousBootstrapTokenMock.mockResolvedValue("token");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => Response.json(anonymousSession)),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = typeof input === "string" ? input : input.toString();
+        return path === "/api/v1/session"
+          ? errorResponse(401, "SESSION_MISSING")
+          : Response.json(anonymousSession);
+      }),
     );
     let resolveCleanup!: () => void;
     clearBootstrapIDMock.mockReturnValue(
@@ -198,4 +313,134 @@ describe("anonymous session discovery", () => {
 
     await expect(discovery).resolves.toBeNull();
   });
+
+  it("reuses a session found inside the writer lock without changing guide state", async () => {
+    activateFirstUseGuide();
+    markFirstUseGuideStageShown("plan");
+    skipFirstUseGuide();
+    const beforeDiscovery = readFirstUseGuidePreferences();
+    getOrCreateBootstrapIDMock.mockResolvedValue(
+      "00000000-0000-7000-8000-000000000001",
+    );
+    const fetchMock = vi.fn(async () =>
+      Response.json(anonymousSession, {
+        headers: {
+          "X-Fukamu-Authenticated-User-ID": anonymousSession.user.id,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const guidePreferencesReconciled = vi.fn();
+
+    await expect(
+      createAnonymousSession(() => true, undefined, guidePreferencesReconciled),
+    ).resolves.toEqual(anonymousSession);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(getAnonymousBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(guidePreferencesReconciled).toHaveBeenCalledOnce();
+    expect(guidePreferencesReconciled).toHaveBeenCalledWith(
+      "deferred",
+      anonymousSession,
+    );
+    expect(readFirstUseGuidePreferences()).toEqual(beforeDiscovery);
+  });
+
+  it("preserves the reconciled guide booleans when a waiting writer reuses the single bootstrap", async () => {
+    getOrCreateBootstrapIDMock.mockResolvedValue(
+      "00000000-0000-7000-8000-000000000001",
+    );
+    getAnonymousBootstrapTokenMock.mockResolvedValue("token");
+    let authoritativeSessionAvailable = false;
+    let anonymousRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = typeof input === "string" ? input : input.toString();
+        if (path === "/api/v1/session") {
+          return authoritativeSessionAvailable
+            ? Response.json(anonymousSession, {
+                headers: {
+                  "X-Fukamu-Authenticated-User-ID": anonymousSession.user.id,
+                },
+              })
+            : errorResponse(401, "SESSION_MISSING");
+        }
+        if (
+          path === "/api/v1/session/anonymous" &&
+          (init?.method ?? "GET") === "POST"
+        ) {
+          anonymousRequests += 1;
+          authoritativeSessionAvailable = true;
+          return Response.json(anonymousSession);
+        }
+        throw new Error(`unexpected request: ${path}`);
+      }),
+    );
+    let lockQueue: Promise<unknown> = Promise.resolve();
+    const lockRequest = vi.fn(
+      (
+        _name: string,
+        options: LockOptions,
+        callback: LockGrantedCallback<unknown>,
+      ) => {
+        expect(options.mode).toBe("exclusive");
+        const result = lockQueue.then(() =>
+          callback({ name: "test-session-cookie-writer", mode: "exclusive" }),
+        );
+        lockQueue = result.then(
+          () => undefined,
+          () => undefined,
+        );
+        return result;
+      },
+    );
+    vi.stubGlobal("navigator", { locks: { request: lockRequest } });
+    let reconciledSnapshot: ReturnType<
+      typeof readFirstUseGuidePreferences
+    > | null = null;
+    const firstReconciliation = vi.fn(() => {
+      for (const stage of firstUseGuideStages) {
+        markFirstUseGuideStageShown(stage);
+      }
+      skipFirstUseGuide();
+      reconciledSnapshot = readFirstUseGuidePreferences();
+    });
+    const waitingReconciliation = vi.fn();
+
+    const [created, reused] = await Promise.all([
+      createAnonymousSession(() => true, undefined, firstReconciliation),
+      createAnonymousSession(() => true, undefined, waitingReconciliation),
+    ]);
+
+    expect(created).toEqual(anonymousSession);
+    expect(reused).toEqual(anonymousSession);
+    expect(lockRequest).toHaveBeenCalledTimes(2);
+    expect(anonymousRequests).toBe(1);
+    expect(getAnonymousBootstrapTokenMock).toHaveBeenCalledOnce();
+    expect(firstReconciliation).toHaveBeenCalledOnce();
+    expect(firstReconciliation).toHaveBeenCalledWith(
+      "local-shared-safe",
+      anonymousSession,
+    );
+    expect(waitingReconciliation).toHaveBeenCalledOnce();
+    expect(waitingReconciliation).toHaveBeenCalledWith(
+      "deferred",
+      anonymousSession,
+    );
+    expect(readFirstUseGuidePreferences()).toEqual(reconciledSnapshot);
+  });
 });
+
+function errorResponse(status: number, code: string): Response {
+  return Response.json(
+    {
+      error: {
+        code,
+        message: "request failed",
+        requestId: "00000000-0000-7000-8000-000000000001",
+      },
+    },
+    { status },
+  );
+}

@@ -28,6 +28,13 @@ import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBo
 import type { PostCommitSessionOwnershipToken } from "../shared/cleanup/postCommitCleanupContext";
 import { clearUserDrafts } from "../shared/drafts/browserDraftCache";
 import {
+  activateFirstUseGuide,
+  clearFirstUseGuidePreferences,
+  markFirstUseGuideStageShown,
+  readFirstUseGuidePreferences,
+  skipFirstUseGuide,
+} from "../shared/preferences/firstUseGuidePreference";
+import {
   readSelectedCycleFrame,
   rememberSelectedCycleFrame,
 } from "../shared/preferences/selectedFramePreference";
@@ -96,9 +103,32 @@ const currentSessionOwnership = Object.freeze({
 }) as PostCommitSessionOwnershipToken;
 const publishAccountDeletionAdvisory = vi.fn<(deletedUserId: string) => void>();
 
+function seedFirstUseGuidePreferences() {
+  activateFirstUseGuide();
+  markFirstUseGuideStageShown("goal");
+  markFirstUseGuideStageShown("review");
+  skipFirstUseGuide();
+  return readFirstUseGuidePreferences();
+}
+
+function expectFirstUseGuidePreferencesCleared() {
+  expect(readFirstUseGuidePreferences()).toEqual({
+    eligible: false,
+    skipped: false,
+    shown: {
+      goal: false,
+      plan: false,
+      do: false,
+      check: false,
+      action: false,
+      review: false,
+    },
+  });
+}
+
 describe("SettingsPage", () => {
   beforeEach(() => {
-    window.localStorage.clear();
+    clearFirstUseGuidePreferences();
     vi.mocked(deleteAccount).mockReset();
     vi.mocked(loginGoogle).mockReset();
     vi.mocked(upgradeGoogle).mockReset();
@@ -319,6 +349,7 @@ describe("SettingsPage", () => {
   });
 
   it("keeps local drafts when server deletion fails", async () => {
+    const preferencesBeforeDeletion = seedFirstUseGuidePreferences();
     const events: string[] = [];
     let activeLease: AutoSaveScopeLease | undefined;
     const persistDraft = vi.fn(async () => {
@@ -367,6 +398,7 @@ describe("SettingsPage", () => {
     expect(clearUserDrafts).not.toHaveBeenCalled();
     expect(publishAccountDeletionAdvisory).not.toHaveBeenCalled();
     expect(screen.getByText(session.user.id)).toBeInTheDocument();
+    expect(readFirstUseGuidePreferences()).toEqual(preferencesBeforeDeletion);
   });
 
   it("does not delete the account when the in-app dialog is canceled", async () => {
@@ -453,6 +485,8 @@ describe("SettingsPage", () => {
   });
 
   it("fences writers after deletion commits and clears only this user's drafts", async () => {
+    seedFirstUseGuidePreferences();
+    window.localStorage.setItem("unrelated", "keep");
     const selectedCycleId = "40000000-0000-7000-8000-000000000001";
     rememberSelectedCycleFrame(selectedCycleId, "action");
     const persistence = deferredVoid();
@@ -499,8 +533,13 @@ describe("SettingsPage", () => {
       expect(events).toEqual(["delete", "advisory", "persist-start"]),
     );
     expect(readSelectedCycleFrame(selectedCycleId, "active")).toBe("plan");
+    expectFirstUseGuidePreferencesCleared();
+    expect(window.localStorage.getItem("unrelated")).toBe("keep");
     expect(deleteAccount).toHaveBeenCalledOnce();
     expect(clearUserDrafts).not.toHaveBeenCalled();
+
+    activateFirstUseGuide();
+    const nextUserPreferences = readFirstUseGuidePreferences();
 
     persistence.resolve();
     await waitFor(() =>
@@ -526,6 +565,7 @@ describe("SettingsPage", () => {
       2,
       session.user.id,
     );
+    expect(readFirstUseGuidePreferences()).toEqual(nextUserPreferences);
 
     expect(staleQueue).toBeTypeOf("function");
     await staleQueue(async () => {

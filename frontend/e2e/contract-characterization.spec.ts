@@ -54,6 +54,48 @@ test("same bootstrap ID and session refresh converge on one anonymous identity",
   expect(refreshed.user.id).toBe(initial.user.id);
 });
 
+test("same-user Google upgrade through the UI preserves first-use Guide state", async ({
+  page,
+}) => {
+  const subject = newUUIDv7();
+  await installGoogleIdentityFake(page, "test-google:" + subject);
+
+  await page.goto("/");
+  await expect(
+    page.getByRole("button", { name: "新しい目標を設定" }),
+  ).toBeVisible();
+  const anonymousSession = await getSession(page);
+  await page.getByRole("button", { name: "新しい目標を設定" }).click();
+  await expect(
+    page.getByRole("heading", { name: "はじめてガイド" }),
+  ).toBeVisible();
+
+  const guideStateBeforeUpgrade = firstUseGuideStorageSnapshot(
+    "eligible",
+    "shown-goal",
+  );
+  await expect
+    .poll(() => readFirstUseGuideStorage(page))
+    .toEqual(guideStateBeforeUpgrade);
+
+  await page.goto("/settings");
+  await expect(page.locator("code")).toHaveText(anonymousSession.user.id);
+  const upgradeResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/api/v1/auth/google/upgrade",
+  );
+  await page
+    .getByRole("button", { name: googleIdentityFakeButtonName })
+    .click();
+  expect((await upgradeResponse).status()).toBe(200);
+  await expect(page.getByRole("status")).toHaveText(
+    "Google Accountを連携しました。",
+  );
+  expect((await getSession(page)).user.id).toBe(anonymousSession.user.id);
+  expect(await readFirstUseGuideStorage(page)).toEqual(guideStateBeforeUpgrade);
+});
+
 test("Google collision login selects the linked account without merging after reload", async ({
   browser,
 }) => {
@@ -117,6 +159,20 @@ test("same-tab Google collision login isolates a fresh Home cache without reload
     const source = await sourceContext.newPage();
     await installGoogleIdentityFake(source, "test-google:" + subject);
     await createProgressingGoal(source, sourceGoal);
+    await expect(
+      source.getByRole("heading", { name: "はじめてガイド" }),
+    ).toBeVisible();
+    await source.getByRole("button", { name: "ガイドをスキップ" }).click();
+    await expect
+      .poll(() => readFirstUseGuideStorage(source))
+      .toEqual(
+        firstUseGuideStorageSnapshot(
+          "eligible",
+          "skipped",
+          "shown-goal",
+          "shown-plan",
+        ),
+      );
     await source.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
     await expect(
       source.getByRole("article", { name: new RegExp(sourceGoal) }),
@@ -155,11 +211,21 @@ test("same-tab Google collision login isolates a fresh Home cache without reload
       ),
     ).toBe(documentMarker);
 
+    await expect
+      .poll(() => readFirstUseGuideStorage(source))
+      .toEqual(firstUseGuideStorageSnapshot());
+
     await source.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
     await expect(source.getByText(sourceGoal)).toHaveCount(0);
+    const targetCard = source.getByRole("article", {
+      name: new RegExp(targetGoal),
+    });
+    await expect(targetCard).toBeVisible();
+    await targetCard.getByRole("link", { name: "Cycle 1を続ける" }).click();
+    await expect(source.getByText("Goal v1 · Cycle 1")).toBeVisible();
     await expect(
-      source.getByRole("article", { name: new RegExp(targetGoal) }),
-    ).toBeVisible();
+      source.getByRole("heading", { name: "はじめてガイド" }),
+    ).toHaveCount(0);
   } finally {
     await targetContext.close();
     await sourceContext.close();
@@ -600,6 +666,20 @@ test("account delete revisits as a different empty anonymous user", async ({
 }) => {
   const goalText = "アカウント削除で消える目標";
   await createProgressingGoal(page, goalText);
+  await expect(
+    page.getByRole("heading", { name: "はじめてガイド" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "ガイドをスキップ" }).click();
+  await expect
+    .poll(() => readFirstUseGuideStorage(page))
+    .toEqual(
+      firstUseGuideStorageSnapshot(
+        "eligible",
+        "skipped",
+        "shown-goal",
+        "shown-plan",
+      ),
+    );
   await page.goto("/settings");
   const oldUserId = (await page.locator("code").textContent())?.trim();
   expect(oldUserId).toBeTruthy();
@@ -616,6 +696,9 @@ test("account delete revisits as a different empty anonymous user", async ({
   await expect(page.getByText(goalText)).toHaveCount(0);
   const newSession = await getSession(page);
   expect(newSession.user.id).not.toBe(oldUserId);
+  expect(await readFirstUseGuideStorage(page)).toEqual(
+    firstUseGuideStorageSnapshot("eligible"),
+  );
 });
 
 test("active termination leaves a canceled read-only cycle and a new Goal starts at Cycle 1", async ({
@@ -691,6 +774,22 @@ test("public API rejects missing session, invalid CSRF, and unknown JSON", async
 
 const authenticatedUserHeader = "x-fukamu-authenticated-user-id";
 const expectedUserHeader = "x-fukamu-expected-user-id";
+const firstUseGuideStoragePrefix = "fukamu-cycle-first-use-guide-v1:";
+const firstUseGuideStorageSuffixes = [
+  "eligible",
+  "skipped",
+  "shown-goal",
+  "shown-plan",
+  "shown-do",
+  "shown-check",
+  "shown-action",
+  "shown-review",
+] as const;
+
+type FirstUseGuideStorageSuffix = (typeof firstUseGuideStorageSuffixes)[number];
+type FirstUseGuideStorageSnapshot = Readonly<
+  Record<FirstUseGuideStorageSuffix, true | null>
+>;
 
 type CreationDraftView = {
   readonly id: string;
@@ -703,6 +802,52 @@ type ObservedGoalDraftPatch = {
   readonly body: string | undefined;
   readonly afterCookieSwitch: boolean;
 };
+
+function firstUseGuideStorageSnapshot(
+  ...present: readonly FirstUseGuideStorageSuffix[]
+): FirstUseGuideStorageSnapshot {
+  const presentSuffixes = new Set(present);
+  return Object.fromEntries(
+    firstUseGuideStorageSuffixes.map((suffix) => [
+      suffix,
+      presentSuffixes.has(suffix) ? true : null,
+    ]),
+  ) as Record<FirstUseGuideStorageSuffix, true | null>;
+}
+
+async function readFirstUseGuideStorage(
+  page: Page,
+): Promise<FirstUseGuideStorageSnapshot> {
+  const snapshot = await page.evaluate(
+    ({ prefix, suffixes }) => {
+      const expectedKeys = new Set(suffixes.map((suffix) => prefix + suffix));
+      return {
+        values: Object.fromEntries(
+          suffixes.map((suffix) => [
+            suffix,
+            localStorage.getItem(prefix + suffix),
+          ]),
+        ),
+        unexpectedKeys: Object.keys(localStorage).filter(
+          (key) => key.startsWith(prefix) && !expectedKeys.has(key),
+        ),
+      };
+    },
+    {
+      prefix: firstUseGuideStoragePrefix,
+      suffixes: firstUseGuideStorageSuffixes,
+    },
+  );
+
+  expect(snapshot.unexpectedKeys).toEqual([]);
+  return Object.fromEntries(
+    firstUseGuideStorageSuffixes.map((suffix) => {
+      const value = snapshot.values[suffix];
+      expect([null, "true"]).toContain(value);
+      return [suffix, value === "true" ? true : null];
+    }),
+  ) as Record<FirstUseGuideStorageSuffix, true | null>;
+}
 
 async function disableSessionIdentityAdvisory(page: Page): Promise<void> {
   await page.addInitScript(() => {

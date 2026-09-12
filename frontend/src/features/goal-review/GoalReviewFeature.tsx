@@ -10,6 +10,7 @@ import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../auth";
+import { FirstUseGuide } from "../first-use-guide";
 import {
   cacheCycle,
   cacheGoal,
@@ -829,6 +830,13 @@ function ReviewEditor({
         ),
     ),
   );
+  const firstUseGuideEligible =
+    !editor.hydrating &&
+    !editor.resolvingConflict &&
+    !editor.revisionConflictActive &&
+    !editor.recoveryConflict &&
+    !workspaceIsMoved &&
+    commandRecovery === undefined;
   return (
     <main className="page review-page">
       <header className="goal-context">
@@ -842,6 +850,13 @@ function ReviewEditor({
           を完了しました
         </p>
       </header>
+      <FirstUseGuide
+        stage="review"
+        autoEligible={
+          firstUseGuideEligible && triggerCycle.sequenceNumber === 1
+        }
+        replayEligible={firstUseGuideEligible}
+      />
       <section
         className="review-decision-context"
         aria-labelledby="goal-review-context-heading"

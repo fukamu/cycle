@@ -12,6 +12,11 @@ import { flushSync } from "react-dom";
 import type { Session } from "../../shared/api/schemas";
 import type { SessionRecoverySubscription } from "../../shared/api/sessionRecoveryEvents";
 import type { AutoSaveScopeRegistry } from "../../shared/autosave/AutoSaveScopeProvider";
+import {
+  adoptReconciledFirstUseGuidePreferences,
+  clearFirstUseGuidePreferences,
+  suppressFirstUseGuideUntilReconciliation,
+} from "../../shared/preferences/firstUseGuidePreference";
 import { clearSelectedCycleFrames } from "../../shared/preferences/selectedFramePreference";
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
 import type {
@@ -80,11 +85,13 @@ export function useSessionPublicationController({
       nextSession: Session,
       remountSameIdentity: boolean,
       isCurrent: () => boolean,
+      beforeCommit?: () => void,
     ): boolean => {
       if (identityUnverifiedRef.current) return false;
       let committed = false;
       commitSynchronouslyWhenMounted(childrenWrapperRef, () => {
         if (identityUnverifiedRef.current || !isCurrent()) return;
+        beforeCommit?.();
         leaseOwner.activate(nextSession.user.id);
         setRuntimeRecovery(null);
         setInteractionSuspended(false);
@@ -118,6 +125,11 @@ export function useSessionPublicationController({
           options.remountSameIdentity,
           () =>
             !identityUnverifiedRef.current && options.isCurrent?.() !== false,
+          options.guidePreferencesReconciliation === "external"
+            ? adoptReconciledFirstUseGuidePreferences
+            : options.guidePreferencesReconciliation === "deferred"
+              ? suppressFirstUseGuideUntilReconciliation
+              : undefined,
         );
       }
 
@@ -147,8 +159,23 @@ export function useSessionPublicationController({
         nextSession,
         false,
         publicationIsCurrent,
+        () => {
+          // The cookie-writer path either reset guidance after its own
+          // anonymous POST or reused a Session whose writer already
+          // reconciled guidance. Other identity changes clear it in the same
+          // synchronous commit that mounts the new keyed subtree.
+          if (options.guidePreferencesReconciliation === "external") {
+            adoptReconciledFirstUseGuidePreferences();
+          } else if (options.guidePreferencesReconciliation === "deferred") {
+            suppressFirstUseGuideUntilReconciliation();
+          } else if (options.guidePreferencesReconciliation === undefined) {
+            clearFirstUseGuidePreferences();
+          }
+        },
       );
-      if (committed) clearSelectedCycleFrames();
+      if (committed) {
+        clearSelectedCycleFrames();
+      }
       return committed;
     },
     [

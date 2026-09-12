@@ -18,6 +18,10 @@ import {
   cleanupExpiredBrowserDrafts,
   tombstoneDeletedGoalAndClearDrafts,
 } from "../../shared/drafts/browserDraftCache";
+import {
+  adoptReconciledFirstUseGuidePreferences,
+  clearFirstUseGuidePreferences,
+} from "../../shared/preferences/firstUseGuidePreference";
 import { clearSelectedCycleFrames } from "../../shared/preferences/selectedFramePreference";
 import { removeGoalFromCache } from "../goal-collection";
 import {
@@ -37,7 +41,10 @@ import {
   requestCurrentSession,
   sessionQueryKey,
 } from "./sessionDiscovery";
-import type { SessionIdentityAdvisoryFactory } from "./sessionIdentityAdvisory";
+import type {
+  SessionIdentityAdvisoryFactory,
+  SessionIdentityAdvisoryMessage,
+} from "./sessionIdentityAdvisory";
 import { useSessionIdentityAdvisory } from "./useSessionIdentityAdvisory";
 import { useSessionOperationRunners } from "./sessionOperationRunners";
 import { useSessionRecoveryController } from "./sessionRecoveryController";
@@ -119,11 +126,7 @@ function SessionBoundary({
   const [unboundAdvisoryAbortController] = useState(
     () => new AbortController(),
   );
-  const query = useInitialSessionDiscovery(
-    leaseOwner,
-    unboundAdvisoryAbortController.signal,
-  );
-
+  const unboundAdvisoryResolutionGenerationRef = useRef(0);
   const enqueueTransition = useCallback(
     <Result,>(operation: () => Promise<Result>): Promise<Result> => {
       const transition = transitionRef.current
@@ -138,11 +141,47 @@ function SessionBoundary({
     [],
   );
 
-  const handleUnboundIdentityAdvisory = useCallback(() => {
-    unboundAdvisoryAbortController.abort();
-    clearSelectedCycleFrames();
-    reloadApplication();
-  }, [reloadApplication, unboundAdvisoryAbortController]);
+  const handleUnboundIdentityAdvisory = useCallback(
+    (advisory?: SessionIdentityAdvisoryMessage) => {
+      unboundAdvisoryAbortController.abort();
+      clearSelectedCycleFrames();
+      const resolutionGeneration =
+        (unboundAdvisoryResolutionGenerationRef.current += 1);
+
+      if (advisory?.guidePreferencesReconciled !== true) {
+        clearFirstUseGuidePreferences();
+        reloadApplication();
+        return;
+      }
+
+      // A reconciled marker is only advisory. Preserve its shared Guide state
+      // after a new authoritative GET proves that the cookie now names the
+      // exact advertised User; every failure or mismatch clears fail-closed.
+      void (async () => {
+        let targetMatches = false;
+        try {
+          const authoritativeSession = await requestCurrentSession();
+          targetMatches =
+            authoritativeSession.user.id === advisory.targetUserId;
+        } catch {
+          // The fixed local cleanup below owns every unavailable/error outcome.
+        }
+        if (
+          unboundAdvisoryResolutionGenerationRef.current !==
+          resolutionGeneration
+        ) {
+          return;
+        }
+        if (targetMatches) {
+          adoptReconciledFirstUseGuidePreferences();
+        } else {
+          clearFirstUseGuidePreferences();
+        }
+        reloadApplication();
+      })().catch(() => undefined);
+    },
+    [reloadApplication, unboundAdvisoryAbortController],
+  );
 
   const publication = useSessionPublicationController({
     queryClient,
@@ -158,6 +197,11 @@ function SessionBoundary({
     factory: advisoryFactory,
     onUnboundIdentityAdvisory: handleUnboundIdentityAdvisory,
   });
+  const query = useInitialSessionDiscovery(
+    leaseOwner,
+    unboundAdvisoryAbortController.signal,
+    publishIdentityAdvisory,
+  );
   const publishAccountDeletionAdvisory = useAccountDeletionAdvisory({
     queryClient,
     sessionQueryKey,

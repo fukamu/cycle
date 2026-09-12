@@ -10,6 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../auth";
+import { FirstUseGuide } from "../first-use-guide";
 import {
   cacheCreationDraft,
   cacheCycle,
@@ -413,6 +414,12 @@ function GoalDraftEditor({
     editor.resolvingConflict ||
     Boolean(editor.recoveryConflict) ||
     Boolean(editor.scopeMovedHref);
+  const firstUseGuideEligible =
+    !editor.hydrating &&
+    !editor.resolvingConflict &&
+    !editor.revisionConflictActive &&
+    !editor.recoveryConflict &&
+    !editor.scopeMovedHref;
   return (
     <main className="page editor-page">
       <header className="page-heading">
@@ -420,6 +427,11 @@ function GoalDraftEditor({
         <h1>新しい目標</h1>
         <p id="goal-editor-guide">{goalCopy.guide}</p>
       </header>
+      <FirstUseGuide
+        stage="goal"
+        autoEligible={firstUseGuideEligible}
+        replayEligible={firstUseGuideEligible}
+      />
       <section className="editor-card">
         {editor.recoveryConflict && (
           <DraftRecoveryNotice

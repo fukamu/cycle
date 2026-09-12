@@ -15,6 +15,10 @@ import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
 import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import {
+  FirstUseGuideProvider,
+  useFirstUseGuideControls,
+} from "../features/first-use-guide";
+import {
   AutoSaveScopeProvider,
   useAutoSaveScopeRegistry,
 } from "../shared/autosave/AutoSaveScopeProvider";
@@ -44,6 +48,8 @@ import {
   putBrowserDraft,
 } from "../shared/drafts/browserDraftCache";
 import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBoundary";
+import { firstUseGuideCopy } from "../shared/copy/ja";
+import { activateFirstUseGuide } from "../shared/preferences/firstUseGuidePreference";
 import { HomePage } from "./HomePage";
 import { NewGoalPage } from "./NewGoalPage";
 
@@ -152,6 +158,16 @@ function IdentityQuiesceControl() {
   );
 }
 
+function FirstUseGuideReplayControl() {
+  const controls = useFirstUseGuideControls();
+  if (!controls.canReplay) return null;
+  return (
+    <button type="button" onClick={controls.replayCurrentGuide}>
+      はじめてガイドを再表示
+    </button>
+  );
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -164,6 +180,7 @@ function deferred<T>() {
 
 describe("NewGoalPage", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.clearAllMocks();
     vi.mocked(getHome).mockResolvedValue(home);
     vi.mocked(getGoalDraft).mockResolvedValue({ draft });
@@ -191,6 +208,27 @@ describe("NewGoalPage", () => {
       cycle: startedCycle,
       replayed: true,
     });
+  });
+
+  it("shows the eligible Goal guide without changing the editor or autosave", async () => {
+    activateFirstUseGuide();
+
+    renderPage();
+
+    const guide = await screen.findByRole("complementary", {
+      name: firstUseGuideCopy.heading,
+    });
+    expect(
+      within(guide).getByText(firstUseGuideCopy.stages.goal.location),
+    ).toBeInTheDocument();
+    expect(
+      within(guide).getByText(firstUseGuideCopy.stages.goal.guide),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("textbox", { name: "あなたの目標" }),
+    ).toHaveValue(draft.body);
+    expect(saveGoalDraft).not.toHaveBeenCalled();
+    expect(refineGoalDraft).not.toHaveBeenCalled();
   });
 
   it("converges an exact creation conflict through canonical Home without resending POST", async () => {
@@ -942,7 +980,17 @@ describe("NewGoalPage", () => {
       .mockRejectedValueOnce(new TypeError("network"))
       .mockResolvedValueOnce({ draft: latestDraft });
 
-    renderPage();
+    renderPage(createCache(), false, false, false, sessionLease, true);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "はじめてガイドを再表示",
+      }),
+    );
+    expect(
+      await screen.findByRole("complementary", {
+        name: firstUseGuideCopy.heading,
+      }),
+    ).toBeInTheDocument();
     const editor = await screen.findByRole("textbox", {
       name: "あなたの目標",
     });
@@ -950,6 +998,11 @@ describe("NewGoalPage", () => {
     fireEvent.blur(editor);
 
     const retry = await screen.findByRole("button", { name: "再試行" });
+    expect(
+      screen.queryByRole("complementary", {
+        name: firstUseGuideCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
     expect(editor).toHaveValue(localBody);
     expect(editor).toHaveAttribute("readonly");
     expect(getGoalDraft).toHaveBeenCalledTimes(1);
@@ -992,6 +1045,11 @@ describe("NewGoalPage", () => {
     expect(
       screen.getByRole("button", { name: "サーバーの内容を使用" }),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", {
+        name: firstUseGuideCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
     expect(deleteBrowserDraft).not.toHaveBeenCalled();
 
     fireEvent.click(
@@ -1009,6 +1067,11 @@ describe("NewGoalPage", () => {
     );
     expect(await screen.findByText("保存済み")).toBeInTheDocument();
     expect(editor).not.toHaveAttribute("readonly");
+    expect(
+      await screen.findByRole("complementary", {
+        name: firstUseGuideCopy.heading,
+      }),
+    ).toBeInTheDocument();
 
     fireEvent.change(editor, { target: { value: nextLocalBody } });
     fireEvent.blur(editor);
@@ -1438,6 +1501,7 @@ function renderPage(
   identityQuiesceControl = false,
   cleanupRouteSwitch = false,
   requestLease = sessionLease,
+  guideReplayControl = false,
 ) {
   return render(
     <QueryClientProvider client={cache}>
@@ -1447,29 +1511,32 @@ function renderPage(
           lease={requestLease}
           session={session}
         >
-          <MemoryRouter initialEntries={["/goals/new"]}>
-            {cleanupRouteSwitch ? (
-              <Link to="/external">クリーンアップ中に別routeへ移動</Link>
-            ) : null}
-            <PostCommitCleanupBoundary
-              runSessionOperation={async (_expectedUserId, operation) =>
-                operation(() => true)
-              }
-            >
-              <Routes>
-                <Route
-                  path="/"
-                  element={realCanonicalRoutes ? <HomePage /> : <p>ホーム</p>}
-                />
-                <Route path="/goals/new" element={<NewGoalPage />} />
-                <Route
-                  path="/goals/:goalId"
-                  element={<p>現在のワークスペース</p>}
-                />
-                <Route path="/external" element={<p>外部route</p>} />
-              </Routes>
-            </PostCommitCleanupBoundary>
-          </MemoryRouter>
+          <FirstUseGuideProvider>
+            {guideReplayControl ? <FirstUseGuideReplayControl /> : null}
+            <MemoryRouter initialEntries={["/goals/new"]}>
+              {cleanupRouteSwitch ? (
+                <Link to="/external">クリーンアップ中に別routeへ移動</Link>
+              ) : null}
+              <PostCommitCleanupBoundary
+                runSessionOperation={async (_expectedUserId, operation) =>
+                  operation(() => true)
+                }
+              >
+                <Routes>
+                  <Route
+                    path="/"
+                    element={realCanonicalRoutes ? <HomePage /> : <p>ホーム</p>}
+                  />
+                  <Route path="/goals/new" element={<NewGoalPage />} />
+                  <Route
+                    path="/goals/:goalId"
+                    element={<p>現在のワークスペース</p>}
+                  />
+                  <Route path="/external" element={<p>外部route</p>} />
+                </Routes>
+              </PostCommitCleanupBoundary>
+            </MemoryRouter>
+          </FirstUseGuideProvider>
         </AuthenticatedSessionTestProvider>
       </AutoSaveScopeProvider>
     </QueryClientProvider>,

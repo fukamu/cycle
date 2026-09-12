@@ -9,9 +9,11 @@ import {
 } from "../../shared/api/sessionRecoveryEvents";
 import type { AutoSaveScopeRegistry } from "../../shared/autosave/AutoSaveScopeProvider";
 import type {
+  GuidePreferencesReconciliation,
   PublishSession,
   RuntimeRecoveryState,
 } from "./sessionBoundaryContracts";
+import type { PublishSessionIdentityAdvisory } from "./sessionIdentityAdvisory";
 
 export type QuiescedRecovery = {
   readonly event: SessionRecoveryEvent;
@@ -37,11 +39,15 @@ type RecoveryAttemptOptions = {
   readonly createAnonymousSession: (
     isCurrent: () => boolean,
     signal?: AbortSignal,
+    onGuidePreferencesReconciled?: (
+      reconciliation: GuidePreferencesReconciliation,
+      session: Session,
+    ) => void,
   ) => Promise<Session | null>;
   readonly isUnavailableSession: (error: unknown) => boolean;
   readonly queryClient: QueryClient;
   readonly sessionQueryKey: QueryKey;
-  readonly publishIdentityAdvisory: (targetUserId: string) => void;
+  readonly publishIdentityAdvisory: PublishSessionIdentityAdvisory;
   readonly publishSession: PublishSession;
 };
 
@@ -50,6 +56,13 @@ type RecoveryProgress = {
   readonly quiesce: () => Promise<boolean>;
   readonly scopesAlreadyQuiesced: () => boolean;
   readonly clearCompletedQuiesce: () => void;
+};
+
+type RecoveredSession = {
+  readonly session: Session;
+  readonly guidePreferencesReconciliation:
+    | GuidePreferencesReconciliation
+    | undefined;
 };
 
 export async function runSessionRecoveryAttempt(
@@ -135,7 +148,7 @@ async function completeUnverifiedRecovery(
 async function discoverRecoveredSession(
   options: RecoveryAttemptOptions,
   progress: RecoveryProgress,
-): Promise<Session | null> {
+): Promise<RecoveredSession | null> {
   if (requiresDraftQuiesceBeforeDiscovery(options.event.reason)) {
     options.suspendChildrenForRecovery(options.event);
     if (!(await progress.quiesce())) return null;
@@ -147,12 +160,20 @@ async function discoverRecoveredSession(
 async function discoverAfterRequiredQuiesce(
   options: RecoveryAttemptOptions,
   progress: RecoveryProgress,
-): Promise<Session | null> {
+): Promise<RecoveredSession | null> {
   try {
     const recoveredSession = await options.requestCurrentSession(
       options.abortController.signal,
     );
-    return progress.continue() ? recoveredSession : null;
+    return progress.continue()
+      ? {
+          session: recoveredSession,
+          guidePreferencesReconciliation: advisoryReconciledGuideForSession(
+            options.event,
+            recoveredSession,
+          ),
+        }
+      : null;
   } catch (error) {
     if (!progress.continue()) return null;
     if (!options.isUnavailableSession(error)) throw error;
@@ -163,13 +184,23 @@ async function discoverAfterRequiredQuiesce(
 async function discoverBeforeConditionalQuiesce(
   options: RecoveryAttemptOptions,
   progress: RecoveryProgress,
-): Promise<Session | null> {
-  let recoveredSession: Session;
+): Promise<RecoveredSession | null> {
+  let recovered: RecoveredSession;
   try {
-    recoveredSession = await options.requestCurrentSession(
-      options.abortController.signal,
-    );
+    recovered = {
+      session: await options.requestCurrentSession(
+        options.abortController.signal,
+      ),
+      guidePreferencesReconciliation: undefined,
+    };
     if (!progress.continue()) return null;
+    recovered = {
+      ...recovered,
+      guidePreferencesReconciliation: advisoryReconciledGuideForSession(
+        options.event,
+        recovered.session,
+      ),
+    };
   } catch (error) {
     if (!progress.continue()) return null;
     if (!options.isUnavailableSession(error)) throw error;
@@ -177,7 +208,7 @@ async function discoverBeforeConditionalQuiesce(
     if (!(await progress.quiesce())) return null;
     const anonymousSession = await bootstrapAnonymousSession(options, progress);
     if (anonymousSession === null) return null;
-    recoveredSession = anonymousSession;
+    recovered = anonymousSession;
   }
 
   const currentSession = options.queryClient.getQueryData<Session>(
@@ -186,47 +217,86 @@ async function discoverBeforeConditionalQuiesce(
   if (
     !progress.scopesAlreadyQuiesced() &&
     currentSession !== undefined &&
-    currentSession.user.id !== recoveredSession.user.id
+    currentSession.user.id !== recovered.session.user.id
   ) {
     options.suspendChildrenAndInvalidateLeaseForRecovery(options.event);
     if (!(await progress.quiesce())) return null;
   }
-  return recoveredSession;
+  return recovered;
 }
 
 async function bootstrapAnonymousSession(
   options: RecoveryAttemptOptions,
   progress: RecoveryProgress,
-): Promise<Session | null> {
+): Promise<RecoveredSession | null> {
+  let guidePreferencesReconciliation:
+    | GuidePreferencesReconciliation
+    | undefined;
   const anonymousSession = await options.createAnonymousSession(
     options.event.isCurrent,
     options.abortController.signal,
+    (reconciliation, reconciledSession) => {
+      guidePreferencesReconciliation = reconciliation;
+      if (
+        reconciliation === "local-shared-safe" ||
+        reconciliation === "local-document-only"
+      ) {
+        options.publishIdentityAdvisory(reconciledSession.user.id, {
+          guidePreferencesReconciled: reconciliation === "local-shared-safe",
+        });
+      }
+    },
   );
   if (anonymousSession === null) {
     options.handoffStaleRecovery();
     return null;
   }
-  return progress.continue() ? anonymousSession : null;
+  return progress.continue()
+    ? { session: anonymousSession, guidePreferencesReconciliation }
+    : null;
 }
 
 async function publishRecoveredSession(
   options: RecoveryAttemptOptions,
   progress: RecoveryProgress,
-  recoveredSession: Session,
+  recovered: RecoveredSession,
 ): Promise<boolean> {
   const currentSession = options.queryClient.getQueryData<Session>(
     options.sessionQueryKey,
   );
-  if (currentSession?.user.id !== recoveredSession.user.id) {
-    options.publishIdentityAdvisory(recoveredSession.user.id);
+  if (
+    currentSession?.user.id !== recovered.session.user.id &&
+    (recovered.guidePreferencesReconciliation === undefined ||
+      recovered.guidePreferencesReconciliation === "external")
+  ) {
+    options.publishIdentityAdvisory(recovered.session.user.id, {
+      guidePreferencesReconciled:
+        recovered.guidePreferencesReconciliation !== undefined,
+    });
   }
-  const published = await options.publishSession(recoveredSession, {
+  const published = await options.publishSession(recovered.session, {
     scopesAlreadyQuiesced: progress.scopesAlreadyQuiesced(),
     remountSameIdentity: progress.scopesAlreadyQuiesced(),
+    ...(recovered.guidePreferencesReconciliation === undefined
+      ? {}
+      : {
+          guidePreferencesReconciliation:
+            recovered.guidePreferencesReconciliation,
+        }),
     isCurrent: options.event.isCurrent,
   });
   if (!published) options.handoffStaleRecovery();
   return published;
+}
+
+function advisoryReconciledGuideForSession(
+  event: SessionRecoveryEvent,
+  session: Session,
+): GuidePreferencesReconciliation | undefined {
+  return event.identityAdvisory?.guidePreferencesReconciled === true &&
+    event.identityAdvisory.targetUserId === session.user.id
+    ? "external"
+    : undefined;
 }
 
 function handleRecoveryFailure(

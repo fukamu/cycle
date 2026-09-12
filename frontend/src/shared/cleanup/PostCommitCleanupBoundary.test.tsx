@@ -10,6 +10,7 @@ import {
   useAutoSaveScopeRegistry,
   type AutoSaveScopeLease,
 } from "../autosave/AutoSaveScopeProvider";
+import { useInteractionAvailability } from "../interaction/interactionAvailabilityContext";
 
 import { PostCommitCleanupBoundary } from "./PostCommitCleanupBoundary";
 import {
@@ -129,10 +130,16 @@ describe("PostCommitCleanupBoundary", () => {
     );
 
     const commitButton = screen.getByRole("button", { name: "commit" });
+    expect(screen.getByLabelText("cleanup interaction")).toHaveTextContent(
+      "available",
+    );
     await userEvent.click(commitButton);
 
     await waitFor(() => expect(events).toContain("write-start"));
     expect(commitButton.closest("div[hidden][inert]")).not.toBeNull();
+    expect(screen.getByLabelText("cleanup interaction")).toHaveTextContent(
+      "blocked",
+    );
     expect(cleanup).not.toHaveBeenCalled();
 
     lateWrite.resolve();
@@ -538,6 +545,7 @@ function QuiesceTrigger({
 }) {
   const registry = useAutoSaveScopeRegistry();
   const runPostCommitCleanup = usePostCommitCleanup();
+  const interactionAvailable = useInteractionAvailability();
   const [lease] = useState(() => registry.prepare("test-scope"));
 
   useLayoutEffect(() => {
@@ -552,20 +560,25 @@ function QuiesceTrigger({
   }, [events, lateWrite, lease]);
 
   return (
-    <button
-      type="button"
-      onClick={() =>
-        void runPostCommitCleanup({
-          expectedUserId: "user-1",
-          cleanup,
-          onSuccess: () => undefined,
-          pendingMessage: "pending",
-          failureMessage: "failed",
-        })
-      }
-    >
-      commit
-    </button>
+    <>
+      <output aria-label="cleanup interaction">
+        {interactionAvailable ? "available" : "blocked"}
+      </output>
+      <button
+        type="button"
+        onClick={() =>
+          void runPostCommitCleanup({
+            expectedUserId: "user-1",
+            cleanup,
+            onSuccess: () => undefined,
+            pendingMessage: "pending",
+            failureMessage: "failed",
+          })
+        }
+      >
+        commit
+      </button>
+    </>
   );
 }
 

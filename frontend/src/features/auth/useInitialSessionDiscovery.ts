@@ -2,7 +2,9 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import type { Session } from "../../shared/api/schemas";
+import { suppressFirstUseGuideUntilReconciliation } from "../../shared/preferences/firstUseGuidePreference";
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
+import type { PublishSessionIdentityAdvisory } from "./sessionIdentityAdvisory";
 import {
   isBetaAdmissionRequired,
   isInitialSessionRateLimited,
@@ -16,6 +18,7 @@ export type InitialSessionQuery = UseQueryResult<Session, Error>;
 export function useInitialSessionDiscovery(
   leaseOwner: AuthenticatedRequestLeaseOwner,
   advisorySignal: AbortSignal,
+  publishIdentityAdvisory: PublishSessionIdentityAdvisory,
 ): InitialSessionQuery {
   const providerMountedRef = useRef(true);
   const [abortController] = useState(() => new AbortController());
@@ -37,7 +40,24 @@ export function useInitialSessionDiscovery(
         abortController.signal,
         advisorySignal,
       ]);
-      const discoveredSession = await loadInitialSession(discoverySignal);
+      const discoveredSession = await loadInitialSession(
+        discoverySignal,
+        (reconciliation, reconciledSession) => {
+          if (reconciliation === "deferred") {
+            suppressFirstUseGuideUntilReconciliation();
+            return;
+          }
+          if (
+            reconciliation !== "local-shared-safe" &&
+            reconciliation !== "local-document-only"
+          ) {
+            return;
+          }
+          publishIdentityAdvisory(reconciledSession.user.id, {
+            guidePreferencesReconciled: reconciliation === "local-shared-safe",
+          });
+        },
+      );
       if (!providerMountedRef.current) {
         throw new DOMException("session discovery interrupted", "AbortError");
       }

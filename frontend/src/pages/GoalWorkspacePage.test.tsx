@@ -17,6 +17,7 @@ import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
 import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
+import { FirstUseGuideProvider } from "../features/first-use-guide";
 import { userQueryKeys } from "../features/goal-collection/goalCache";
 import {
   GoalDeletionAdvisoryContext,
@@ -27,6 +28,7 @@ import { APIError } from "../shared/api/client";
 import {
   cycleFrameCopy,
   cycleFrameTemplateCopy,
+  firstUseGuideCopy,
   frameCopy,
 } from "../shared/copy/ja";
 import {
@@ -57,6 +59,7 @@ import {
   readSelectedCycleFrame,
   rememberSelectedCycleFrame,
 } from "../shared/preferences/selectedFramePreference";
+import { activateFirstUseGuide } from "../shared/preferences/firstUseGuidePreference";
 import { GoalWorkspacePage } from "./GoalWorkspacePage";
 
 vi.mock("../shared/api/workspace", () => ({
@@ -200,6 +203,44 @@ describe("GoalWorkspacePage", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("moves the eligible Cycle 1 guide from Plan to Do without stealing tab focus or saving", async () => {
+    activateFirstUseGuide();
+    const user = userEvent.setup();
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+
+    renderPage(cache);
+
+    const guide = await screen.findByRole("complementary", {
+      name: firstUseGuideCopy.heading,
+    });
+    expect(
+      within(guide).getByText(firstUseGuideCopy.stages.plan.location),
+    ).toBeInTheDocument();
+    expect(
+      within(guide).getByText(firstUseGuideCopy.stages.plan.guide),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "P — Plan" })).toHaveValue(
+      cycle.plan,
+    );
+
+    const doTab = screen.getByRole("tab", { name: /D\s*Do/ });
+    await user.click(doTab);
+
+    await screen.findByText(firstUseGuideCopy.stages.do.location);
+    expect(
+      within(
+        screen.getByRole("complementary", {
+          name: firstUseGuideCopy.heading,
+        }),
+      ).getByText(firstUseGuideCopy.stages.do.guide),
+    ).toBeInTheDocument();
+    expect(doTab).toHaveFocus();
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+    expect(generateAction).not.toHaveBeenCalled();
   });
 
   it("inserts a Plan template into Unicode whitespace through normal autosave and restores the exact prior value with Undo", async () => {
@@ -4942,60 +4983,62 @@ function renderPage(
           lease={sessionLease}
           session={session}
         >
-          <GoalDeletionAdvisoryContext.Provider
-            value={goalDeletionAdvisory.registry}
-          >
-            <MemoryRouter
-              initialEntries={[`/workspace/${goal.id}/cycles/${cycle.id}`]}
+          <FirstUseGuideProvider>
+            <GoalDeletionAdvisoryContext.Provider
+              value={goalDeletionAdvisory.registry}
             >
-              {options.identityQuiesceControl ? (
-                <IdentityQuiesceControl />
-              ) : null}
-              {options.commandRouteSwitch ? (
-                <Link to="/external">コマンド中に外部routeへ移動</Link>
-              ) : null}
-              {options.cleanupSwitchCycleId ? (
-                <Link
-                  to={`/workspace/${goal.id}/cycles/${options.cleanupSwitchCycleId}`}
-                >
-                  クリーンアップ中に別のCycleへ移動
-                </Link>
-              ) : null}
-              <PostCommitCleanupBoundary
-                runSessionOperation={async (_expectedUserId, operation) =>
-                  operation(() => true)
-                }
+              <MemoryRouter
+                initialEntries={[`/workspace/${goal.id}/cycles/${cycle.id}`]}
               >
-                {options.switchCycleId ? (
+                {options.identityQuiesceControl ? (
+                  <IdentityQuiesceControl />
+                ) : null}
+                {options.commandRouteSwitch ? (
+                  <Link to="/external">コマンド中に外部routeへ移動</Link>
+                ) : null}
+                {options.cleanupSwitchCycleId ? (
                   <Link
-                    to={`/workspace/${goal.id}/cycles/${options.switchCycleId}`}
+                    to={`/workspace/${goal.id}/cycles/${options.cleanupSwitchCycleId}`}
                   >
-                    別のCycleへ移動
+                    クリーンアップ中に別のCycleへ移動
                   </Link>
                 ) : null}
-                <Routes>
-                  <Route
-                    path="/workspace/:goalId/cycles/:cycleId"
-                    element={<GoalWorkspacePage />}
-                  />
-                  <Route path="/" element={<CacheInspectingHome />} />
-                  <Route
-                    path="/goals/:goalId/cycles/:cycleId"
-                    element={<p>現在のサイクル</p>}
-                  />
-                  <Route
-                    path="/goals/:goalId/review"
-                    element={<p>現在の目標レビュー</p>}
-                  />
-                  <Route
-                    path="/history/goals/:goalId"
-                    element={<p>現在の目標履歴</p>}
-                  />
-                  <Route path="/external" element={<p>外部route</p>} />
-                </Routes>
-              </PostCommitCleanupBoundary>
-            </MemoryRouter>
-          </GoalDeletionAdvisoryContext.Provider>
+                <PostCommitCleanupBoundary
+                  runSessionOperation={async (_expectedUserId, operation) =>
+                    operation(() => true)
+                  }
+                >
+                  {options.switchCycleId ? (
+                    <Link
+                      to={`/workspace/${goal.id}/cycles/${options.switchCycleId}`}
+                    >
+                      別のCycleへ移動
+                    </Link>
+                  ) : null}
+                  <Routes>
+                    <Route
+                      path="/workspace/:goalId/cycles/:cycleId"
+                      element={<GoalWorkspacePage />}
+                    />
+                    <Route path="/" element={<CacheInspectingHome />} />
+                    <Route
+                      path="/goals/:goalId/cycles/:cycleId"
+                      element={<p>現在のサイクル</p>}
+                    />
+                    <Route
+                      path="/goals/:goalId/review"
+                      element={<p>現在の目標レビュー</p>}
+                    />
+                    <Route
+                      path="/history/goals/:goalId"
+                      element={<p>現在の目標履歴</p>}
+                    />
+                    <Route path="/external" element={<p>外部route</p>} />
+                  </Routes>
+                </PostCommitCleanupBoundary>
+              </MemoryRouter>
+            </GoalDeletionAdvisoryContext.Provider>
+          </FirstUseGuideProvider>
         </AuthenticatedSessionTestProvider>
       </AutoSaveScopeProvider>
     </QueryClientProvider>

@@ -9,6 +9,7 @@ import { flushSync } from "react-dom";
 import { useLocation } from "react-router-dom";
 
 import { useAutoSaveScopeRegistry } from "../autosave/AutoSaveScopeProvider";
+import { InteractionAvailabilityProvider } from "../interaction/InteractionAvailabilityProvider";
 import {
   PostCommitCleanupContext,
   PostCommitRouteOwnershipContext,
@@ -279,9 +280,11 @@ export function PostCommitCleanupBoundary({
             {cleanupState.entry.task.pendingMessage}
           </div>
         ) : null}
-        <div hidden={quiescing} inert={quiescing}>
-          {children}
-        </div>
+        <InteractionAvailabilityProvider available={!quiescing}>
+          <div hidden={quiescing} inert={quiescing}>
+            {children}
+          </div>
+        </InteractionAvailabilityProvider>
       </PostCommitCleanupContext.Provider>
     </PostCommitRouteOwnershipContext.Provider>
   );

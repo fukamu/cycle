@@ -1,11 +1,21 @@
 import { isUUIDv7 } from "../../shared/id/uuid";
 
-const CHANNEL_NAME = "fukamu-cycle-session-identity-v1";
-const MESSAGE_VERSION = 1;
+const CHANNEL_NAME = "fukamu-cycle-session-identity-v2";
+const MESSAGE_VERSION = 2;
 
-type AdvisoryMessage = {
+type AdvisoryWireMessage = {
   readonly version: typeof MESSAGE_VERSION;
   readonly targetUserId: string;
+  readonly guidePreferencesReconciled: boolean;
+};
+
+export type SessionIdentityAdvisoryMessage = {
+  readonly targetUserId: string;
+  readonly guidePreferencesReconciled: boolean;
+};
+
+export type SessionIdentityAdvisoryPublishOptions = {
+  readonly guidePreferencesReconciled?: boolean;
 };
 
 type MessageEventLike = {
@@ -13,7 +23,7 @@ type MessageEventLike = {
 };
 
 export type SessionIdentityAdvisoryChannelLike = {
-  readonly postMessage: (message: AdvisoryMessage) => void;
+  readonly postMessage: (message: AdvisoryWireMessage) => void;
   readonly addEventListener: (
     type: "message",
     listener: (event: MessageEventLike) => void,
@@ -26,16 +36,21 @@ export type SessionIdentityAdvisoryChannelLike = {
 };
 
 export type SessionIdentityAdvisory = {
-  readonly publish: (targetUserId: string) => void;
+  readonly publish: (
+    targetUserId: string,
+    options?: SessionIdentityAdvisoryPublishOptions,
+  ) => void;
   readonly close: () => void;
 };
+
+export type PublishSessionIdentityAdvisory = SessionIdentityAdvisory["publish"];
 
 export type SessionIdentityAdvisoryFactory = (
   name: string,
 ) => SessionIdentityAdvisoryChannelLike;
 
 export function createSessionIdentityAdvisory(
-  onTargetUserId: (targetUserId: string) => void,
+  onAdvisory: (advisory: SessionIdentityAdvisoryMessage) => void,
   factory: SessionIdentityAdvisoryFactory | undefined = defaultFactory(),
 ): SessionIdentityAdvisory | null {
   if (factory === undefined) return null;
@@ -49,15 +64,15 @@ export function createSessionIdentityAdvisory(
   let active = true;
   const receive = (event: MessageEventLike) => {
     if (!active) return;
-    let targetUserId: string | null;
+    let advisory: SessionIdentityAdvisoryMessage | null;
     try {
-      targetUserId = parseTargetUserId(event.data);
+      advisory = parseAdvisory(event.data);
     } catch {
       return;
     }
-    if (targetUserId === null) return;
+    if (advisory === null) return;
     try {
-      onTargetUserId(targetUserId);
+      onAdvisory(advisory);
     } catch {
       // Advisory delivery cannot own or break the authoritative response path.
     }
@@ -74,10 +89,15 @@ export function createSessionIdentityAdvisory(
   }
 
   return {
-    publish: (targetUserId) => {
+    publish: (targetUserId, options = {}) => {
       if (!active || !isUUIDv7(targetUserId)) return;
       try {
-        channel.postMessage({ version: MESSAGE_VERSION, targetUserId });
+        channel.postMessage({
+          version: MESSAGE_VERSION,
+          targetUserId,
+          guidePreferencesReconciled:
+            options.guidePreferencesReconciled === true,
+        });
       } catch {
         // Response identity binding remains authoritative.
       }
@@ -99,18 +119,22 @@ export function createSessionIdentityAdvisory(
   };
 }
 
-function parseTargetUserId(value: unknown): string | null {
+function parseAdvisory(value: unknown): SessionIdentityAdvisoryMessage | null {
   if (typeof value !== "object" || value === null) return null;
   const candidate = value as Record<string, unknown>;
   if (
-    Object.keys(candidate).length !== 2 ||
+    Object.keys(candidate).length !== 3 ||
     candidate.version !== MESSAGE_VERSION ||
     typeof candidate.targetUserId !== "string" ||
-    !isUUIDv7(candidate.targetUserId)
+    !isUUIDv7(candidate.targetUserId) ||
+    typeof candidate.guidePreferencesReconciled !== "boolean"
   ) {
     return null;
   }
-  return candidate.targetUserId;
+  return {
+    targetUserId: candidate.targetUserId,
+    guidePreferencesReconciled: candidate.guidePreferencesReconciled,
+  };
 }
 
 function defaultFactory(): SessionIdentityAdvisoryFactory | undefined {
