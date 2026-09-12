@@ -54,6 +54,9 @@ describe("first-use guide copy", () => {
 
 describe("cycle frame template copy", () => {
   it("keeps the approved Plan and Do names and exact inserted previews", () => {
+    expect(cycleFrameTemplateCopy.toggle).toBe(
+      "テンプレートから書き始める（任意）",
+    );
     expect(
       cycleFrameTemplateCopy.templates.plan.map(({ name, content }) => ({
         name,

@@ -177,6 +177,15 @@ const otherGoalId = "20000000-0000-7000-8000-000000000002";
 
 const sessionLease = createCurrentAuthenticatedRequestLease(session.user.id);
 
+function expandFrameTemplates() {
+  const toggle = screen.getByRole("button", {
+    name: cycleFrameTemplateCopy.toggle,
+  });
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  return toggle;
+}
+
 describe("GoalWorkspacePage", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -256,6 +265,7 @@ describe("GoalWorkspacePage", () => {
     renderPage(cache);
 
     await screen.findByText("保存済み");
+    expandFrameTemplates();
     const editor = screen.getByRole("textbox", { name: "P — Plan" });
     const insert = screen.getByRole("button", {
       name: cycleFrameTemplateCopy.insert(template.name),
@@ -320,6 +330,16 @@ describe("GoalWorkspacePage", () => {
     const planRegion = screen.getByRole("region", {
       name: cycleFrameTemplateCopy.heading,
     });
+    const planToggle = within(planRegion).getByRole("button", {
+      name: cycleFrameTemplateCopy.toggle,
+    });
+    expect(planToggle).toHaveAttribute("aria-expanded", "false");
+    expect(
+      within(planRegion).queryByRole("heading", {
+        name: cycleFrameTemplateCopy.templates.plan[0].name,
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(planToggle);
     expect(
       within(planRegion).getByText(
         cycleFrameTemplateCopy.disabled.hasContent("P"),
@@ -345,11 +365,21 @@ describe("GoalWorkspacePage", () => {
     const doRegion = screen.getByRole("region", {
       name: cycleFrameTemplateCopy.heading,
     });
+    const doToggle = within(doRegion).getByRole("button", {
+      name: cycleFrameTemplateCopy.toggle,
+    });
+    expect(doToggle).toHaveAttribute("aria-expanded", "false");
     expect(
       within(doRegion).queryByText(
         cycleFrameTemplateCopy.templates.plan[0].name,
       ),
     ).not.toBeInTheDocument();
+    expect(
+      within(doRegion).queryByRole("heading", {
+        name: cycleFrameTemplateCopy.templates.do[0].name,
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(doToggle);
     for (const template of cycleFrameTemplateCopy.templates.do) {
       expect(within(doRegion).getByText(template.name)).toBeVisible();
     }
@@ -394,6 +424,7 @@ describe("GoalWorkspacePage", () => {
     renderPage(cache);
 
     await screen.findByText("保存済み");
+    expandFrameTemplates();
     const editor = screen.getByRole("textbox", { name: "P — Plan" });
     const insert = screen.getByRole("button", {
       name: cycleFrameTemplateCopy.insert(
@@ -434,6 +465,7 @@ describe("GoalWorkspacePage", () => {
     renderPage(cache);
 
     await screen.findByText("別の更新が見つかりました");
+    expandFrameTemplates();
     const editor = screen.getByRole("textbox", { name: "P — Plan" });
     const insert = screen.getByRole("button", {
       name: cycleFrameTemplateCopy.insert(
@@ -2911,6 +2943,7 @@ describe("GoalWorkspacePage", () => {
       expect(
         screen.getByText("現在の作業を確認してから追加してください。"),
       ).toBeVisible();
+      expandFrameTemplates();
       const templateInsert = screen.getByRole("button", {
         name: cycleFrameTemplateCopy.insert(
           cycleFrameTemplateCopy.templates.do[0].name,
@@ -3734,6 +3767,7 @@ describe("GoalWorkspacePage", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: /P\s*Plan/ }));
+    expandFrameTemplates();
     const insert = screen.getByRole("button", {
       name: cycleFrameTemplateCopy.insert(
         cycleFrameTemplateCopy.templates.plan[0].name,
