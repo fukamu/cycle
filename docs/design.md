@@ -511,6 +511,7 @@ Cycle 3を振り返り、目標を続けるか決めましょう。
 ## 9.3 Navigation rules
 
 - Header logoでHomeへ戻る。
+- Header Drawerの「目標の履歴」は`/history`とその子routeで、「設定」は`/settings`で現在項目とする。現在項目はlink semanticsを維持したまま`aria-current="page"`と可視の「現在地」を併記し、色だけに依存して示さない。Home、Goal Creation、Goal Workspace、Goal Reviewでは、Drawerのどちらの項目も現在項目にしない。
 - Active CycleのP/D/C/A Tabは自由移動可能。
 - AI Action処理中もP/D/C Tab編集・移動可能。Aのみread-only。
 - Goal Refine処理中もGoal Draft編集は可能。AI要求時の本文と現在の保存済み本文が異なる間はsuggestionをstaleとして採用不可にするが、完全に同じ本文へ戻して保存済みなら採用できる。

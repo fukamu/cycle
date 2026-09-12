@@ -457,6 +457,54 @@ describe("AppLayout", () => {
     expect(settingsDestination).not.toHaveFocus();
   });
 
+  it.each([
+    { pathname: "/", currentLabel: undefined },
+    { pathname: "/goals/new", currentLabel: undefined },
+    { pathname: "/history", currentLabel: "目標の履歴" },
+    {
+      pathname: "/history/goals/20000000-0000-7000-8000-000000000001",
+      currentLabel: "目標の履歴",
+    },
+    { pathname: "/settings", currentLabel: "設定" },
+  ])(
+    "marks the parent navigation item as current at $pathname",
+    async ({ pathname, currentLabel }) => {
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter initialEntries={[pathname]}>
+          <RouteHeadingFocusProvider>
+            <Routes>
+              <Route element={<AppLayout />}>
+                <Route path="*" element={<h1>現在の画面</h1>} />
+              </Route>
+            </Routes>
+          </RouteHeadingFocusProvider>
+        </MemoryRouter>,
+      );
+
+      await user.click(screen.getByRole("button", { name: "メニューを開く" }));
+      const history = screen.getByRole("link", { name: "目標の履歴" });
+      const settings = screen.getByRole("link", { name: "設定" });
+      const current = currentLabel
+        ? screen.getByRole("link", { name: currentLabel })
+        : undefined;
+
+      for (const link of [history, settings]) {
+        if (link === current) {
+          expect(link).toHaveAttribute("aria-current", "page");
+          const marker = screen.getByText("現在地", { exact: true });
+          expect(link).toContainElement(marker);
+          expect(marker).toHaveAttribute("aria-hidden", "true");
+        } else {
+          expect(link).not.toHaveAttribute("aria-current");
+        }
+      }
+      expect(screen.queryAllByText("現在地", { exact: true })).toHaveLength(
+        currentLabel ? 1 : 0,
+      );
+    },
+  );
+
   it("arms Help without navigation and replays it in the next safe context", async () => {
     const user = userEvent.setup();
     render(

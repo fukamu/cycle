@@ -489,6 +489,8 @@ test("header drawer contains focus and deactivates the background", async ({
     name: "はじめてガイドを表示",
   });
   await expect(history).toBeFocused();
+  await expect(history).not.toHaveAttribute("aria-current");
+  await expect(settings).not.toHaveAttribute("aria-current");
   expect(
     await page.evaluate(() => ({
       main: document.querySelector<HTMLElement>("#main-content")?.inert,
@@ -533,6 +535,64 @@ test("header drawer contains focus and deactivates the background", async ({
   });
   await expect(destination).toBeFocused();
   await expect(mainContent).not.toHaveAttribute("inert", "");
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await menuButton.click();
+  await expect(history).toHaveAttribute("aria-current", "page");
+  await expect(settings).not.toHaveAttribute("aria-current");
+  await expect(history.getByText("現在地", { exact: true })).toBeVisible();
+  const currentItemLayout = await history.evaluate((element) => {
+    const label = element.querySelector<HTMLElement>(".drawer__link-label");
+    const marker = element.querySelector<HTMLElement>(".drawer__current");
+    const labelRect = label?.getBoundingClientRect();
+    const markerRect = marker?.getBoundingClientRect();
+    return {
+      documentOverflows:
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+      partsOverlap:
+        labelRect && markerRect
+          ? labelRect.right > markerRect.left &&
+            labelRect.left < markerRect.right &&
+            labelRect.bottom > markerRect.top &&
+            labelRect.top < markerRect.bottom
+          : true,
+    };
+  });
+  expect(currentItemLayout).toEqual({
+    documentOverflows: false,
+    partsOverlap: false,
+  });
+
+  await history.click();
+  await expect(menuButton).toBeFocused();
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await menuButton.click();
+  await settings.click();
+  const settingsDestination = page.getByRole("heading", {
+    level: 1,
+    name: "設定",
+  });
+  await expect(settingsDestination).toBeFocused();
+
+  await menuButton.click();
+  await expect(settings).toHaveAttribute("aria-current", "page");
+  await expect(history).not.toHaveAttribute("aria-current");
+  await expect(settings.getByText("現在地", { exact: true })).toBeVisible();
   expect(
     await page.evaluate(
       () =>
