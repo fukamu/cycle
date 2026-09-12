@@ -468,6 +468,7 @@ Hamburger Menu:
 
 Homeは`progressingGoals: GoalView[]`をCollectionとして扱う。Freeでは0〜2件だが、型・API・Componentを固定長にしない。Goalの現在作業は専用summaryで重複表現せず、§23.2の`GoalView.currentWork`を使う。
 
+- Section見出し横の件数は`{現在数} / {上限}件`と表示し、同じ要素のaccessible nameを`取り組んでいる目標は上限{上限}件中{現在数}件です`とする。件数と上限にはHome read modelの値を使い、Free上限へ固定しない。
 - `progressingGoals`はGoalの作成日時が古い順（`created_at ASC, id ASC`）で返し、Goalの更新によってCard位置を変えない。
 - `currentWork.kind=active_cycle`は`reviewSchedule`を必ず含み、未設定を`reviewDate=null`、`reviewScheduleRevision=0`で表す。見直す日の変更でHomeの安定したGoal順序を変えない。`goal_review`では`reviewSchedule`を含めない。
 - Progressing Goal 0件: Creation Draftがあれば「目標の設定を続ける」、なければ「新しい目標を設定」。

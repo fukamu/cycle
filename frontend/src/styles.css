@@ -297,6 +297,7 @@ summary:focus-visible {
 
 .section-heading {
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
   align-items: baseline;
   justify-content: space-between;
@@ -311,12 +312,14 @@ summary:focus-visible {
 }
 
 .section-heading span {
+  flex: 0 0 auto;
   padding: 3px 10px;
   color: var(--brand-dark);
   background: var(--brand-soft);
   border-radius: 999px;
   font-size: var(--font-size-small);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .goal-collection {

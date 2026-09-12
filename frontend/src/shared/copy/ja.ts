@@ -234,6 +234,13 @@ export const cycleGoalActionCopy = {
   },
 } as const;
 
+export const homeCopy = {
+  progressingGoalCount: (count: number, limit: number) =>
+    `${count} / ${limit}件`,
+  progressingGoalCountAccessible: (count: number, limit: number) =>
+    `取り組んでいる目標は上限${limit}件中${count}件です`,
+} as const;
+
 export const goalCopy = {
   guide:
     "これから良くしたいことや、目指したい状態を書いてみましょう。最初から完璧である必要はありません。",
