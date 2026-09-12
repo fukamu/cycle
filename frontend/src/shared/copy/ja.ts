@@ -93,6 +93,7 @@ export type CycleFrameTemplate = {
 
 export const cycleFrameTemplateCopy = {
   heading: "書き始めのテンプレート（任意）",
+  toggle: "テンプレートから書き始める（任意）",
   guide: "内容を確認してから選んでください。挿入後は自由に編集できます。",
   previewLabel: "挿入される内容",
   insert: (name: string) => `${name}を挿入`,

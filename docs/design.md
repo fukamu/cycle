@@ -608,9 +608,9 @@ Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、`現在のco
 
 Active Cycleでは任意の`見直す日`を`YYYY-MM-DD`のcalendar dateとして表示し、未設定、設定/変更、明示Clearを区別する。設定/変更とClearはFrame Auto Saveへ混ぜず、各操作を明示確定してから送る。設定済み日はBrowser local calendar dateとの比較からToday / Upcoming / Overdueをtextで併記し、timezone/offsetを日付値へ保存しない。Completed / Canceledでは確定時点の値をRead-onlyで表示し、変更controlを出さない。
 
-Active CycleのPまたはD選択中は、Guideの後、Textareaの前に任意のbuilt-in templateを3件表示する。各templateは名称、用途、実際に挿入する全文preview、明示操作`{template名}を挿入`を選択前から示す。現在Frameが空文字またはUnicode whitespaceだけの場合だけ、明示操作で既存本文全体をpreviewどおり置き換え、同じTextarea入力・Auto Save経路へ渡して末尾へfocusする。挿入直後は`テンプレートの挿入を取り消す`を提供し、その後はtemplate IDや選択情報を持たないplain textとして自由に編集できる。
+Active CycleのPまたはD選択中は、Guideの後、Textareaの前に任意のbuilt-in templateを段階表示する。標準では明示操作`テンプレートから書き始める（任意）`だけを閉じた状態で示し、操作時に同じ場所で3件を展開する。展開後は各templateの名称、用途、実際に挿入する全文preview、明示操作`{template名}を挿入`を選択前から示す。P / Dを切り替えた場合は遷移先を閉じた標準状態で表示し、展開状態を永続化しない。現在Frameが空文字またはUnicode whitespaceだけの場合だけ、明示操作で既存本文全体をpreviewどおり置き換え、同じTextarea入力・Auto Save経路へ渡して末尾へfocusする。挿入直後は展開した領域内に`テンプレートの挿入を取り消す`を提供し、その後はtemplate IDや選択情報を持たないplain textとして自由に編集できる。
 
-P/Dが非空の場合もtemplateとpreviewを表示したまま挿入操作を無効にし、`現在の{P|D}に入力があるため、テンプレートを挿入できません。既存の内容は上書きしません。`をvisible textとaccessible descriptionで示す。IME composition中、選択FrameのBrowser Draft Recovery確認待ち、workspace移動後、Cycle command処理中も挿入せず、それぞれの理由を同じ場所へ示す。Completed / Canceled CycleとC/Aではtemplate UIを表示しない。Exact template copyは§9.7を正とする。
+P/Dが非空の場合も閉じた展開操作を表示する。展開後はtemplateとpreviewを表示したまま挿入操作を無効にし、`現在の{P|D}に入力があるため、テンプレートを挿入できません。既存の内容は上書きしません。`をvisible textとaccessible descriptionで示す。IME composition中、選択FrameのBrowser Draft Recovery確認待ち、workspace移動後、Cycle command処理中も挿入せず、展開中はそれぞれの理由を同じ場所へ示す。Completed / Canceled CycleとC/Aではtemplate UIを表示しない。Exact template copyは§9.7を正とする。
 
 Active Cycleの編集可能なP / D / Cでは、Textarea、文字数feedback、Auto Save state / counterの後に、それぞれ`D — Doへ進む`、`C — Checkへ進む`、`A — Actionへ進む`というinline CTAを通常のscroll flowで表示する。CTAは既存のFrame選択経路で次のFrameを選択し、選択後は遷移先Tabへfocusする。入力が空、dirty / saving / failedを含むAuto Save state、または保存処理中であることを理由に無効化せず、保存完了を待たない。既存のflush、Auto Save queue、Browser Draft Cache、選択Frameの端末保存、自由なTab移動は変更しない。A、Completed / Canceled Cycle、選択中FrameのBrowser Draft Recoveryの確認待ち、workspace移動後、Cycle command処理中などTextareaがread-onlyとなる状態では表示しない。固定・sticky配置や、入力完了を強制するwizard / validation gateにはしない。
 
@@ -645,7 +645,9 @@ UI文言はComponentへ散在させず、日本語copy moduleで管理する。
 
 ### P/D built-in templates
 
-共通heading: `書き始めのテンプレート（任意）`
+共通region label: `書き始めのテンプレート（任意）`
+
+共通展開操作: `テンプレートから書き始める（任意）`
 
 共通guide: `内容を確認してから選んでください。挿入後は自由に編集できます。`
 

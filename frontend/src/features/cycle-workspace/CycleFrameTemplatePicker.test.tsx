@@ -4,7 +4,7 @@ import { cycleFrameTemplateCopy } from "../../shared/copy/ja";
 import { CycleFrameTemplatePicker } from "./CycleFrameTemplatePicker";
 
 describe("CycleFrameTemplatePicker", () => {
-  it("shows every Plan name, purpose, and exact preview before explicit insertion", () => {
+  it("keeps optional templates collapsed until explicit expansion, then shows every Plan preview before insertion", () => {
     const onInsert = vi.fn();
     render(
       <CycleFrameTemplatePicker
@@ -19,6 +19,19 @@ describe("CycleFrameTemplatePicker", () => {
     const picker = screen.getByRole("region", {
       name: cycleFrameTemplateCopy.heading,
     });
+    const toggle = within(picker).getByRole("button", {
+      name: cycleFrameTemplateCopy.toggle,
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(
+      within(picker).queryByRole("heading", {
+        name: cycleFrameTemplateCopy.templates.plan[0].name,
+      }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
     for (const template of cycleFrameTemplateCopy.templates.plan) {
       expect(
         within(picker).getByRole("heading", { name: template.name }),
@@ -48,7 +61,7 @@ describe("CycleFrameTemplatePicker", () => {
     expect(onInsert).toHaveBeenCalledWith(selected);
   });
 
-  it("keeps previews available while insertion is disabled with an accessible reason", () => {
+  it("shows previews and an accessible disabled reason after expansion", () => {
     const onInsert = vi.fn();
     const reason = cycleFrameTemplateCopy.disabled.hasContent("D");
     render(
@@ -61,6 +74,15 @@ describe("CycleFrameTemplatePicker", () => {
       />,
     );
 
+    const toggle = screen.getByRole("button", {
+      name: cycleFrameTemplateCopy.toggle,
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent(reason);
     for (const template of cycleFrameTemplateCopy.templates.do) {
