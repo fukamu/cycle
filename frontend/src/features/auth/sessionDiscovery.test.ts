@@ -84,8 +84,8 @@ describe("anonymous session discovery", () => {
     }
     skipFirstUseGuide();
     const beforeDiscovery = readFirstUseGuidePreferences();
-    const setItem = vi.spyOn(Storage.prototype, "setItem");
-    const removeItem = vi.spyOn(Storage.prototype, "removeItem");
+    const setItem = vi.spyOn(window.localStorage, "setItem");
+    const removeItem = vi.spyOn(window.localStorage, "removeItem");
     const fetchMock = vi.fn(async () =>
       Response.json(anonymousSession, {
         headers: {
@@ -109,8 +109,8 @@ describe("anonymous session discovery", () => {
   });
 
   it("does not infer Guide eligibility from missing keys after an outer-GET existing Session", async () => {
-    const setItem = vi.spyOn(Storage.prototype, "setItem");
-    const removeItem = vi.spyOn(Storage.prototype, "removeItem");
+    const setItem = vi.spyOn(window.localStorage, "setItem");
+    const removeItem = vi.spyOn(window.localStorage, "removeItem");
     const fetchMock = vi.fn(async () =>
       Response.json(anonymousSession, {
         headers: {
