@@ -5,6 +5,7 @@ import {
   cycleFrameTemplateCopy,
   frameCopy,
   homeCopy,
+  textCounterCopy,
 } from "../src/shared/copy/ja";
 import { newUUIDv7 } from "../src/shared/id/uuid";
 import { expectAPIError, getSession, requestFromPage } from "./support/api";
@@ -175,6 +176,61 @@ async function expectHomeGoalCountAtNarrowWidths(
   };
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await assertLayout();
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await assertLayout();
+
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
+}
+
+async function expectTextCounterAtNarrowWidths(
+  page: Page,
+  subject: string,
+  count: number,
+  limit: number,
+) {
+  const assertLayout = async () => {
+    const counter = page.getByRole("status", {
+      name: textCounterCopy.accessible(subject, count, limit),
+    });
+    await expect(counter).toHaveText(textCounterCopy.visible(count, limit));
+    await expect(counter).toHaveAttribute("aria-live", "off");
+    expect(
+      await counter.evaluate((element) => {
+        const meta = element.closest(".editor-meta");
+        if (!(meta instanceof HTMLElement))
+          throw new Error("editor metadata is missing");
+        const counterRect = element.getBoundingClientRect();
+        const siblingRects = Array.from(meta.children)
+          .filter((candidate) => candidate !== element)
+          .map((candidate) => candidate.getBoundingClientRect());
+        return {
+          overlapsSibling: siblingRects.some(
+            (rect) =>
+              counterRect.left < rect.right &&
+              counterRect.right > rect.left &&
+              counterRect.top < rect.bottom &&
+              counterRect.bottom > rect.top,
+          ),
+          horizontalOverflow:
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        };
+      }),
+    ).toEqual({ overlapsSibling: false, horizontalOverflow: false });
+  };
+
+  await page.setViewportSize({ width: 320, height: 844 });
   await page.evaluate(() =>
     document.documentElement.style.removeProperty("zoom"),
   );
@@ -687,11 +743,15 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
   const goal = page.getByRole("textbox", { name: "あなたの目標" });
   await expect(goal).not.toHaveAttribute("maxlength");
-  await expect(page.getByText("0 / 80")).toBeVisible();
+  await expectTextCounterAtNarrowWidths(page, "あなたの目標", 0, 80);
   const maximumGoal = "😀".repeat(80);
   await saveText(page, goal, maximumGoal, "/api/v1/goal-drafts/");
   await expect(goal).toHaveValue(maximumGoal);
-  await expect(page.getByText("80 / 80")).toBeVisible();
+  await expect(
+    page.getByRole("status", {
+      name: "あなたの目標は上限80文字中80文字です",
+    }),
+  ).toHaveText("80 / 80文字");
   await goal.fill(`${maximumGoal}😀`);
   await expect(goal).toHaveValue(maximumGoal);
   await expect(
@@ -727,11 +787,15 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
   const planEditor = page.getByRole("textbox", { name: "P — Plan" });
   await expect(planEditor).not.toHaveAttribute("maxlength");
-  await expect(page.getByText("0 / 200")).toBeVisible();
+  await expectTextCounterAtNarrowWidths(page, "P — Plan", 0, 200);
   const maximumFrame = "😀".repeat(200);
   await saveFrame(page, "P — Plan", maximumFrame, "P");
   await expect(planEditor).toHaveValue(maximumFrame);
-  await expect(page.getByText("200 / 200")).toBeVisible();
+  await expect(
+    page.getByRole("status", {
+      name: "P — Planは上限200文字中200文字です",
+    }),
+  ).toHaveText("200 / 200文字");
   await planEditor.fill(`${maximumFrame}😀`);
   await expect(planEditor).toHaveValue(maximumFrame);
   await expect(
@@ -819,6 +883,12 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(
     page.getByText("Goal v1 · Cycle 1 を完了しました"),
   ).toBeVisible();
+  await expectTextCounterAtNarrowWidths(
+    page,
+    "次のサイクルで目指す目標",
+    Array.from(goalText).length,
+    80,
+  );
   expect(
     await page.evaluate(() =>
       Object.keys(localStorage).filter((key) =>

@@ -34,6 +34,7 @@ import {
   SaveBadge,
 } from "../../shared/components/AsyncState";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
+import { TextCounter } from "../../shared/components/TextCounter";
 import { goalActionCopy, goalCopy } from "../../shared/copy/ja";
 import { useBoundedTextInput } from "../../shared/hooks/useBoundedTextInput";
 import {
@@ -500,15 +501,12 @@ function GoalDraftEditor({
             state={editor.state}
             retry={conflictRetryBlocked ? undefined : editor.retry}
           />
-          <span
-            className={
-              boundedInput.count > GOAL_TEXT_MAX_CODE_POINTS
-                ? "counter counter--error"
-                : "counter"
-            }
-          >
-            {boundedInput.count} / {GOAL_TEXT_MAX_CODE_POINTS}
-          </span>
+          <TextCounter
+            subject="あなたの目標"
+            count={boundedInput.count}
+            limit={GOAL_TEXT_MAX_CODE_POINTS}
+            invalid={boundedInput.count > GOAL_TEXT_MAX_CODE_POINTS}
+          />
         </div>
         <div className="button-row">
           <button
