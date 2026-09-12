@@ -72,7 +72,7 @@ Cycle固有のアプリケーション要件・仕様・設計の最上位Source
 - 全体: `./scripts/check.sh`
 - Gate / CI control-plane負例: `./scripts/check-control-plane-fixtures.sh --working-tree`（既知のapplication-only変更は省略し、control-plane変更または分類不能時はfull fixture suiteを実行）
 - E2E込み: 消去可能な`TEST_DATABASE_URL`を設定して `./scripts/check.sh --e2e`
-- Commit前の必須gate: 全変更をstageして `./scripts/check-before-commit.sh`（full securityとtree guardは全candidate、残りは保守的change profile。Backendを含むprofileと`full`では消去可能なlocal `*_test` DBを`TEST_DATABASE_URL`へ設定）
+- Commit前の必須gate: 全変更をstageして `./scripts/check-before-commit.sh`（candidate securityとtree guardは全candidate、extended securityは`full` profile。Backendを含むprofileと`full`では消去可能なlocal `*_test` DBを`TEST_DATABASE_URL`へ設定）
 - Safe cleanの対象確認: `./scripts/clean.sh --dry-run`
 - DB reset guardのdry-run: `./scripts/reset-local-db.sh --database-name fukamu_cycle --confirm-database-name fukamu_cycle --dry-run`
 

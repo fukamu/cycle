@@ -444,6 +444,7 @@ expected = {
     "Reuse verified PR CI": "skipped",
     "Classify candidate changes": "success",
     "Security, configuration, and documentation": "success",
+    "Release security": "skipped",
     "Required PR CI": "success",
     "Attest tested PR tree": "success",
 }

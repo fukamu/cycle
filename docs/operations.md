@@ -93,7 +93,7 @@ Turnstile EditだけにscopeしたCloudflare tokenをdeploy tokenから分離し
 
 `Terraform Plan Staging`は`terraform plan -detailed-exitcode`を実行し、exit 0を`no_changes`、exit 2を`changes_present`、その他をfailureとして扱います。証跡はexact commit SHA、workflow run ID、saved PlanのSHA-256を含みます。`no_changes`は通常Deployへ直接渡せるinfra evidenceであり、Apply Environment、Apply credential inventory、state snapshot / read-back / restore drillへ進みません。
 
-`Terraform Apply Staging`は`changes_present`の場合だけ使い、自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人が、次のvalue-free inventoryを確認してからActions画面で成功したPlan run IDとexact confirmation `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。Workflowの最初のpreflight stepはconfirmationだけを検証し、不一致なら`gh api`を含む外部accessへ進みません。その後actor / triggering actorの両方、source workflow、repository、success、main、`changes_present` artifact、current main HEADを検査し、不一致ならApply Environment credentialへ進みません。Rerunもconfigured approver本人だけが実行します。利用中のGitHub planでRequired reviewerを使える場合は同じownerを設定し、owner本人がdispatchとreviewを行う運用では`Prevent self-review`を有効にしません。
+`Terraform Apply Staging`は`changes_present`の場合だけ使い、自動起動しません。Planをreviewした`TERRAFORM_APPLY_APPROVER`本人が、次のvalue-free inventoryを確認してからActions画面で成功したPlan run IDとexact confirmation `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。Workflowの最初のpreflight stepはconfirmationだけを検証し、不一致なら`gh api`を含む外部accessへ進みません。その後actor / triggering actorの両方、source workflow、repository、success、main、`changes_present` artifact、current main HEADを検査し、不一致ならApply Environment credentialへ進みません。Rerunもconfigured approver本人だけが実行します。同じownerによるRequired reviewer承認は重ねず、別担当者との職務分離が必要な場合だけEnvironment reviewerを追加します。
 
 ```bash
 gh secret list --app actions --repo fukamu/cycle --json name,updatedAt
@@ -129,12 +129,14 @@ CI (main HEAD。PR検証treeを完全一致で再利用できなければ全chec
 
 Plan中にdestroy / replaceがないこと、hostnameとTurnstile modeが承認値であることを確認します。Mainが進んだ、stateが別経路で変化した、artifactがstale / expiredの場合はPlanを破棄し、新しいCI / Planからやり直します。Saved planとTerraform stateはsecret相当としてdownload・転記・長期保存しません。
 
+Scheduled `Security audit`がfailure、cancel、timeout等の非成功で完了した場合、Terraform Plan、Terraform Apply、Deployは、そのrunより後にscheduledまたはmanualのfull auditが成功するまで共通preflightで停止します。固定titleのIssueを調査し、修正をmainへ反映した後、current mainから`Security audit`を新しくmanual dispatchして成功を確認し、新しいPlanからreleaseをやり直します。Auditはmainのattempt 1だけを受け入れ、full scan完了時にもaudited SHAがcurrent mainであることを確認します。一度復旧すれば、その後のmain commitは独立した`Release security`で検証されるため追加auditは不要です。既存runのRe-run、Issueのclose、workflow名やpathの異なるrunでこのgateを迂回しません。GitHub APIの取得失敗やlatest stateのschema不一致は停止として扱います。
+
 ### Manual Staging Deploy approval
 
 `Deploy Staging`は`workflow_run`から自動起動しません。Dispatch inputとrepository variableのexact contractは[`environment.md`のGitHub Staging Deploy input](environment.md#github-staging-deploy-input)を正本とします。
 
 - 通常releaseはTerraform evidenceとは別の明示承認とし、reviewしたexact-current-mainの成功`no_changes` PlanまたはApply run IDを指定する。Workflowはinput形式とmodeの組合せをGitHub API accessより前に拒否し、その後configured approver、Plan / Apply workflow identity、repository、main、success、head SHA、artifact inventory、Plan checksum / provenance、current main、同一SHAの成功CIを検証し、`changes_present` Planの直接Deployを拒否する。
-- Application recoveryは通常releaseと別modeでdispatchし、Terraform Apply evidenceの代わりに専用exact confirmationを使う。Current main、configured approver、同一SHAの成功CI、schema compatibilityを満たすApplication復旧だけに限定し、Terraform変更を含む通常releaseや任意commitのDeployへ使わない。
+- Application recoveryは通常releaseと別の`mode=recovery`でdispatchし、Terraform evidenceを空にする。Current main、configured approver、同一SHAの成功CI、schema compatibilityを満たすApplication復旧だけに限定し、Terraform変更を含む通常releaseや任意commitのDeployへ使わない。
 - Preflight成功後も`staging` Environmentのreviewer gateを維持できる。Environmentへ入る直前にcurrent mainを再取得し、検証済みSHAから進んでいればtraffic切替前に停止する。
 - Actual Apply、Deploy、secret / credential設定、権限変更、live provider smokeは、それぞれの実行時に個別承認を得る。事前のIssue / Pull Request承認をlive変更の承認として扱わない。
 
@@ -223,7 +225,7 @@ Post-deploy `full`だけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`で
 - Repository、workflow path、同じrun ID、source attempt 1、candidate SHA、deploy mode、configured operator、exact-main CI run、mode固有のno-change Plan / Apply evidenceが今回の入力と完全一致する。
 - Artifactが一意、未失効、許容size内の通常fileで、strict schemaを満たす。
 
-条件を確認できた場合だけ、Actions画面から同じrunの`Re-run all jobs`を選びます。WorkflowはrerunのUI種別そのものではなく、attempt 2のdeployが同じattemptで生成されたfresh resolve outputを受け取ったことを検証します。Deploy jobだけを対象にして成功済みresolverを再実行しない`Re-run failed jobs` / selected-job rerunは拒否されます。Resolverとdependentを対象にしたselected-job rerunがfresh resolve条件を満たし得る場合も、運用手順としては使用しません。Attempt 2はcurrent main、同一SHAの成功CI、no-change Plan / Apply evidenceまたはrecovery confirmation、actor / triggering actorを再検証して最初から実行し、途中phaseから再開しません。Attempt 2の失敗後はattempt 3を実行せず、artifactの欠落、cancel / timeout、schema / binding不一致も安全の証拠として補完しません。
+条件を確認できた場合だけ、Actions画面から同じrunの`Re-run all jobs`を選びます。WorkflowはrerunのUI種別そのものではなく、attempt 2のdeployが同じattemptで生成されたfresh resolve outputを受け取ったことを検証します。Deploy jobだけを対象にして成功済みresolverを再実行しない`Re-run failed jobs` / selected-job rerunは拒否されます。Resolverとdependentを対象にしたselected-job rerunがfresh resolve条件を満たし得る場合も、運用手順としては使用しません。Attempt 2はcurrent main、同一SHAの成功CI、通常modeのno-change Plan / Apply evidenceまたはrecovery modeの空のTerraform evidence、actor / triggering actorを再検証して最初から実行し、途中phaseから再開しません。Attempt 2の失敗後はattempt 3を実行せず、artifactの欠落、cancel / timeout、schema / binding不一致も安全の証拠として補完しません。
 
 Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し、CloudflareがDNS recordとcertificateを管理します。同名recordがある場合は所有用途を確認し、不要と確認できたrecordだけをDashboardから除去します。`workers.dev`とpreview URLは無効のまま維持します。
 
@@ -239,7 +241,7 @@ Cutover前に次を満たす。
 4. Cloudflare deploy tokenが旧Workerと`pdcai.matoruru.com` custom domainを変更できる最小scopeを持つ。Token値や旧Worker secret値を確認記録へ出さない。
 5. 旧originで旧interactive HTMLが配信中であることだけを本文・credentialなしで確認し、旧DB内容や件数を収集しない。
 
-Actions画面で`Retire Legacy PDCAI Origin`を`main`からmanual dispatchし、current main SHAとexact confirmation `RETIRE pdcai.matoruru.com WITHOUT RECOVERY`を入力する。Workflowはactor、confirmation、SHA、current main、成功CIをEnvironment credentialの前に検証し、同じ旧Worker名へ[`legacy-retirement/wrangler.jsonc`](../cloudflare/legacy-retirement/wrangler.jsonc)のstatic assetsだけをdeployする。Application DB migration、現行Worker、Container、Turnstile、Terraform state、Application runtime secretを変更しない。
+Actions画面で`Retire Legacy PDCAI Origin`を`main`からmanual dispatchし、exact confirmation `RETIRE pdcai.matoruru.com WITHOUT RECOVERY`を入力する。Workflowはactorとtriggering actor、confirmation、dispatch時のSHA、current main、成功CIをEnvironment credentialの前に検証し、同じ旧Worker名へ[`legacy-retirement/wrangler.jsonc`](../cloudflare/legacy-retirement/wrangler.jsonc)のstatic assetsだけをdeployする。Application DB migration、現行Worker、Container、Turnstile、Terraform state、Application runtime secretを変更しない。
 
 Deployment後はworkflowのsmokeで次を確認する。Deploy直後に旧edge cacheがHTTP 200で残る伝播競合を考慮し、全条件が同時に成立するまで最大12回、5秒間隔で再評価する。
 
@@ -361,6 +363,7 @@ OTLP failureでは固定error classと集約`failure_count`だけを確認し、
 | Symptom | Checks | Response |
 |---|---|---|
 | Terraform Planが開始しない | mainの同一SHA CI、workflow state | 同一SHAのCIを成功させる。PR検証treeを証明できなければmain全CIを待つ |
+| Security audit release gateで停止 | 固定title Issue、最新scheduled non-success、それより後のscheduled / manual audit run | 原因を修正し、current mainから新しいmanual full auditを開始して成功させ、新しいPlanから再開する。既存runのRe-runやIssue closeで迂回しない |
 | Apply preflightで停止 | actor / approver、Plan run ID、artifact期限、current main | Owner本人が最新成功Planを指定する。Stale / expired planを再利用しない |
 | Applyがapproval待ち | `Review deployments` | Planをreviewした指定ownerがApprove / Rejectする。期限超過時は新Plan |
 | Deployが開始しない | no-change Plan / Apply metadata、main SHA、workflow conclusion | CI → Plan → 必要な場合だけapproved Applyをやり直し、manual DeployでTerraformを迂回しない |

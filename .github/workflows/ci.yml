@@ -52,6 +52,19 @@ jobs:
             echo 'PR CI could not be safely reused; the full CI suite will run.' >> "${GITHUB_STEP_SUMMARY}"
           fi
 
+  release_security:
+    name: Release security
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run full security gates for the exact main commit
+        run: bash ./scripts/check-security.sh --profile full
+
   classify:
     name: Classify candidate changes
     needs: reuse_pr_ci
@@ -118,10 +131,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ needs.classify.outputs.change_profile == 'full' && '0' || '1' }}
           persist-credentials: false
+      - name: Test security audit release gate
+        run: bash .github/scripts/verify-security-audit-release-gate.test.sh
       - name: Run security gates
-        run: bash ./scripts/check-security.sh
+        if: github.event_name == 'pull_request'
+        env:
+          SECURITY_PROFILE: ${{ needs.classify.outputs.change_profile == 'full' && 'full' || 'candidate' }}
+        run: bash ./scripts/check-security.sh --profile "${SECURITY_PROFILE}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.0"

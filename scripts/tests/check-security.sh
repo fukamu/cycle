@@ -15,6 +15,8 @@ require_command git
 require_command cmp
 require_command find
 require_command base64
+require_command dd
+require_command node
 require_command script
 require_command tar
 require_command zip
@@ -80,6 +82,109 @@ create_nested_tar_fixture() {
     current="${next}"
   done
   cp -- "${current}" "${destination}"
+}
+
+write_png_fixture() {
+  local destination="$1"
+  local fixture_kind="${2:-valid}"
+  local encoded
+
+  case "${fixture_kind}" in
+    valid)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII='
+      ;;
+    valid_alternate)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+      ;;
+    valid_ancillary)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAABGdBTUEAALGPC/xhBQAAAANQTFRF/wAAGeIJNwAAAAlwSFlzAAAOxAAADsQBlSsOGwAAAAxJREFUeJxj+M/AAAADAQEAyf6S7wAAAABJRU5ErkJggg=='
+      ;;
+    valid_indexed_filtered)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAMAAADD/I+4AAAABlBMVEUAAAD///+l2Z/dAAAAC0lEQVR4nGNk/A8AAQcBAtp+NUYAAAAASUVORK5CYII='
+      ;;
+    text_metadata)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADHRFWHR0b2tlbj1iZW5pZ26vbrBKAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII='
+      ;;
+    apng)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACGFjVEwAAAABAAAAALQt6aAAAAALSURBVHicY2AAAgAABQABel6rPwAAAABJRU5ErkJggg=='
+      ;;
+    unknown_chunk)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAHZwQWcBVcKzAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII='
+      ;;
+    oversized_dimension)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAEAEAAAABCAYAAACx4wBCAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII='
+      ;;
+    invalid_ancillary_order)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAA1BMVEX/AAAZ4gk3AAAABGdBTUEAALGPC/xhBQAAAAxJREFUeJxj+M/AAAADAQEAyf6S7wAAAABJRU5ErkJggg=='
+      ;;
+    invalid_palette_order)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAABnRSTlMA/wAAAACkwsAdAAAAA1BMVEX/AAAZ4gk3AAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
+      ;;
+    invalid_gray_transparency_sample)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAAAnRSTlMBAG+I/HkAAAAKSURBVHicY2AAAAACAAFIr6RxAAAAAElFTkSuQmCC'
+      ;;
+    invalid_truecolor_transparency_sample)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAABnRSTlMAAAEAAADWGmD0AAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC'
+      ;;
+    invalid_indexed_filtered)
+      encoded='iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAMAAADD/I+4AAAABlBMVEUAAAD///+l2Z/dAAAAC0lEQVR4nGNkZAQAAAkABC7EI8UAAAAASUVORK5CYII='
+      ;;
+    *) fail "unknown PNG fixture kind ${fixture_kind}" ;;
+  esac
+  mkdir -p -- "$(dirname -- "${destination}")"
+  printf '%s' "${encoded}" | base64 --decode >"${destination}"
+}
+
+write_maximum_decoded_png_fixture() {
+  local destination="$1"
+  local marker="$2"
+
+  mkdir -p -- "$(dirname -- "${destination}")"
+  node - "${destination}" "${marker}" <<'NODE'
+const fs = require("node:fs");
+const { deflateSync } = require("node:zlib");
+
+const destination = process.argv[2];
+const marker = Number(process.argv[3]);
+if (!Number.isInteger(marker) || marker < 0 || marker > 255) process.exit(2);
+
+const crc32 = (content) => {
+  let crc = 0xffffffff;
+  for (const byte of content) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ ((crc & 1) === 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+};
+const chunk = (typeText, data) => {
+  const type = Buffer.from(typeText, "ascii");
+  const result = Buffer.alloc(12 + data.length);
+  result.writeUInt32BE(data.length, 0);
+  type.copy(result, 4);
+  data.copy(result, 8);
+  result.writeUInt32BE(crc32(Buffer.concat([type, data])), 8 + data.length);
+  return result;
+};
+
+const width = 4096;
+const height = 4096;
+const rowLength = width * 4 + 1;
+const pixels = Buffer.alloc(rowLength * height);
+for (let row = 0; row < height; row += 1) pixels[row * rowLength] = 0;
+pixels[1] = marker;
+const header = Buffer.alloc(13);
+header.writeUInt32BE(width, 0);
+header.writeUInt32BE(height, 4);
+header.set([8, 6, 0, 0, 0], 8);
+fs.writeFileSync(destination, Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  chunk("IHDR", header),
+  chunk("IDAT", deflateSync(pixels, { level: 9 })),
+  chunk("IEND", Buffer.alloc(0)),
+]));
+NODE
 }
 
 expect_failure() {
@@ -383,6 +488,170 @@ expect_failure \
   "${text_policy_fixture}/candidate"
 unlink -- "${text_policy_fixture}/candidate/printable.zip"
 
+approved_asset_path="${text_policy_fixture}/candidate/frontend/src/assets/guide.png"
+write_png_fixture "${approved_asset_path}"
+security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
+  || fail "approved PNG candidate asset was rejected"
+security_run_gitleaks_normalized_text \
+  "${text_policy_fixture}/candidate" \
+  candidate \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-approved-png.log" \
+  || fail "validated PNG candidate asset was not omitted from normalized content materialization"
+
+write_png_fixture "${approved_asset_path}" valid_ancillary
+security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
+  || fail "approved PNG ancillary chunks were rejected"
+security_run_gitleaks_normalized_text \
+  "${text_policy_fixture}/candidate" \
+  candidate \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-approved-png-ancillary.log" \
+  || fail "validated PNG ancillary chunks lost their normalized-scan identity"
+write_png_fixture "${approved_asset_path}" valid_indexed_filtered
+security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
+  || fail "approved filtered indexed PNG was rejected"
+write_png_fixture "${approved_asset_path}"
+security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
+  || fail "restored approved PNG candidate asset was rejected"
+
+for rejected_asset_path in \
+  "${text_policy_fixture}/candidate/frontend/public/guide.png" \
+  "${text_policy_fixture}/candidate/frontend/src/guide.png" \
+  "${text_policy_fixture}/candidate/frontend/src/assets/.png" \
+  "${text_policy_fixture}/candidate/frontend/src/assets/nested/.png" \
+  "${text_policy_fixture}/candidate/frontend/src/assets/guide.PNG" \
+  "${text_policy_fixture}/candidate/frontend/src/assets/guide.webp" \
+  "${text_policy_fixture}/candidate/frontend/src/assets/guide.svg" \
+  "${text_policy_fixture}/candidate/frontend/src/assets/guide.woff2"; do
+  mkdir -p -- "$(dirname -- "${rejected_asset_path}")"
+  cp -- "${approved_asset_path}" "${rejected_asset_path}"
+  expect_failure \
+    "PNG candidate at unapproved path or extension ${rejected_asset_path#"${text_policy_fixture}/candidate/"}" \
+    security_validate_candidate_text_files \
+    "${text_policy_fixture}/candidate"
+  unlink -- "${rejected_asset_path}"
+done
+
+for invalid_png_kind in \
+  text_metadata apng unknown_chunk oversized_dimension invalid_ancillary_order invalid_palette_order \
+  invalid_gray_transparency_sample invalid_truecolor_transparency_sample invalid_indexed_filtered; do
+  write_png_fixture "${approved_asset_path}" "${invalid_png_kind}"
+  expect_failure \
+    "${invalid_png_kind} PNG candidate fixture" \
+    security_validate_candidate_text_files \
+    "${text_policy_fixture}/candidate"
+done
+
+write_png_fixture "${approved_asset_path}"
+cp -- "${approved_asset_path}" "${approved_asset_path}.fixture"
+printf '\000' | dd of="${approved_asset_path}.fixture" bs=1 seek=29 conv=notrunc status=none
+mv -- "${approved_asset_path}.fixture" "${approved_asset_path}"
+expect_failure \
+  "PNG candidate with a corrupt chunk CRC" \
+  security_validate_candidate_text_files \
+  "${text_policy_fixture}/candidate"
+
+write_png_fixture "${approved_asset_path}"
+dd if="${approved_asset_path}" of="${approved_asset_path}.fixture" bs=1 count=40 status=none
+mv -- "${approved_asset_path}.fixture" "${approved_asset_path}"
+expect_failure \
+  "truncated PNG candidate" \
+  security_validate_candidate_text_files \
+  "${text_policy_fixture}/candidate"
+
+write_png_fixture "${approved_asset_path}"
+printf 'PK\003\004trailing archive\n' >>"${approved_asset_path}"
+expect_failure \
+  "PNG candidate with a trailing archive" \
+  security_validate_candidate_text_files \
+  "${text_policy_fixture}/candidate"
+
+write_png_fixture "${approved_asset_path}"
+dd if=/dev/zero bs=1048576 count=2 status=none >>"${approved_asset_path}"
+expect_failure \
+  "PNG candidate above the two MiB bound" \
+  security_validate_candidate_text_files \
+  "${text_policy_fixture}/candidate"
+
+for disguised_asset_kind in gif archive executable; do
+  case "${disguised_asset_kind}" in
+    gif) printf 'GIF89a\000fixture\n' >"${approved_asset_path}" ;;
+    archive) printf 'PK\003\004archive\000fixture\n' >"${approved_asset_path}" ;;
+    executable) printf '\177ELF\002\001\001\000fixture\n' >"${approved_asset_path}" ;;
+  esac
+  expect_failure \
+    "${disguised_asset_kind} content disguised as a PNG candidate" \
+    security_validate_candidate_text_files \
+    "${text_policy_fixture}/candidate"
+done
+
+write_png_fixture "${approved_asset_path}"
+chmod 755 "${approved_asset_path}"
+expect_failure \
+  "executable-mode PNG candidate" \
+  security_validate_candidate_text_files \
+  "${text_policy_fixture}/candidate"
+chmod 644 "${approved_asset_path}"
+security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
+  || fail "restored approved PNG candidate asset was rejected"
+printf '\177ELF\002\001\001\000changed after validation\n' >"${approved_asset_path}"
+expect_failure \
+  "normalized candidate PNG changed after inventory validation" \
+  security_run_gitleaks_normalized_text \
+  "${text_policy_fixture}/candidate" \
+  candidate \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-changed-png.log"
+write_png_fixture "${approved_asset_path}"
+security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
+  || fail "restored PNG candidate could not refresh its validated identity"
+
+aggregate_asset_candidate="${text_policy_fixture}/aggregate-asset-candidate"
+aggregate_asset_first="${aggregate_asset_candidate}/frontend/src/assets/first.png"
+aggregate_asset_second="${aggregate_asset_candidate}/frontend/src/assets/second.png"
+write_maximum_decoded_png_fixture "${aggregate_asset_first}" 1
+cp -- "${aggregate_asset_first}" "${aggregate_asset_second}"
+security_validate_candidate_text_files "${aggregate_asset_candidate}" \
+  || fail "the same maximum-size decoded PNG OID was charged twice"
+write_maximum_decoded_png_fixture "${aggregate_asset_second}" 2
+expect_failure \
+  "aggregate decoded PNG size above the inventory bound" \
+  security_validate_candidate_text_files \
+  "${aggregate_asset_candidate}"
+unlink -- "${aggregate_asset_second}"
+security_validate_candidate_text_files "${aggregate_asset_candidate}" \
+  || fail "one maximum-size decoded PNG did not fit the aggregate bound"
+
+unvalidated_asset_candidate="${text_policy_fixture}/unvalidated-asset-candidate"
+write_png_fixture "${unvalidated_asset_candidate}/frontend/src/assets/guide.png"
+expect_failure \
+  "normalized candidate asset without a matching inventory validation" \
+  security_run_gitleaks_normalized_text \
+  "${unvalidated_asset_candidate}" \
+  candidate \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-unvalidated-png.log"
+
+credential_asset_candidate="${text_policy_fixture}/credential-asset-candidate"
+credential_asset_secret="$(printf '%s%s%s%s' 'gh' 'p_' 'P1n2G3a4S5s6E7t8' 'F9i0L1e2N3a4M5e6Q7r8')"
+write_png_fixture "${credential_asset_candidate}/frontend/src/assets/${credential_asset_secret}.png"
+security_validate_candidate_text_files "${credential_asset_candidate}" \
+  || fail "structurally valid credential-like PNG filename fixture was rejected before name scanning"
+expect_failure \
+  "normalized credential-like PNG filename fixture" \
+  security_run_gitleaks_normalized_text \
+  "${credential_asset_candidate}" \
+  candidate \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-png-name-negative.log"
+grep -Fq -- 'leaks found' "${output_root}/gitleaks-normalized-png-name-negative.log" \
+  || fail "normalized PNG name manifest did not contain a finding"
+if grep -Fq -- "${credential_asset_secret}" "${output_root}/gitleaks-normalized-png-name-negative.log"; then
+  fail "normalized PNG name output exposed the runtime secret"
+fi
+unset credential_asset_secret
+
 printf '\377invalid UTF-8\n' >"${text_policy_fixture}/candidate/invalid-utf8.txt"
 expect_failure \
   "invalid UTF-8 candidate fixture" \
@@ -404,6 +673,125 @@ security_validate_staged_text_files "${repo_root}" \
   || fail "current staged approved-text inventory was rejected"
 security_validate_history_text_files "${repo_root}" \
   || fail "reviewed legacy binary blob identity did not match repository history"
+
+asset_policy_repo="${text_policy_fixture}/asset-repository"
+mkdir -p -- "${asset_policy_repo}"
+git -C "${asset_policy_repo}" init --quiet
+printf '%s\n' 'asset repository root' >"${asset_policy_repo}/root.txt"
+write_png_fixture "${asset_policy_repo}/frontend/src/assets/guide.png"
+git -C "${asset_policy_repo}" add root.txt frontend/src/assets/guide.png
+security_validate_staged_text_files "${asset_policy_repo}" \
+  || fail "approved staged PNG asset was rejected"
+security_run_gitleaks_normalized_text \
+  "${asset_policy_repo}" \
+  staged \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-staged-png.log" \
+  || fail "approved staged PNG asset was not bound to its validated identity"
+git -C "${asset_policy_repo}" update-index --chmod=+x frontend/src/assets/guide.png
+expect_failure \
+  "executable-mode staged PNG asset" \
+  security_validate_staged_text_files \
+  "${asset_policy_repo}"
+git -C "${asset_policy_repo}" update-index --chmod=-x frontend/src/assets/guide.png
+security_validate_staged_text_files "${asset_policy_repo}" \
+  || fail "restored staged PNG asset was rejected"
+write_png_fixture "${asset_policy_repo}/frontend/src/assets/guide.png" valid_alternate
+git -C "${asset_policy_repo}" add frontend/src/assets/guide.png
+expect_failure \
+  "normalized staged PNG changed after inventory validation" \
+  security_run_gitleaks_normalized_text \
+  "${asset_policy_repo}" \
+  staged \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-staged-png-changed.log"
+write_png_fixture "${asset_policy_repo}/frontend/src/assets/guide.png"
+git -C "${asset_policy_repo}" add frontend/src/assets/guide.png
+security_validate_staged_text_files "${asset_policy_repo}" \
+  || fail "restored staged PNG OID was rejected"
+git -C "${asset_policy_repo}" \
+  -c user.name='Asset Fixture' \
+  -c user.email='asset-fixture.invalid@example.invalid' \
+  commit --quiet -m 'add approved asset'
+security_validate_history_text_files "${asset_policy_repo}" \
+  || fail "approved historical PNG asset was rejected"
+security_run_gitleaks_normalized_text \
+  "${asset_policy_repo}" \
+  history \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-history-png.log" \
+  || fail "approved historical PNG asset was not bound to its validated identity"
+write_png_fixture "${asset_policy_repo}/frontend/src/assets/guide.png" valid_alternate
+git -C "${asset_policy_repo}" add frontend/src/assets/guide.png
+git -C "${asset_policy_repo}" \
+  -c user.name='Asset Fixture' \
+  -c user.email='asset-fixture.invalid@example.invalid' \
+  commit --quiet -m 'replace approved asset'
+expect_failure \
+  "normalized history gained a PNG OID after inventory validation" \
+  security_run_gitleaks_normalized_text \
+  "${asset_policy_repo}" \
+  history \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-history-png-changed.log"
+security_validate_history_text_files "${asset_policy_repo}" \
+  || fail "replacement historical PNG asset was rejected"
+security_run_gitleaks_normalized_text \
+  "${asset_policy_repo}" \
+  history \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-history-png-refreshed.log" \
+  || fail "refreshed historical PNG identities were rejected"
+git -C "${asset_policy_repo}" rm --quiet frontend/src/assets/guide.png
+git -C "${asset_policy_repo}" \
+  -c user.name='Asset Fixture' \
+  -c user.email='asset-fixture.invalid@example.invalid' \
+  commit --quiet -m 'remove approved asset'
+security_validate_history_text_files "${asset_policy_repo}" \
+  || fail "deleted approved PNG asset was rejected from history"
+security_run_gitleaks_normalized_text \
+  "${asset_policy_repo}" \
+  history \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-deleted-history-png.log" \
+  || fail "deleted approved PNG asset lost its validated history binding"
+
+invalid_asset_history_repo="${text_policy_fixture}/invalid-asset-history"
+mkdir -p -- "${invalid_asset_history_repo}"
+git -C "${invalid_asset_history_repo}" init --quiet
+printf '%s\n' 'invalid asset history root' >"${invalid_asset_history_repo}/root.txt"
+write_png_fixture "${invalid_asset_history_repo}/frontend/src/assets/bad.png"
+printf 'PK\003\004trailing archive\n' >>"${invalid_asset_history_repo}/frontend/src/assets/bad.png"
+git -C "${invalid_asset_history_repo}" add root.txt frontend/src/assets/bad.png
+git -C "${invalid_asset_history_repo}" \
+  -c user.name='Invalid Asset Fixture' \
+  -c user.email='invalid-asset-fixture.invalid@example.invalid' \
+  commit --quiet -m 'add invalid asset'
+git -C "${invalid_asset_history_repo}" rm --quiet frontend/src/assets/bad.png
+git -C "${invalid_asset_history_repo}" \
+  -c user.name='Invalid Asset Fixture' \
+  -c user.email='invalid-asset-fixture.invalid@example.invalid' \
+  commit --quiet -m 'remove invalid asset'
+expect_failure \
+  "deleted historical PNG with a trailing archive" \
+  security_validate_history_text_files \
+  "${invalid_asset_history_repo}"
+
+executable_asset_history_repo="${text_policy_fixture}/executable-asset-history"
+mkdir -p -- "${executable_asset_history_repo}"
+git -C "${executable_asset_history_repo}" init --quiet
+printf '%s\n' 'executable asset history root' >"${executable_asset_history_repo}/root.txt"
+write_png_fixture "${executable_asset_history_repo}/frontend/src/assets/executable.png"
+chmod 755 "${executable_asset_history_repo}/frontend/src/assets/executable.png"
+git -C "${executable_asset_history_repo}" add root.txt frontend/src/assets/executable.png
+git -C "${executable_asset_history_repo}" \
+  -c user.name='Executable Asset Fixture' \
+  -c user.email='executable-asset-fixture.invalid@example.invalid' \
+  commit --quiet -m 'add executable asset'
+expect_failure \
+  "executable-mode historical PNG asset" \
+  security_validate_history_text_files \
+  "${executable_asset_history_repo}"
 
 git_guard_repo="${text_policy_fixture}/git-guard"
 mkdir -p -- "${git_guard_repo}"
@@ -431,6 +819,8 @@ expect_failure \
 git_guard_linked_runtime_secret="$(printf '%s%s%s%s' 'gh' 'p_' 'L1m2N3o4P5q6R7s8' 'T9u0V1w2X3y4Z5a6B7c8')"
 printf 'token=%s\n' "${git_guard_linked_runtime_secret}" >"${git_guard_linked_worktree}/plain.txt"
 git -C "${git_guard_linked_worktree}" add plain.txt
+security_validate_staged_text_files "${git_guard_linked_worktree}" \
+  || fail "linked Git worktree staged secret fixture was rejected before secret scanning"
 expect_failure \
   "linked Git worktree-specific normalized staged secret fixture" \
   security_run_gitleaks_normalized_text \
@@ -695,7 +1085,7 @@ expect_failure \
   "${text_path_history}"
 
 unset guarded_original_commit guarded_replacement_commit newline_candidate_path fsmonitor_marker fsmonitor_hook pager_marker pager_hook pager_driver included_git_config promisor_repo promisor_marker promisor_helper promisor_missing_oid promisor_object_path promisor_diff_status
-pass "candidate, index, and all-ref history accept only approved text; Git graph overrides and exact legacy-binary drift fail closed"
+pass "candidate, index, and all-ref history accept approved text or bounded PNG assets; Git graph overrides and binary-policy drift fail closed"
 
 security_tools_source="${repo_root}/scripts/lib/security-tools.sh"
 merge_history_option_count="$(awk 'index($0, "--log-opts=--all --full-history -m --text --no-ext-diff --no-textconv") { count += 1 } END { print count + 0 }' "${security_tools_source}")"

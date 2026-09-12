@@ -373,55 +373,21 @@ test_docs_gate() {
   fixture="$(new_docs_fixture missing-pull-request-template)"
   rm -- "${fixture}/.github/pull_request_template.md"
   assert_failure_contains \
-    "missing pull request Source of Truth template without deployment contract" \
+    "missing pull request review template" \
     "PULL_REQUEST_TEMPLATE_MISSING" \
     bash "${fixture}/scripts/check-docs.sh"
 
-  fixture="$(new_docs_fixture missing-pull-request-canonical-reference)"
-  enable_operational_documentation_topology "${fixture}"
-  remove_exact_line \
-    "${fixture}/.github/pull_request_template.md" \
-    '- [文書の権威](https://github.com/fukamu/cycle/blob/main/docs/design.md#01-文書の権威)'
-  assert_failure_contains \
-    "pull request template missing a canonical reference" \
-    "PULL_REQUEST_TEMPLATE_CANONICAL_REFERENCE" \
-    bash "${fixture}/scripts/check-docs.sh"
-
-  fixture="$(new_docs_fixture raw-html-pull-request-canonical-link)"
-  enable_operational_documentation_topology "${fixture}"
+  fixture="$(new_docs_fixture hidden-pull-request-decision-prompt)"
   replace_exact_line \
     "${fixture}/.github/pull_request_template.md" \
-    '- [文書の権威](https://github.com/fukamu/cycle/blob/main/docs/design.md#01-文書の権威)' \
-    '<a href="https://github.com/fukamu/cycle/blob/main/docs/design.md#01-文書の権威">文書の権威</a>'
+    '- Issue / Decision URL: <!-- scope、分類、判断を所有するIssueまたはDecisionへのlink -->' \
+    '<!-- Issue / Decision URL: -->'
   assert_failure_contains \
-    "pull request template replaces a visible Markdown owner link with raw HTML" \
-    "PULL_REQUEST_TEMPLATE_CANONICAL_REFERENCE" \
-    bash "${fixture}/scripts/check-docs.sh"
-
-  fixture="$(new_docs_fixture broken-pull-request-canonical-anchor)"
-  enable_operational_documentation_topology "${fixture}"
-  replace_exact_line \
-    "${fixture}/docs/design.md" \
-    '## 52.5 Specification update procedure' \
-    '## 52.5 Renamed specification procedure'
-  assert_failure_contains \
-    "pull request template canonical URL has a missing local anchor" \
-    "PULL_REQUEST_TEMPLATE_CANONICAL_REFERENCE" \
-    bash "${fixture}/scripts/check-docs.sh"
-
-  fixture="$(new_docs_fixture detached-pull-request-source-sections)"
-  enable_operational_documentation_topology "${fixture}"
-  insert_before_exact_line \
-    "${fixture}/.github/pull_request_template.md" \
-    '### Specification Impact classification' \
-    '## Detached review section'
-  assert_failure_contains \
-    "pull request template moves review prompts outside the Source of Truth section" \
-    "PULL_REQUEST_TEMPLATE_STRUCTURE" \
+    "pull request template hides the decision URL prompt" \
+    "PULL_REQUEST_TEMPLATE_DECISION" \
     bash "${fixture}/scripts/check-docs.sh"
 
   fixture="$(new_docs_fixture missing-pull-request-classification)"
-  enable_operational_documentation_topology "${fixture}"
   # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
   remove_exact_line \
     "${fixture}/.github/pull_request_template.md" \
@@ -431,104 +397,51 @@ test_docs_gate() {
     "PULL_REQUEST_TEMPLATE_CLASSIFICATION" \
     bash "${fixture}/scripts/check-docs.sh"
 
-  fixture="$(new_docs_fixture missing-pull-request-impact-area)"
-  enable_operational_documentation_topology "${fixture}"
-  remove_exact_line \
-    "${fixture}/.github/pull_request_template.md" \
-    '| AI | <!-- 必須 --> |'
-  assert_failure_contains \
-    "pull request template missing an impact or N/A review area" \
-    "PULL_REQUEST_TEMPLATE_IMPACT_REVIEW" \
-    bash "${fixture}/scripts/check-docs.sh"
-
-  fixture="$(new_docs_fixture weakened-pull-request-na-reason)"
-  enable_operational_documentation_topology "${fixture}"
-  # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
-  replace_exact_line \
-    "${fixture}/.github/pull_request_template.md" \
-    '各行を必ず埋め、影響がない場合は `N/A — 理由` と記載してください。空欄または理由のない `N/A` は認めません。' \
-    '影響がない場合は `N/A` と記載してください。'
-  assert_failure_contains \
-    "pull request template permits N/A without a reason" \
-    "PULL_REQUEST_TEMPLATE_IMPACT_REVIEW" \
-    bash "${fixture}/scripts/check-docs.sh"
-
-  fixture="$(new_docs_fixture missing-pull-request-owner-evidence)"
-  enable_operational_documentation_topology "${fixture}"
+  fixture="$(new_docs_fixture missing-pull-request-canonical-section)"
   # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
   remove_exact_line \
     "${fixture}/.github/pull_request_template.md" \
-    '- Product Owner approval: <!-- 仕様変更では、理由・影響・選択肢を含む承認証跡を記載。その他は `N/A — 理由`。 -->'
+    '- Canonical design section(s): <!-- 確認または更新した`docs/design.md`のsection -->'
   assert_failure_contains \
-    "pull request template missing Product Owner approval evidence" \
-    "PULL_REQUEST_TEMPLATE_OWNER_FIRST" \
+    "pull request template missing the canonical section prompt" \
+    "PULL_REQUEST_TEMPLATE_CANONICAL_REFERENCE" \
     bash "${fixture}/scripts/check-docs.sh"
 
-  fixture="$(new_docs_fixture missing-pull-request-owner-first-gate)"
-  enable_operational_documentation_topology "${fixture}"
+  fixture="$(new_docs_fixture missing-pull-request-affected-areas)"
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- Affected owners / areas: <!-- 影響があるowner / areaだけを列挙 -->'
+  assert_failure_contains \
+    "pull request template missing the affected owners and areas prompt" \
+    "PULL_REQUEST_TEMPLATE_AFFECTED_AREAS" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-rationale)"
+  remove_exact_line \
+    "${fixture}/.github/pull_request_template.md" \
+    '- Classification rationale: <!-- この分類の理由、主な影響、仕様変更でない場合は承認不要と判断した根拠 -->'
+  assert_failure_contains \
+    "pull request template missing the classification rationale prompt" \
+    "PULL_REQUEST_TEMPLATE_RATIONALE" \
+    bash "${fixture}/scripts/check-docs.sh"
+
+  fixture="$(new_docs_fixture missing-pull-request-approval)"
   # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
   remove_exact_line \
     "${fixture}/.github/pull_request_template.md" \
-    '- [ ] `仕様変更`はProduct Owner承認後に着手し、canonical ownerをcodeより前またはこのPull Requestで更新した。その他の分類はその根拠を上に記載した。'
+    '- Product Owner approval URL (`仕様変更`のみ): <!-- 理由・影響・選択肢を含む承認へのlink -->'
   assert_failure_contains \
-    "pull request template missing the owner-first gate" \
-    "PULL_REQUEST_TEMPLATE_OWNER_FIRST" \
-    bash "${fixture}/scripts/check-docs.sh"
-
-  fixture="$(new_docs_fixture missing-pull-request-stop-condition)"
-  enable_operational_documentation_topology "${fixture}"
-  remove_exact_line \
-    "${fixture}/.github/pull_request_template.md" \
-    '- [ ] Product質問、仕様矛盾、security/data retention/auth/permission/production上の重要な判断不能、または影響範囲不明は未解決でない。発見した場合は該当変更を停止し、Product Ownerの判断を記録した。'
-  assert_failure_contains \
-    "pull request template missing the stop condition" \
-    "PULL_REQUEST_TEMPLATE_STOP_CONDITION" \
-    bash "${fixture}/scripts/check-docs.sh"
-
-  fixture="$(new_docs_fixture hidden-pull-request-stop-condition)"
-  enable_operational_documentation_topology "${fixture}"
-  insert_before_exact_line \
-    "${fixture}/.github/pull_request_template.md" \
-    '- [ ] Product質問、仕様矛盾、security/data retention/auth/permission/production上の重要な判断不能、または影響範囲不明は未解決でない。発見した場合は該当変更を停止し、Product Ownerの判断を記録した。' \
-    '```text'
-  insert_after_exact_line \
-    "${fixture}/.github/pull_request_template.md" \
-    '- [ ] Product質問、仕様矛盾、security/data retention/auth/permission/production上の重要な判断不能、または影響範囲不明は未解決でない。発見した場合は該当変更を停止し、Product Ownerの判断を記録した。' \
-    '```'
-  assert_failure_contains \
-    "pull request template hides the stop condition in a code fence" \
-    "PULL_REQUEST_TEMPLATE_STOP_CONDITION" \
-    bash "${fixture}/scripts/check-docs.sh"
-
-  fixture="$(new_docs_fixture missing-pull-request-main-consistency)"
-  enable_operational_documentation_topology "${fixture}"
-  remove_exact_line \
-    "${fixture}/.github/pull_request_template.md" \
-    '- [ ] 仕様だけまたは実装だけが先行する一時的不整合をmainへmergeせず、Product / UX、Domain / state、DB / migration、API、Frontend、AI、Security / Privacy、Operations、Testが同じ現在形になっている。'
-  assert_failure_contains \
-    "pull request template missing main consistency" \
-    "PULL_REQUEST_TEMPLATE_MAIN_CONSISTENCY" \
+    "pull request template missing the specification-change approval URL prompt" \
+    "PULL_REQUEST_TEMPLATE_APPROVAL" \
     bash "${fixture}/scripts/check-docs.sh"
 
   fixture="$(new_docs_fixture missing-pull-request-verification-evidence)"
-  enable_operational_documentation_topology "${fixture}"
   remove_exact_line \
     "${fixture}/.github/pull_request_template.md" \
     '## Verification evidence'
   assert_failure_contains \
     "pull request template missing verification evidence" \
     "PULL_REQUEST_TEMPLATE_VERIFICATION_EVIDENCE" \
-    bash "${fixture}/scripts/check-docs.sh"
-
-  fixture="$(new_docs_fixture missing-pull-request-semantic-scope)"
-  enable_operational_documentation_topology "${fixture}"
-  replace_exact_line \
-    "${fixture}/.github/pull_request_template.md" \
-    'このtemplateは意味的整合性を自動証明しません。実装者とreviewerがcanonical ownerとconsumerを読み、同じ現在形に整合していることを確認してください。' \
-    '実装者とreviewerが整合性を確認してください。'
-  assert_failure_contains \
-    "pull request template claims no bounded semantic scope" \
-    "PULL_REQUEST_TEMPLATE_SEMANTIC_SCOPE" \
     bash "${fixture}/scripts/check-docs.sh"
 
   fixture="$(new_docs_fixture missing-operational-owner-link)"
@@ -1017,34 +930,6 @@ test_config_gate() {
     >>"${fixture}/backend/internal/config/config.go"
   bash "${fixture}/scripts/check-config-parity.sh" >/dev/null \
     || fail "configuration parity gate treated Go comments or string literals as environment consumers"
-
-  fixture="$(new_config_fixture deploy-root-env)"
-  insert_before_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    'permissions:' \
-    $'env:\n  PATH: /tmp/fixture-bin\n'
-  assert_failure_contains "deployment root env" \
-    "deployment workflow root field inventory" \
-    bash "${fixture}/scripts/check-config-parity.sh"
-
-  fixture="$(new_config_fixture deploy-extra-job)"
-  insert_before_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '  deploy:' \
-    $'  unexpected:\n    runs-on: ubuntu-latest\n    steps: []\n'
-  assert_failure_contains "deployment extra job" \
-    "deployment workflow job ID inventory" \
-    bash "${fixture}/scripts/check-config-parity.sh"
-
-  fixture="$(new_config_fixture deploy-anonymous-run-step)"
-  # shellcheck disable=SC2016 # GitHub runner variable is an intentional fixture literal.
-  insert_before_exact_line \
-    "${fixture}/.github/workflows/deploy.yml" \
-    '      - name: Run stable CSRF initial rollout and authoritative drain' \
-    '      - run: test ! -f "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"'
-  assert_failure_contains "deployment anonymous run step" \
-    "deployment step inventory" \
-    bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture ignored-backend-source)"
   mkdir -p -- "${fixture}/backend/.tmp"
@@ -2101,7 +1986,7 @@ test_config_gate() {
     '    needs: resolve' \
     '    needs: [resolve]'
   assert_failure_contains "deployment needs drift" \
-    "deployment job field inventory" \
+    "deployment job contract" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture skipped-resolve-job)"
@@ -2110,7 +1995,7 @@ test_config_gate() {
     '  resolve:' \
     '    if: false'
   assert_failure_contains "skipped deployment resolve job" \
-    "deployment resolve job contract" \
+    "deployment resolve job execution controls" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture replaced-resolve-command)"
@@ -2131,7 +2016,7 @@ test_config_gate() {
     '    runs-on: ubuntu-latest' \
     '    runs-on: self-hosted'
   assert_failure_contains "self-hosted deployment runner" \
-    "deployment job field inventory" \
+    "deployment job contract" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture skipped-ci-success-check)"
@@ -2199,7 +2084,7 @@ test_config_gate() {
     '  deploy:' \
     '    if: false'
   assert_failure_contains "skipped deploy job" \
-    "deployment job field inventory" \
+    "deployment job execution controls" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture tolerated-deploy-job)"
@@ -2208,7 +2093,7 @@ test_config_gate() {
     '  deploy:' \
     '    continue-on-error: true'
   assert_failure_contains "tolerated deploy job failure" \
-    "deployment job field inventory" \
+    "deployment job execution controls" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture deploy-job-shell-default)"

@@ -1,0 +1,103 @@
+name: Security audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 20 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Full security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require a fresh audit workflow run
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_RUN_ATTEMPT}" != '1' || "${GITHUB_REF}" != 'refs/heads/main' ]]; then
+            echo '::error::Security audits must be fresh runs dispatched from main; reruns and other refs are not accepted.'
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run full security gates
+        run: bash ./scripts/check-security.sh --profile full
+      - name: Verify audited commit is still current main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          response_file="$(mktemp)"
+          trap 'rm -f -- "${response_file}"' EXIT
+          gh api --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+            >"${response_file}"
+          current_main_sha="$({
+            jq -ser '
+              if (
+                length == 1 and
+                (.[0] | type) == "object" and
+                .[0].ref == "refs/heads/main" and
+                (.[0].object | type) == "object" and
+                .[0].object.type == "commit" and
+                (.[0].object.sha | type) == "string" and
+                (.[0].object.sha | test("^[0-9a-f]{40}$"))
+              ) then .[0].object.sha
+              else error("invalid current main response")
+              end
+            ' "${response_file}" 2>/dev/null
+          } || true)"
+          if [[ "${current_main_sha}" != "${GITHUB_SHA}" ]]; then
+            echo '::error::Audited commit is no longer current main; start a fresh security audit.'
+            exit 1
+          fi
+
+  report_failure:
+    name: Report scheduled security audit failure
+    needs: audit
+    if: ${{ always() && github.event_name == 'schedule' && needs.audit.result != 'success' }}
+    permissions:
+      issues: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or update the fixed security audit issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          issue_title='[Security audit] Scheduled full scan failed'
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          issue_body="Scheduled full security audit failed for main commit \`${GITHUB_SHA}\`. Release remains blocked until a fresh full audit passes. Inspect the run without copying raw findings: ${run_url}"
+          search_response="$(gh api --method GET /search/issues \
+            -f q="repo:${GITHUB_REPOSITORY} is:issue is:open in:title ${issue_title}" \
+            -f per_page=100)"
+          jq -e --arg title "${issue_title}" '
+            .incomplete_results == false and
+            .total_count <= 100 and
+            ([.items[] | select(.title == $title and (has("pull_request") | not))] | length <= 1)
+          ' <<<"${search_response}" >/dev/null
+          issue_number="$(jq -r --arg title "${issue_title}" '
+            [.items[] | select(.title == $title and (has("pull_request") | not))][0].number // empty
+          ' <<<"${search_response}")"
+          if [[ -n "${issue_number}" ]]; then
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments" \
+              -f body="${issue_body}" >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues" \
+              -f title="${issue_title}" \
+              -f body="${issue_body}" >/dev/null
+          fi

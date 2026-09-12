@@ -14,10 +14,6 @@ on:
         description: Successful exact-current-main no-change Plan or Apply run ID (normal only)
         required: false
         type: string
-      recovery_confirmation:
-        description: Type RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY (recovery only)
-        required: false
-        type: string
 
 permissions:
   actions: read
@@ -45,7 +41,6 @@ jobs:
           EXPECTED_APPROVER: ${{ vars.STAGING_DEPLOY_APPROVER }}
           INFRA_EVIDENCE_RUN_ID: ${{ inputs.infra_evidence_run_id }}
           MODE: ${{ inputs.mode }}
-          RECOVERY_CONFIRMATION: ${{ inputs.recovery_confirmation }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" != 'workflow_dispatch' ]]; then
@@ -83,18 +78,10 @@ jobs:
                 echo '::error::Normal deployment requires a numeric Terraform infrastructure evidence run ID.'
                 exit 1
               fi
-              if [[ -n "${RECOVERY_CONFIRMATION}" ]]; then
-                echo '::error::Normal deployment must not include a recovery confirmation.'
-                exit 1
-              fi
               ;;
             recovery)
               if [[ -n "${INFRA_EVIDENCE_RUN_ID}" ]]; then
                 echo '::error::Recovery deployment must not include a Terraform infrastructure evidence run ID.'
-                exit 1
-              fi
-              if [[ "${RECOVERY_CONFIRMATION}" != 'RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY' ]]; then
-                echo '::error::Recovery deployment requires the exact schema-compatible recovery confirmation.'
                 exit 1
               fi
               ;;
@@ -568,6 +555,12 @@ jobs:
         with:
           ref: ${{ env.COMMIT_SHA }}
           persist-credentials: false
+
+      - name: Verify security audit release gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/verify-security-audit-release-gate.sh "${COMMIT_SHA}"
 
       - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
         with:

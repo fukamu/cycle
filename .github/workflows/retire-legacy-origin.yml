@@ -3,10 +3,6 @@ name: Retire Legacy PDCAI Origin
 on:
   workflow_dispatch:
     inputs:
-      commit_sha:
-        description: Successful main commit to deploy as the legacy retirement page
-        required: true
-        type: string
       confirmation:
         description: Type RETIRE pdcai.matoruru.com WITHOUT RECOVERY
         required: true
@@ -31,7 +27,7 @@ jobs:
         id: verify
         shell: bash
         env:
-          COMMIT_SHA: ${{ inputs.commit_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
           CONFIRMATION: ${{ inputs.confirmation }}
           EXPECTED_APPROVER: ${{ vars.LEGACY_RETIREMENT_APPROVER }}
           GH_TOKEN: ${{ github.token }}
@@ -45,16 +41,16 @@ jobs:
             echo '::error::Missing repository variable LEGACY_RETIREMENT_APPROVER.'
             exit 1
           fi
-          if [[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]; then
-            echo "::error::Only the configured legacy retirement approver may run this workflow."
+          if [[ "${GITHUB_ACTOR,,}" != "${EXPECTED_APPROVER,,}" || "${GITHUB_TRIGGERING_ACTOR,,}" != "${EXPECTED_APPROVER,,}" ]]; then
+            echo "::error::Only the configured legacy retirement approver may dispatch or rerun this workflow."
             exit 1
           fi
           if [[ "${CONFIRMATION}" != 'RETIRE pdcai.matoruru.com WITHOUT RECOVERY' ]]; then
             echo '::error::The exact legacy retirement confirmation is required.'
             exit 1
           fi
-          if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo '::error::commit_sha must be a lowercase 40-character commit SHA.'
+          if [[ ! "${DISPATCH_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::The dispatch revision must be a lowercase 40-character commit SHA.'
             exit 1
           fi
 
@@ -84,18 +80,18 @@ jobs:
               ' \
               <<< "${current_main_json}"
           )"
-          if [[ "${COMMIT_SHA}" != "${current_main_sha}" ]]; then
-            echo "::error::The approved commit is not current main HEAD."
+          if [[ "${DISPATCH_SHA}" != "${current_main_sha}" ]]; then
+            echo "::error::The dispatched revision is not current main HEAD."
             exit 1
           fi
           ci_runs_json="$(
             gh api \
               -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${COMMIT_SHA}&branch=main&status=success&per_page=1"
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${DISPATCH_SHA}&branch=main&status=success&per_page=1"
           )"
           successful_runs="$(
             jq -ser \
-              --arg commit_sha "${COMMIT_SHA}" \
+              --arg commit_sha "${DISPATCH_SHA}" \
               --arg repository "${GITHUB_REPOSITORY}" \
               '
                 if (
@@ -128,7 +124,7 @@ jobs:
             echo '::error::The approved main commit does not have successful CI.'
             exit 1
           fi
-          echo "commit_sha=${COMMIT_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "commit_sha=${DISPATCH_SHA}" >> "${GITHUB_OUTPUT}"
 
   deploy:
     needs: preflight

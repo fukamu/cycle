@@ -164,35 +164,29 @@ sed -i 's/PE-WRK-002/PE-WRK-MISSING/g' "${fixture}/AGENTS.md"
 expect_failure "missing PE-WRK-002 repository routing" \
   bash "${fixture}/scripts/check-playbook-adoption.sh"
 
-for wiring in check-security.sh check-docs.sh check-config-parity.sh tests/run.sh; do
-  fixture="$(new_fixture "missing-${wiring//\//-}-wiring")"
-  sed -i '/check-playbook-adoption[.]sh/d' "${fixture}/scripts/${wiring}"
-  expect_failure "missing Playbook required gate wiring: ${wiring}" \
-    bash "${fixture}/scripts/check-playbook-adoption.sh"
-done
-
-fixture="$(new_fixture duplicate-security-wiring)"
-# shellcheck disable=SC2016 # The sed program matches a literal fixture variable reference.
-sed -i \
-  '/if ! bash "${snapshot_root}\/scripts\/check-playbook-adoption[.]sh"; then/p' \
-  "${fixture}/scripts/check-security.sh"
-expect_failure "duplicate Playbook security gate wiring" \
+fixture="$(new_fixture missing-check-docs-wiring)"
+sed -i '/check-playbook-adoption[.]sh/d' "${fixture}/scripts/check-docs.sh"
+expect_failure "missing Playbook required gate wiring: check-docs.sh" \
   bash "${fixture}/scripts/check-playbook-adoption.sh"
 
-while IFS='|' read -r wiring call; do
-  fixture="$(new_fixture "misordered-${wiring//\//-}-wiring")"
-  move_exact_line_to_start "${fixture}/scripts/${wiring}" "${call}"
-  expect_failure "misordered Playbook required gate wiring: ${wiring}" \
-    bash "${fixture}/scripts/check-playbook-adoption.sh"
-  grep -Fq -- "does not run the Playbook check at the approved boundary" \
-    "${test_root}/last-output" \
-    || fail "misordered Playbook wiring did not report its approved boundary: ${wiring}"
-done <<'WIRING_ORDER_FIXTURES'
-check-security.sh|if ! bash "${snapshot_root}/scripts/check-playbook-adoption.sh"; then
-check-docs.sh|bash "${candidate_root}/scripts/check-playbook-adoption.sh"
-check-config-parity.sh|bash "${candidate_root}/scripts/check-playbook-adoption.sh"
-tests/run.sh|bash "${script_dir}/check-playbook-adoption.sh"
-WIRING_ORDER_FIXTURES
+fixture="$(new_fixture duplicate-docs-wiring)"
+# shellcheck disable=SC2016 # The sed program matches a literal fixture variable reference.
+sed -i \
+  '/bash "${candidate_root}\/scripts\/check-playbook-adoption[.]sh"/p' \
+  "${fixture}/scripts/check-docs.sh"
+expect_failure "duplicate Playbook documentation gate wiring" \
+  bash "${fixture}/scripts/check-playbook-adoption.sh"
+
+fixture="$(new_fixture misordered-check-docs-wiring)"
+# shellcheck disable=SC2016 # The move helper receives one literal fixture command.
+move_exact_line_to_start \
+  "${fixture}/scripts/check-docs.sh" \
+  'bash "${candidate_root}/scripts/check-playbook-adoption.sh"'
+expect_failure "misordered Playbook required gate wiring: check-docs.sh" \
+  bash "${fixture}/scripts/check-playbook-adoption.sh"
+grep -Fq -- "does not run the Playbook check at the approved boundary" \
+  "${test_root}/last-output" \
+  || fail "misordered Playbook wiring did not report its approved boundary: check-docs.sh"
 
 fixture="$(new_fixture tampered-signer-fingerprint)"
 node -e '

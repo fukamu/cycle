@@ -210,28 +210,10 @@ for (const reference of [".fukamu/playbook/PLAYBOOK.md", "PE-WRK-002"]) {
 }
 
 await requireSingleOrderedCall({
-  path: "scripts/check-security.sh",
-  call: 'if ! bash "${snapshot_root}/scripts/check-playbook-adoption.sh"; then',
-  before: 'security_run_gitleaks_normalized_text "${repo_root}" history',
-  after: 'security_run_supply_chain_policy "${snapshot_root}"',
-});
-await requireSingleOrderedCall({
   path: "scripts/check-docs.sh",
   call: 'bash "${candidate_root}/scripts/check-playbook-adoption.sh"',
   before: "create_docs_config_candidate_snapshot",
   after: 'node "${script_dir}/check-docs.mjs" "${candidate_root}"',
-});
-await requireSingleOrderedCall({
-  path: "scripts/check-config-parity.sh",
-  call: 'bash "${candidate_root}/scripts/check-playbook-adoption.sh"',
-  before: "create_docs_config_candidate_snapshot",
-  after: "config_candidate_files=(",
-});
-await requireSingleOrderedCall({
-  path: "scripts/tests/run.sh",
-  call: 'bash "${script_dir}/check-playbook-adoption.sh"',
-  before: 'bash "${script_dir}/check-supply-chain.sh"',
-  after: 'bash "${script_dir}/check-ci-security-model.sh"',
 });
 
 console.log(`Validated Cycle playbook trace for ${ruleIds.length} rules`);

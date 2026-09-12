@@ -19,8 +19,20 @@ readonly SECURITY_GOVULNCHECK_VERSION='v1.7.0'
 readonly SECURITY_LEGACY_BINARY_BLOB_OID='ac78d653896d639a4b9f93ae26d5009fcc39a4db'
 readonly SECURITY_LEGACY_BINARY_BLOB_SIZE='9181184'
 
-# The normalized text view deliberately bypasses Gitleaks MIME/path skips. These
-# immutable historical blobs are the only reviewed duplicates it omits: twelve
+# These values are populated only by the networkless repository inventory
+# validator below. The normalized Gitleaks view uses the exact validated blob
+# identities so an extension alone can never suppress content scanning.
+SECURITY_VALIDATED_ASSET_ROOT_CANDIDATE=''
+SECURITY_VALIDATED_ASSET_ROOT_STAGED=''
+SECURITY_VALIDATED_ASSET_ROOT_HISTORY=''
+SECURITY_VALIDATED_ASSET_OIDS_CANDIDATE=''
+SECURITY_VALIDATED_ASSET_OIDS_STAGED=''
+SECURITY_VALIDATED_ASSET_OIDS_HISTORY=''
+
+# The normalized text view deliberately bypasses Gitleaks MIME/path skips.
+# Structurally validated PNG assets are omitted only through the exact OIDs
+# produced by the immediately preceding networkless inventory check. These
+# immutable historical blobs are the other reviewed duplicates it omits: twelve
 # valid backend/go.sum snapshots and four source snapshots containing the two
 # synthetic values already scoped by .gitleaksignore. Normal Git/history scans
 # remain active, and any content change creates a new OID that is scanned.
@@ -310,6 +322,9 @@ security_create_candidate_snapshot() {
 security_validate_text_inventory() {
   local source_root="$1"
   local inventory_mode="$2"
+  local validation_output
+  local validation_prefix='FUKAMU_SECURITY_APPROVED_ASSET_OIDS='
+  local approved_asset_oids
 
   [[ "${inventory_mode}" == "candidate" || "${inventory_mode}" == "staged" || "${inventory_mode}" == "history" ]] || return 1
   # shellcheck disable=SC2016 # The single-quoted program expands only inside the pinned container.
@@ -343,17 +358,28 @@ security_validate_text_inventory() {
       try {
         const fs = require("node:fs");
         const path = require("node:path");
+        const { createHash } = require("node:crypto");
         const { execFileSync } = require("node:child_process");
         const { TextDecoder } = require("node:util");
+        const { inflateSync } = require("node:zlib");
         const root = "/source";
         const mode = process.env.INVENTORY_MODE;
         const legacyOid = process.env.LEGACY_BINARY_BLOB_OID;
         const legacySize = Number(process.env.LEGACY_BINARY_BLOB_SIZE);
         const decoder = new TextDecoder("utf-8", { fatal: true });
-        const maximumFileSize = 16 * 1024 * 1024;
+        const maximumTextFileSize = 16 * 1024 * 1024;
+        const maximumAssetFileSize = 2 * 1024 * 1024;
+        const maximumAssetDimension = 4096;
+        const maximumAssetPixels = 16777216;
+        const maximumApprovedAssetBlobs = 512;
+        const maximumAggregateAssetFileSize = 64 * 1024 * 1024;
+        const maximumAggregateAssetDecodedSize = 128 * 1024 * 1024;
         const maximumTreeOutput = 64 * 1024 * 1024;
         const maximumBatchOutput = 256 * 1024 * 1024;
         const maximumEntries = 1000000;
+        const approvedAssetBlobOids = new Set();
+        let aggregateAssetFileSize = 0;
+        let aggregateAssetDecodedSize = 0;
         const exactBasenames = new Set([
           ".dockerignore",
           ".editorconfig",
@@ -409,16 +435,24 @@ security_validate_text_inventory() {
           }
           const basename = segments.at(-1);
           if (
+            relativePath.startsWith("frontend/src/assets/") &&
+            basename.length > ".png".length &&
+            basename.endsWith(".png")
+          ) {
+            return "image/png";
+          }
+          if (
             !exactPaths.has(relativePath) && !exactBasenames.has(basename) &&
             !basename.endsWith(".Dockerfile") &&
             !approvedSuffixes.some((suffix) => basename.endsWith(suffix))
           ) {
             throw new Error("unapproved text file type");
           }
+          return "text";
         };
 
         const validateText = (content) => {
-          if (content.length > maximumFileSize) throw new Error("text file size bound");
+          if (content.length > maximumTextFileSize) throw new Error("text file size bound");
           for (const byte of content) {
             if ((byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) || byte === 0x7f) {
               throw new Error("binary control byte");
@@ -431,6 +465,223 @@ security_validate_text_inventory() {
               throw new Error("non-text Unicode control");
             }
           }
+        };
+
+        const crc32 = (content) => {
+          let crc = 0xffffffff;
+          for (const byte of content) {
+            crc ^= byte;
+            for (let bit = 0; bit < 8; bit += 1) {
+              crc = (crc >>> 1) ^ ((crc & 1) === 1 ? 0xedb88320 : 0);
+            }
+          }
+          return (crc ^ 0xffffffff) >>> 0;
+        };
+
+        const validatePng = (content, maximumRemainingDecodedSize) => {
+          const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+          const allowedChunks = new Set([
+            "IHDR",
+            "PLTE",
+            "IDAT",
+            "IEND",
+            "cHRM",
+            "gAMA",
+            "sRGB",
+            "pHYs",
+            "tRNS",
+          ]);
+          const singletonChunks = new Set(["IHDR", "PLTE", "IEND", "cHRM", "gAMA", "sRGB", "pHYs", "tRNS"]);
+          const seenChunks = new Set();
+          const idatChunks = [];
+          let offset = signature.length;
+          let width = 0;
+          let height = 0;
+          let colorType = -1;
+          let sawIdat = false;
+          let idatEnded = false;
+          let sawPlte = false;
+          let paletteEntries = 0;
+
+          if (
+            content.length < 57 || content.length > maximumAssetFileSize ||
+            !content.subarray(0, signature.length).equals(signature)
+          ) {
+            throw new Error("unapproved PNG signature or size");
+          }
+
+          while (offset < content.length) {
+            if (content.length - offset < 12) throw new Error("truncated PNG chunk");
+            const length = content.readUInt32BE(offset);
+            const typeStart = offset + 4;
+            const dataStart = typeStart + 4;
+            const dataEnd = dataStart + length;
+            const chunkEnd = dataEnd + 4;
+            if (dataEnd < dataStart || chunkEnd > content.length) {
+              throw new Error("invalid PNG chunk boundary");
+            }
+            const typeBytes = content.subarray(typeStart, dataStart);
+            const type = typeBytes.toString("ascii");
+            if (!/^[A-Za-z]{4}$/.test(type) || !allowedChunks.has(type)) {
+              throw new Error("unapproved PNG chunk");
+            }
+            if (singletonChunks.has(type) && seenChunks.has(type)) {
+              throw new Error("duplicate PNG singleton chunk");
+            }
+            const expectedCrc = content.readUInt32BE(dataEnd);
+            if (crc32(content.subarray(typeStart, dataEnd)) !== expectedCrc) {
+              throw new Error("invalid PNG chunk CRC");
+            }
+            const data = content.subarray(dataStart, dataEnd);
+
+            if (type === "IHDR") {
+              if (offset !== signature.length || length !== 13) {
+                throw new Error("invalid PNG IHDR position or size");
+              }
+              width = data.readUInt32BE(0);
+              height = data.readUInt32BE(4);
+              const bitDepth = data[8];
+              colorType = data[9];
+              if (
+                width < 1 || height < 1 ||
+                width > maximumAssetDimension || height > maximumAssetDimension ||
+                width * height > maximumAssetPixels ||
+                bitDepth !== 8 || !new Set([0, 2, 3, 4, 6]).has(colorType) ||
+                data[10] !== 0 || data[11] !== 0 || data[12] !== 0
+              ) {
+                throw new Error("unapproved PNG dimensions or encoding");
+              }
+            } else {
+              if (!seenChunks.has("IHDR")) throw new Error("PNG chunk before IHDR");
+              if (type !== "IDAT" && sawIdat) idatEnded = true;
+              if (type === "IDAT") {
+                if (idatEnded || length < 1) throw new Error("invalid PNG IDAT sequence");
+                sawIdat = true;
+                idatChunks.push(data);
+              } else if (type === "PLTE") {
+                if (
+                  sawIdat || seenChunks.has("tRNS") ||
+                  length < 3 || length > 768 || length % 3 !== 0 ||
+                  colorType === 0 || colorType === 4
+                ) {
+                  throw new Error("invalid PNG palette");
+                }
+                paletteEntries = length / 3;
+                sawPlte = true;
+              } else if (type === "tRNS") {
+                if (sawIdat) throw new Error("PNG transparency after image data");
+                if (
+                  (colorType === 0 &&
+                    (length !== 2 || data.readUInt16BE(0) > 0xff)) ||
+                  (colorType === 2 &&
+                    (length !== 6 ||
+                     data.readUInt16BE(0) > 0xff ||
+                     data.readUInt16BE(2) > 0xff ||
+                     data.readUInt16BE(4) > 0xff)) ||
+                  (colorType === 3 && (paletteEntries < 1 || length < 1 || length > paletteEntries)) ||
+                  colorType === 4 || colorType === 6
+                ) {
+                  throw new Error("invalid PNG transparency");
+                }
+              } else if (type === "cHRM") {
+                if (sawIdat || sawPlte || length !== 32) throw new Error("invalid PNG chromaticity");
+              } else if (type === "gAMA") {
+                if (sawIdat || sawPlte || length !== 4 || data.readUInt32BE(0) === 0) throw new Error("invalid PNG gamma");
+              } else if (type === "sRGB") {
+                if (sawIdat || sawPlte || length !== 1 || data[0] > 3) throw new Error("invalid PNG color intent");
+              } else if (type === "pHYs") {
+                if (sawIdat || length !== 9 || data[8] > 1) throw new Error("invalid PNG pixel density");
+              } else if (type === "IEND") {
+                if (!sawIdat || length !== 0 || chunkEnd !== content.length) {
+                  throw new Error("invalid PNG IEND or trailing bytes");
+                }
+              }
+            }
+            seenChunks.add(type);
+            offset = chunkEnd;
+          }
+
+          if (!seenChunks.has("IEND") || (colorType === 3 && paletteEntries < 1)) {
+            throw new Error("incomplete PNG structure");
+          }
+          const channels = new Map([[0, 1], [2, 3], [3, 1], [4, 2], [6, 4]]).get(colorType);
+          const rowBytes = width * channels;
+          const expectedDecodedLength = height * (rowBytes + 1);
+          if (expectedDecodedLength > maximumRemainingDecodedSize) {
+            throw new Error("aggregate PNG decoded size bound");
+          }
+          const compressed = Buffer.concat(idatChunks);
+          const inflated = inflateSync(compressed, {
+            info: true,
+            maxOutputLength: expectedDecodedLength,
+          });
+          if (
+            inflated.buffer.length !== expectedDecodedLength ||
+            inflated.engine.bytesWritten !== compressed.length
+          ) {
+            throw new Error("invalid PNG compressed payload length");
+          }
+          const paeth = (left, above, upperLeft) => {
+            const prediction = left + above - upperLeft;
+            const leftDistance = Math.abs(prediction - left);
+            const aboveDistance = Math.abs(prediction - above);
+            const upperLeftDistance = Math.abs(prediction - upperLeft);
+            if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) return left;
+            if (aboveDistance <= upperLeftDistance) return above;
+            return upperLeft;
+          };
+          let previousRow = Buffer.alloc(rowBytes);
+          for (let row = 0; row < height; row += 1) {
+            const rowStart = row * (rowBytes + 1);
+            const filter = inflated.buffer[rowStart];
+            if (filter > 4) {
+              throw new Error("invalid PNG scanline filter");
+            }
+            const filteredRow = inflated.buffer.subarray(rowStart + 1, rowStart + rowBytes + 1);
+            const reconstructedRow = Buffer.alloc(rowBytes);
+            for (let column = 0; column < rowBytes; column += 1) {
+              const left = column >= channels ? reconstructedRow[column - channels] : 0;
+              const above = previousRow[column];
+              const upperLeft = column >= channels ? previousRow[column - channels] : 0;
+              let predictor = 0;
+              if (filter === 1) predictor = left;
+              else if (filter === 2) predictor = above;
+              else if (filter === 3) predictor = Math.floor((left + above) / 2);
+              else if (filter === 4) predictor = paeth(left, above, upperLeft);
+              reconstructedRow[column] = (filteredRow[column] + predictor) & 0xff;
+            }
+            if (colorType === 3) {
+              for (const paletteIndex of reconstructedRow) {
+                if (paletteIndex >= paletteEntries) {
+                  throw new Error("PNG pixel uses an undefined palette entry");
+                }
+              }
+            }
+            previousRow = reconstructedRow;
+          }
+          return expectedDecodedLength;
+        };
+
+        const gitBlobOid = (content) => createHash("sha1")
+          .update(`blob ${content.length}\0`, "utf8")
+          .update(content)
+          .digest("hex");
+
+        const validateApprovedAssetBlob = (content, oid) => {
+          if (approvedAssetBlobOids.has(oid)) return;
+          if (approvedAssetBlobOids.size >= maximumApprovedAssetBlobs) {
+            throw new Error("approved asset count bound");
+          }
+          if (content.length > maximumAggregateAssetFileSize - aggregateAssetFileSize) {
+            throw new Error("aggregate PNG compressed size bound");
+          }
+          const decodedSize = validatePng(
+            content,
+            maximumAggregateAssetDecodedSize - aggregateAssetDecodedSize,
+          );
+          aggregateAssetFileSize += content.length;
+          aggregateAssetDecodedSize += decodedSize;
+          approvedAssetBlobOids.add(oid);
         };
 
         const parseHexLines = (content, label) => {
@@ -472,8 +723,8 @@ security_validate_text_inventory() {
             } else {
               if (!stat.isFile()) throw new Error("candidate special file");
               const relativePath = path.relative(root, current);
-              validatePath(relativePath);
-              if (stat.size > maximumFileSize) throw new Error("candidate file size bound");
+              const fileKind = validatePath(relativePath);
+              if (stat.size > maximumTextFileSize) throw new Error("candidate file size bound");
               const content = fs.readFileSync(current);
               const postRead = fs.lstatSync(current);
               if (
@@ -482,7 +733,12 @@ security_validate_text_inventory() {
               ) {
                 throw new Error("candidate changed during validation");
               }
-              validateText(content);
+              if (fileKind === "image/png") {
+                if ((stat.mode & 0o111) !== 0) throw new Error("executable candidate asset");
+                validateApprovedAssetBlob(content, gitBlobOid(content));
+              } else {
+                validateText(content);
+              }
               fileCount += 1;
             }
             entryCount += 1;
@@ -491,7 +747,7 @@ security_validate_text_inventory() {
           if (fileCount < 1) throw new Error("empty candidate tree");
         } else if (mode === "staged") {
           const index = execGit(["ls-files", "--stage", "-z"]);
-          const stagedBlobOids = new Set();
+          const stagedBlobKinds = new Map();
           let offset = 0;
           let entryCount = 0;
           while (offset < index.length) {
@@ -504,23 +760,31 @@ security_validate_text_inventory() {
             const match = /^(100644|100755) ([0-9a-f]{40}) 0$/.exec(header);
             if (match === null) throw new Error("unapproved staged entry mode");
             const relativePath = decoder.decode(record.subarray(separator + 1));
-            validatePath(relativePath);
-            stagedBlobOids.add(match[2]);
+            const fileKind = validatePath(relativePath);
+            if (fileKind === "image/png" && match[1] !== "100644") {
+              throw new Error("executable staged asset");
+            }
+            const kinds = stagedBlobKinds.get(match[2]) ?? new Set();
+            kinds.add(fileKind);
+            stagedBlobKinds.set(match[2], kinds);
             entryCount += 1;
             if (entryCount > maximumEntries) throw new Error("staged entry count bound");
             offset = terminator + 1;
           }
-          if (stagedBlobOids.size < 1) throw new Error("empty staged blob inventory");
-          for (const oid of stagedBlobOids) {
-            const content = execGit(["cat-file", "blob", oid], undefined, maximumFileSize + 1);
-            validateText(content);
+          if (stagedBlobKinds.size < 1) throw new Error("empty staged blob inventory");
+          for (const [oid, kinds] of stagedBlobKinds) {
+            const content = execGit(["cat-file", "blob", oid], undefined, maximumTextFileSize + 1);
+            if (kinds.has("image/png")) {
+              validateApprovedAssetBlob(content, oid);
+            }
+            if (kinds.has("text")) validateText(content);
           }
         } else if (mode === "history") {
           if (!/^[0-9a-f]{40}$/.test(legacyOid) || !Number.isSafeInteger(legacySize) || legacySize < 1) {
             throw new Error("invalid legacy binary identity");
           }
           const commits = parseHexLines(execGit(["rev-list", "--all"]), "commit inventory");
-          const treeBlobOids = new Set();
+          const treeBlobKinds = new Map();
           let treeEntryCount = 0;
           let legacyPathSeen = false;
 
@@ -544,15 +808,21 @@ security_validate_text_inventory() {
                 }
                 legacyPathSeen = true;
               } else {
-                validatePath(relativePath);
+                const fileKind = validatePath(relativePath);
+                if (fileKind === "image/png" && match[1] !== "100644") {
+                  throw new Error("executable historical asset");
+                }
+                const kinds = treeBlobKinds.get(oid) ?? new Set();
+                kinds.add(fileKind);
+                treeBlobKinds.set(oid, kinds);
               }
-              treeBlobOids.add(oid);
+              if (!treeBlobKinds.has(oid)) treeBlobKinds.set(oid, new Set());
               treeEntryCount += 1;
               if (treeEntryCount > maximumEntries) throw new Error("history tree entry count bound");
               offset = terminator + 1;
             }
           }
-          if (treeBlobOids.size < 1) throw new Error("empty history tree inventory");
+          if (treeBlobKinds.size < 1) throw new Error("empty history tree inventory");
 
           const reachableOids = parseHexLines(
             execGit(["rev-list", "--objects", "--all", "--no-object-names"]),
@@ -580,13 +850,13 @@ security_validate_text_inventory() {
             const size = Number(match[3]);
             if (!Number.isSafeInteger(size) || size < 0) throw new Error("invalid object size");
             if (match[2] === "blob") {
-              if (!treeBlobOids.has(match[1])) throw new Error("reachable pathless blob");
+              if (!treeBlobKinds.has(match[1])) throw new Error("reachable pathless blob");
               reachableBlobOids.push(match[1]);
             } else if (match[2] === "commit" || match[2] === "tag") {
               reachableMetadataObjects.set(match[1], match[2]);
             }
           }
-          if (reachableBlobOids.length !== treeBlobOids.size) {
+          if (reachableBlobOids.length !== treeBlobKinds.size) {
             throw new Error("history blob inventory mismatch");
           }
 
@@ -603,7 +873,7 @@ security_validate_text_inventory() {
             const match = /^([0-9a-f]{40}) blob ([0-9]+)$/.exec(header);
             if (match === null || match[1] !== expectedOid) throw new Error("invalid blob header");
             const size = Number(match[2]);
-            if (!Number.isSafeInteger(size) || size < 0 || size > maximumFileSize) {
+            if (!Number.isSafeInteger(size) || size < 0 || size > maximumTextFileSize) {
               throw new Error("historical blob size bound");
             }
             const contentStart = headerEnd + 1;
@@ -615,7 +885,11 @@ security_validate_text_inventory() {
             if (expectedOid === legacyOid) {
               if (!legacyPathSeen || size !== legacySize) throw new Error("legacy binary mismatch");
             } else {
-              validateText(content);
+              const kinds = treeBlobKinds.get(expectedOid);
+              if (kinds.has("image/png")) {
+                validateApprovedAssetBlob(content, expectedOid);
+              }
+              if (kinds.has("text")) validateText(content);
             }
             blobOffset = contentEnd + 1;
           }
@@ -641,7 +915,7 @@ security_validate_text_inventory() {
               throw new Error("invalid commit/tag metadata header");
             }
             const size = Number(match[3]);
-            if (!Number.isSafeInteger(size) || size < 0 || size > maximumFileSize) {
+            if (!Number.isSafeInteger(size) || size < 0 || size > maximumTextFileSize) {
               throw new Error("commit/tag metadata size bound");
             }
             const contentStart = headerEnd + 1;
@@ -656,7 +930,7 @@ security_validate_text_inventory() {
             throw new Error("unexpected commit/tag metadata batch suffix");
           }
           const refNames = execGit(["for-each-ref", "--format=%(refname)"]);
-          if (refNames.length < 1 || refNames.length > maximumFileSize) {
+          if (refNames.length < 1 || refNames.length > maximumTextFileSize) {
             throw new Error("invalid ref-name inventory size");
           }
           validateText(refNames);
@@ -670,12 +944,52 @@ security_validate_text_inventory() {
         } else {
           throw new Error("unknown text inventory mode");
         }
+        process.stdout.write(
+          "FUKAMU_SECURITY_APPROVED_ASSET_OIDS=" +
+          [...approvedAssetBlobOids].sort().join(":") +
+          "\n",
+        );
       } catch {
         process.exit(2);
       }
     '
   )
-  "${command[@]}" >/dev/null 2>/dev/null
+  case "${inventory_mode}" in
+    candidate)
+      SECURITY_VALIDATED_ASSET_ROOT_CANDIDATE=''
+      SECURITY_VALIDATED_ASSET_OIDS_CANDIDATE=''
+      ;;
+    staged)
+      SECURITY_VALIDATED_ASSET_ROOT_STAGED=''
+      SECURITY_VALIDATED_ASSET_OIDS_STAGED=''
+      ;;
+    history)
+      SECURITY_VALIDATED_ASSET_ROOT_HISTORY=''
+      SECURITY_VALIDATED_ASSET_OIDS_HISTORY=''
+      ;;
+  esac
+  validation_output="$("${command[@]}" 2>/dev/null)" || return 1
+  [[ "${validation_output}" == "${validation_prefix}"* &&
+    "${validation_output}" != *$'\n'* ]] || return 1
+  approved_asset_oids="${validation_output#"${validation_prefix}"}"
+  if [[ -n "${approved_asset_oids}" &&
+    ! "${approved_asset_oids}" =~ ^[0-9a-f]{40}(:[0-9a-f]{40})*$ ]]; then
+    return 1
+  fi
+  case "${inventory_mode}" in
+    candidate)
+      SECURITY_VALIDATED_ASSET_ROOT_CANDIDATE="${source_root}"
+      SECURITY_VALIDATED_ASSET_OIDS_CANDIDATE="${approved_asset_oids}"
+      ;;
+    staged)
+      SECURITY_VALIDATED_ASSET_ROOT_STAGED="${source_root}"
+      SECURITY_VALIDATED_ASSET_OIDS_STAGED="${approved_asset_oids}"
+      ;;
+    history)
+      SECURITY_VALIDATED_ASSET_ROOT_HISTORY="${source_root}"
+      SECURITY_VALIDATED_ASSET_OIDS_HISTORY="${approved_asset_oids}"
+      ;;
+  esac
 }
 
 security_validate_candidate_text_files() {
@@ -1493,8 +1807,23 @@ security_run_gitleaks_normalized_text() {
   local config_path="$3"
   local log_path="$4"
   local scan_status=0
+  local approved_asset_oids
 
   [[ "${inventory_mode}" == "candidate" || "${inventory_mode}" == "staged" || "${inventory_mode}" == "history" ]] || return 1
+  case "${inventory_mode}" in
+    candidate)
+      [[ "${SECURITY_VALIDATED_ASSET_ROOT_CANDIDATE}" == "${source_root}" ]] || return 1
+      approved_asset_oids="${SECURITY_VALIDATED_ASSET_OIDS_CANDIDATE}"
+      ;;
+    staged)
+      [[ "${SECURITY_VALIDATED_ASSET_ROOT_STAGED}" == "${source_root}" ]] || return 1
+      approved_asset_oids="${SECURITY_VALIDATED_ASSET_OIDS_STAGED}"
+      ;;
+    history)
+      [[ "${SECURITY_VALIDATED_ASSET_ROOT_HISTORY}" == "${source_root}" ]] || return 1
+      approved_asset_oids="${SECURITY_VALIDATED_ASSET_OIDS_HISTORY}"
+      ;;
+  esac
   # shellcheck disable=SC2016 # The single-quoted program expands only inside the pinned container.
   local -a command=(
     docker run --rm
@@ -1512,6 +1841,7 @@ security_run_gitleaks_normalized_text() {
     --env "INVENTORY_MODE=${inventory_mode}"
     --env "LEGACY_BINARY_BLOB_OID=${SECURITY_LEGACY_BINARY_BLOB_OID}"
     --env "REVIEWED_BLOB_OIDS=${SECURITY_NORMALIZED_TEXT_REVIEWED_BLOB_OIDS}"
+    --env "APPROVED_ASSET_OIDS=${approved_asset_oids}"
     --volume "${source_root}:/source:ro"
     --volume "${config_path}:/gitleaks/config.toml:ro"
   )
@@ -1529,6 +1859,39 @@ security_run_gitleaks_normalized_text() {
       mkdir /tmp/normalized
       materialized_count=0
 
+      : > /tmp/approved-asset-oids
+      : > /tmp/seen-asset-oids
+      old_ifs="${IFS}"
+      IFS=:
+      set -- ${APPROVED_ASSET_OIDS}
+      IFS="${old_ifs}"
+      test "$#" -le 512
+      for approved_asset_oid in "$@"; do
+        case "${approved_asset_oid}" in
+          "" | *[!0-9a-f]*) exit 1 ;;
+        esac
+        test "${#approved_asset_oid}" -eq 40
+        printf "%s\n" "${approved_asset_oid}" >> /tmp/approved-asset-oids
+      done
+      sort -u /tmp/approved-asset-oids > /tmp/approved-asset-oids.sorted
+      cmp -s /tmp/approved-asset-oids /tmp/approved-asset-oids.sorted
+
+      is_approved_asset_oid() {
+        grep -F -x -q -- "$1" /tmp/approved-asset-oids
+      }
+
+      is_approved_asset_path() {
+        case "$1" in
+          frontend/src/assets/*)
+            case "${1##*/}" in
+              ?*.png) return 0 ;;
+            esac
+            ;;
+          *) return 1 ;;
+        esac
+        return 1
+      }
+
       is_reviewed_blob() {
         case ":${REVIEWED_BLOB_OIDS}:" in
           *":$1:"*) return 0 ;;
@@ -1539,10 +1902,16 @@ security_run_gitleaks_normalized_text() {
       materialize_file() {
         object_id="$1"
         source_file="$2"
+        relative_path="$3"
         case "${object_id}" in
           "" | *[!0-9a-f]*) exit 1 ;;
         esac
         test "${#object_id}" -eq 40
+        if is_approved_asset_path "${relative_path}"; then
+          is_approved_asset_oid "${object_id}"
+          printf "%s\n" "${object_id}" >> /tmp/seen-asset-oids
+          return 0
+        fi
         if test "${object_id}" = "${LEGACY_BINARY_BLOB_OID}" || is_reviewed_blob "${object_id}"; then
           return 0
         fi
@@ -1646,13 +2015,13 @@ security_run_gitleaks_normalized_text() {
             test "${relative_path}" != "${source_file}"
             append_manifest_name candidate-path "${relative_path}" /tmp/candidate-names
             object_id="$(git hash-object --no-filters -- "${source_file}")"
-            materialize_file "${object_id}" "${source_file}"
+            materialize_file "${object_id}" "${source_file}" "${relative_path}"
           done < /tmp/candidate-files
           materialize_manifest CANDIDATE_NAMES /tmp/candidate-names
           ;;
         staged)
           : > /tmp/staged-names
-          : > /tmp/index-oids
+          : > /tmp/index-text-oids
           tab="$(printf "\t")"
           git ls-files --stage -z > /tmp/index-inventory
           test -s /tmp/index-inventory
@@ -1672,17 +2041,23 @@ security_run_gitleaks_normalized_text() {
             test "${#2}" -eq 40
             test "$3" = 0
             append_manifest_name staged-path "${relative_path}" /tmp/staged-names
-            printf "%s\n" "$2" >> /tmp/index-oids
+            if is_approved_asset_path "${relative_path}"; then
+              test "$1" = 100644
+              is_approved_asset_oid "$2"
+              printf "%s\n" "$2" >> /tmp/seen-asset-oids
+            else
+              printf "%s\n" "$2" >> /tmp/index-text-oids
+            fi
           done < /tmp/index-inventory
-          sort -u /tmp/index-oids > /tmp/index-oids.sorted
-          test -s /tmp/index-oids.sorted
+          sort -u /tmp/index-text-oids > /tmp/index-text-oids.sorted
           while IFS= read -r object_id; do
-            materialize_object "${object_id}" blob
-          done < /tmp/index-oids.sorted
+            test -z "${object_id}" || materialize_object "${object_id}" blob
+          done < /tmp/index-text-oids.sorted
           materialize_manifest STAGED_NAMES /tmp/staged-names
           ;;
         history)
           : > /tmp/history-names
+          : > /tmp/history-text-oids
           tab="$(printf "\t")"
           git rev-list --all > /tmp/history-commits
           test -s /tmp/history-commits
@@ -1708,8 +2083,16 @@ security_run_gitleaks_normalized_text() {
               esac
               test "${#3}" -eq 40
               append_manifest_name history-path "${relative_path}" /tmp/history-names
+              if is_approved_asset_path "${relative_path}"; then
+                test "$1" = 100644
+                is_approved_asset_oid "$3"
+                printf "%s\n" "$3" >> /tmp/seen-asset-oids
+              else
+                printf "%s\n" "$3" >> /tmp/history-text-oids
+              fi
             done < /tmp/history-tree
           done < /tmp/history-commits
+          sort -u /tmp/history-text-oids > /tmp/history-text-oids.sorted
           git rev-list --objects --all --no-object-names > /tmp/reachable-objects
           test -s /tmp/reachable-objects
           sort -u /tmp/reachable-objects > /tmp/unique-objects
@@ -1718,7 +2101,14 @@ security_run_gitleaks_normalized_text() {
           while IFS=" " read -r object_id object_type object_size extra; do
             test -z "${extra}"
             case "${object_type}" in
-              blob | commit | tag) materialize_object "${object_id}" "${object_type}" ;;
+              blob)
+                if grep -F -x -q -- "${object_id}" /tmp/history-text-oids.sorted; then
+                  materialize_object "${object_id}" blob
+                elif ! is_approved_asset_oid "${object_id}"; then
+                  materialize_object "${object_id}" blob
+                fi
+                ;;
+              commit | tag) materialize_object "${object_id}" "${object_type}" ;;
               tree) ;;
               *) exit 1 ;;
             esac
@@ -1741,6 +2131,8 @@ security_run_gitleaks_normalized_text() {
           ;;
         *) exit 1 ;;
       esac
+      sort -u /tmp/seen-asset-oids > /tmp/seen-asset-oids.sorted
+      cmp -s /tmp/approved-asset-oids.sorted /tmp/seen-asset-oids.sorted
       test "${materialized_count}" -gt 0
       exec gitleaks \
         --config=/gitleaks/config.toml \

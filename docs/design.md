@@ -6166,7 +6166,9 @@ Production data/secretをStagingへcopyしない。Staging dataは破棄可能�
 
 ## 44.3 CI
 
-PR CIはbase commitからGitHub merge refのexact treeまでの完全な変更inventoryを、`docs`、`frontend`、`backend`、`application`（Frontend + Backend）、`full`のclosed profileへ分類する。`docs`はquality、`frontend`はquality / Frontend / E2E、`backend`はquality / Backend / E2E、`application`はquality / Frontend / Backend / E2E、`full`はworkflow / quality / Frontend / Backend / Infrastructure / E2Eを必須とする。qualityのfull security profileと専用Playbook policy workflowはG7で別Decisionが行われるまで全PR candidateで維持する。
+PR CIはbase commitからGitHub merge refのexact treeまでの完全な変更inventoryを、`docs`、`frontend`、`backend`、`application`（Frontend + Backend）、`full`のclosed profileへ分類する。`docs`はquality、`frontend`はquality / Frontend / E2E、`backend`はquality / Backend / E2E、`application`はquality / Frontend / Backend / E2E、`full`はworkflow / quality / Frontend / Backend / Infrastructure / E2Eを必須とする。全PR candidateではcandidate tree / indexのpath・file type・secretとimmutable dependency / workflow input policyを軽量profileで検査し、全履歴inventory、dependency advisory、Go static analysis、IaC、production imageの重いsecurity検査は`full` profile、main release candidate、scheduled / manual auditで実行する。Main pushはPR CIの再利用可否にかかわらずfull securityを独立jobで完走する。
+
+Weekly scheduled security auditがfailure、cancel、timeout等の非成功で完了した後は、そのrunより新しいscheduledまたはmanualのfull security auditが成功するまで、Terraform Plan、Terraform Apply、Deployを開始しない。Auditはmainから開始したattempt 1だけを受け入れ、full scan後にもaudited SHAがcurrent mainであることを再検証してから成功する。これにより一度成功して復旧した後の新しいmain commitは独立したmain `Release security`で検証し、過去のscheduled failureを理由にcommitごとの追加auditを要求しない。Workflow identity、repository、branch、event、run順序、latest state、API schemaをrelease mutation前の共通preflightでfail-closedに検証し、Issueのcloseや失敗runのRe-runで復旧扱いにしない。
 
 通常のFrontend / Backend codeとMarkdownだけを既知scopeとしてunionできる。Cloudflare / Infrastructure、dependency / lock、workflow、gate / classifier、security / Playbook policy、configuration ownerの変更、およびunknown path、rename / copy / file type変更、100件超、空または不完全なinventoryは`full`へfallbackする。main pushでPR CIを安全に再利用できない場合も変更内容にかかわらず`full`とする。
 
@@ -6176,16 +6178,16 @@ main pushでは、PR CIが実際に検証したmerge treeとmain commitのtree�
 
 External OpenAI / Google / Turnstileの実callを通常PR必須testにしない。Fake adapterを使い、limited contract testはStaging/manualで行う。
 
-Playbook policyは`.fukamu/playbook/lock.json`のexact revisionとSHA-256、vendored bundle / validator、空のoverride、全rule IDのrelation・正確なlocal section traceを通常CIでoffline検証する。専用workflowに加え、既存requiredのSecurity、documentation、configuration gateとstaged-tree commit gateの各経路から同じcandidateを検証し、一つのworkflowやgateの省略で迂回できないようにする。導入・更新時だけ、完全な中央repository cloneに対してGit graph hardening、repository-local署名helper設定の拒否、署名付きversion tagのrevisionと承認済み署名者fingerprintを確認し、中央commit・vendored bytes・lock hashの三者一致をcandidate validatorから独立して追加検証する。
+Playbook policyは`.fukamu/playbook/lock.json`のexact revisionとSHA-256、vendored bundle / validator、空のoverride、全rule IDのrelation・正確なlocal section traceを通常CIでoffline検証する。独立した専用workflowをrequired check候補として維持し、統合check内ではdocumentation gateを唯一の入口として同じcandidateを検証する。Security、configuration、staged-tree runnerから同じvalidatorを重複起動しない。導入・更新時だけ、完全な中央repository cloneに対してGit graph hardening、repository-local署名helper設定の拒否、署名付きversion tagのrevisionと承認済み署名者fingerprintを確認し、中央commit・vendored bytes・lock hashの三者一致をcandidate validatorから独立して追加検証する。
 
 ## 44.4 Deploy sequence
 
 `Terraform Plan Staging`は`terraform plan -detailed-exitcode`の結果を`no_changes`または`changes_present`へ分類し、exact commit SHA、workflow run ID、saved PlanのSHA-256とともに改変不能な証跡へ束縛する。`no_changes`ではApply Environment、Apply credential inventory、state snapshot / read-back / restore drillへ進まない。`changes_present`ではreview済みsaved Plan、別のmanual Apply approval、state保護を維持する。
 
-`Terraform Apply Staging`と`Deploy Staging`は別々のmanual approval boundaryとする。通常Deployはconfigured approverがexact-current-mainの成功した`no_changes` Plan証跡、または`changes_present` Planから生成された成功Apply証跡のrun IDを指定した場合だけ実行し、自動起動しない。Workflow identity、repository、commit、run、artifact inventory、checksumをfail-closedに照合し、`changes_present` Planの直接Deployを拒否する。Application recoveryは別modeとし、current main、同一SHAの成功CI、configured approver、exact confirmationを必須にする。Recoveryは通常releaseのinfra evidence gateを迂回する一般Deploy経路として使わない。
+`Terraform Apply Staging`と`Deploy Staging`は別々のmanual approval boundaryとする。通常Deployはconfigured approverがexact-current-mainの成功した`no_changes` Plan証跡、または`changes_present` Planから生成された成功Apply証跡のrun IDを指定した場合だけ実行し、自動起動しない。Workflow identity、repository、commit、run、artifact inventory、checksumをfail-closedに照合し、`changes_present` Planの直接Deployを拒否する。Application recoveryは明示的な別modeとし、current main、同一SHAの成功CI、configured approver、空のTerraform evidenceを必須にする。同じ判断を表すtyped confirmationは重ねない。Recoveryは通常releaseのinfra evidence gateを迂回する一般Deploy経路として使わない。
 
 ```text
-1. current main、manual Deploy approver、mode固有のno-change Plan / Apply evidenceまたはrecovery confirmation、同一SHAの成功CIを検証
+1. current main、manual Deploy approver、明示したmode、通常modeのno-change Plan / Apply evidenceまたはrecovery modeの空のTerraform evidence、同一SHAの成功CIを検証
 2. main commitをbuildし、deployment inputとBackend runtime configurationをmigration前に検証
 3. release mutation前に、現在配信中Stagingを`target=current-public`として`/healthz`、`/readyz`をhard gateで確認する
 4. Stable CSRF v1初回rolloutでは、同一Browser Context二tabとlegacy Session / tokenをprocess memoryへ保持し、同一Userで二度取得したlegacy tokenの変化と旧版unsafe request成功をrelease mutation前に確認する。この一回限りのgateがpre-mutation anonymous bootstrap / sessionを一度だけ所有する
@@ -6203,7 +6205,7 @@ Generic pre-switch hard gateはcurrent-publicのhealth / readinessとmigration p
 
 Staging critical diagnosticの`mutation_started`はtemporary test accountの作成ではなく、schemaまたは配信中Applicationを変更し得るrelease mutationを表す。`preflight` / `baseline`では`false`、deploy後の`full`では`true`とmode / workflow phaseから導出し、caller入力から推測しない。Temporary accountのlifecycleは別のclosed enum `cleanup_state=not_applicable|not_started|unverified|verified`で表し、anonymous create requestのresponse-lossや削除後401未確認を`not_started`または`verified`へ補正しない。Configuration不明時だけtarget / mutation stateを`unknown`とし、URL、token、cookie、User / Session ID、本文、response bodyをdiagnosticへ含めない。
 
-`Deploy Staging`のworkflow rerunは、同じworkflow runのattempt 1が`completed` / `failure`であり、そのattempt 1が自動生成したexact checkpoint artifactを検証できる場合に限り、`Re-run all jobs`によるattempt 2を一度だけ許可する。Checkpointはfixed child内のmigration command呼び出し直前をrelease mutation boundaryとし、`mutationBoundary=not_crossed`かつtemporary account cleanupが`not_started`または公開Delete 204 / 旧Session 401で証明済みの`verified`の場合だけ`no_mutation_started`を表明する。Artifactはrepository、workflow、run、source attempt 1、candidate SHA、mode、operator、exact-main CI、mode固有のTerraform evidenceへ束縛し、attempt 2はcurrent main、成功CI、Terraform evidenceまたはrecovery confirmationを新たに解決・再検証する。Attempt 2と同じattemptで生成されたfresh resolve outputを必須とし、deploy jobだけを対象にして成功済みresolveを再実行しないfailed / selected-job rerunを拒否する。Attempt 3以降、artifactの欠落・期限切れ・重複・破損・binding不一致、cleanup `unverified`、release mutation boundary以降、cancel / timeoutまたは状態不明でもrerunを拒否し、partial resumeしない。
+`Deploy Staging`のworkflow rerunは、同じworkflow runのattempt 1が`completed` / `failure`であり、そのattempt 1が自動生成したexact checkpoint artifactを検証できる場合に限り、`Re-run all jobs`によるattempt 2を一度だけ許可する。Checkpointはfixed child内のmigration command呼び出し直前をrelease mutation boundaryとし、`mutationBoundary=not_crossed`かつtemporary account cleanupが`not_started`または公開Delete 204 / 旧Session 401で証明済みの`verified`の場合だけ`no_mutation_started`を表明する。Artifactはrepository、workflow、run、source attempt 1、candidate SHA、mode、operator、exact-main CI、mode固有のTerraform evidenceへ束縛し、attempt 2はcurrent main、成功CI、通常modeのTerraform evidenceまたはrecovery modeの空のTerraform evidenceを新たに解決・再検証する。Attempt 2と同じattemptで生成されたfresh resolve outputを必須とし、deploy jobだけを対象にして成功済みresolveを再実行しないfailed / selected-job rerunを拒否する。Attempt 3以降、artifactの欠落・期限切れ・重複・破損・binding不一致、cleanup `unverified`、release mutation boundary以降、cancel / timeoutまたは状態不明でもrerunを拒否し、partial resumeしない。
 
 Fixed childはread-onlyのdrain baselineとcurrent-main確認を終えた後、migration commandの直前にmutation boundaryを`crossed`へ遷移する。遷移できない場合はmigrationを開始しない。遷移後は実際のmigration command到達前であってもmutation開始済みまたは不明として扱い、新しいdispatchも停止してauthoritative Worker / Container stateを確認し、§44.7のschema-compatible rollbackまたはreviewed forward fixを選ぶ。G10のworkflowは新しいmanual dispatchを履歴横断で機械的には阻止しないため、この停止はOperations ownerの明示的な運用責任とする。
 
@@ -6359,7 +6361,7 @@ Testはcanonical ownerを検証するconsumerであり、Product Rule、API値�
 
 PostgreSQL固有のconstraint、deferred FK、row lock、transactionをSQLiteで代用しない。
 
-Governance / Policyの大規模negative fixture suiteは、gate / CI control-planeの変更または変更分類が確定できない場合に適用し、既知のapplication-only変更では省略できる。Commit前gateはfull securityとstaged tree guardを全candidateへ適用した後、`docs`では文書、`frontend`ではFrontend、`backend`ではBackendと実PostgreSQL integration、`application`ではFrontend + Backend、`full`では全scopeとPlaywright E2Eを実行する。Frontend / BackendのPR merge refではE2Eを追加し、無関係なTerraform / Wrangler / Playwright E2Eを全local commitへ重ねない。手動の`check.sh` full / scope CLIの意味は変更しない。
+Governance / Policyの大規模negative fixture suiteは、gate / CI control-planeの変更または変更分類が確定できない場合に適用し、既知のapplication-only変更では省略できる。Commit前gateはcandidate securityとstaged tree guardを全candidateへ分類前にexactly once適用し、分類直後にtreeを再確認する。`full`分類だけは全履歴、dependency advisory、Go static analysis、IaC、production imageを含むextended securityを追加し、treeを再確認してから全scopeとPlaywright E2Eを実行する。その他は`docs`では文書、`frontend`ではFrontend、`backend`ではBackendと実PostgreSQL integration、`application`ではFrontend + Backendを実行する。Frontend / BackendのPR merge refではE2Eを追加し、無関係なTerraform / Wrangler / Playwright E2Eを全local commitへ重ねない。手動の`check.sh` full / scope CLIの意味は変更しない。
 
 ## 48.2 Test determinism
 

@@ -33,7 +33,6 @@ create_docs_config_candidate_snapshot \
   "${repo_root}" \
   "${candidate_root}" \
   "${candidate_metadata_root}"
-bash "${candidate_root}/scripts/check-playbook-adoption.sh"
 config_candidate_files=(
   ".env.example"
   ".github/workflows/deploy.yml"

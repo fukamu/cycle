@@ -175,7 +175,7 @@ TERRAFORM_APPLY_APPROVER
 
 Manual dispatch input `credential_inventory_confirmation`には、inventory確認後だけexact text `CONFIRM APPLY R2 INVENTORY NO FALLBACK`を入力します。これはsecret値やprovenanceの自動検証ではなく、現在のGitHub scope inventoryとCloudflare token metadataをownerが確認したことの明示gateです。
 
-GitHub Environment `staging-terraform-apply`はApply用R2 Read/Write secretの必須かつ運用上唯一の保管場所です。Deployment branchを `main`へ制限します。全planでowner限定manual dispatchを必須gateとし、Required reviewersを利用できるplanでは同じuserによる追加approval gateも設定します。Workflow preflightはinventory confirmationをGitHub API accessより先に検証し、その後actor / triggering actorの両方と `TERRAFORM_APPLY_APPROVER`を照合します。不一致・未設定ではEnvironment credentialを使うApply jobへ進みません。
+GitHub Environment `staging-terraform-apply`はApply用R2 Read/Write secretの必須かつ運用上唯一の保管場所です。Deployment branchを `main`へ制限します。Owner限定manual dispatchを必須gateとし、Workflow preflightはinventory confirmationをGitHub API accessより先に検証した後、actor / triggering actorの両方と `TERRAFORM_APPLY_APPROVER`を照合します。不一致・未設定ではEnvironment credentialを使うApply jobへ進みません。Required reviewersを追加する場合は、dispatch ownerと別の承認者による職務分離が必要な運用に限定し、同じownerの承認を重ねません。
 
 ## GitHub Staging Deploy input
 
@@ -188,8 +188,8 @@ STAGING_DEPLOY_APPROVER
 ```
 
 - `STAGING_DEPLOY_APPROVER`: `Deploy Staging`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorとtriggering actorの両方に照合する。`staging` Environment variableには登録しない。
-- 通常modeはinput `mode=normal`と、成功したexact-current-mainの`no_changes` Terraform Plan、またはApply済みTerraform Planのnumeric `infra_evidence_run_id`を必須とする。`recovery_confirmation`は空でなければならない。
-- Application recovery modeはinput `mode=recovery`とexact `recovery_confirmation=RECOVER STAGING APPLICATION WITHOUT TERRAFORM APPLY`を必須とし、`infra_evidence_run_id`は空でなければならない。これはsecret、credential、Terraform変更を伴わないschema-compatibleなcurrent-main Application復旧だけに使う。
+- 通常modeはinput `mode=normal`と、成功したexact-current-mainの`no_changes` Terraform Plan、またはApply済みTerraform Planのnumeric `infra_evidence_run_id`を必須とする。
+- Application recovery modeはinput `mode=recovery`を明示し、`infra_evidence_run_id`は空でなければならない。これはsecret、credential、Terraform変更を伴わないschema-compatibleなcurrent-main Application復旧だけに使う。同じ意思決定を表すtyped confirmationは追加しない。
 - 両modeともconfigured approver、current main SHA、同一SHAの成功`CI`をEnvironment credentialより前に検証する。通常modeはさらにPlanまたはApply workflowのname/path/event/status/conclusion/repository/head SHA、未失効のexact artifact、Plan checksumとprovenanceを検証し、`changes_present` Planの直接Deployを拒否する。
 
 `CLOUDFLARE_API_TOKEN`はDeployに加えて、対象Worker deployment / version / trafficと対象Container application / rollout / instanceのread-only metadataを取得できる必要があります。現在のtokenで不足する権限を推測して拡張せず、Cloudflare metadataを取得できない場合はDeploy前に停止してcredential ownerの個別承認を得ます。
@@ -204,9 +204,9 @@ Repository variable:
 LEGACY_RETIREMENT_APPROVER
 ```
 
-- `LEGACY_RETIREMENT_APPROVER`: Product OwnerのB2判断を確認後、`Retire Legacy PDCAI Origin`をmanual dispatchできる唯一のGitHub user login。大文字小文字を無視してworkflow actorと照合する。
+- `LEGACY_RETIREMENT_APPROVER`: Product OwnerのB2判断を確認後、`Retire Legacy PDCAI Origin`をmanual dispatchまたはrerunできる唯一のGitHub user login。大文字小文字を無視してworkflow actorとtriggering actorの両方に照合する。
 - Workflowは`staging` Environmentの既存`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`だけをdeployment stepへ渡す。Database、provider、Application runtime secretはretirement Workerへ渡さない。
-- Dispatch inputはcurrent mainの40文字lowercase commit SHAと、exact confirmation `RETIRE pdcai.matoruru.com WITHOUT RECOVERY`を必須とする。値はsecretではない。
+- DispatchはActions画面で`main`を選択し、exact confirmation `RETIRE pdcai.matoruru.com WITHOUT RECOVERY`だけを入力する。Workflowはdispatch時の`github.sha`をcurrent main HEADおよび成功CIへ照合する。値はsecretではない。
 
 ## GitHub `staging` Environment
 
