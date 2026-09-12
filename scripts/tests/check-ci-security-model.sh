@@ -2452,10 +2452,13 @@ validate_workflow() {
   fi
   local step_if_count
   local approved_step_if_count
+  local control_plane_step_if_count
   step_if_count="$(grep -Ec '^(      - if:|        if:)' "${file}" || true)"
   approved_step_if_count="$(grep -Fxc -- "        if: github.event_name == 'pull_request'" "${file}" || true)"
-  if [[ "${step_if_count}" != "1" || "${approved_step_if_count}" != "1" ]]; then
-    violation "only the exact pull-request security selection step may be conditionally skipped"
+  control_plane_step_if_count="$(grep -Fxc -- "        if: needs.classify.outputs.change_profile == 'full'" "${file}" || true)"
+  if [[ "${step_if_count}" != "2" || "${approved_step_if_count}" != "1" ||
+    "${control_plane_step_if_count}" != "1" ]]; then
+    violation "only the exact pull-request security and full-profile control-plane steps may be conditionally skipped"
     return 1
   fi
   if grep -Eq "^[[:space:]]+(-[[:space:]]+)?[\"']?continue-on-error[\"']?[[:space:]]*:" "${file}"; then
@@ -2627,9 +2630,10 @@ validate_workflow() {
     violation "quality must not define defaults, env, container, services, or strategy"
     return 1
   fi
-  if [[ "$(grep -Ec "^(      - |        )[\"']?if[\"']?[[:space:]]*:" "${quality_job}" || true)" != "1" ||
-  "$(grep -Fxc -- "        if: github.event_name == 'pull_request'" "${quality_job}" || true)" != "1" ]]; then
-    violation "quality may skip only its PR security selector on main, where release_security owns the full gate"
+  if [[ "$(grep -Ec "^(      - |        )[\"']?if[\"']?[[:space:]]*:" "${quality_job}" || true)" != "2" ||
+  "$(grep -Fxc -- "        if: github.event_name == 'pull_request'" "${quality_job}" || true)" != "1" ||
+  "$(grep -Fxc -- "        if: needs.classify.outputs.change_profile == 'full'" "${quality_job}" || true)" != "1" ]]; then
+    violation "quality may skip only its PR security selector on main and control-plane fixtures outside the full profile"
     return 1
   fi
   if grep -Eq "^(      - |        )[\"']?shell[\"']?[[:space:]]*:" "${quality_job}"; then
@@ -2652,6 +2656,7 @@ validate_workflow() {
     '          untracked_files="$(git ls-files --others --exclude-standard)"' \
     '          [[ -z "${untracked_files}" ]]' \
     "        run: bash ./scripts/check-shell.sh" \
+    "        if: needs.classify.outputs.change_profile == 'full'" \
     '        run: bash ./scripts/check-control-plane-fixtures.sh --range "${CONTROL_PLANE_BASE_SHA}" "${CONTROL_PLANE_HEAD_SHA}"' \
     "        run: bash ./scripts/check-docs.sh" \
     "        run: bash ./scripts/check-config-parity.sh"; do
@@ -3527,6 +3532,12 @@ replace_job_line "${fixture}" quality \
   '        run: bash ./scripts/check-control-plane-fixtures.sh --range "${CONTROL_PLANE_BASE_SHA}" "${CONTROL_PLANE_HEAD_SHA}"' \
   "        run: true"
 assert_invalid "replaced control-plane fixture classifier" "${fixture}"
+
+fixture="$(new_fixture bypassed-control-plane-profile)"
+replace_job_line "${fixture}" quality \
+  "        if: needs.classify.outputs.change_profile == 'full'" \
+  "        if: always()"
+assert_invalid "control-plane fixtures outside full profile" "${fixture}"
 
 fixture="$(new_fixture altered-control-plane-base)"
 # shellcheck disable=SC2016 # Expected workflow expressions are literals.
