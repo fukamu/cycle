@@ -687,7 +687,8 @@ jobs:
             echo '### Stable CSRF live smoke result'
             echo
             echo "- Exact-main CI commit: \`${COMMIT_SHA}\`"
-            echo '- Legacy-to-stable two-tab/security smoke: passed'
+            echo "- Exact-main deterministic legacy compatibility CI: ${EXACT_MAIN_CI_RUN_ID}"
+            echo '- Candidate stable two-tab/security smoke: passed'
             echo '- Public account cleanup and revoked-session check: passed'
           } >> "${GITHUB_STEP_SUMMARY}"
 

@@ -1047,6 +1047,13 @@ test("deployment contract is the exact repository handoff classification", () =>
     1,
     "the live Browser process must await the deployment and drain child",
   );
+  assert.ok(
+    stagingRolloutContract.indexOf("await adapter.runDeployAndDrain();") <
+      stagingRolloutContract.indexOf(
+        "await adapter.prepareCandidateSession();",
+      ),
+    "the live candidate session must be created only after deployment and authoritative drain",
+  );
   const anonymousSessionRoute = between(
     stagingRolloutBrowserEntry,
     "export function createStagingDeployAnonymousSessionRoute({\n",
@@ -1111,7 +1118,7 @@ test("deployment contract is the exact repository handoff classification", () =>
   );
   const fallbackAccountCleanup = between(
     stagingRolloutContract,
-    "  if (originalUserID !== undefined && !accountDeleted) {\n",
+    "  if (candidateUserID !== undefined && !accountDeleted) {\n",
     "\n  try {\n    await adapter.close();",
   );
   assert.ok(

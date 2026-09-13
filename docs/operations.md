@@ -200,21 +200,21 @@ configured approver / dispatch input / exact main SHA / CI / no-change Plan or A
 -> staging Chromium install
 -> frontend build
 -> 現在配信中Stagingの/healthz + /readyz blocking preflight
--> 同じBrowser processで一度だけanonymous bootstrapし、legacy Sessionを二度取得して、同一Userでtokenが変化することをmutation前に確認
+-> exact-main CIのrequired job matrixでlegacy / stable互換性とdual-validation convergenceを決定的に確認
 -> Cloudflare Worker / Container baseline取得
 -> Neon direct URLでmigration
 -> ephemeral secrets file作成
 -> Wrangler deploy Worker + Container + assets（candidate SHA tag）
 -> secrets file削除 (child trap)
 -> candidate-only old-image drainをauthoritative metadataの連続2観測で確認
--> 同じBrowser process / Contextの二tabでstable convergence、unsafe操作、拒否、Account Deleteを確認
+-> candidate-publicでfresh anonymous Sessionを作成し、同じBrowser Contextの二tabでstable同値、unsafe操作、invalid token / Origin拒否、Account Deleteを確認
 -> drain-pending recordと、smoke成功後だけのseparate markerを保存
 -> /healthz, /readyz smoke test
 -> Goal / Cycle / Review / History critical journey
 -> 公開account-delete APIでaccount cleanup
 ```
 
-Generic pre-switch hard gateはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへ`/healthz`と`/readyz`だけを確認します。Stable CSRF初回rolloutでは#139の同一Browser process / ContextだけがAdmission off / closedの自動判定、Turnstile anonymous bootstrap、legacy Sessionを所有します。同じDeploy runでgeneric anonymous journeyを先行させるとTurnstile / anonymous-create rate-limitを自己消費し得るため、manual `baseline` diagnosticは実行しません。#139のpre-mutation evidenceが失敗した場合はrelease mutationへ進まず、post-deploy smokeまたはaccount cleanupが失敗した場合はreleaseを成功としません。
+Generic pre-switch hard gateはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへ`/healthz`と`/readyz`だけを確認します。Stable CSRF初回rolloutではlegacy / stable互換性をexact-main CIの決定的なtestで確認し、#139の同一Browser process / Contextはauthoritative drain後のcandidate-publicだけでAdmission off / closedの自動判定、Turnstile anonymous bootstrap、fresh stable Sessionを所有します。同じDeploy runでgeneric anonymous journeyを先行させるとcurrent-publicのTurnstile / anonymous-create rate-limitを自己消費し得るため、manual `baseline` diagnosticは実行しません。Exact-main CI evidenceが確認できなければrelease mutationへ進まず、candidateのstable two-tab / security smokeまたはaccount cleanupが失敗した場合はreleaseを成功としません。
 
 Post-deploy `full`だけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。Candidate critical journeyまたはcleanupの失敗ではreleaseを成功としません。Migration失敗時もWrangler deployへ進みません。Recovery modeはApplication authorization boundaryであり、stable初回rolloutのpartial resumeやsmoke bypassには使いません。
 
@@ -275,19 +275,19 @@ Release前に次を満たします。
 
 Rolloutと確認は次の順で行います。
 
-1. 同一candidateのCI / release gateを通す。Deploy前に同じpublic Sessionでtokenを二度取得し、同一Userのtokenが変化するlegacy baselineだけを受理する。Stable同値、identity変更、形式不正、取得失敗ではmigration / deployを開始しない。Dual-validationを含むApplicationのCloudflare deploy成功はrollout開始であり、旧image drain完了の証拠として扱わない。
+1. 同一candidateのCI / release gateを通す。Exact-main CIのrequired job matrixでlegacy / stable token、旧 / 新Application、旧 / 新key、expiry / revoke race、dual-validation convergenceを決定的に検証し、CI run IDをrelease証跡へ束縛する。証跡不明、必要jobの未実行・失敗、candidate SHA不一致ではmigration / deployを開始しない。Current-publicのTurnstile anonymous bootstrapやlegacy Session取得をこのpre-mutation gateへ含めない。Dual-validationを含むApplicationのCloudflare deploy成功はrollout開始であり、旧image drain完了の証拠として扱わない。
 2. Mixed-version中は旧Backendがlegacy random verifierを再保存し、新Backendがstable verifierへ収束させ得る。旧Backend自身はderived stable validationを知らないため、一時的な`403 CSRF_INVALID`をavailability上のdegraded behaviorとして受容するが、Origin、CSRF、Expected User、Session guardを緩和しない。
 3. [`design.md` §41.5](design.md#415-csrf--session)のauthoritative drain条件を、Deploy前後のWorker deployment / version / tagとContainer application / rollout / instanceのbounded API取得で確認する。Rollout履歴は固定page上限の`limit` / `last` paginationで切り詰めを検出し、baseline後に増えた履歴全体の件数ではなく、baseline versionから観測中のcandidate version / imageへ遷移するrolloutを一意に相関する。Candidate Worker version IDから固定Wranglerが生成した同一runner上のlocal image tagをshell非経由でinspectし、Cloudflare Registryのexact repository digestをrollout、Application、全running instanceへ束縛する。連続観測ではWorker、Application、相関rollout、version / image digestと、instanceが非emptyかつ全件running candidateだけであるsemantic stateを照合し、instance ID、配列順、または一時的な件数差だけでは失敗にしない。各観測の前後でactive stateが変わらないことも照合する。旧Worker version、旧Container image digest、candidate version / digest、rollout、確認時刻、確認者だけをaccess-controlled drain-pending recordへ残し、API取得不能、local candidate imageの一意なdigest取得不能、またはtimeoutでは停止する。
-4. Drain後、同一Browser Contextの二tabで同時`GET /session`が同じtokenへ収束すること、片方をreloadした後も両tabのcommand / autosaveが成功することを確認する。CSRF token、Session ID、Response bodyを記録へ残さない。
-5. Live smokeではconvergence後のlegacy token、invalid token / Origin、Account Delete後の旧Session、advisory欠落時のauthoritative recoveryを確認する。Expiry / revoke race、旧 / 新Application・旧 / 新key matrix、Google fake / Session rotationはartifactに記録するexact-main CI runの証跡へ対応付け、Google live provider確認が必要な場合は非個人test identityによる別のmanual checkpointとする。Drain-pending recordとは別に、同じCI run / Deploy run ID / attempt / commitへbindingした`smoke_passed` markerをlive smoke完了後だけ作成し、両方がある場合だけ初回live smoke成功とする。想定外の拒否が続く場合は新規deployを止め、security guardを迂回せず[Application rollback](#application)またはreviewed forward fixを選ぶ。
+4. Drain後のcandidate-publicでfresh anonymous Sessionを作成し、同一Browser Contextの二tabで同時`GET /session`が同じstable tokenを返すこと、片方をreloadした後も同値であり、両tabのcommand / autosaveが成功することを確認する。CSRF token、Session ID、Response bodyを記録へ残さない。
+5. Live smokeではinvalid token / Origin、Account Delete後の旧Session、advisory欠落時のauthoritative recoveryを確認する。Legacy verifier収束とconvergence後のlegacy token拒否、expiry / revoke race、旧 / 新Application・旧 / 新key matrix、Google fake / Session rotationはartifactに記録するexact-main CI runの証跡へ対応付け、Google live provider確認が必要な場合は非個人test identityによる別のmanual checkpointとする。Drain-pending recordとは別に、同じCI run / Deploy run ID / attempt / commitへbindingした`smoke_passed` markerをlive smoke完了後だけ作成し、両方がある場合だけ初回live smoke成功とする。想定外の拒否が続く場合は新規deployを止め、security guardを迂回せず[Application rollback](#application)またはreviewed forward fixを選ぶ。
 
-このone-time harnessではfixed childがread-onlyのdrain baselineとcurrent-main確認を終えた後、migration commandを呼ぶ直前にcheckpointのmutation boundaryを`crossed`へ遷移します。遷移に失敗した場合はmigrationを開始しません。遷移後の失敗、cancel、timeoutは、migration commandへ到達したと確認できない場合もmutation開始済みまたは不明として扱い、workflow rerunを行いません。Checkpointが欠落・破損している場合やcleanupを証明できない場合も`no_mutation_started`と推測しません。新規Deployを停止し、safe metadata artifactを保全してauthoritative Worker / Container stateを確認します。Exact baselineへ戻せるschema-compatible rollbackは個別のlive承認後にold-version drainまで確認し、それ以外はreviewed forward fixを選びます。Migration down、pepper変更、legacy smoke waiver、自動rollbackは行いません。Drain済みでも`smoke_passed` markerがなければ初回rollout受入は未完了です。
+このone-time harnessではexact-main CI evidenceをworkflow preflightで検証し、fixed childがread-onlyのdrain baselineとcurrent-main確認を終えた後、migration commandを呼ぶ直前にcheckpointのmutation boundaryを`crossed`へ遷移します。遷移に失敗した場合はmigrationを開始しません。Live Browser Sessionはfixed childがcandidate-only drainを確認した後だけ作成します。遷移後の失敗、cancel、timeoutは、migration commandへ到達したと確認できない場合もmutation開始済みまたは不明として扱い、workflow rerunを行いません。Checkpointが欠落・破損している場合やcleanupを証明できない場合も`no_mutation_started`と推測しません。新規Deployを停止し、safe metadata artifactを保全してauthoritative Worker / Container stateを確認します。Exact baselineへ戻せるschema-compatible rollbackは個別のlive承認後にold-version drainまで確認し、それ以外はreviewed forward fixを選びます。Migration down、pepper変更、exact-main CI evidenceまたはcandidate smokeのwaiver、自動rollbackは行いません。Drain済みでも`smoke_passed` markerがなければ初回rollout受入は未完了です。
 
 G10は同じrunのattempt 2を証跡で認可する仕組みであり、別のmanual dispatchを過去runの状態から機械的にblockするものではありません。Child spawn以降または状態不明時は、Actions画面で新しいdispatchを開始できても、Operations ownerが新規dispatchを停止したままauthoritative recoveryを完了させます。
 
 Workflow artifactは90日保持の一時checkpointであり、180日後のlegacy verifier削除判断の正本にはしません。Actual live rolloutでは、drain-pending recordと`smoke_passed` markerのsafe metadataを失効前に承認済みのaccess-controlledな長期release recordへ保全します。対応する長期記録がなければdrain時刻を推測せず、legacy verifier削除を解禁しません。
 
-初回rollout成功後、このharnessはstable baselineをlegacy未確認として意図的に停止します。次のlive Deploy前に、#139の`smoke_passed` artifact / runを根拠としてsteady-state gateへ置換する別Issue / Pull Requestを完了します。Runtime inputやRecovery modeでone-time gateをskipしません。
+初回rollout成功後、次のlive Deploy前に#139の`smoke_passed` artifact / runを根拠としてこのone-time harnessをsteady-state gateへ置換する別Issue / Pull Requestを完了します。Runtime inputやRecovery modeでexact-main CI evidenceまたはcandidate smokeをskipしません。
 
 現在のStagingは`max_instances: 1`の固定singletonでも旧imageから新版へ切り替わる一回の失効があり得ます。将来`max_instances > 1`へ変更する前に、dual-validationだけを全instanceへ先行配備してdrainを確認し、その後のstable issuanceを二段階release / issuance flagとして別Issue / Decision gateで仕様化します。単一DB列を旧版と新版が交互に上書きする状態を互換保証として扱いません。
 
@@ -346,7 +346,7 @@ OTLP failureでは固定error classと集約`failure_count`だけを確認し、
 
 ## Staging critical journey cleanup
 
-`baseline`は現在配信中StagingのAdmission entry、Turnstile anonymous bootstrap、session discovery、公開account cleanupを別のoperator調査runで確認するnon-blocking diagnosticです。検出した失敗はwarning annotationとnon-zero exitで調査run自体へ通知しますが、Deploy workflowに接続しないためcandidate releaseをblockしません。Stable CSRF初回rolloutが存続する間はDeploy workflowから自動実行せず、日常monitorにも使いません。実行する場合は前のlive runとanonymous bootstrap TTL / rate-limitを確認し、候補releaseの合否判定や#139 gateの代替にせず、[`development.md`](development.md#staging-pre-switch-baseline--post-deploy-critical-journey)のsecret注入境界に従います。`full`はcandidate-publicのblocking post-deploy journeyです。
+`baseline`は現在配信中StagingのAdmission entry、Turnstile anonymous bootstrap、session discovery、公開account cleanupを別のoperator調査runで確認するnon-blocking diagnosticです。検出した失敗はwarning annotationとnon-zero exitで調査run自体へ通知しますが、Deploy workflowに接続しないためcandidate releaseをblockしません。Stable CSRF初回rolloutが存続する間はDeploy workflowから自動実行せず、日常monitorにも使いません。実行する場合は前のlive runとanonymous bootstrap TTL / rate-limitを確認し、候補releaseの合否判定や#139のcandidate-public smokeの代替にせず、[`development.md`](development.md#staging-pre-switch-baseline--post-deploy-critical-journey)のsecret注入境界に従います。`full`はcandidate-publicのblocking post-deploy journeyです。
 
 `baseline`と`full`はrepository / run ID / candidate commit / modeから同一runで安定する別のUUIDv7 bootstrap IDを作り、Raw IDを表示しません。各検証でBrowserを閉じてsessionを更新し、CSRF、expected-user binding、`{"confirmed":true}`を使う公開`DELETE /api/v1/account`だけでcleanupします。204とresponse identityを確認するまで1、2、4、8、16秒backoffで再試行し、最後に`GET /api/v1/session`が401であることを確認します。
 

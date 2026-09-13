@@ -93,7 +93,7 @@ export function createStagingCSRFRolloutBrowserAdapter({
       configurePage(pageA, actionTimeoutMilliseconds);
     },
 
-    async prepareLegacySession() {
+    async prepareCandidateSession() {
       await prepareStagingBootstrapStorage(pageA, baseURL, bootstrapID);
       let session;
       const anonymousSessionCheckpoint =
@@ -124,7 +124,7 @@ export function createStagingCSRFRolloutBrowserAdapter({
       const checkpointFailure = anonymousSessionCheckpoint.failure();
       if (checkpointFailure !== undefined) throw checkpointFailure;
       if (session === undefined) {
-        throw new Error("legacy session preparation failed");
+        throw new Error("candidate session preparation failed");
       }
       await pageA.evaluate(() => {
         globalThis.history.replaceState(
@@ -134,26 +134,6 @@ export function createStagingCSRFRolloutBrowserAdapter({
         );
       });
       return session;
-    },
-
-    async confirmLegacySession() {
-      const response = await context.request.get(`${baseURL}/api/v1/session`, {
-        headers: { Accept: "application/json", Origin: baseURL },
-        failOnStatusCode: false,
-        maxRedirects: 0,
-        timeout: actionTimeoutMilliseconds,
-      });
-      try {
-        if (response.status() !== 200) {
-          throw new Error("legacy session confirmation failed");
-        }
-        return parseAnonymousSession(
-          await response.json(),
-          response.headers()[authenticatedUserIDHeader],
-        );
-      } finally {
-        await response.dispose();
-      }
     },
 
     async captureRevokedSessionProbe() {
@@ -196,7 +176,7 @@ export function createStagingCSRFRolloutBrowserAdapter({
       });
     },
 
-    async runLegacyUnsafeRequest(session) {
+    async runCandidateUnsafeRequest(session) {
       const response = await context.request.post(
         `${baseURL}/api/v1/goal-drafts`,
         requestOptions(baseURL, session, { initialBody: "" }),
@@ -323,17 +303,10 @@ export function createStagingCSRFRolloutBrowserAdapter({
       return true;
     },
 
-    async verifyCSRFRejection(kind, { originalSession, stableSession }) {
-      const invalidToken = createInvalidToken(
-        originalSession.csrfToken,
-        stableSession.csrfToken,
-      );
+    async verifyCSRFRejection(kind, { stableSession }) {
+      const invalidToken = createInvalidToken(stableSession.csrfToken);
       const csrfToken =
-        kind === "legacy_token"
-          ? originalSession.csrfToken
-          : kind === "invalid_token"
-            ? invalidToken
-            : stableSession.csrfToken;
+        kind === "invalid_token" ? invalidToken : stableSession.csrfToken;
       const origin =
         kind === "invalid_origin" ? "https://invalid.example" : baseURL;
       const response = await revokedSessionProbe.patch(
@@ -392,7 +365,7 @@ export function createStagingCSRFRolloutBrowserAdapter({
       }
     },
 
-    async deleteOriginalAccount(session) {
+    async deleteCandidateAccount(session) {
       const response = await context.request.delete(
         `${baseURL}/api/v1/account`,
         requestOptions(baseURL, session, { confirmed: true }),
@@ -802,9 +775,9 @@ async function safeErrorCode(response) {
   }
 }
 
-function createInvalidToken(first, second) {
+function createInvalidToken(stableToken) {
   for (const candidate of ["A".repeat(43), "B".repeat(43), "_".repeat(43)]) {
-    if (candidate !== first && candidate !== second) return candidate;
+    if (candidate !== stableToken) return candidate;
   }
   throw new Error("invalid token fixture could not be created");
 }
