@@ -332,6 +332,32 @@ test("accepts version gaps, unrelated rollouts, and reordered candidate instance
   assert.equal(Object.hasOwn(evidence, "containerInstanceId"), false);
 });
 
+test("accepts omitted instance images through exact application and rollout version binding", async () => {
+  const baseline = observation({
+    instances: [instance({ image: null })],
+  });
+  const candidate = observation({
+    candidate: true,
+    instances: [instance({ id: ids.newInstance, version: 2, image: null })],
+  });
+  assert.equal(
+    (
+      await proveCloudflareDrain({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: sequenceAdapter([
+          baseline,
+          candidate,
+          structuredClone(candidate),
+        ]),
+        now: tickingClock(),
+        sleep: async () => undefined,
+        wake: async () => undefined,
+      })
+    ).result,
+    "drained",
+  );
+});
+
 test("rejects zero running instances, mixed images, and ambiguous candidate rollouts", async () => {
   const invalidCandidates = [
     observation({ candidate: true, instances: [] }),
@@ -340,6 +366,24 @@ test("rejects zero running instances, mixed images, and ambiguous candidate roll
       instances: [
         instance({ id: ids.newInstance, version: 2, image: newImage }),
         instance(),
+      ],
+    }),
+    observation({
+      candidate: true,
+      instances: [
+        instance({ id: ids.newInstance, version: 2, image: unrelatedImage }),
+      ],
+    }),
+    observation({
+      candidate: true,
+      rollouts: [
+        rollout({
+          id: ids.newRollout,
+          currentVersion: 1,
+          targetVersion: 2,
+          targetImage: null,
+        }),
+        rollout(),
       ],
     }),
     observation({
@@ -733,6 +777,17 @@ function rolloutEnvelope(candidate = false) {
   return envelope(values);
 }
 
+function historicalRolloutWithoutImageEnvelope() {
+  const value = structuredClone(rolloutEnvelope(true).result[0]);
+  value.id = ids.oldRollout;
+  value.created_at = "2026-09-07T00:00:00.000Z";
+  value.current_version = 1;
+  value.target_version = 1;
+  value.current_configuration = {};
+  value.target_configuration = {};
+  return envelope([value]);
+}
+
 function rawRollout(index) {
   const value = structuredClone(rolloutEnvelope(true).result[0]);
   value.id = `10000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
@@ -743,7 +798,7 @@ function rawRollout(index) {
 function instanceEnvelope(
   candidate = false,
   resultInfo = { per_page: 50, next_page_token: null },
-  { healthOnly = false } = {},
+  { healthOnly = false, includeImage = true } = {},
 ) {
   return envelope(
     {
@@ -753,7 +808,7 @@ function instanceEnvelope(
           created_at: "2026-09-07T00:00:00.000Z",
           location: "nrt",
           app_version: candidate ? 2 : 1,
-          image: candidate ? newImage : oldImage,
+          ...(includeImage ? { image: candidate ? newImage : oldImage } : {}),
           current_placement: {
             id: "00000000-0000-4000-8000-00000000000b",
             created_at: "2026-09-07T00:00:00.000Z",
@@ -773,7 +828,11 @@ function instanceEnvelope(
   );
 }
 
-function productionFetch({ candidate = false, currentSchema = false } = {}) {
+function productionFetch({
+  candidate = false,
+  currentSchema = false,
+  historicalRolloutWithoutImage = false,
+} = {}) {
   const requests = [];
   const fetchImpl = async (url, options) => {
     requests.push({ url, options });
@@ -809,7 +868,11 @@ function productionFetch({ candidate = false, currentSchema = false } = {}) {
         `/containers/applications/${ids.application}/rollouts`,
       )
     ) {
-      return response(rolloutEnvelope(candidate));
+      return response(
+        historicalRolloutWithoutImage
+          ? historicalRolloutWithoutImageEnvelope()
+          : rolloutEnvelope(candidate),
+      );
     }
     if (
       parsed.pathname.endsWith(
@@ -817,7 +880,10 @@ function productionFetch({ candidate = false, currentSchema = false } = {}) {
       )
     ) {
       return response(
-        instanceEnvelope(candidate, undefined, { healthOnly: currentSchema }),
+        instanceEnvelope(candidate, undefined, {
+          healthOnly: currentSchema,
+          includeImage: !currentSchema,
+        }),
       );
     }
     throw new Error("unexpected test URL");
@@ -853,7 +919,10 @@ test("production adapter uses fixed GET endpoints and returns only normalized ev
 });
 
 test("production adapter accepts the current Containers application and placement schema", async () => {
-  const fake = productionFetch({ currentSchema: true });
+  const fake = productionFetch({
+    currentSchema: true,
+    historicalRolloutWithoutImage: true,
+  });
   const adapter = createCloudflareRawAdapter({
     accountId: accountID,
     apiToken: token,
@@ -862,10 +931,46 @@ test("production adapter accepts the current Containers application and placemen
     fetchImpl: fake.fetchImpl,
   });
   const expected = observation();
-  expected.container.rollouts = [];
+  expected.container.rollouts = [
+    rollout({
+      targetImage: null,
+    }),
+  ];
+  expected.container.instances[0].image = null;
   assert.deepEqual(
     await adapter.readObservation({ phase: "baseline" }),
     expected,
+  );
+});
+
+test("production adapter rejects a malformed optional instance image without exposing it", async () => {
+  const fake = productionFetch({ currentSchema: true });
+  const adapter = createCloudflareRawAdapter({
+    accountId: accountID,
+    apiToken: token,
+    workerName,
+    containerApplicationName: applicationName,
+    fetchImpl: async (url, options) => {
+      if (
+        new URL(url).pathname.endsWith(
+          `/containers/dash/applications/${ids.application}/instances`,
+        )
+      ) {
+        const invalid = instanceEnvelope(false, undefined, {
+          healthOnly: true,
+        });
+        invalid.result.instances[0].image = token;
+        return response(invalid);
+      }
+      return fake.fetchImpl(url, options);
+    },
+  });
+  await assert.rejects(
+    adapter.readObservation({ phase: "baseline" }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.reason === "invalid_evidence" &&
+      !error.message.includes(token),
   );
 });
 
