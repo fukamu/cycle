@@ -150,6 +150,10 @@ function sequenceAdapter(values) {
   };
 }
 
+function stableBaseline(value = observation()) {
+  return [value, structuredClone(value)];
+}
+
 function tickingClock(step = 10_000) {
   let value = -step;
   return () => {
@@ -166,7 +170,7 @@ test("requires two identical authoritative observations after waking the deploy"
     instances: [],
   });
   const adapter = sequenceAdapter([
-    observation(),
+    ...stableBaseline(),
     transitioning,
     observation({ candidate: true }),
     observation({ candidate: true }),
@@ -182,7 +186,16 @@ test("requires two identical authoritative observations after waking the deploy"
   });
 
   assert.deepEqual(adapter.calls, [
-    { phase: "baseline", attempt: 0 },
+    {
+      phase: "baseline",
+      attempt: 0,
+      timeoutMilliseconds: 290_000,
+    },
+    {
+      phase: "baseline",
+      attempt: 1,
+      timeoutMilliseconds: 270_000,
+    },
     { phase: "drain", attempt: 0, timeoutMilliseconds: 1_190_000 },
     { phase: "drain", attempt: 1, timeoutMilliseconds: 1_160_000 },
     { phase: "drain", attempt: 2, timeoutMilliseconds: 1_140_000 },
@@ -190,7 +203,7 @@ test("requires two identical authoritative observations after waking the deploy"
   assert.equal(wakeInputs.length, 1);
   assert.equal(wakeInputs[0].workerVersionId, ids.oldWorkerVersion);
   assert.equal(wakeInputs[0].containerImageDigest, `sha256:${"1".repeat(64)}`);
-  assert.deepEqual(sleeps, [10_000, 10_000]);
+  assert.deepEqual(sleeps, [10_000, 10_000, 10_000]);
   assert.deepEqual(evidence, {
     result: "drained",
     commitSHA: candidateSHA,
@@ -203,7 +216,7 @@ test("requires two identical authoritative observations after waking the deploy"
     containerImageDigest: `sha256:${"2".repeat(64)}`,
     drainedContainerVersion: 1,
     drainedContainerImageDigest: `sha256:${"1".repeat(64)}`,
-    observedAt: "1970-01-01T00:01:20.000Z",
+    observedAt: "1970-01-01T00:02:00.000Z",
   });
   assert.equal(
     JSON.parse(serializeCloudflareDrainEvidence(evidence)).result,
@@ -241,7 +254,7 @@ test("does not treat a changed untagged worker as the candidate", async () => {
     proveCloudflareDrain({
       candidateCommitSHA: candidateSHA,
       rawAdapter: sequenceAdapter([
-        observation({ workerTag: null }),
+        ...stableBaseline(observation({ workerTag: null })),
         observation({ candidate: true, workerTag: null }),
       ]),
       now: tickingClock(),
@@ -276,7 +289,7 @@ test("accepts idle zero-instance inventories across an exact rollout", async () 
     const evidence = await proveCloudflareDrain({
       candidateCommitSHA: candidateSHA,
       rawAdapter: sequenceAdapter([
-        baseline,
+        ...stableBaseline(baseline),
         candidate,
         structuredClone(candidate),
       ]),
@@ -296,23 +309,132 @@ test("accepts idle zero-instance inventories across an exact rollout", async () 
   }
 });
 
-test("rejects an idle baseline while a rollout remains active", async () => {
-  await assert.rejects(
-    proveCloudflareDrain({
+test("reports the highest-priority closed baseline reason without waking", async () => {
+  const cases = [
+    {
+      reason: "baseline_active_rollout",
+      value: observation({
+        activeRolloutId: ids.oldRollout,
+        instances: [
+          instance({ status: "placed", version: 0, image: unrelatedImage }),
+        ],
+      }),
+    },
+    {
+      reason: "baseline_instance_not_running",
+      value: observation({
+        instances: [
+          instance({ status: "placed", version: 0, image: unrelatedImage }),
+        ],
+      }),
+    },
+    ...["stopping", "stopped", "failed", "unhealthy"].map((status) => ({
+      reason: "baseline_instance_not_running",
+      value: observation({ instances: [instance({ status })] }),
+    })),
+    {
+      reason: "baseline_instance_version_mismatch",
+      value: observation({
+        instances: [instance({ version: 0, image: unrelatedImage })],
+      }),
+    },
+    {
+      reason: "baseline_instance_image_reference_mismatch",
+      value: observation({ instances: [instance({ image: unrelatedImage })] }),
+    },
+  ];
+
+  for (const { reason, value } of cases) {
+    let woke = false;
+    const adapter = sequenceAdapter([value, structuredClone(value)]);
+    await assert.rejects(
+      proveCloudflareDrain({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: adapter,
+        now: tickingClock(1),
+        sleep: async () => undefined,
+        wake: async () => {
+          woke = true;
+        },
+        pollIntervalMilliseconds: 1,
+        timeoutMilliseconds: 5,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "baseline" &&
+        error.reason === reason &&
+        error.source === "none" &&
+        !error.message.includes(token),
+    );
+    assert.equal(woke, false);
+    assert.equal(adapter.calls.length, 2);
+  }
+});
+
+test("waits for transient baseline rollout and placement states before waking", async () => {
+  const pendingValues = [
+    observation({ activeRolloutId: ids.oldRollout }),
+    observation({ instances: [instance({ status: "placed" })] }),
+  ];
+
+  for (const pending of pendingValues) {
+    const adapter = sequenceAdapter([
+      pending,
+      ...stableBaseline(),
+      observation({ candidate: true }),
+      observation({ candidate: true }),
+    ]);
+    const callsAtWake = [];
+    const evidence = await proveCloudflareDrain({
       candidateCommitSHA: candidateSHA,
-      rawAdapter: sequenceAdapter([
-        observation({
-          activeRolloutId: ids.oldRollout,
-          instances: [],
-        }),
-      ]),
-      wake: async () => undefined,
-    }),
-    (error) =>
-      error instanceof CloudflareDrainFailure &&
-      error.phase === "baseline" &&
-      error.reason === "baseline_not_stable",
-  );
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => callsAtWake.push(structuredClone(adapter.calls)),
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    });
+
+    assert.equal(evidence.result, "drained");
+    assert.equal(callsAtWake.length, 1);
+    assert.deepEqual(
+      callsAtWake[0].map(({ phase, attempt }) => ({ phase, attempt })),
+      [
+        { phase: "baseline", attempt: 0 },
+        { phase: "baseline", attempt: 1 },
+        { phase: "baseline", attempt: 2 },
+      ],
+    );
+  }
+});
+
+test("fails closed when stable baseline identity changes between samples", async () => {
+  for (const intermediate of [
+    [],
+    [observation({ activeRolloutId: ids.oldRollout })],
+  ]) {
+    const changed = observation();
+    changed.worker.deploymentId = ids.changedWorkerVersion;
+    let woke = false;
+    await assert.rejects(
+      proveCloudflareDrain({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: sequenceAdapter([observation(), ...intermediate, changed]),
+        now: tickingClock(1),
+        sleep: async () => undefined,
+        wake: async () => {
+          woke = true;
+        },
+        pollIntervalMilliseconds: 1,
+        timeoutMilliseconds: 10,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "baseline" &&
+        error.reason === "evidence_changed",
+    );
+    assert.equal(woke, false);
+  }
 });
 
 test("does not accept mixed old instances or one candidate observation", async () => {
@@ -324,7 +446,7 @@ test("does not accept mixed old instances or one candidate observation", async (
     ],
   });
   const adapter = sequenceAdapter([
-    observation(),
+    ...stableBaseline(),
     observation({ candidate: true }),
     mixed,
   ]);
@@ -350,7 +472,16 @@ test("rejects an already-active candidate and never wakes deployment", async () 
   await assert.rejects(
     proveCloudflareDrain({
       candidateCommitSHA: candidateSHA,
-      rawAdapter: sequenceAdapter([observation({ candidate: true })]),
+      rawAdapter: sequenceAdapter([
+        observation({
+          candidate: true,
+          activeRolloutId: ids.newRollout,
+          rolloutStatus: "completed",
+          instances: [
+            instance({ status: "placed", version: 0, image: unrelatedImage }),
+          ],
+        }),
+      ]),
       wake: async () => {
         woke = true;
       },
@@ -363,6 +494,54 @@ test("rejects an already-active candidate and never wakes deployment", async () 
   assert.equal(woke, false);
 });
 
+test("keeps invalid and provider baseline failures immediate", async () => {
+  for (const { adapter, reason, source } of [
+    {
+      adapter: sequenceAdapter([{ ...observation(), private: token }]),
+      reason: "invalid_evidence",
+      source: "observation",
+    },
+    {
+      adapter: {
+        calls: [],
+        async readObservation(input) {
+          this.calls.push(input);
+          throw new CloudflareDrainFailure("baseline", "provider_rejected");
+        },
+      },
+      reason: "provider_rejected",
+      source: "none",
+    },
+  ]) {
+    let woke = false;
+    let slept = false;
+    await assert.rejects(
+      proveCloudflareDrain({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: adapter,
+        now: tickingClock(1),
+        sleep: async () => {
+          slept = true;
+        },
+        wake: async () => {
+          woke = true;
+        },
+        pollIntervalMilliseconds: 1,
+        timeoutMilliseconds: 10,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "baseline" &&
+        error.reason === reason &&
+        error.source === source &&
+        !error.message.includes(token),
+    );
+    assert.equal(adapter.calls.length, 1);
+    assert.equal(slept, false);
+    assert.equal(woke, false);
+  }
+});
+
 test("fails closed when a stable semantic projection changes or rollout reverts", async () => {
   const changed = observation({ candidate: true });
   changed.worker.versionId = ids.changedWorkerVersion;
@@ -370,7 +549,7 @@ test("fails closed when a stable semantic projection changes or rollout reverts"
     proveCloudflareDrain({
       candidateCommitSHA: candidateSHA,
       rawAdapter: sequenceAdapter([
-        observation(),
+        ...stableBaseline(),
         observation({ candidate: true }),
         changed,
       ]),
@@ -389,7 +568,7 @@ test("fails closed when a stable semantic projection changes or rollout reverts"
       proveCloudflareDrain({
         candidateCommitSHA: candidateSHA,
         rawAdapter: sequenceAdapter([
-          observation(),
+          ...stableBaseline(),
           observation({
             candidate: true,
             activeRolloutId: ids.newRollout,
@@ -436,7 +615,7 @@ test("accepts version gaps, unrelated rollouts, and reordered candidate instance
 
   const evidence = await proveCloudflareDrain({
     candidateCommitSHA: candidateSHA,
-    rawAdapter: sequenceAdapter([observation(), first, second]),
+    rawAdapter: sequenceAdapter([...stableBaseline(), first, second]),
     now: tickingClock(),
     sleep: async () => undefined,
     wake: async () => undefined,
@@ -459,7 +638,7 @@ test("accepts omitted instance images through exact application and rollout vers
       await proveCloudflareDrain({
         candidateCommitSHA: candidateSHA,
         rawAdapter: sequenceAdapter([
-          baseline,
+          ...stableBaseline(baseline),
           candidate,
           structuredClone(candidate),
         ]),
@@ -486,7 +665,7 @@ test("accepts an initial application version of zero and drains it to the candid
   const evidence = await proveCloudflareDrain({
     candidateCommitSHA: candidateSHA,
     rawAdapter: sequenceAdapter([
-      baseline,
+      ...stableBaseline(baseline),
       candidate,
       structuredClone(candidate),
     ]),
@@ -580,12 +759,17 @@ test("rejects mixed images and ambiguous candidate rollouts", async () => {
     await assert.rejects(
       proveCloudflareDrain({
         candidateCommitSHA: candidateSHA,
-        rawAdapter: sequenceAdapter([observation(), invalid]),
+        rawAdapter: sequenceAdapter([
+          ...stableBaseline(),
+          invalid,
+          structuredClone(invalid),
+          structuredClone(invalid),
+        ]),
         now: tickingClock(1),
         sleep: async () => undefined,
         wake: async () => undefined,
         pollIntervalMilliseconds: 1,
-        timeoutMilliseconds: 3,
+        timeoutMilliseconds: 6,
       }),
       (error) =>
         error instanceof CloudflareDrainFailure &&
@@ -606,7 +790,7 @@ test("does not accept an idle candidate while its rollout remains active", async
       proveCloudflareDrain({
         candidateCommitSHA: candidateSHA,
         rawAdapter: sequenceAdapter([
-          observation({ instances: [] }),
+          ...stableBaseline(observation({ instances: [] })),
           active,
           structuredClone(active),
           structuredClone(active),
@@ -640,7 +824,7 @@ test("polls a placed candidate but rejects known terminal instance states", asyn
     ],
   });
   const adapter = sequenceAdapter([
-    observation(),
+    ...stableBaseline(),
     placed,
     observation({ candidate: true }),
     observation({ candidate: true }),
@@ -670,7 +854,7 @@ test("polls a placed candidate but rejects known terminal instance states", asyn
     await assert.rejects(
       proveCloudflareDrain({
         candidateCommitSHA: candidateSHA,
-        rawAdapter: sequenceAdapter([observation(), terminal]),
+        rawAdapter: sequenceAdapter([...stableBaseline(), terminal]),
         now: tickingClock(),
         sleep: async () => undefined,
         wake: async () => undefined,
@@ -685,12 +869,13 @@ test("polls a placed candidate but rejects known terminal instance states", asyn
 
 test("starts the drain deadline after wake and rejects a late final read", async () => {
   const wakeExcludedClock = [
-    0, 1_000_000, 1_000_001, 1_000_002, 1_000_003, 1_000_004, 1_000_005,
+    0, 1, 2, 3, 4, 1_000_000, 1_000_001, 1_000_002, 1_000_003, 1_000_004,
+    1_000_005,
   ];
   const evidence = await proveCloudflareDrain({
     candidateCommitSHA: candidateSHA,
     rawAdapter: sequenceAdapter([
-      observation(),
+      ...stableBaseline(),
       observation({ candidate: true }),
       observation({ candidate: true }),
     ]),
@@ -702,12 +887,12 @@ test("starts the drain deadline after wake and rejects a late final read", async
   });
   assert.equal(evidence.observedAt, "1970-01-01T00:16:40.005Z");
 
-  const lateReadClock = [0, 100, 101, 102, 109, 110];
+  const lateReadClock = [0, 1, 2, 3, 4, 100, 101, 102, 103, 109, 110];
   await assert.rejects(
     proveCloudflareDrain({
       candidateCommitSHA: candidateSHA,
       rawAdapter: sequenceAdapter([
-        observation(),
+        ...stableBaseline(),
         observation({ candidate: true }),
         observation({ candidate: true }),
       ]),
@@ -794,7 +979,7 @@ test("binds the rollout to the locally pushed candidate image digest", async () 
       proveCloudflareDrainImplementation({
         candidateCommitSHA: candidateSHA,
         rawAdapter: sequenceAdapter([
-          observation(),
+          ...stableBaseline(),
           observation({ candidate: true }),
         ]),
         resolveCandidateImageDigest: async () => digest,
@@ -1744,6 +1929,23 @@ test("diagnostics expose only closed enums and validated run metadata", () => {
     "stability",
   ]);
   assert.ok(cloudflareDrainReasons.includes("authorization_rejected"));
+  for (const reason of [
+    "baseline_active_rollout",
+    "baseline_instance_not_running",
+    "baseline_instance_version_mismatch",
+    "baseline_instance_image_reference_mismatch",
+  ]) {
+    assert.ok(cloudflareDrainReasons.includes(reason));
+    const baselineDiagnostic = formatCloudflareDrainDiagnostic(
+      new CloudflareDrainFailure("baseline", reason),
+      { runID: "123", runAttempt: "2", commitSHA: candidateSHA },
+    );
+    assert.equal(
+      parseCloudflareDrainDiagnosticLine(baselineDiagnostic),
+      baselineDiagnostic,
+    );
+    assert.doesNotMatch(baselineDiagnostic, new RegExp(token));
+  }
   assert.deepEqual(cloudflareDrainSources, [
     "none",
     "provider_response",
@@ -1831,7 +2033,7 @@ test("argumentless CLI keeps the wake protocol and result free of raw payloads",
   const stderr = outputBuffer();
   let requestCount = 0;
   const fetchImpl = async (url, options) => {
-    const candidate = requestCount >= 9;
+    const candidate = requestCount >= 18;
     requestCount += 1;
     return productionFetch({ candidate }).fetchImpl(url, options);
   };
@@ -1864,6 +2066,52 @@ test("argumentless CLI keeps the wake protocol and result free of raw payloads",
   assert.equal(evidence.containerRolloutId, ids.newRollout);
   assert.equal(stderr.value(), "");
   assert.doesNotMatch(stdout.value(), new RegExp(token));
+});
+
+test("CLI reports a secret-safe closed reason for a nonconverging baseline", async () => {
+  const fake = productionFetch();
+  const stdout = outputBuffer();
+  const stderr = outputBuffer();
+  const fetchImpl = async (url, options) => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith(`/containers/applications/${ids.application}`)) {
+      const value = applicationEnvelope();
+      value.result.active_rollout_id = ids.oldRollout;
+      return response(value);
+    }
+    if (
+      pathname.endsWith(`/containers/applications/${ids.application}/rollouts`)
+    ) {
+      return response(historicalRolloutWithoutImageEnvelope());
+    }
+    return fake.fetchImpl(url, options);
+  };
+
+  const status = await runCloudflareDrainEvidenceCLI({
+    argv: [],
+    env: {
+      COMMIT_SHA: candidateSHA,
+      CLOUDFLARE_ACCOUNT_ID: accountID,
+      CLOUDFLARE_API_TOKEN: token,
+      GITHUB_RUN_ID: "123",
+      GITHUB_RUN_ATTEMPT: "1",
+    },
+    input: new PassThrough(),
+    output: stdout.stream,
+    errorOutput: stderr.stream,
+    fetchImpl,
+    now: tickingClock(100_000),
+    sleep: async () => undefined,
+  });
+
+  assert.equal(status, 1);
+  assert.equal(stdout.value(), "");
+  assert.equal(
+    stderr.value(),
+    `::error::Cloudflare drain evidence failed; phase=baseline; reason=baseline_active_rollout; source=none; run_id=123; run_attempt=1; commit_sha=${candidateSHA}.\n`,
+  );
+  assert.doesNotMatch(stderr.value(), new RegExp(token));
+  assert.doesNotMatch(stderr.value(), /rollout_id|status|version|image/i);
 });
 
 test("CLI rejects arguments and reports only a closed diagnostic", async () => {
