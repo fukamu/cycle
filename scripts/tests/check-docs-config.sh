@@ -1940,10 +1940,11 @@ test_config_gate() {
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture frontend-docs-extra-key)"
+  frontend_docs_line="$(grep -F -- 'Frontend public valueとBackendの対応値は同じGitHub Environment入力からbuild/deployします。' "${fixture}/docs/environment.md")"
   # shellcheck disable=SC2016 # Markdown code spans are intentional fixture literals.
   insert_before_exact_line \
     "${fixture}/docs/environment.md" \
-    'Frontend public valueとBackendの対応値は同じGitHub Environment入力からbuild/deployします。' \
+    "${frontend_docs_line}" \
     '| `VITE_UNMODELED` | fixture | **public**、fixture |'
   assert_failure_contains "extra Frontend environment documentation" \
     "Frontend contract/environment docs" \

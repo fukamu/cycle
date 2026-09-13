@@ -257,7 +257,11 @@ function InitialSessionError({
   }
   if (isInitialSessionRateLimited(error)) {
     return (
-      <div className="app-message app-message--error" role="alert">
+      <div
+        className="app-message app-message--error"
+        data-initial-session-state="rate-limited"
+        role="alert"
+      >
         <p>
           短時間に新しい利用の開始が続いています。時間を空けてから再試行してください。再試行を繰り返すと、待ち時間が延びる場合があります。
         </p>
@@ -268,7 +272,11 @@ function InitialSessionError({
     );
   }
   return (
-    <div className="app-message app-message--error" role="alert">
+    <div
+      className="app-message app-message--error"
+      data-initial-session-state="retryable"
+      role="alert"
+    >
       <p>FUKAMU Cycleを開始できませんでした。</p>
       <button type="button" onClick={retry}>
         再試行

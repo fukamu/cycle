@@ -6,6 +6,7 @@
       "HTTP_ADDRESS",
       "AI_PROVIDER",
       "TURNSTILE_ENABLED",
+      "TURNSTILE_CREDENTIAL_PROFILE",
       "TURNSTILE_EXPECTED_ACTION"
     ],
     "omitted": ["STATIC_DIR"],

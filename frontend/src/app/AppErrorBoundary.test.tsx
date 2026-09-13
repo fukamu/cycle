@@ -98,6 +98,7 @@ describe("AppErrorBoundary", () => {
       );
 
       const alert = screen.getByRole("alert");
+      expect(alert).toHaveAttribute("data-application-error-boundary", "true");
       expect(alert).toHaveTextContent("問い合わせID: " + requestId);
       expect(alert).not.toHaveTextContent("SQL");
       expect(alert).not.toHaveTextContent("provider secret");

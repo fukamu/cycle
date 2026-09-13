@@ -15,6 +15,8 @@ const contract = JSON.parse(
 );
 const stagingPublicOrigin = "https://cycle.staging.fukamu.matoruru.com";
 const allowedReferralURL = "https://cycle.fukamu.com/";
+const stagingTurnstileSiteKey = "1x00000000000000000000BB";
+const stagingTurnstileSecretKey = "1x0000000000000000000000000000000AA";
 
 export function validateDeploymentInputs(environment) {
   const problems = [];
@@ -54,6 +56,15 @@ export function validateDeploymentInputs(environment) {
   const referralURL = stringValue(environment, referralName) ?? "";
   if (referralURL !== "" && referralURL !== allowedReferralURL) {
     addProblem("INVALID_INPUT", referralName);
+  }
+
+  for (const [name, expected] of [
+    ["TURNSTILE_SITE_KEY", stagingTurnstileSiteKey],
+    ["TURNSTILE_SECRET_KEY", stagingTurnstileSecretKey],
+  ]) {
+    if (!missing.has(name) && stringValue(environment, name) !== expected) {
+      addProblem("INVALID_INPUT", name);
+    }
   }
 
   try {

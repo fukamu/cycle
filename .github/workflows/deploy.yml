@@ -643,6 +643,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
           TURNSTILE_ENABLED: "true"
+          TURNSTILE_CREDENTIAL_PROFILE: staging_test
           TURNSTILE_EXPECTED_ACTION: anonymous_bootstrap
         run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go run ./cmd/configcheck
 

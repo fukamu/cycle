@@ -14,6 +14,14 @@ const (
 	minimumSecretLength         = 24
 	minimumCSRFTokenPepperBytes = 32
 	maximumSessionAbsoluteTTL   = 180 * 24 * time.Hour
+
+	TurnstileCredentialProfileLive        = "live"
+	TurnstileCredentialProfileStagingTest = "staging_test"
+
+	stagingPublicOrigin                   = "https://cycle.staging.fukamu.matoruru.com"
+	officialTurnstileAlwaysPassTestSecret = "1x0000000000000000000000000000000AA"
+	officialTurnstileAlwaysFailTestSecret = "2x0000000000000000000000000000000AA"
+	officialTurnstileSpentTestSecret      = "3x0000000000000000000000000000000AA"
 )
 
 type LookupEnv func(string) (string, bool)
@@ -106,9 +114,10 @@ type RateLimitConfig struct {
 }
 
 type TurnstileConfig struct {
-	Enabled        bool
-	SecretKey      string
-	ExpectedAction string
+	Enabled           bool
+	SecretKey         string
+	ExpectedAction    string
+	CredentialProfile string
 }
 
 type GoogleConfig struct {
@@ -188,9 +197,10 @@ func Load(lookup LookupEnv) (Config, error) {
 			AIPerIPMinute:             reader.intValue("RATE_AI_PER_IP_MINUTE", 10),
 		},
 		Turnstile: TurnstileConfig{
-			Enabled:        reader.boolValue("TURNSTILE_ENABLED", true),
-			SecretKey:      reader.stringValue("TURNSTILE_SECRET_KEY", ""),
-			ExpectedAction: reader.stringValue("TURNSTILE_EXPECTED_ACTION", "anonymous_bootstrap"),
+			Enabled:           reader.boolValue("TURNSTILE_ENABLED", true),
+			SecretKey:         reader.stringValue("TURNSTILE_SECRET_KEY", ""),
+			ExpectedAction:    reader.stringValue("TURNSTILE_EXPECTED_ACTION", "anonymous_bootstrap"),
+			CredentialProfile: reader.stringValue("TURNSTILE_CREDENTIAL_PROFILE", TurnstileCredentialProfileLive),
 		},
 		Google: GoogleConfig{WebClientID: reader.stringValue("GOOGLE_WEB_CLIENT_ID", "")},
 	}
@@ -294,6 +304,23 @@ func (config Config) Validate() error {
 	}
 	if config.Turnstile.ExpectedAction == "" {
 		problems = append(problems, "TURNSTILE_EXPECTED_ACTION is required")
+	}
+	if config.Turnstile.CredentialProfile != TurnstileCredentialProfileLive &&
+		config.Turnstile.CredentialProfile != TurnstileCredentialProfileStagingTest {
+		problems = append(problems, "TURNSTILE_CREDENTIAL_PROFILE must be live or staging_test")
+	}
+	usesAlwaysPassTestSecret := config.Turnstile.SecretKey == officialTurnstileAlwaysPassTestSecret
+	usesOfficialTestSecret := usesAlwaysPassTestSecret ||
+		config.Turnstile.SecretKey == officialTurnstileAlwaysFailTestSecret ||
+		config.Turnstile.SecretKey == officialTurnstileSpentTestSecret
+	if config.Turnstile.CredentialProfile == TurnstileCredentialProfileStagingTest {
+		if config.App.Environment != "production" ||
+			config.App.PublicOrigin == nil || config.App.PublicOrigin.String() != stagingPublicOrigin ||
+			!config.Turnstile.Enabled || !usesAlwaysPassTestSecret {
+			problems = append(problems, "TURNSTILE_CREDENTIAL_PROFILE=staging_test requires APP_ENV=production, the exact staging PUBLIC_ORIGIN, enabled Turnstile, and the official always-pass test secret")
+		}
+	} else if usesOfficialTestSecret {
+		problems = append(problems, "the official Turnstile test secret requires TURNSTILE_CREDENTIAL_PROFILE=staging_test")
 	}
 	if config.App.Environment == "production" {
 		if strings.TrimSpace(config.Telemetry.OTLPEndpoint) == "" {

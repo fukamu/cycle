@@ -171,6 +171,8 @@ test("preserves closed candidate anonymous session failures after drain", async 
     "anonymous_session_forbidden",
     "anonymous_session_rate_limited",
     "anonymous_session_unavailable",
+    "initial_session_retry_exhausted",
+    "unexpected_entry_boundary",
   ]) {
     const fake = createFakeAdapter({
       async prepareCandidateSession() {

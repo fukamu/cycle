@@ -44,6 +44,7 @@ type Settings struct {
 	SecretKey      string
 	ExpectedAction string
 	ExpectedHost   string
+	TestProfile    bool
 	RateHashKey    []byte
 	SiteverifyURL  string
 	Observer       Observer
@@ -56,6 +57,7 @@ type Verifier struct {
 	secretKey      string
 	expectedAction string
 	expectedHost   string
+	testProfile    bool
 	rateHashKey    []byte
 	siteverifyURL  string
 	observer       Observer
@@ -76,7 +78,8 @@ func NewVerifier(client HTTPClient, limiter RateLimiter, clock Clock, settings S
 	return &Verifier{
 		client: client, limiter: limiter, clock: clock,
 		secretKey: settings.SecretKey, expectedAction: settings.ExpectedAction,
-		expectedHost: settings.ExpectedHost, rateHashKey: append([]byte(nil), settings.RateHashKey...),
+		expectedHost: settings.ExpectedHost, testProfile: settings.TestProfile,
+		rateHashKey:   append([]byte(nil), settings.RateHashKey...),
 		siteverifyURL: endpoint, observer: settings.Observer,
 	}
 }
@@ -124,8 +127,10 @@ func (verifier *Verifier) VerifyAnonymousCreation(ctx context.Context, input por
 		span.SetStatus(codes.Error, "siteverify response invalid")
 		return errors.Join(ports.ErrAntiAbuseUnavailable, err)
 	}
-	if !verification.Success || verification.Action != verifier.expectedAction ||
-		!strings.EqualFold(verification.Hostname, verifier.expectedHost) {
+	if !verification.Success ||
+		(!verifier.testProfile &&
+			(verification.Action != verifier.expectedAction ||
+				!strings.EqualFold(verification.Hostname, verifier.expectedHost))) {
 		metricResult = "blocked"
 		return ports.ErrAnonymousCreationBlocked
 	}

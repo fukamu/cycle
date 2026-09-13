@@ -66,6 +66,53 @@ func TestVerifierFailsClosedForInvalidSignals(t *testing.T) {
 	}
 }
 
+func TestVerifierStagingTestProfileUsesOfficialDummySuccessSignal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		body    string
+		wantErr error
+	}{
+		{name: "current dummy response shape", body: `{"success":true,"hostname":"example.com"}`},
+		{name: "dummy metadata is not treated as live identity", body: `{"success":true,"hostname":"localhost","action":"test"}`},
+		{name: "unsuccessful", body: `{"success":false,"hostname":"example.com"}`, wantErr: ports.ErrAnonymousCreationBlocked},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			client := &fakeHTTPClient{response: response(http.StatusOK, test.body)}
+			verifier := NewVerifier(client, &fakeLimiter{}, turnstileFakeClock{}, Settings{
+				SecretKey: "official-test-secret", ExpectedAction: "anonymous_bootstrap", ExpectedHost: "cycle.example",
+				TestProfile: true, RateHashKey: []byte("rate-key"), SiteverifyURL: "https://verify.example/siteverify",
+			})
+			err := verifier.VerifyAnonymousCreation(context.Background(), ports.AnonymousAbuseInput{
+				TurnstileToken: "opaque-token", RemoteAddress: "203.0.113.1",
+			})
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("error = %v, want %v", err, test.wantErr)
+			}
+			if client.request == nil {
+				t.Fatal("staging test profile did not call Siteverify")
+			}
+		})
+	}
+}
+
+func TestVerifierLiveProfileRejectsOfficialDummyResponseIdentity(t *testing.T) {
+	t.Parallel()
+
+	err := testVerifier(
+		&fakeHTTPClient{response: response(http.StatusOK, `{"success":true,"hostname":"localhost","action":"test"}`)},
+		&fakeLimiter{},
+	).VerifyAnonymousCreation(context.Background(), ports.AnonymousAbuseInput{
+		TurnstileToken: "opaque-token", RemoteAddress: "203.0.113.1",
+	})
+	if !errors.Is(err, ports.ErrAnonymousCreationBlocked) {
+		t.Fatalf("error = %v, want blocked live-profile validation", err)
+	}
+}
+
 func TestVerifierTreatsSiteverifyFailureAsUnavailable(t *testing.T) {
 	t.Parallel()
 	tests := map[string]*fakeHTTPClient{

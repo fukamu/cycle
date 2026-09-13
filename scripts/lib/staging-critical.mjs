@@ -14,6 +14,8 @@ export const stagingCriticalFailureReasons = Object.freeze([
   "anonymous_session_forbidden",
   "anonymous_session_rate_limited",
   "anonymous_session_unavailable",
+  "initial_session_retry_exhausted",
+  "unexpected_entry_boundary",
   "unexpected_status",
   "session_discovery_failed",
   "account_delete_failed",

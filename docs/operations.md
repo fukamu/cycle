@@ -306,7 +306,7 @@ Workflow artifactは90日保持の一時checkpointであり、180日後のlegacy
 3. Self-cleaning critical journeyがGoal Draft autosave、Goal開始、P/D/C/A、Cycle完了、Goal Review、次Cycle、HistoryのGoal V1 / Cycle 1 / Cycle 2まで成功する。
 4. 同journeyの公開account-delete cleanupが成功し、session再確認が401へ収束する。
 5. 配信HTMLがStagingの`noindex, nofollow`を持ち、certificate / mixed-content / CSP errorがない。
-6. Turnstile hostname / action、Google login / upgrade、Goal Refine、Action Generate / Refine、account deletionを検証dataで最小回数確認する。
+6. StagingのTurnstileが公式invisible always-pass test pairと`staging_test` profileに固定され、Siteverify success、Origin拒否、rate-limit拒否が成立することを確認する。dummy responseのhostname / actionはidentity証跡にしない。Google login / upgrade、Goal Refine、Action Generate / Refine、account deletionを検証dataで最小回数確認する。
 7. Workers Logs / TracesとOTLP payloadにsecret、PDCA本文、email、raw user ID / IP、raw Turnstile tokenがない。
 8. Backend span / metricが承認済みcollectorへ到達し、collector障害中も`/readyz`と代表Application requestが影響を受けない。
 9. Neon、Container、OpenAI usage / cost、rate-limit拒否が承認済みlimit内であり、Anonymous createのUTC hour境界やrollout直後に想定外の許可・拒否burstがない。
@@ -413,7 +413,9 @@ Browser networkとserver error codeをcredential値なしで確認し、Google C
 
 ### Turnstile
 
-Anonymous bootstrap errorとSiteverify response classを確認し、Raw token / secretをlogへ追加しません。Frontend site key、Backend secret、Staging hostname、`anonymous_bootstrap` actionを照合します。Production profileでTurnstileを無効化せずfail-closedを維持します。
+Anonymous bootstrap errorとSiteverify response classを確認し、Raw token / secretをlogへ追加しません。Stagingはheadless E2E用の`staging_test` profileとしてCloudflare公式invisible always-pass sitekey / test secretを組で使います。公式test responseのhostname / actionは実identityを証明しないため`success`だけを検証します。実credentialとの片側だけの混在、canonical Staging以外のorigin、Turnstile無効化は起動・build前に拒否します。Origin検証とApplication rate limitは常に維持します。
+
+Staging E2Eの成功を実Turnstile bot判定の証拠にはしません。Productionは`live` profileで実sitekey / secret、公開hostname、`anonymous_bootstrap` actionを照合し、verification service利用不能時もfail-closedを維持します。Playwrightで実challengeが失敗した場合にRetry回数を増やしたりtest-only endpoint / header bypassを追加したりしません。
 
 ### Anonymous create rate limit
 

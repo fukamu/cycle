@@ -5398,11 +5398,15 @@ Goal StartはUser row lock後に同じoperationのreplayを先に判定し、fre
 
 - Expected action: `anonymous_bootstrap`
 - Server-side Siteverifyを必須とする。
-- hostname、action、successを検証する。
+- `live` profileではhostname、action、successを検証し、`staging_test`では下記の制約下でsuccessを検証する。
 - tokenの短い有効期限とsingle-use性を前提に、network retryではFrontendが新しいtokenを取得する。
 - Productionでverification serviceが利用不能なら新規Anonymous User作成はfail-closedとする。
 - 既存Session userのGoal/Cycle利用は継続させる。
 - Local/testではFakeAntiAbuseVerifierをDependency Injectionする。
+
+Turnstile credential profileは`live`と`staging_test`を明示的に分離する。`live`は実widget credentialを使い、Siteverifyの`hostname`をApplicationの公開hostname、`action`を`anonymous_bootstrap`へexactに照合する。`staging_test`はheadless Browserを含む自動E2Eの決定性を保つため、Cloudflare公式のinvisible always-pass test sitekeyと対応test secretだけを組で使う。公式test credentialのSiteverify responseは実origin/actionを証明しないため、`staging_test`は`success=true`だけを検証し、`hostname` / `action`をlive identityの証拠にしない。Siteverify、Origin検証、Anonymous create rate limit、Session cleanupは省略しない。
+
+`staging_test`は`APP_ENV=production`、canonical Staging origin `https://cycle.staging.fukamu.matoruru.com`、Turnstile有効の組み合わせだけで起動できる。別origin、`live` profile、将来のProduction deployではCloudflare公式test credentialを起動時またはbuild時に拒否する。Stagingのblocking E2Eは実bot判定の成功証跡とは扱わず、実Turnstile challengeをblocking release gateへ含めない。test-only endpoint、request header bypass、Turnstile無効化は導入しない。
 
 Invisible challengeを採用し、通常操作の摩擦を抑える。Risk判定によりchallengeが表示される場合は許容する。
 
@@ -6197,7 +6201,7 @@ Playbook policyは`.fukamu/playbook/lock.json`のexact revisionとSHA-256、vend
 4. Stable CSRF v1初回rolloutでは、exact-main CIのrequired job matrixでlegacy / stable token、旧 / 新Application、旧 / 新key、expiry / revoke raceとdual-validation convergenceを決定的に検証し、成功CI run IDをrelease証跡へ束縛する。Current-publicのTurnstile anonymous bootstrapやlegacy Session取得をrelease mutation前のhard gateにしない
 5. exact mainを再確認し、同じBrowser test processが固定child commandを待つ間に、staging migrationをdirect DB URLで適用し、Worker/Container/assetsをdeployする
 6. Authoritative Cloudflare metadataからold-image drainをbounded pollし、candidate-only stateを連続2回確認する。証跡不能またはtimeoutでは停止する
-7. Drain後のcandidate-publicでfresh anonymous Sessionを作成し、同一Browser Context二tabのstable同値 / reload安定性 / command / autosave / invalid token・Origin拒否と公開account cleanupを確認する。続けて`/healthz` / `/readyz` smoke testを行う
+7. Drain後のcandidate-publicでStaging専用の公式Turnstile test credential pairを使ってfresh anonymous Sessionを作成し、同一Browser Context二tabのstable同値 / reload安定性 / command / autosave / invalid token・Origin拒否と公開account cleanupを確認する。Siteverify、Origin検証、Application rate limitは有効なままとし、この自動E2Eを実bot判定の証拠にはしない。続けて`/healthz` / `/readyz` smoke testを行う
 8. `target=candidate-public`のGoal / Cycle / Review / Historyを含むpost-deploy critical E2E、公開account delete 204、旧session 401をhard gateで確認する
 9. production approval
 10. production migration

@@ -58,7 +58,11 @@ export class AppErrorBoundary extends Component<
 
     return (
       <main className="page">
-        <div className="app-message app-message--error" role="alert">
+        <div
+          className="app-message app-message--error"
+          data-application-error-boundary="true"
+          role="alert"
+        >
           <p>{presentation.message}</p>
           {presentation.requestId !== undefined && (
             <p>

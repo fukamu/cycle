@@ -622,7 +622,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     /^    (?:if|continue-on-error):/m,
     "deployment job execution controls",
   );
-  assert.equal(backend.fixed.length, 5);
+  assert.equal(backend.fixed.length, 6);
   assert.deepEqual(backend.omitted, ["STATIC_DIR"]);
   assert.equal(backend.githubVariables.length, 38);
   assert.deepEqual(backend.derived, { AI_PRICING_MODEL: "AI_MODEL" });
@@ -1720,6 +1720,10 @@ test("deployment contract is the exact repository handoff classification", () =>
       },
       ...secretEnvironmentMappings(backendSecretSources),
       TURNSTILE_ENABLED: { kind: "literal", value: "true" },
+      TURNSTILE_CREDENTIAL_PROFILE: {
+        kind: "literal",
+        value: "staging_test",
+      },
       TURNSTILE_EXPECTED_ACTION: {
         kind: "literal",
         value: "anonymous_bootstrap",
@@ -3544,7 +3548,11 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
   const searchIndexingImports = assertExactNamedImport(
     sourceFile,
     "./vite/searchIndexing.ts",
-    ["parseDeploymentEnvironment", "searchIndexingPlugin"],
+    [
+      "parseDeploymentEnvironment",
+      "searchIndexingPlugin",
+      "validateTurnstileSiteKey",
+    ],
     label,
   );
   const parseEnvironmentImport = searchIndexingImports.find(
@@ -3552,6 +3560,9 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
   );
   const searchIndexingPluginImport = searchIndexingImports.find(
     (element) => element.name.text === "searchIndexingPlugin",
+  );
+  const validateTurnstileSiteKeyImport = searchIndexingImports.find(
+    (element) => element.name.text === "validateTurnstileSiteKey",
   );
 
   const defaultExports = sourceFile.statements.filter(
@@ -3596,7 +3607,7 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
     label,
   );
   assertNoBuildConfigBindingCollisions(sourceFile, factory, label);
-  assert.equal(factory.body.statements.length, 3, label);
+  assert.equal(factory.body.statements.length, 4, label);
 
   const environmentDeclaration = exactConstDeclaration(
     factory.body.statements[0],
@@ -3667,7 +3678,35 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
     label,
   );
 
-  const returnStatement = factory.body.statements[2];
+  const validationStatement = factory.body.statements[2];
+  assert.ok(typescript.isExpressionStatement(validationStatement), label);
+  assert.ok(
+    typescript.isCallExpression(validationStatement.expression) &&
+      validationStatement.expression.questionDotToken === undefined &&
+      typescript.isIdentifier(validationStatement.expression.expression) &&
+      validationStatement.expression.expression.text ===
+        "validateTurnstileSiteKey" &&
+      validationStatement.expression.arguments.length === 2,
+    label,
+  );
+  const validateTurnstileCall = validationStatement.expression;
+  assert.ok(
+    typescript.isIdentifier(validateTurnstileCall.arguments[0]) &&
+      validateTurnstileCall.arguments[0].text === "deploymentEnvironment",
+    label,
+  );
+  const turnstileSiteKeyAccess = validateTurnstileCall.arguments[1];
+  assert.ok(
+    typescript.isPropertyAccessExpression(turnstileSiteKeyAccess) &&
+      turnstileSiteKeyAccess.questionDotToken === undefined &&
+      typescript.isIdentifier(turnstileSiteKeyAccess.expression) &&
+      turnstileSiteKeyAccess.expression.text === "environment" &&
+      typescript.isIdentifier(turnstileSiteKeyAccess.name) &&
+      turnstileSiteKeyAccess.name.text === "VITE_TURNSTILE_SITE_KEY",
+    label,
+  );
+
+  const returnStatement = factory.body.statements[3];
   assert.ok(
     typescript.isReturnStatement(returnStatement) &&
       returnStatement.expression !== undefined &&
@@ -3727,13 +3766,21 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
   assertIdentifierNodeInventory(
     sourceFile,
     "environment",
-    [environmentDeclaration.name, deploymentEnvironmentAccess.expression],
+    [
+      environmentDeclaration.name,
+      deploymentEnvironmentAccess.expression,
+      turnstileSiteKeyAccess.expression,
+    ],
     label,
   );
   assertIdentifierNodeInventory(
     sourceFile,
     "deploymentEnvironment",
-    [deploymentDeclaration.name, searchIndexingCall.arguments[0]],
+    [
+      deploymentDeclaration.name,
+      validateTurnstileCall.arguments[0],
+      searchIndexingCall.arguments[0],
+    ],
     label,
   );
   assertIdentifierNodeInventory(
@@ -3758,6 +3805,12 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
     sourceFile,
     "searchIndexingPlugin",
     [searchIndexingPluginImport.name, searchIndexingCall.expression],
+    label,
+  );
+  assertIdentifierNodeInventory(
+    sourceFile,
+    "validateTurnstileSiteKey",
+    [validateTurnstileSiteKeyImport.name, validateTurnstileCall.expression],
     label,
   );
   assertIdentifierNodeInventory(
@@ -3792,7 +3845,7 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
   collectViteAccesses(sourceFile);
   assert.deepEqual(
     viteAccesses.map(({ name, syntax }) => syntax + ":" + name),
-    ["direct:VITE_DEPLOYMENT_ENV"],
+    ["direct:VITE_DEPLOYMENT_ENV", "direct:VITE_TURNSTILE_SITE_KEY"],
     "Frontend build-config environment consumer inventory",
   );
   assertSameSyntaxNode(
@@ -3800,6 +3853,7 @@ function assertFrontendDeploymentEnvironmentWiring(sourceFile) {
     deploymentEnvironmentAccess,
     label,
   );
+  assertSameSyntaxNode(viteAccesses[1].node, turnstileSiteKeyAccess, label);
 }
 
 function assertNoAdditionalFrontendBuildEnvironmentConsumers() {
@@ -4235,6 +4289,8 @@ function runWorkflowValidation(overrides) {
   Object.assign(environment, {
     PUBLIC_ORIGIN: "https://cycle.staging.fukamu.matoruru.com",
     BETA_ADMISSION_MODE: "off",
+    TURNSTILE_SITE_KEY: "1x00000000000000000000BB",
+    TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
     ...overrides,
   });
   return spawnSync("bash", ["-c", validationCommand], {
