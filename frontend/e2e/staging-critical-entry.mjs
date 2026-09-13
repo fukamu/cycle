@@ -15,7 +15,12 @@ export async function enterStagingCritical({
     await context.addInitScript(installInviteFragment, inviteToken);
   }
 
-  const sessionCapturePromise = captureAnonymousSession(page);
+  const sessionCapturePromise = Promise.resolve(
+    captureAnonymousSession(page),
+  ).then(
+    (session) => session,
+    () => undefined,
+  );
   await page.goto(baseURL, { waitUntil: "domcontentloaded" });
   const admissionButton = page.getByRole("button", {
     name: admissionButtonName,

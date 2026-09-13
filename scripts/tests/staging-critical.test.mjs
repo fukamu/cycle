@@ -194,7 +194,7 @@ function withBrowserGlobals(location, history, callback) {
   }
 }
 
-function entryFixture(currentMode) {
+function entryFixture(currentMode, { failEntry = false } = {}) {
   const calls = [];
   const location = { pathname: "/", search: "?source=staging", hash: "" };
   let injectedURL = "";
@@ -221,6 +221,7 @@ function entryFixture(currentMode) {
             async waitFor(options) {
               assert.deepEqual(options, { state: "visible" });
               calls.push("wait-entry-cta");
+              if (failEntry) throw new Error("private entry failure");
             },
           };
         },
@@ -459,6 +460,64 @@ test("off entry skips invite handling and opens New Goal directly", async () => 
   });
   assert.equal(result, session);
   assert.equal(fixture.injectedURL, "");
+  assert.deepEqual(fixture.calls, [
+    "capture-session",
+    "goto",
+    "wait-entry-cta",
+    "wait-new-goal",
+  ]);
+});
+
+test("observes a pending anonymous session capture before entry can fail", async () => {
+  const fixture = entryFixture("off", { failEntry: true });
+  const pendingCapture = new Promise(() => undefined);
+  const originalThen = pendingCapture.then.bind(pendingCapture);
+  let rejectionObserved = false;
+  pendingCapture.then = (onFulfilled, onRejected) => {
+    rejectionObserved = typeof onRejected === "function";
+    return originalThen(onFulfilled, onRejected);
+  };
+
+  await assert.rejects(
+    enterStagingCritical({
+      context: fixture.context,
+      page: fixture.page,
+      baseURL: canonicalBaseURL,
+      admissionMode: "off",
+      inviteToken: "",
+      captureAnonymousSession() {
+        fixture.calls.push("capture-session");
+        return pendingCapture;
+      },
+    }),
+    (error) =>
+      error instanceof StagingCriticalFailure &&
+      error.phase === "entry" &&
+      error.reason === "entry_cta_timeout" &&
+      !error.message.includes("private entry failure"),
+  );
+  assert.equal(rejectionObserved, true);
+  assert.deepEqual(fixture.calls, [
+    "capture-session",
+    "goto",
+    "wait-entry-cta",
+  ]);
+});
+
+test("maps an anonymous session capture rejection to an unobserved session", async () => {
+  const fixture = entryFixture("off");
+  const result = await enterStagingCritical({
+    context: fixture.context,
+    page: fixture.page,
+    baseURL: canonicalBaseURL,
+    admissionMode: "off",
+    inviteToken: "",
+    captureAnonymousSession() {
+      fixture.calls.push("capture-session");
+      return Promise.reject(new Error("private response failure"));
+    },
+  });
+  assert.equal(result, undefined);
   assert.deepEqual(fixture.calls, [
     "capture-session",
     "goto",
