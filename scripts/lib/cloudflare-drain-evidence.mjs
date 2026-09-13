@@ -681,8 +681,10 @@ function normalizeApplication(value, expectedName) {
     value.name !== expectedName ||
     !parseIdentifier(value.id) ||
     !isPositiveInteger(value.version) ||
-    !Number.isSafeInteger(value.instances) ||
-    value.instances < 0 ||
+    !(
+      value.instances === undefined ||
+      (Number.isSafeInteger(value.instances) && value.instances >= 0)
+    ) ||
     value.max_instances !== 1 ||
     !isRecord(value.configuration) ||
     !parseImage(value.configuration.image) ||
@@ -720,7 +722,8 @@ function normalizeRollout(value) {
 }
 
 function normalizeInstance(value) {
-  const status = value?.current_placement?.status?.container_status;
+  const placementStatus = value?.current_placement?.status;
+  const status = placementStatus?.container_status ?? placementStatus?.health;
   if (
     !isRecord(value) ||
     !parseIdentifier(value.id) ||
@@ -1206,6 +1209,19 @@ export function formatCloudflareDrainDiagnostic(failure, metadata) {
     throw new Error("cloudflare drain diagnostic metadata is invalid");
   }
   return `::error::Cloudflare drain evidence failed; phase=${failure.phase}; reason=${failure.reason}; run_id=${metadata.runID}; run_attempt=${metadata.runAttempt}; commit_sha=${metadata.commitSHA}.`;
+}
+
+export function parseCloudflareDrainDiagnosticLine(value) {
+  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > 512) {
+    return undefined;
+  }
+  const match = value.match(
+    /^::error::Cloudflare drain evidence failed; phase=([a-z_]+); reason=([a-z_]+); run_id=(local|[1-9][0-9]*); run_attempt=(local|[1-9][0-9]*); commit_sha=(local|[0-9a-f]{40})\.$/,
+  );
+  if (match === null || !phaseSet.has(match[1]) || !reasonSet.has(match[2])) {
+    return undefined;
+  }
+  return value;
 }
 
 export function serializeCloudflareDrainEvidence(evidence) {

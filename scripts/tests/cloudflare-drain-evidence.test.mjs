@@ -12,6 +12,7 @@ import {
   cloudflareDrainReasons,
   createCloudflareRawAdapter,
   formatCloudflareDrainDiagnostic,
+  parseCloudflareDrainDiagnosticLine,
   proveCloudflareDrain as proveCloudflareDrainImplementation,
   serializeCloudflareDrainEvidence,
 } from "../lib/cloudflare-drain-evidence.mjs";
@@ -677,14 +678,17 @@ function workerVersionEnvelope(candidate = false) {
   });
 }
 
-function applicationEnvelope(candidate = false) {
+function applicationEnvelope(
+  candidate = false,
+  { includeDeprecatedInstances = true } = {},
+) {
   return envelope({
     id: ids.application,
     created_at: "2026-09-07T00:00:00.000Z",
     account_id: accountID,
     name: applicationName,
     version: candidate ? 2 : 1,
-    instances: 1,
+    ...(includeDeprecatedInstances ? { instances: 1 } : {}),
     max_instances: 1,
     scheduling_policy: "default",
     configuration: { image: candidate ? newImage : oldImage },
@@ -739,6 +743,7 @@ function rawRollout(index) {
 function instanceEnvelope(
   candidate = false,
   resultInfo = { per_page: 50, next_page_token: null },
+  { healthOnly = false } = {},
 ) {
   return envelope(
     {
@@ -756,9 +761,9 @@ function instanceEnvelope(
             deployment_version: 1,
             terminate: false,
             status: {
-              health: "healthy",
+              health: healthOnly ? "running" : "healthy",
               ready: true,
-              container_status: "running",
+              ...(healthOnly ? {} : { container_status: "running" }),
             },
           },
         },
@@ -768,7 +773,7 @@ function instanceEnvelope(
   );
 }
 
-function productionFetch({ candidate = false } = {}) {
+function productionFetch({ candidate = false, currentSchema = false } = {}) {
   const requests = [];
   const fetchImpl = async (url, options) => {
     requests.push({ url, options });
@@ -793,7 +798,11 @@ function productionFetch({ candidate = false } = {}) {
     if (
       parsed.pathname.endsWith(`/containers/applications/${ids.application}`)
     ) {
-      return response(applicationEnvelope(candidate));
+      return response(
+        applicationEnvelope(candidate, {
+          includeDeprecatedInstances: !currentSchema,
+        }),
+      );
     }
     if (
       parsed.pathname.endsWith(
@@ -807,7 +816,9 @@ function productionFetch({ candidate = false } = {}) {
         `/containers/dash/applications/${ids.application}/instances`,
       )
     ) {
-      return response(instanceEnvelope(candidate));
+      return response(
+        instanceEnvelope(candidate, undefined, { healthOnly: currentSchema }),
+      );
     }
     throw new Error("unexpected test URL");
   };
@@ -839,6 +850,23 @@ test("production adapter uses fixed GET endpoints and returns only normalized ev
     assert.equal(request.options.headers.Authorization, `Bearer ${token}`);
     assert.doesNotMatch(request.url, new RegExp(token));
   }
+});
+
+test("production adapter accepts the current Containers application and placement schema", async () => {
+  const fake = productionFetch({ currentSchema: true });
+  const adapter = createCloudflareRawAdapter({
+    accountId: accountID,
+    apiToken: token,
+    workerName,
+    containerApplicationName: applicationName,
+    fetchImpl: fake.fetchImpl,
+  });
+  const expected = observation();
+  expected.container.rollouts = [];
+  assert.deepEqual(
+    await adapter.readObservation({ phase: "baseline" }),
+    expected,
+  );
 });
 
 test("production adapter follows bounded cursor pagination and rejects cycles", async () => {
@@ -1170,6 +1198,16 @@ test("diagnostics expose only closed enums and validated run metadata", () => {
     diagnostic,
     `::error::Cloudflare drain evidence failed; phase=drain; reason=evidence_timeout; run_id=123; run_attempt=2; commit_sha=${candidateSHA}.`,
   );
+  assert.equal(parseCloudflareDrainDiagnosticLine(diagnostic), diagnostic);
+  for (const invalid of [
+    `${diagnostic}\nprivate`,
+    diagnostic.replace("phase=drain", "phase=private"),
+    diagnostic.replace("reason=evidence_timeout", "reason=private"),
+    diagnostic.replace("run_id=123", `run_id=${token}`),
+    "x".repeat(513),
+  ]) {
+    assert.equal(parseCloudflareDrainDiagnosticLine(invalid), undefined);
+  }
   assert.doesNotMatch(diagnostic, /private|token|response|account_id/i);
   assert.throws(
     () => new CloudflareDrainFailure("secret-phase", "evidence_timeout"),
