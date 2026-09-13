@@ -531,7 +531,7 @@ test("keeps browser evidence memory-only and invokes one fixed child adapter", (
 });
 
 test("forwards only one closed Cloudflare drain diagnostic", () => {
-  const diagnostic = `::error::Cloudflare drain evidence failed; phase=baseline; reason=invalid_evidence; run_id=123; run_attempt=2; commit_sha=${"a".repeat(40)}.`;
+  const diagnostic = `::error::Cloudflare drain evidence failed; phase=baseline; reason=invalid_evidence; source=worker_version; run_id=123; run_attempt=2; commit_sha=${"a".repeat(40)}.`;
   assert.equal(
     selectCloudflareDrainDiagnostic(
       `private provider output\n${diagnostic}\nStaging candidate deployment failed\n`,

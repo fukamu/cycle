@@ -10,6 +10,7 @@ import {
   CloudflareDrainFailure,
   cloudflareDrainPhases,
   cloudflareDrainReasons,
+  cloudflareDrainSources,
   createCloudflareRawAdapter,
   formatCloudflareDrainDiagnostic,
   parseCloudflareDrainDiagnosticLine,
@@ -79,6 +80,7 @@ function instance({
 
 function observation({
   candidate = false,
+  workerTag = candidate ? candidateSHA : previousSHA,
   activeRolloutId = null,
   rolloutStatus = "completed",
   baselineVersion = 1,
@@ -102,7 +104,7 @@ function observation({
       deploymentId: candidate ? ids.newDeployment : ids.oldDeployment,
       versionId: candidate ? ids.newWorkerVersion : ids.oldWorkerVersion,
       trafficPercentage: 100,
-      tag: candidate ? candidateSHA : previousSHA,
+      tag: workerTag,
     },
     container: {
       applicationId: ids.application,
@@ -206,6 +208,50 @@ test("requires two identical authoritative observations after waking the deploy"
   assert.equal(
     JSON.parse(serializeCloudflareDrainEvidence(evidence)).result,
     "drained",
+  );
+});
+
+test("binds an untagged legacy baseline by identity and drains to the exact tagged candidate", async () => {
+  const baseline = observation({ workerTag: null });
+  const candidate = observation({ candidate: true });
+  const wakeInputs = [];
+  const evidence = await proveCloudflareDrain({
+    candidateCommitSHA: candidateSHA,
+    rawAdapter: sequenceAdapter([
+      baseline,
+      structuredClone(baseline),
+      candidate,
+      structuredClone(candidate),
+    ]),
+    now: tickingClock(),
+    sleep: async () => undefined,
+    wake: async (value) => wakeInputs.push(value),
+  });
+
+  assert.equal(wakeInputs[0].workerTag, null);
+  assert.equal(wakeInputs[0].workerDeploymentId, ids.oldDeployment);
+  assert.equal(wakeInputs[0].workerVersionId, ids.oldWorkerVersion);
+  assert.equal(evidence.workerDeploymentId, ids.newDeployment);
+  assert.equal(evidence.workerVersionId, ids.newWorkerVersion);
+  assert.equal(evidence.commitSHA, candidateSHA);
+});
+
+test("does not treat a changed untagged worker as the candidate", async () => {
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: sequenceAdapter([
+        observation({ workerTag: null }),
+        observation({ candidate: true, workerTag: null }),
+      ]),
+      now: tickingClock(),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "evidence_changed",
   );
 });
 
@@ -623,6 +669,7 @@ test("rejects unknown schemas, enums, oversized raw input, and clock regression"
       (error) =>
         error instanceof CloudflareDrainFailure &&
         error.reason === "invalid_evidence" &&
+        error.source === "observation" &&
         !error.message.includes(token),
     );
   }
@@ -663,7 +710,9 @@ test("binds the rollout to the locally pushed candidate image digest", async () 
       (error) =>
         error instanceof CloudflareDrainFailure &&
         error.phase === "drain" &&
-        ["evidence_changed", "invalid_evidence"].includes(error.reason),
+        ["evidence_changed", "invalid_evidence"].includes(error.reason) &&
+        (error.reason !== "invalid_evidence" ||
+          error.source === "candidate_image"),
     );
   }
 });
@@ -988,6 +1037,66 @@ test("production adapter uses fixed GET endpoints and returns only normalized ev
   }
 });
 
+test("production adapter maps only absent legacy Worker annotations or tag to null", async () => {
+  for (const absent of ["annotations", "tag"]) {
+    const fake = productionFetch();
+    const adapter = createCloudflareRawAdapter({
+      accountId: accountID,
+      apiToken: token,
+      workerName,
+      containerApplicationName: applicationName,
+      fetchImpl: async (url, options) => {
+        if (new URL(url).pathname.includes("/versions/")) {
+          const value = workerVersionEnvelope();
+          if (absent === "annotations") {
+            delete value.result.annotations;
+          } else {
+            delete value.result.annotations["workers/tag"];
+          }
+          return response(value);
+        }
+        return fake.fetchImpl(url, options);
+      },
+    });
+    const expected = observation({ workerTag: null });
+    expected.container.rollouts = [];
+
+    assert.deepEqual(
+      await adapter.readObservation({ phase: "baseline" }),
+      expected,
+    );
+  }
+});
+
+test("production adapter rejects a present malformed Worker tag without echo", async () => {
+  for (const malformedTag of ["", token, null, "A".repeat(40)]) {
+    const fake = productionFetch();
+    const adapter = createCloudflareRawAdapter({
+      accountId: accountID,
+      apiToken: token,
+      workerName,
+      containerApplicationName: applicationName,
+      fetchImpl: async (url, options) => {
+        if (new URL(url).pathname.includes("/versions/")) {
+          const value = workerVersionEnvelope();
+          value.result.annotations["workers/tag"] = malformedTag;
+          return response(value);
+        }
+        return fake.fetchImpl(url, options);
+      },
+    });
+
+    await assert.rejects(
+      adapter.readObservation({ phase: "baseline" }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.reason === "invalid_evidence" &&
+        error.source === "worker_version" &&
+        !error.message.includes(token),
+    );
+  }
+});
+
 test("production adapter accepts the current Containers application and placement schema", async () => {
   const fake = productionFetch({
     currentSchema: true,
@@ -1010,6 +1119,37 @@ test("production adapter accepts the current Containers application and placemen
   assert.deepEqual(
     await adapter.readObservation({ phase: "baseline" }),
     expected,
+  );
+});
+
+test("production adapter classifies an invalid application without exposing it", async () => {
+  const fake = productionFetch();
+  const adapter = createCloudflareRawAdapter({
+    accountId: accountID,
+    apiToken: token,
+    workerName,
+    containerApplicationName: applicationName,
+    fetchImpl: async (url, options) => {
+      if (
+        new URL(url).pathname.endsWith(
+          `/containers/applications/${ids.application}`,
+        )
+      ) {
+        const value = applicationEnvelope();
+        value.result.max_instances = token;
+        return response(value);
+      }
+      return fake.fetchImpl(url, options);
+    },
+  });
+
+  await assert.rejects(
+    adapter.readObservation({ phase: "baseline" }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.reason === "invalid_evidence" &&
+      error.source === "application" &&
+      !error.message.includes(token),
   );
 });
 
@@ -1081,6 +1221,7 @@ test("production adapter rejects a malformed optional instance image without exp
     (error) =>
       error instanceof CloudflareDrainFailure &&
       error.reason === "invalid_evidence" &&
+      error.source === "instance_inventory" &&
       !error.message.includes(token),
   );
 });
@@ -1146,7 +1287,8 @@ test("production adapter follows bounded cursor pagination and rejects cycles", 
     cyclicAdapter.readObservation({ phase: "baseline" }),
     (error) =>
       error instanceof CloudflareDrainFailure &&
-      error.reason === "invalid_evidence",
+      error.reason === "invalid_evidence" &&
+      error.source === "application_inventory",
   );
 });
 
@@ -1225,7 +1367,8 @@ test("production adapter rejects repeated and unbounded rollout pages", async ()
       adapter.readObservation({ phase: "baseline" }),
       (error) =>
         error instanceof CloudflareDrainFailure &&
-        error.reason === "invalid_evidence",
+        error.reason === "invalid_evidence" &&
+        error.source === "rollout_inventory",
     );
     assert.equal(rolloutPage, mode === "duplicate" ? 2 : 4);
   }
@@ -1278,6 +1421,36 @@ test("production adapter rejects worker or container changes inside one observat
   }
 });
 
+test("production adapter rejects a tag appearing during an untagged observation", async () => {
+  const fake = productionFetch();
+  let versionReads = 0;
+  const adapter = createCloudflareRawAdapter({
+    accountId: accountID,
+    apiToken: token,
+    workerName,
+    containerApplicationName: applicationName,
+    fetchImpl: async (url, options) => {
+      if (new URL(url).pathname.includes("/versions/")) {
+        versionReads += 1;
+        const value = workerVersionEnvelope();
+        if (versionReads === 1) {
+          delete value.result.annotations["workers/tag"];
+        }
+        return response(value);
+      }
+      return fake.fetchImpl(url, options);
+    },
+  });
+
+  await assert.rejects(
+    adapter.readObservation({ phase: "baseline" }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "baseline" &&
+      error.reason === "evidence_changed",
+  );
+});
+
 test("production adapter applies the remaining drain deadline to every API request", async () => {
   const fake = productionFetch();
   let currentTime = 0;
@@ -1306,20 +1479,34 @@ test("production adapter applies the remaining drain deadline to every API reque
 });
 
 test("production adapter rejects auth, unknown status, oversized and unknown envelopes without echo", async () => {
-  for (const [fetchImpl, reason] of [
-    [async () => response({ private: token }, 401), "authorization_rejected"],
-    [async () => response({ private: token }, 403), "authorization_rejected"],
-    [async () => response({ private: token }, 429), "provider_rejected"],
+  for (const [fetchImpl, reason, source] of [
+    [
+      async () => response({ private: token }, 401),
+      "authorization_rejected",
+      "none",
+    ],
+    [
+      async () => response({ private: token }, 403),
+      "authorization_rejected",
+      "none",
+    ],
+    [
+      async () => response({ private: token }, 429),
+      "provider_rejected",
+      "none",
+    ],
     [
       async () =>
         response(workerDeploymentEnvelope(), 200, {
           "content-length": String(64 * 1024 + 1),
         }),
       "invalid_evidence",
+      "provider_response",
     ],
     [
       async () => response({ ...workerDeploymentEnvelope(), unknown: token }),
       "invalid_evidence",
+      "worker_deployment",
     ],
   ]) {
     const adapter = createCloudflareRawAdapter({
@@ -1335,6 +1522,7 @@ test("production adapter rejects auth, unknown status, oversized and unknown env
       (error) =>
         error instanceof CloudflareDrainFailure &&
         error.reason === reason &&
+        error.source === source &&
         error.message === "cloudflare drain evidence failed" &&
         !error.message.includes(token),
     );
@@ -1404,6 +1592,18 @@ test("diagnostics expose only closed enums and validated run metadata", () => {
     "stability",
   ]);
   assert.ok(cloudflareDrainReasons.includes("authorization_rejected"));
+  assert.deepEqual(cloudflareDrainSources, [
+    "none",
+    "provider_response",
+    "worker_deployment",
+    "worker_version",
+    "application_inventory",
+    "application",
+    "rollout_inventory",
+    "instance_inventory",
+    "observation",
+    "candidate_image",
+  ]);
   const failure = new CloudflareDrainFailure("drain", "evidence_timeout");
   const diagnostic = formatCloudflareDrainDiagnostic(failure, {
     runID: "123",
@@ -1412,13 +1612,15 @@ test("diagnostics expose only closed enums and validated run metadata", () => {
   });
   assert.equal(
     diagnostic,
-    `::error::Cloudflare drain evidence failed; phase=drain; reason=evidence_timeout; run_id=123; run_attempt=2; commit_sha=${candidateSHA}.`,
+    `::error::Cloudflare drain evidence failed; phase=drain; reason=evidence_timeout; source=none; run_id=123; run_attempt=2; commit_sha=${candidateSHA}.`,
   );
   assert.equal(parseCloudflareDrainDiagnosticLine(diagnostic), diagnostic);
   for (const invalid of [
     `${diagnostic}\nprivate`,
     diagnostic.replace("phase=drain", "phase=private"),
     diagnostic.replace("reason=evidence_timeout", "reason=private"),
+    diagnostic.replace("source=none", "source=private"),
+    diagnostic.replace("source=none", "source=worker_version"),
     diagnostic.replace("run_id=123", `run_id=${token}`),
     "x".repeat(513),
   ]) {
@@ -1428,6 +1630,26 @@ test("diagnostics expose only closed enums and validated run metadata", () => {
   assert.throws(
     () => new CloudflareDrainFailure("secret-phase", "evidence_timeout"),
   );
+  assert.throws(
+    () => new CloudflareDrainFailure("baseline", "invalid_evidence"),
+  );
+  assert.throws(
+    () => new CloudflareDrainFailure("baseline", "invalid_evidence", "private"),
+  );
+  const workerVersionFailure = new CloudflareDrainFailure(
+    "baseline",
+    "invalid_evidence",
+    "worker_version",
+  );
+  const workerVersionDiagnostic = formatCloudflareDrainDiagnostic(
+    workerVersionFailure,
+    { runID: "123", runAttempt: "2", commitSHA: candidateSHA },
+  );
+  assert.equal(
+    parseCloudflareDrainDiagnosticLine(workerVersionDiagnostic),
+    workerVersionDiagnostic,
+  );
+  assert.doesNotMatch(workerVersionDiagnostic, new RegExp(token));
   assert.throws(() =>
     formatCloudflareDrainDiagnostic(failure, {
       runID: token,
@@ -1509,7 +1731,7 @@ test("CLI rejects arguments and reports only a closed diagnostic", async () => {
   assert.equal(stdout.value(), "");
   assert.equal(
     stderr.value(),
-    `::error::Cloudflare drain evidence failed; phase=configuration; reason=invalid_configuration; run_id=local; run_attempt=local; commit_sha=${candidateSHA}.\n`,
+    `::error::Cloudflare drain evidence failed; phase=configuration; reason=invalid_configuration; source=none; run_id=local; run_attempt=local; commit_sha=${candidateSHA}.\n`,
   );
   assert.doesNotMatch(stderr.value(), new RegExp(token));
 });
