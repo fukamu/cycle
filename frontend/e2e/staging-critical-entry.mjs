@@ -15,11 +15,17 @@ export async function enterStagingCritical({
     await context.addInitScript(installInviteFragment, inviteToken);
   }
 
+  let sessionCaptureFailure;
   const sessionCapturePromise = Promise.resolve(
     captureAnonymousSession(page),
   ).then(
     (session) => session,
-    () => undefined,
+    (failure) => {
+      if (failure instanceof StagingCriticalFailure) {
+        sessionCaptureFailure = failure;
+      }
+      return undefined;
+    },
   );
   await page.goto(baseURL, { waitUntil: "domcontentloaded" });
   const admissionButton = page.getByRole("button", {
@@ -28,12 +34,28 @@ export async function enterStagingCritical({
   const newGoalButton = page.getByRole("button", {
     name: newGoalButtonName,
   });
+  const retryButton = page.getByRole("button", { name: "\u518d\u8a66\u884c" });
   try {
-    await admissionButton.or(newGoalButton).first().waitFor({
-      state: "visible",
-    });
+    await admissionButton
+      .or(newGoalButton)
+      .or(retryButton)
+      .first()
+      .waitFor({ state: "visible" });
   } catch {
+    if (sessionCaptureFailure !== undefined) {
+      throw sessionCaptureFailure;
+    }
     throw new StagingCriticalFailure("entry", "entry_cta_timeout");
+  }
+
+  if (await retryButton.isVisible()) {
+    if (sessionCaptureFailure !== undefined) {
+      throw sessionCaptureFailure;
+    }
+    throw new StagingCriticalFailure(
+      "entry",
+      "anonymous_session_request_not_observed",
+    );
   }
 
   if (admissionMode !== "off") {
@@ -45,7 +67,11 @@ export async function enterStagingCritical({
     await admissionButton.click();
   }
   await newGoalButton.waitFor({ state: "visible" });
-  return sessionCapturePromise;
+  const session = await sessionCapturePromise;
+  if (sessionCaptureFailure !== undefined) {
+    throw sessionCaptureFailure;
+  }
+  return session;
 }
 
 function installInviteFragment(currentToken) {

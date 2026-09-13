@@ -1,3 +1,5 @@
+import { StagingCriticalFailure } from "./staging-critical.mjs";
+
 const uuidV7Pattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const csrfTokenPattern = /^[A-Za-z0-9_-]{43}$/;
@@ -5,6 +7,11 @@ const csrfTokenPattern = /^[A-Za-z0-9_-]{43}$/;
 export const stagingCSRFRolloutFailureReasons = Object.freeze([
   "unexpected_status",
   "legacy_session_invalid",
+  "anonymous_session_request_not_observed",
+  "anonymous_session_bad_request",
+  "anonymous_session_forbidden",
+  "anonymous_session_rate_limited",
+  "anonymous_session_unavailable",
   "legacy_baseline_not_observed",
   "deploy_or_drain_failed",
   "session_identity_changed",
@@ -99,7 +106,10 @@ export async function runStagingCSRFRollout({ adapter, retryOptions } = {}) {
     const classified =
       failure instanceof StagingCSRFRolloutFailure
         ? failure
-        : new StagingCSRFRolloutFailure(fallbackPhase, "unexpected_status");
+        : failure instanceof StagingCriticalFailure &&
+            failureReasonSet.has(failure.reason)
+          ? new StagingCSRFRolloutFailure(fallbackPhase, failure.reason)
+          : new StagingCSRFRolloutFailure(fallbackPhase, "unexpected_status");
     if (
       !failures.some(
         (existing) =>

@@ -9,6 +9,11 @@ const maximumUUIDTimestamp = 0xffffffffffff;
 export const stagingCriticalFailureReasons = Object.freeze([
   "entry_cta_timeout",
   "anonymous_session_not_observed",
+  "anonymous_session_request_not_observed",
+  "anonymous_session_bad_request",
+  "anonymous_session_forbidden",
+  "anonymous_session_rate_limited",
+  "anonymous_session_unavailable",
   "unexpected_status",
   "session_discovery_failed",
   "account_delete_failed",

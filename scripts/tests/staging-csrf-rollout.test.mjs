@@ -12,10 +12,13 @@ import {
   validateRolloutSession,
 } from "../lib/staging-csrf-rollout.mjs";
 import {
+  captureStagingAnonymousSession,
+  classifyStagingAnonymousSessionStatus,
   createStagingDeployAnonymousSessionRoute,
   markStagingDeployCleanupFromRevokedResult,
   prepareStagingBootstrapStorage,
 } from "../../frontend/e2e/staging-csrf-rollout-entry.mjs";
+import { StagingCriticalFailure } from "../lib/staging-critical.mjs";
 
 const userID = "0198c20b-7b95-7000-8000-000000000001";
 const otherUserID = "0198c20b-7b95-7000-8000-000000000002";
@@ -88,6 +91,90 @@ test("does not seed IndexedDB without an exact healthy Staging origin", async ()
       ),
     );
     assert.equal(evaluated, false);
+  }
+});
+
+test("classifies anonymous session HTTP failures without reading response bodies", async () => {
+  const cases = [
+    [400, "anonymous_session_bad_request"],
+    [403, "anonymous_session_forbidden"],
+    [429, "anonymous_session_rate_limited"],
+    [500, "anonymous_session_unavailable"],
+    [503, "anonymous_session_unavailable"],
+    [302, "unexpected_status"],
+  ];
+  for (const [status, reason] of cases) {
+    let bodyRead = false;
+    const response = {
+      url: () =>
+        "https://cycle.staging.fukamu.matoruru.com/api/v1/session/anonymous",
+      request: () => ({ method: () => "POST" }),
+      status: () => status,
+      async json() {
+        bodyRead = true;
+        throw new Error("private response body");
+      },
+    };
+    await assert.rejects(
+      captureStagingAnonymousSession({
+        async waitForResponse(predicate, options) {
+          assert.equal(predicate(response), true);
+          assert.deepEqual(options, { timeout: 120_000 });
+          return response;
+        },
+      }),
+      (error) =>
+        error instanceof StagingCriticalFailure &&
+        error.phase === "entry" &&
+        error.reason === reason &&
+        !error.message.includes("private response body"),
+    );
+    assert.equal(bodyRead, false);
+    assert.equal(classifyStagingAnonymousSessionStatus(status), reason);
+  }
+});
+
+test("captures a successful anonymous session response", async () => {
+  const response = {
+    url: () =>
+      "https://cycle.staging.fukamu.matoruru.com/api/v1/session/anonymous",
+    request: () => ({ method: () => "POST" }),
+    status: () => 201,
+    headers: () => ({ "x-fukamu-authenticated-user-id": userID }),
+    async json() {
+      return {
+        user: { id: userID, googleConnected: false, googleEmail: null },
+        csrfToken: preparedLegacyToken,
+      };
+    },
+  };
+  const session = await captureStagingAnonymousSession({
+    async waitForResponse(predicate) {
+      assert.equal(predicate(response), true);
+      return response;
+    },
+  });
+  assert.deepEqual(session, preparedLegacySession);
+  assert.equal(classifyStagingAnonymousSessionStatus(201), undefined);
+});
+
+test("preserves closed anonymous session failures before release mutation", async () => {
+  for (const reason of [
+    "anonymous_session_request_not_observed",
+    "anonymous_session_bad_request",
+    "anonymous_session_forbidden",
+    "anonymous_session_rate_limited",
+    "anonymous_session_unavailable",
+  ]) {
+    const fake = createFakeAdapter({
+      async prepareLegacySession() {
+        fake.calls.push("prepare-legacy");
+        throw new StagingCriticalFailure("entry", reason);
+      },
+    });
+    const failures = await runFake(fake.adapter);
+    assert.deepEqual(classifications(failures), [`legacy_session:${reason}`]);
+    assert.equal(fake.calls.includes("deploy-drain"), false);
   }
 });
 

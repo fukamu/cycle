@@ -5,7 +5,10 @@ import { URL } from "node:url";
 
 import { chromium, request } from "@playwright/test";
 
-import { parseAnonymousSession } from "../../scripts/lib/staging-critical.mjs";
+import {
+  parseAnonymousSession,
+  StagingCriticalFailure,
+} from "../../scripts/lib/staging-critical.mjs";
 import {
   markStagingDeployCleanupUnverified,
   markStagingDeployCleanupVerified,
@@ -109,11 +112,7 @@ export function createStagingCSRFRolloutBrowserAdapter({
           admissionMode,
           inviteToken: currentInviteToken,
           captureAnonymousSession: (currentPage) =>
-            captureSessionResponse(
-              currentPage,
-              "POST",
-              "/api/v1/session/anonymous",
-            ),
+            captureStagingAnonymousSession(currentPage),
         });
       } finally {
         await pageA.unroute(
@@ -656,6 +655,45 @@ async function captureSessionResponse(page, method, pathname) {
   } catch {
     return undefined;
   }
+}
+
+export async function captureStagingAnonymousSession(page) {
+  const response = await page.waitForResponse(
+    (candidate) => {
+      const candidateURL = new URL(candidate.url());
+      return (
+        candidate.request().method() === "POST" &&
+        candidateURL.pathname === "/api/v1/session/anonymous"
+      );
+    },
+    { timeout: 120_000 },
+  );
+  const failureReason = classifyStagingAnonymousSessionStatus(
+    response.status(),
+  );
+  if (failureReason !== undefined) {
+    throw new StagingCriticalFailure("entry", failureReason);
+  }
+  try {
+    return parseAnonymousSession(
+      await response.json(),
+      response.headers()[authenticatedUserIDHeader],
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+export function classifyStagingAnonymousSessionStatus(status) {
+  if (!Number.isSafeInteger(status) || status < 100 || status > 599) {
+    return "unexpected_status";
+  }
+  if (status >= 200 && status < 300) return undefined;
+  if (status === 400) return "anonymous_session_bad_request";
+  if (status === 403) return "anonymous_session_forbidden";
+  if (status === 429) return "anonymous_session_rate_limited";
+  if (status >= 500) return "anonymous_session_unavailable";
+  return "unexpected_status";
 }
 
 function requestOptions(origin, session, data) {
