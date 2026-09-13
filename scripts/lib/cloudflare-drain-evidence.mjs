@@ -188,7 +188,7 @@ function parseNormalizedObservation(value) {
       !rolloutStatuses.has(rollout.status) ||
       !isPositiveInteger(rollout.currentVersion) ||
       !isPositiveInteger(rollout.targetVersion) ||
-      !parseImage(rollout.targetImage)
+      !(rollout.targetImage === null || parseImage(rollout.targetImage))
     ) {
       throw new Error("container rollout is invalid");
     }
@@ -209,7 +209,7 @@ function parseNormalizedObservation(value) {
       instanceIDs.has(instance.id) ||
       !instanceStatuses.has(instance.status) ||
       !isPositiveInteger(instance.version) ||
-      !parseImage(instance.image)
+      !(instance.image === null || parseImage(instance.image))
     ) {
       throw new Error("container instance is invalid");
     }
@@ -241,7 +241,7 @@ function baselineProjection(observation, candidateCommitSHA) {
       (instance) =>
         instance.status !== "running" ||
         instance.version !== container.version ||
-        instance.image !== container.image,
+        (instance.image !== null && instance.image !== container.image),
     )
   ) {
     fail("baseline", "baseline_not_stable");
@@ -281,6 +281,7 @@ function candidateProjection(
   if (
     rollout === undefined ||
     rollout.status !== "completed" ||
+    rollout.targetImage === null ||
     imageDigest(rollout.targetImage) !== expectedCandidateImageDigest ||
     container.activeRolloutId !== null ||
     container.version === baseline.containerVersion ||
@@ -291,7 +292,7 @@ function candidateProjection(
       (instance) =>
         instance.status !== "running" ||
         instance.version !== container.version ||
-        instance.image !== container.image,
+        (instance.image !== null && instance.image !== container.image),
     )
   ) {
     return undefined;
@@ -340,6 +341,19 @@ function validateDrainTransition(
   if (
     (!workerIsBaseline && !workerIsCandidate) ||
     container.applicationId !== baseline.containerApplicationId
+  ) {
+    fail("drain", "evidence_changed");
+  }
+  if (
+    container.instances.some(
+      (instance) =>
+        (instance.version === baseline.containerVersion &&
+          instance.image !== null &&
+          instance.image !== baseline.containerImage) ||
+        (instance.version === container.version &&
+          instance.image !== null &&
+          instance.image !== container.image),
+    )
   ) {
     fail("drain", "evidence_changed");
   }
@@ -404,7 +418,8 @@ function validateDrainTransition(
 
   if (
     candidateRollout !== undefined &&
-    (candidateRollout.currentVersion !== baseline.containerVersion ||
+    (candidateRollout.targetImage === null ||
+      candidateRollout.currentVersion !== baseline.containerVersion ||
       candidateRollout.targetVersion === baseline.containerVersion ||
       candidateRollout.targetImage === baseline.containerImage ||
       imageDigest(candidateRollout.targetImage) !==
@@ -437,7 +452,17 @@ function validateDrainTransition(
     container.instances.some(
       (instance) =>
         instance.version === candidateRollout.targetVersion &&
-        instance.image === candidateRollout.targetImage &&
+        instance.image !== null &&
+        instance.image !== candidateRollout.targetImage,
+    )
+  ) {
+    fail("drain", "evidence_changed");
+  }
+  if (
+    candidateRollout !== undefined &&
+    container.instances.some(
+      (instance) =>
+        instance.version === candidateRollout.targetVersion &&
         ["failed", "stopped", "stopping", "unhealthy"].includes(
           instance.status,
         ),
@@ -699,6 +724,7 @@ function normalizeApplication(value, expectedName) {
 }
 
 function normalizeRollout(value) {
+  const targetImage = value?.target_configuration?.image;
   if (
     !isRecord(value) ||
     !parseIdentifier(value.id) ||
@@ -707,7 +733,7 @@ function normalizeRollout(value) {
     !isPositiveInteger(value.current_version) ||
     !isPositiveInteger(value.target_version) ||
     !isRecord(value.target_configuration) ||
-    !parseImage(value.target_configuration.image)
+    !(targetImage === undefined || parseImage(targetImage))
   ) {
     throw new Error("container rollout response is invalid");
   }
@@ -717,19 +743,20 @@ function normalizeRollout(value) {
     status: value.status,
     currentVersion: value.current_version,
     targetVersion: value.target_version,
-    targetImage: value.target_configuration.image,
+    targetImage: targetImage ?? null,
   };
 }
 
 function normalizeInstance(value) {
   const placementStatus = value?.current_placement?.status;
   const status = placementStatus?.container_status ?? placementStatus?.health;
+  const image = value?.image;
   if (
     !isRecord(value) ||
     !parseIdentifier(value.id) ||
     !instanceStatuses.has(status) ||
     !isPositiveInteger(value.app_version) ||
-    !parseImage(value.image)
+    !(image === undefined || parseImage(image))
   ) {
     throw new Error("container instance response is invalid");
   }
@@ -737,7 +764,7 @@ function normalizeInstance(value) {
     id: value.id,
     status,
     version: value.app_version,
-    image: value.image,
+    image: image ?? null,
   };
 }
 
