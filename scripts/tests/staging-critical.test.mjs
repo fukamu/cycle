@@ -194,7 +194,10 @@ function withBrowserGlobals(location, history, callback) {
   }
 }
 
-function entryFixture(currentMode, { failEntry = false } = {}) {
+function entryFixture(
+  currentMode,
+  { failEntry = false, showRetry = false } = {},
+) {
   const calls = [];
   const location = { pathname: "/", search: "?source=staging", hash: "" };
   let injectedURL = "";
@@ -212,18 +215,32 @@ function entryFixture(currentMode, { failEntry = false } = {}) {
       calls.push("wait-new-goal");
     },
   };
+  const retryButton = {
+    async isVisible() {
+      return showRetry;
+    },
+  };
+  const entryButtons = {
+    first() {
+      return {
+        async waitFor(options) {
+          assert.deepEqual(options, { state: "visible" });
+          calls.push("wait-entry-cta");
+          if (failEntry) throw new Error("private entry failure");
+        },
+      };
+    },
+  };
   const admissionButton = {
     or(candidate) {
       assert.equal(candidate, newGoalButton);
       return {
+        or(lastCandidate) {
+          assert.equal(lastCandidate, retryButton);
+          return entryButtons;
+        },
         first() {
-          return {
-            async waitFor(options) {
-              assert.deepEqual(options, { state: "visible" });
-              calls.push("wait-entry-cta");
-              if (failEntry) throw new Error("private entry failure");
-            },
-          };
+          return entryButtons.first();
         },
       };
     },
@@ -260,6 +277,7 @@ function entryFixture(currentMode, { failEntry = false } = {}) {
         if (options.name === "\u5229\u7528\u3092\u958b\u59cb\u3059\u308b") {
           return admissionButton;
         }
+        if (options.name === "\u518d\u8a66\u884c") return retryButton;
         assert.equal(
           options.name,
           "\u65b0\u3057\u3044\u76ee\u6a19\u3092\u8a2d\u5b9a",
@@ -523,6 +541,59 @@ test("maps an anonymous session capture rejection to an unobserved session", asy
     "goto",
     "wait-entry-cta",
     "wait-new-goal",
+  ]);
+});
+
+test("preserves a closed anonymous session rejection when entry also fails", async () => {
+  const fixture = entryFixture("off", { failEntry: true });
+  const captureFailure = new StagingCriticalFailure(
+    "entry",
+    "anonymous_session_rate_limited",
+  );
+  await assert.rejects(
+    enterStagingCritical({
+      context: fixture.context,
+      page: fixture.page,
+      baseURL: canonicalBaseURL,
+      admissionMode: "off",
+      inviteToken: "",
+      captureAnonymousSession() {
+        fixture.calls.push("capture-session");
+        return Promise.reject(captureFailure);
+      },
+    }),
+    (error) => error === captureFailure,
+  );
+  assert.deepEqual(fixture.calls, [
+    "capture-session",
+    "goto",
+    "wait-entry-cta",
+  ]);
+});
+
+test("classifies a retry state before an anonymous session request starts", async () => {
+  const fixture = entryFixture("off", { showRetry: true });
+  await assert.rejects(
+    enterStagingCritical({
+      context: fixture.context,
+      page: fixture.page,
+      baseURL: canonicalBaseURL,
+      admissionMode: "off",
+      inviteToken: "",
+      captureAnonymousSession() {
+        fixture.calls.push("capture-session");
+        return new Promise(() => undefined);
+      },
+    }),
+    (error) =>
+      error instanceof StagingCriticalFailure &&
+      error.phase === "entry" &&
+      error.reason === "anonymous_session_request_not_observed",
+  );
+  assert.deepEqual(fixture.calls, [
+    "capture-session",
+    "goto",
+    "wait-entry-cta",
   ]);
 });
 
@@ -820,6 +891,11 @@ test("formats only closed-enum diagnostics and validated run metadata", () => {
   assert.deepEqual(stagingCriticalFailureReasons, [
     "entry_cta_timeout",
     "anonymous_session_not_observed",
+    "anonymous_session_request_not_observed",
+    "anonymous_session_bad_request",
+    "anonymous_session_forbidden",
+    "anonymous_session_rate_limited",
+    "anonymous_session_unavailable",
     "unexpected_status",
     "session_discovery_failed",
     "account_delete_failed",
