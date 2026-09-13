@@ -220,8 +220,10 @@ Post-deploy `full`だけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`で
 
 `Deploy Staging`のattempt 1が失敗した場合、同じworkflow runを一度だけ安全に再試行できるのは、attempt 1が`completed` / `failure`であり、自動生成されたcheckpointをhuman audit用artifactとexact immutable Actions cache key `staging-deploy-retry-<commit>-<run-id>-1`へ保存し、attempt 2が同じkeyから復元したfileについて次の全条件を満たす場合だけです。
 
+Checkpointの`mutationBoundary`と`cleanupState`は別の事実として記録します。Candidate deploy / drain wrapperはmigrationの直前に`mutationBoundary=crossed`へ遷移し、この時点では一時accountを作成していないため`cleanupState=not_started`を維持します。Authoritative drain後にanonymous create requestを送る直前だけ`cleanupState=unverified`へ遷移し、公開Delete 204と旧Session 401を確認した後に`verified`へ遷移します。Option Aではcleanup追跡をmutation前に開始せず、`mutationBoundary=crossed`から`not_crossed`へ戻す遷移と、`cleanupState=verified`から`unverified`へ戻す遷移は許可しません。
+
 - `result=no_mutation_started`かつ`mutationBoundary=not_crossed`である。
-- 一時accountをまだ作り得ない`cleanupState=not_started`、または公開Delete 204と旧Session 401を確認した`cleanupState=verified`である。`unverified`は受理しない。
+- `cleanupState=not_started`である。Option Aでは一時account作成をauthoritative drain後だけに行うため、mutation前の`verified` / `unverified`は受理しない。
 - Repository、workflow path、同じrun ID、source attempt 1、candidate SHA、deploy mode、configured operator、exact-main CI run、mode固有のno-change Plan / Apply evidenceが今回の入力と完全一致する。
 - Fallback keyを使わないexact cache hitであり、復元したcheckpointが許容size内の通常fileで、strict schemaを満たす。Audit artifactは人がattempt 1を確認するための証跡であり、rerun間のruntime transportには使わない。
 

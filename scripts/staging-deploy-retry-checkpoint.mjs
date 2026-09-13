@@ -208,8 +208,12 @@ function validateState(value, metadata) {
     !metadataMatches(value, metadata) ||
     !validateTerraformEvidence(value.terraformEvidence, value.deployMode) ||
     !validateExactMainCI(value.exactMainCI, value.commitSHA) ||
-    !/^(?:not_crossed|crossed)$/.test(value.mutationBoundary) ||
-    !/^(?:not_started|unverified|verified)$/.test(value.cleanupState)
+    !(
+      (value.mutationBoundary === "not_crossed" &&
+        value.cleanupState === "not_started") ||
+      (value.mutationBoundary === "crossed" &&
+        /^(?:not_started|unverified|verified)$/.test(value.cleanupState))
+    )
   ) {
     fail();
   }
@@ -227,7 +231,7 @@ function validateEvidence(value, metadata) {
     !validateTerraformEvidence(value.terraformEvidence, value.deployMode) ||
     !validateExactMainCI(value.exactMainCI, value.commitSHA) ||
     value.mutationBoundary !== "not_crossed" ||
-    !/^(?:not_started|verified)$/.test(value.cleanupState)
+    value.cleanupState !== "not_started"
   ) {
     fail();
   }
@@ -362,7 +366,7 @@ function transitionState(environment, transition) {
 export function markStagingDeployCleanupUnverified(environment = process.env) {
   transitionState(environment, (current) => {
     if (
-      current.mutationBoundary !== "not_crossed" ||
+      current.mutationBoundary !== "crossed" ||
       !/^(?:not_started|unverified)$/.test(current.cleanupState)
     ) {
       fail();
@@ -373,7 +377,12 @@ export function markStagingDeployCleanupUnverified(environment = process.env) {
 
 export function markStagingDeployCleanupVerified(environment = process.env) {
   transitionState(environment, (current) => {
-    if (current.cleanupState !== "unverified") fail();
+    if (
+      current.mutationBoundary !== "crossed" ||
+      current.cleanupState !== "unverified"
+    ) {
+      fail();
+    }
     return { ...current, cleanupState: "verified" };
   });
 }
@@ -384,7 +393,7 @@ export function markStagingDeployMutationBoundaryCrossed(
   transitionState(environment, (current) => {
     if (
       current.mutationBoundary !== "not_crossed" ||
-      current.cleanupState !== "unverified"
+      current.cleanupState !== "not_started"
     ) {
       fail();
     }
@@ -399,7 +408,7 @@ export function finalizeStagingDeployRetryEvidence(environment = process.env) {
   const state = validateState(readCheckpoint(stateFile, runnerTemp), metadata);
   if (
     state.mutationBoundary !== "not_crossed" ||
-    !/^(?:not_started|verified)$/.test(state.cleanupState)
+    state.cleanupState !== "not_started"
   ) {
     return false;
   }
