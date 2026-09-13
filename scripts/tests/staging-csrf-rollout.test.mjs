@@ -22,11 +22,7 @@ import { StagingCriticalFailure } from "../lib/staging-critical.mjs";
 
 const userID = "0198c20b-7b95-7000-8000-000000000001";
 const otherUserID = "0198c20b-7b95-7000-8000-000000000002";
-const preparedLegacyToken = "P".repeat(43);
-const legacyToken = "L".repeat(43);
 const stableToken = "S".repeat(43);
-const preparedLegacySession = { userID, csrfToken: preparedLegacyToken };
-const originalSession = { userID, csrfToken: legacyToken };
 const stableSession = { userID, csrfToken: stableToken };
 
 test("establishes the canonical Staging origin before seeding IndexedDB", async () => {
@@ -144,7 +140,7 @@ test("captures a successful anonymous session response", async () => {
     async json() {
       return {
         user: { id: userID, googleConnected: false, googleEmail: null },
-        csrfToken: preparedLegacyToken,
+        csrfToken: stableToken,
       };
     },
   };
@@ -154,11 +150,11 @@ test("captures a successful anonymous session response", async () => {
       return response;
     },
   });
-  assert.deepEqual(session, preparedLegacySession);
+  assert.deepEqual(session, stableSession);
   assert.equal(classifyStagingAnonymousSessionStatus(201), undefined);
 });
 
-test("preserves closed anonymous session failures before release mutation", async () => {
+test("preserves closed candidate anonymous session failures after drain", async () => {
   for (const reason of [
     "anonymous_session_request_not_observed",
     "anonymous_session_bad_request",
@@ -167,14 +163,16 @@ test("preserves closed anonymous session failures before release mutation", asyn
     "anonymous_session_unavailable",
   ]) {
     const fake = createFakeAdapter({
-      async prepareLegacySession() {
-        fake.calls.push("prepare-legacy");
+      async prepareCandidateSession() {
+        fake.calls.push("prepare-candidate");
         throw new StagingCriticalFailure("entry", reason);
       },
     });
     const failures = await runFake(fake.adapter);
-    assert.deepEqual(classifications(failures), [`legacy_session:${reason}`]);
-    assert.equal(fake.calls.includes("deploy-drain"), false);
+    assert.deepEqual(classifications(failures), [
+      `candidate_session:${reason}`,
+    ]);
+    assert.equal(fake.calls.includes("deploy-drain"), true);
   }
 });
 
@@ -243,9 +241,12 @@ test("marks cleanup verified only from the exact revoked-session proof", () => {
 });
 
 test("accepts only UUIDv7 identities and exact base64url CSRF tokens", () => {
-  assert.deepEqual(validateRolloutSession(originalSession), originalSession);
+  assert.deepEqual(validateRolloutSession(stableSession), stableSession);
   for (const invalid of [
-    { userID: otherUserID.replace("7b95-7", "7b95-6"), csrfToken: legacyToken },
+    {
+      userID: otherUserID.replace("7b95-7", "7b95-6"),
+      csrfToken: stableToken,
+    },
     { userID, csrfToken: "short" },
     { userID, csrfToken: `${"A".repeat(42)}=` },
     { userID, csrfToken: `${"A".repeat(42)}+` },
@@ -254,96 +255,43 @@ test("accepts only UUIDv7 identities and exact base64url CSRF tokens", () => {
       () => validateRolloutSession(invalid),
       (error) =>
         error instanceof StagingCSRFRolloutFailure &&
-        error.phase === "legacy_session" &&
-        error.reason === "legacy_session_invalid" &&
+        error.phase === "candidate_session" &&
+        error.reason === "stable_token_invalid" &&
         !error.message.includes(userID) &&
-        !error.message.includes(legacyToken),
+        !error.message.includes(stableToken),
     );
   }
 });
 
-test("runs the one-time legacy-to-stable rollout in one ordered adapter", async () => {
+test("runs the one-time candidate rollout after deploy and drain", async () => {
   const fake = createFakeAdapter();
   const failures = await runFake(fake.adapter);
   assert.deepEqual(failures, []);
   assert.deepEqual(fake.calls, [
     "launch",
-    "prepare-legacy",
-    "capture-probe",
-    "confirm-legacy",
-    "prepare-tab-b",
-    "legacy-unsafe",
     "deploy-drain",
+    "prepare-candidate",
+    "capture-probe",
+    "prepare-tab-b",
+    "candidate-unsafe",
     "discover-both",
     "reload-a",
     "autosave-a",
     "command-a",
     "command-b",
     "autosave-b",
-    "reject:legacy_token",
     "reject:invalid_token",
     "reject:invalid_origin",
     "close-pages",
     "discover-cleanup",
-    "delete-original",
+    "delete-candidate",
     "verify-revoked",
     "close",
   ]);
   assert.deepEqual(fake.deletedSessions, [stableSession]);
 });
 
-test("fails closed when current staging is already stable", async () => {
-  const fake = createFakeAdapter({
-    async confirmLegacySession() {
-      fake.calls.push("confirm-legacy");
-      return preparedLegacySession;
-    },
-    async discoverForCleanup() {
-      fake.calls.push("discover-cleanup");
-      return preparedLegacySession;
-    },
-  });
-  const failures = await runFake(fake.adapter);
-  assert.deepEqual(classifications(failures), [
-    "legacy_confirmation:legacy_baseline_not_observed",
-  ]);
-  assert.equal(fake.calls.includes("deploy-drain"), false);
-  assert.equal(fake.calls.includes("autosave-a"), false);
-  assert.deepEqual(fake.deletedSessions, [preparedLegacySession]);
-});
-
-test("never mutates when legacy confirmation is invalid", async () => {
-  const cases = [
-    {
-      expected: "legacy_confirmation:session_identity_changed",
-      value: { userID: otherUserID, csrfToken: legacyToken },
-    },
-    {
-      expected: "legacy_confirmation:legacy_session_invalid",
-      value: { userID, csrfToken: "malformed" },
-    },
-    {
-      expected: "legacy_confirmation:unexpected_status",
-      failure: new Error("private response detail"),
-    },
-  ];
-  for (const testCase of cases) {
-    const fake = createFakeAdapter({
-      async confirmLegacySession() {
-        fake.calls.push("confirm-legacy");
-        if (testCase.failure !== undefined) throw testCase.failure;
-        return testCase.value;
-      },
-    });
-    const failures = await runFake(fake.adapter);
-    assert.deepEqual(classifications(failures), [testCase.expected]);
-    assert.equal(fake.calls.includes("prepare-tab-b"), false);
-    assert.equal(fake.calls.includes("legacy-unsafe"), false);
-    assert.equal(fake.calls.includes("deploy-drain"), false);
-  }
-});
-
-test("does not start post-drain checks when deploy or drain fails", async () => {
+test("does not create a candidate session when deploy or drain fails", async () => {
   const fake = createFakeAdapter({
     async runDeployAndDrain() {
       fake.calls.push("deploy-drain");
@@ -354,20 +302,37 @@ test("does not start post-drain checks when deploy or drain fails", async () => 
   assert.deepEqual(classifications(failures), [
     "deploy_and_drain:deploy_or_drain_failed",
   ]);
+  assert.equal(fake.calls.includes("prepare-candidate"), false);
   assert.equal(fake.calls.includes("discover-both"), false);
-  assert.deepEqual(fake.deletedSessions, [stableSession]);
+  assert.deepEqual(fake.deletedSessions, []);
 });
 
-test("cleans a known original identity when its captured token is malformed", async () => {
+test("fails closed when the candidate session cannot be created", async () => {
   const fake = createFakeAdapter({
-    async prepareLegacySession() {
-      fake.calls.push("prepare-legacy");
+    async prepareCandidateSession() {
+      fake.calls.push("prepare-candidate");
+      throw new Error("private browser response");
+    },
+  });
+  const failures = await runFake(fake.adapter);
+  assert.deepEqual(classifications(failures), [
+    "candidate_session:unexpected_status",
+  ]);
+  assert.equal(fake.calls.includes("deploy-drain"), true);
+  assert.equal(fake.calls.includes("discover-both"), false);
+  assert.deepEqual(fake.deletedSessions, []);
+});
+
+test("cleans a known candidate identity when its captured token is malformed", async () => {
+  const fake = createFakeAdapter({
+    async prepareCandidateSession() {
+      fake.calls.push("prepare-candidate");
       return { userID, csrfToken: "malformed" };
     },
   });
   const failures = await runFake(fake.adapter);
   assert.deepEqual(classifications(failures), [
-    "legacy_session:legacy_session_invalid",
+    "candidate_session:stable_token_invalid",
   ]);
   assert.deepEqual(fake.deletedSessions, [stableSession]);
   assert.equal(fake.calls.includes("prepare-tab-b"), false);
@@ -407,7 +372,7 @@ test("never selects a rediscovered different identity for deletion", async () =>
     "account_delete:session_identity_changed",
   ]);
   assert.equal(cleanupDiscoveries, 1);
-  assert.deepEqual(fake.deletedSessions, [originalSession]);
+  assert.deepEqual(fake.deletedSessions, [stableSession]);
   assert.equal(
     fake.deletedSessions.some((session) => session.userID === otherUserID),
     false,
@@ -453,8 +418,8 @@ test("requires exact CSRF and revoked-session error contracts", async () => {
 test("retries deletion but records only closed diagnostic values", async () => {
   let attempts = 0;
   const fake = createFakeAdapter({
-    async deleteOriginalAccount(session) {
-      fake.calls.push("delete-original");
+    async deleteCandidateAccount(session) {
+      fake.calls.push("delete-candidate");
       fake.deletedSessions.push(session);
       attempts += 1;
       if (attempts === 1) return { status: 503 };
@@ -568,22 +533,18 @@ function createFakeAdapter(overrides = {}) {
     async launch() {
       calls.push("launch");
     },
-    async prepareLegacySession() {
-      calls.push("prepare-legacy");
-      return preparedLegacySession;
+    async prepareCandidateSession() {
+      calls.push("prepare-candidate");
+      return stableSession;
     },
     async captureRevokedSessionProbe() {
       calls.push("capture-probe");
     },
-    async confirmLegacySession() {
-      calls.push("confirm-legacy");
-      return originalSession;
-    },
     async prepareSecondTab() {
       calls.push("prepare-tab-b");
     },
-    async runLegacyUnsafeRequest() {
-      calls.push("legacy-unsafe");
+    async runCandidateUnsafeRequest() {
+      calls.push("candidate-unsafe");
       return true;
     },
     async runDeployAndDrain() {
@@ -624,8 +585,8 @@ function createFakeAdapter(overrides = {}) {
       calls.push("discover-cleanup");
       return stableSession;
     },
-    async deleteOriginalAccount(session) {
-      calls.push("delete-original");
+    async deleteCandidateAccount(session) {
+      calls.push("delete-candidate");
       deletedSessions.push(session);
       return { status: 204, authenticatedUserIDVerified: true };
     },

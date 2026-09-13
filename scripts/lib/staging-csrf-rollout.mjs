@@ -6,16 +6,13 @@ const csrfTokenPattern = /^[A-Za-z0-9_-]{43}$/;
 
 export const stagingCSRFRolloutFailureReasons = Object.freeze([
   "unexpected_status",
-  "legacy_session_invalid",
   "anonymous_session_request_not_observed",
   "anonymous_session_bad_request",
   "anonymous_session_forbidden",
   "anonymous_session_rate_limited",
   "anonymous_session_unavailable",
-  "legacy_baseline_not_observed",
   "deploy_or_drain_failed",
   "session_identity_changed",
-  "candidate_not_observed",
   "stable_token_invalid",
   "security_rejection_invalid",
   "account_delete_failed",
@@ -25,10 +22,9 @@ export const stagingCSRFRolloutFailureReasons = Object.freeze([
 export const stagingCSRFRolloutPhases = Object.freeze([
   "configuration",
   "browser_launch",
-  "legacy_session",
-  "legacy_confirmation",
-  "legacy_unsafe_request",
   "deploy_and_drain",
+  "candidate_session",
+  "candidate_unsafe_request",
   "two_tab_convergence",
   "reload_stability",
   "tab_a_autosave",
@@ -69,7 +65,10 @@ export function formatStagingCSRFRolloutDiagnostic(failure, metadata) {
   return `::error::Staging CSRF rollout failed; phase=${failure.phase}; reason=${failure.reason}; run_id=${metadata.runID}; run_attempt=${metadata.runAttempt}; commit_sha=${metadata.commitSHA}.`;
 }
 
-export function validateRolloutSession(value, failurePhase = "legacy_session") {
+export function validateRolloutSession(
+  value,
+  failurePhase = "candidate_session",
+) {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -79,13 +78,7 @@ export function validateRolloutSession(value, failurePhase = "legacy_session") {
     typeof value.csrfToken !== "string" ||
     !csrfTokenPattern.test(value.csrfToken)
   ) {
-    throw new StagingCSRFRolloutFailure(
-      failurePhase,
-      failurePhase === "legacy_session" ||
-        failurePhase === "legacy_confirmation"
-        ? "legacy_session_invalid"
-        : "stable_token_invalid",
-    );
+    throw new StagingCSRFRolloutFailure(failurePhase, "stable_token_invalid");
   }
   return { userID: value.userID, csrfToken: value.csrfToken };
 }
@@ -97,9 +90,9 @@ export async function runStagingCSRFRollout({ adapter, retryOptions } = {}) {
 
   const failures = [];
   let phase = "browser_launch";
-  let originalUserID;
-  let originalSession;
-  let latestOriginalSession;
+  let candidateUserID;
+  let candidateSession;
+  let latestCandidateSession;
   let accountDeleted = false;
 
   const record = (failure, fallbackPhase = phase) => {
@@ -124,41 +117,26 @@ export async function runStagingCSRFRollout({ adapter, retryOptions } = {}) {
   try {
     await adapter.launch();
 
-    phase = "legacy_session";
-    const preparedSession = await adapter.prepareLegacySession();
-    originalUserID = extractUserID(preparedSession);
-    await adapter.captureRevokedSessionProbe();
-    originalSession = validateRolloutSession(preparedSession);
-    latestOriginalSession = originalSession;
-
-    phase = "legacy_confirmation";
-    const confirmedLegacySession = validateRolloutSession(
-      await adapter.confirmLegacySession(originalSession),
-      phase,
-    );
-    requireOriginalIdentity(confirmedLegacySession, originalSession, phase);
-    if (confirmedLegacySession.csrfToken === originalSession.csrfToken) {
-      throw new StagingCSRFRolloutFailure(
-        phase,
-        "legacy_baseline_not_observed",
-      );
-    }
-    originalSession = confirmedLegacySession;
-    latestOriginalSession = confirmedLegacySession;
-    await adapter.prepareSecondTab();
-
-    phase = "legacy_unsafe_request";
-    requireSuccess(
-      await adapter.runLegacyUnsafeRequest(originalSession),
-      phase,
-    );
-
     phase = "deploy_and_drain";
     try {
       await adapter.runDeployAndDrain();
     } catch {
       throw new StagingCSRFRolloutFailure(phase, "deploy_or_drain_failed");
     }
+
+    phase = "candidate_session";
+    const preparedSession = await adapter.prepareCandidateSession();
+    candidateUserID = extractUserID(preparedSession);
+    await adapter.captureRevokedSessionProbe();
+    candidateSession = validateRolloutSession(preparedSession, phase);
+    latestCandidateSession = candidateSession;
+    await adapter.prepareSecondTab();
+
+    phase = "candidate_unsafe_request";
+    requireSuccess(
+      await adapter.runCandidateUnsafeRequest(candidateSession),
+      phase,
+    );
 
     phase = "two_tab_convergence";
     const discovered = await adapter.discoverTwoTabsConcurrently();
@@ -167,26 +145,23 @@ export async function runStagingCSRFRollout({ adapter, retryOptions } = {}) {
     }
     const tabA = validateRolloutSession(discovered[0], phase);
     const tabB = validateRolloutSession(discovered[1], phase);
-    requireOriginalIdentity(tabA, originalSession, phase);
-    requireOriginalIdentity(tabB, originalSession, phase);
+    requireSameIdentity(tabA, candidateSession, phase);
+    requireSameIdentity(tabB, candidateSession, phase);
     if (tabA.csrfToken !== tabB.csrfToken) {
       throw new StagingCSRFRolloutFailure(phase, "stable_token_invalid");
     }
-    if (tabA.csrfToken === originalSession.csrfToken) {
-      throw new StagingCSRFRolloutFailure(phase, "candidate_not_observed");
-    }
-    latestOriginalSession = tabA;
+    latestCandidateSession = tabA;
 
     phase = "reload_stability";
     const reloaded = validateRolloutSession(
       await adapter.reloadTabAAndDiscover(),
       phase,
     );
-    requireOriginalIdentity(reloaded, originalSession, phase);
+    requireSameIdentity(reloaded, candidateSession, phase);
     if (reloaded.csrfToken !== tabA.csrfToken) {
       throw new StagingCSRFRolloutFailure(phase, "stable_token_invalid");
     }
-    latestOriginalSession = reloaded;
+    latestCandidateSession = reloaded;
 
     phase = "tab_a_autosave";
     requireSuccess(await adapter.runTabAAutosave(reloaded), phase);
@@ -198,10 +173,9 @@ export async function runStagingCSRFRollout({ adapter, retryOptions } = {}) {
     requireSuccess(await adapter.runTabBAutosave(tabB), phase);
 
     phase = "security_rejections";
-    for (const kind of ["legacy_token", "invalid_token", "invalid_origin"]) {
+    for (const kind of ["invalid_token", "invalid_origin"]) {
       requireCSRFRejection(
         await adapter.verifyCSRFRejection(kind, {
-          originalSession,
           stableSession: reloaded,
         }),
       );
@@ -212,12 +186,12 @@ export async function runStagingCSRFRollout({ adapter, retryOptions } = {}) {
       await adapter.discoverForCleanup(),
       "account_delete",
     );
-    requireOriginalIdentity(refreshed, originalSession, "account_delete");
-    latestOriginalSession = refreshed;
+    requireSameIdentity(refreshed, candidateSession, "account_delete");
+    latestCandidateSession = refreshed;
 
     phase = "account_delete";
     await retryAccountDelete(
-      () => adapter.deleteOriginalAccount(refreshed),
+      () => adapter.deleteCandidateAccount(refreshed),
       retryOptions,
     );
     accountDeleted = true;
@@ -228,15 +202,15 @@ export async function runStagingCSRFRollout({ adapter, retryOptions } = {}) {
     record(failure);
   }
 
-  if (originalUserID !== undefined && !accountDeleted) {
+  if (candidateUserID !== undefined && !accountDeleted) {
     await adapter.closePages().catch(() => undefined);
-    let deletionSession = latestOriginalSession;
+    let deletionSession = latestCandidateSession;
     try {
       const discovered = validateRolloutSession(
         await adapter.discoverForCleanup(),
         "account_delete",
       );
-      if (discovered.userID === originalUserID) {
+      if (discovered.userID === candidateUserID) {
         deletionSession = discovered;
       } else {
         record(
@@ -259,11 +233,11 @@ export async function runStagingCSRFRollout({ adapter, retryOptions } = {}) {
 
     if (
       deletionSession !== undefined &&
-      deletionSession.userID === originalUserID
+      deletionSession.userID === candidateUserID
     ) {
       try {
         await retryAccountDelete(
-          () => adapter.deleteOriginalAccount(deletionSession),
+          () => adapter.deleteCandidateAccount(deletionSession),
           retryOptions,
         );
         accountDeleted = true;
@@ -314,8 +288,8 @@ function extractUserID(value) {
     : undefined;
 }
 
-function requireOriginalIdentity(candidate, original, phase) {
-  if (candidate.userID !== original.userID) {
+function requireSameIdentity(candidate, expected, phase) {
+  if (candidate.userID !== expected.userID) {
     throw new StagingCSRFRolloutFailure(phase, "session_identity_changed");
   }
 }
