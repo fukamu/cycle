@@ -17,6 +17,7 @@ import {
   createStagingDeployAnonymousSessionRoute,
   markStagingDeployCleanupFromRevokedResult,
   prepareStagingBootstrapStorage,
+  selectCloudflareDrainDiagnostic,
 } from "../../frontend/e2e/staging-csrf-rollout-entry.mjs";
 import { StagingCriticalFailure } from "../lib/staging-critical.mjs";
 
@@ -498,7 +499,10 @@ test("keeps browser evidence memory-only and invokes one fixed child adapter", (
     /\b(?:recordVideo|screenshot|trace:|tracing\.|storageState)\b/,
   );
   assert.doesNotMatch(browserSources, /stdio:\s*["']inherit["']/);
-  assert.match(entry, /stdio:\s*["']ignore["']/);
+  assert.match(
+    entry,
+    /stdio:\s*\[["']ignore["'], ["']ignore["'], ["']pipe["']\]/,
+  );
   assert.match(entry, /detached:\s*true/);
   assert.match(entry, /process\.kill\(-child\.pid, signal\)/);
   assert.match(entry, /process\.kill\(-child\.pid, 0\)/);
@@ -523,6 +527,23 @@ test("keeps browser evidence memory-only and invokes one fixed child adapter", (
     "STAGING_E2E_INVITE_TOKEN",
   ]) {
     assert.match(harness, new RegExp(`delete process\\.env\\.${name}`));
+  }
+});
+
+test("forwards only one closed Cloudflare drain diagnostic", () => {
+  const diagnostic = `::error::Cloudflare drain evidence failed; phase=baseline; reason=invalid_evidence; run_id=123; run_attempt=2; commit_sha=${"a".repeat(40)}.`;
+  assert.equal(
+    selectCloudflareDrainDiagnostic(
+      `private provider output\n${diagnostic}\nStaging candidate deployment failed\n`,
+    ),
+    diagnostic,
+  );
+  for (const invalid of [
+    "private provider output",
+    `${diagnostic}\n${diagnostic}\n`,
+    `${diagnostic}\n${"x".repeat(4 * 1024)}\n`,
+  ]) {
+    assert.equal(selectCloudflareDrainDiagnostic(invalid), undefined);
   }
 });
 

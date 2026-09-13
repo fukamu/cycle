@@ -1032,14 +1032,21 @@ test("deployment contract is the exact repository handoff classification", () =>
     "      cwd: repositoryRoot,",
     "      detached: true,",
     "      shell: false,",
-    '      stdio: "ignore",',
+    '      stdio: ["ignore", "ignore", "pipe"],',
     "    },",
     "  );",
   ].join("\n");
   assert.equal(
     stagingRolloutBrowserEntry.split(fixedChildSpawn).length - 1,
     1,
-    "the live Browser process must await the exact fixed child command without arguments or inherited stdio",
+    "the live Browser process must await the exact fixed child command without arguments or inherited stdout",
+  );
+  assert.equal(
+    stagingRolloutBrowserEntry.split(
+      "selectCloudflareDrainDiagnostic(standardError)",
+    ).length - 1,
+    1,
+    "the live Browser process must expose only one parsed closed drain diagnostic",
   );
   assert.equal(
     stagingRolloutBrowserEntry.split("await deploymentChildCompletion").length -

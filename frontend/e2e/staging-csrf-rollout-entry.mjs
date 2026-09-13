@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -5,6 +6,7 @@ import { URL } from "node:url";
 
 import { chromium, request } from "@playwright/test";
 
+import { parseCloudflareDrainDiagnosticLine } from "../../scripts/lib/cloudflare-drain-evidence.mjs";
 import {
   parseAnonymousSession,
   StagingCriticalFailure,
@@ -18,6 +20,7 @@ import { enterStagingCritical } from "./staging-critical-entry.mjs";
 const authenticatedUserIDHeader = "x-fukamu-authenticated-user-id";
 const expectedUserIDHeader = "X-Fukamu-Expected-User-ID";
 const sessionCookieName = "__Host-fukamu_cycle_session";
+const maximumDeployDiagnosticBytes = 4 * 1024;
 const uuidV7Pattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -541,9 +544,25 @@ function startFixedDeployAndDrain(repositoryRoot) {
       cwd: repositoryRoot,
       detached: true,
       shell: false,
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
     },
   );
+  let standardError = "";
+  let standardErrorOverflow = false;
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    if (standardErrorOverflow) return;
+    if (
+      Buffer.byteLength(standardError, "utf8") +
+        Buffer.byteLength(chunk, "utf8") >
+      maximumDeployDiagnosticBytes
+    ) {
+      standardError = "";
+      standardErrorOverflow = true;
+      return;
+    }
+    standardError += chunk;
+  });
   const completion = new Promise((resolve, reject) => {
     let settled = false;
     const settle = (callback) => {
@@ -554,15 +573,37 @@ function startFixedDeployAndDrain(repositoryRoot) {
     child.once("error", () =>
       settle(() => reject(new Error("deploy adapter failed"))),
     );
-    child.once("exit", (code, signal) => {
-      settle(() =>
-        code === 0 && signal === null
-          ? resolve()
-          : reject(new Error("deploy adapter failed")),
-      );
+    child.once("close", (code, signal) => {
+      settle(() => {
+        if (code === 0 && signal === null) {
+          resolve();
+          return;
+        }
+        const diagnostic = standardErrorOverflow
+          ? undefined
+          : selectCloudflareDrainDiagnostic(standardError);
+        if (diagnostic !== undefined) {
+          process.stderr.write(`${diagnostic}\n`);
+        }
+        reject(new Error("deploy adapter failed"));
+      });
     });
   });
   return { child, completion };
+}
+
+export function selectCloudflareDrainDiagnostic(value) {
+  if (
+    typeof value !== "string" ||
+    Buffer.byteLength(value, "utf8") > maximumDeployDiagnosticBytes
+  ) {
+    return undefined;
+  }
+  const diagnostics = value
+    .split("\n")
+    .map((line) => parseCloudflareDrainDiagnosticLine(line))
+    .filter((line) => line !== undefined);
+  return diagnostics.length === 1 ? diagnostics[0] : undefined;
 }
 
 async function terminateDeploymentChild(child, completion) {
