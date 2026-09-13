@@ -9,6 +9,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOENV=off GOTOOLCHAIN=local GOWORK=off GOFLAGS=-mod
     go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+LABEL org.opencontainers.image.title="FUKAMU Cycle backend"
 WORKDIR /app
 COPY --from=backend-build /out/server /app/server
 ENV HTTP_ADDRESS=:8080

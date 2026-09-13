@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -17,7 +25,8 @@ import {
   createStagingDeployAnonymousSessionRoute,
   markStagingDeployCleanupFromRevokedResult,
   prepareStagingBootstrapStorage,
-  selectCloudflareDrainDiagnostic,
+  selectStagingDeployDiagnostic,
+  startFixedDeployAndDrain,
 } from "../../frontend/e2e/staging-csrf-rollout-entry.mjs";
 import { StagingCriticalFailure } from "../lib/staging-critical.mjs";
 
@@ -501,7 +510,7 @@ test("keeps browser evidence memory-only and invokes one fixed child adapter", (
   assert.doesNotMatch(browserSources, /stdio:\s*["']inherit["']/);
   assert.match(
     entry,
-    /stdio:\s*\[["']ignore["'], ["']ignore["'], ["']pipe["']\]/,
+    /stdio:\s*\[["']ignore["'], ["']ignore["'], ["']ignore["'], ["']pipe["']\]/,
   );
   assert.match(entry, /detached:\s*true/);
   assert.match(entry, /process\.kill\(-child\.pid, signal\)/);
@@ -530,21 +539,87 @@ test("keeps browser evidence memory-only and invokes one fixed child adapter", (
   }
 });
 
-test("forwards only one closed Cloudflare drain diagnostic", () => {
+test("forwards only one closed deploy or Cloudflare drain diagnostic", () => {
   const diagnostic = `::error::Cloudflare drain evidence failed; phase=baseline; reason=invalid_evidence; source=worker_version; run_id=123; run_attempt=2; commit_sha=${"a".repeat(40)}.`;
   assert.equal(
-    selectCloudflareDrainDiagnostic(
+    selectStagingDeployDiagnostic(
       `private provider output\n${diagnostic}\nStaging candidate deployment failed\n`,
     ),
     diagnostic,
   );
+  const deploySources = [
+    "configuration",
+    "baseline_handshake",
+    "main_guard",
+    "mutation_checkpoint",
+    "migration",
+    "secret_materialization",
+    "wrangler_deploy",
+    "drain_handshake",
+    "evidence_serialization",
+  ];
+  for (const source of deploySources) {
+    const current = `::error::Staging candidate deployment failed; source=${source}.`;
+    assert.equal(
+      selectStagingDeployDiagnostic(`private output\n${current}\n`),
+      current,
+    );
+  }
+  const deployDiagnostic = `::error::Staging candidate deployment failed; source=${deploySources[6]}.`;
+  assert.equal(
+    selectStagingDeployDiagnostic(`${diagnostic}\n${deployDiagnostic}\n`),
+    undefined,
+  );
   for (const invalid of [
     "private provider output",
     `${diagnostic}\n${diagnostic}\n`,
+    "::error::Staging candidate deployment failed; source=private_response.",
+    `${deployDiagnostic}\n${deployDiagnostic}\n`,
     `${diagnostic}\n${"x".repeat(4 * 1024)}\n`,
   ]) {
-    assert.equal(selectCloudflareDrainDiagnostic(invalid), undefined);
+    assert.equal(selectStagingDeployDiagnostic(invalid), undefined);
   }
+});
+
+test("isolates raw child output from the trusted deployment diagnostic pipe", async () => {
+  const runFixture = async (body) => {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "cycle-deploy-fd3-"));
+    mkdirSync(join(repositoryRoot, "scripts"));
+    writeFileSync(
+      join(repositoryRoot, "scripts/run-staging-candidate-deploy-and-drain.sh"),
+      `#!/usr/bin/env bash\nset -u\n${body}\n`,
+      { mode: 0o700 },
+    );
+    let output = "";
+    try {
+      const deployment = startFixedDeployAndDrain(repositoryRoot, {
+        write(value) {
+          output += String(value);
+          return true;
+        },
+      });
+      await assert.rejects(deployment.completion, /deploy adapter failed/);
+      return output;
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true });
+    }
+  };
+
+  const diagnostic =
+    "::error::Staging candidate deployment failed; source=wrangler_deploy.";
+  assert.equal(
+    await runFixture(
+      `printf '%05000d' 0 >&2\nbash -c 'printf spoofed >&3' 3>&-\nprintf '%s\\n' '${diagnostic}' >&3\nexit 1`,
+    ),
+    `${diagnostic}\n`,
+  );
+  assert.equal(
+    await runFixture(
+      `printf '%s\\n' '${diagnostic}' >&3\nprintf '%s\\n' '${diagnostic}' >&3\nexit 1`,
+    ),
+    "",
+  );
+  assert.equal(await runFixture("printf '%05000d' 0 >&3\nexit 1"), "");
 });
 
 function createFakeAdapter(overrides = {}) {
