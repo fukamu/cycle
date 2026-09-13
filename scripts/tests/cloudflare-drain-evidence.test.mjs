@@ -81,6 +81,7 @@ function observation({
   candidate = false,
   activeRolloutId = null,
   rolloutStatus = "completed",
+  baselineVersion = 1,
   candidateVersion = 2,
   rollouts,
   instances,
@@ -95,7 +96,7 @@ function observation({
             image: newImage,
           }),
         ]
-      : [instance()]);
+      : [instance({ version: baselineVersion })]);
   return {
     worker: {
       deploymentId: candidate ? ids.newDeployment : ids.oldDeployment,
@@ -105,7 +106,7 @@ function observation({
     },
     container: {
       applicationId: ids.application,
-      version: candidate ? candidateVersion : 1,
+      version: candidate ? candidateVersion : baselineVersion,
       image: candidate ? newImage : oldImage,
       activeRolloutId,
       rollouts:
@@ -115,13 +116,21 @@ function observation({
               rollout({
                 id: ids.newRollout,
                 status: rolloutStatus,
-                currentVersion: 1,
+                currentVersion: baselineVersion,
                 targetVersion: candidateVersion,
                 targetImage: newImage,
               }),
-              rollout(),
+              rollout({
+                currentVersion: baselineVersion,
+                targetVersion: baselineVersion,
+              }),
             ]
-          : [rollout()]),
+          : [
+              rollout({
+                currentVersion: baselineVersion,
+                targetVersion: baselineVersion,
+              }),
+            ]),
       instances: currentInstances,
     },
   };
@@ -358,6 +367,37 @@ test("accepts omitted instance images through exact application and rollout vers
   );
 });
 
+test("accepts an initial application version of zero and drains it to the candidate", async () => {
+  const baseline = observation({
+    baselineVersion: 0,
+    instances: [instance({ version: 0, image: null })],
+  });
+  const candidate = observation({
+    candidate: true,
+    baselineVersion: 0,
+    candidateVersion: 1,
+    instances: [instance({ id: ids.newInstance, version: 1, image: null })],
+  });
+  const evidence = await proveCloudflareDrain({
+    candidateCommitSHA: candidateSHA,
+    rawAdapter: sequenceAdapter([
+      baseline,
+      candidate,
+      structuredClone(candidate),
+    ]),
+    now: tickingClock(),
+    sleep: async () => undefined,
+    wake: async () => undefined,
+  });
+  assert.equal(evidence.drainedContainerVersion, 0);
+  assert.equal(evidence.containerVersion, 1);
+  assert.equal(
+    JSON.parse(serializeCloudflareDrainEvidence(evidence))
+      .drainedContainerVersion,
+    0,
+  );
+});
+
 test("rejects zero running instances, mixed images, and ambiguous candidate rollouts", async () => {
   const invalidCandidates = [
     observation({ candidate: true, instances: [] }),
@@ -553,6 +593,26 @@ test("rejects unknown schemas, enums, oversized raw input, and clock regression"
     })(),
     `${JSON.stringify(observation())}${" ".repeat(4 * 64 * 1024)}`,
   ];
+  for (const invalidVersion of [-1, 0.5]) {
+    for (const selectVersion of [
+      (value) => {
+        value.container.version = invalidVersion;
+      },
+      (value) => {
+        value.container.rollouts[0].currentVersion = invalidVersion;
+      },
+      (value) => {
+        value.container.rollouts[0].targetVersion = invalidVersion;
+      },
+      (value) => {
+        value.container.instances[0].version = invalidVersion;
+      },
+    ]) {
+      const value = observation();
+      selectVersion(value);
+      cases.push(value);
+    }
+  }
   for (const invalid of cases) {
     await assert.rejects(
       proveCloudflareDrain({
@@ -724,14 +784,17 @@ function workerVersionEnvelope(candidate = false) {
 
 function applicationEnvelope(
   candidate = false,
-  { includeDeprecatedInstances = true } = {},
+  {
+    includeDeprecatedInstances = true,
+    applicationVersion = candidate ? 2 : 1,
+  } = {},
 ) {
   return envelope({
     id: ids.application,
     created_at: "2026-09-07T00:00:00.000Z",
     account_id: accountID,
     name: applicationName,
-    version: candidate ? 2 : 1,
+    version: applicationVersion,
     ...(includeDeprecatedInstances ? { instances: 1 } : {}),
     max_instances: 1,
     scheduling_policy: "default",
@@ -798,7 +861,11 @@ function rawRollout(index) {
 function instanceEnvelope(
   candidate = false,
   resultInfo = { per_page: 50, next_page_token: null },
-  { healthOnly = false, includeImage = true } = {},
+  {
+    healthOnly = false,
+    includeImage = true,
+    applicationVersion = candidate ? 2 : 1,
+  } = {},
 ) {
   return envelope(
     {
@@ -807,7 +874,7 @@ function instanceEnvelope(
           id: candidate ? ids.newInstance : ids.oldInstance,
           created_at: "2026-09-07T00:00:00.000Z",
           location: "nrt",
-          app_version: candidate ? 2 : 1,
+          app_version: applicationVersion,
           ...(includeImage ? { image: candidate ? newImage : oldImage } : {}),
           current_placement: {
             id: "00000000-0000-4000-8000-00000000000b",
@@ -832,6 +899,7 @@ function productionFetch({
   candidate = false,
   currentSchema = false,
   historicalRolloutWithoutImage = false,
+  applicationVersion = candidate ? 2 : 1,
 } = {}) {
   const requests = [];
   const fetchImpl = async (url, options) => {
@@ -860,6 +928,7 @@ function productionFetch({
       return response(
         applicationEnvelope(candidate, {
           includeDeprecatedInstances: !currentSchema,
+          applicationVersion,
         }),
       );
     }
@@ -883,6 +952,7 @@ function productionFetch({
         instanceEnvelope(candidate, undefined, {
           healthOnly: currentSchema,
           includeImage: !currentSchema,
+          applicationVersion,
         }),
       );
     }
@@ -937,6 +1007,47 @@ test("production adapter accepts the current Containers application and placemen
     }),
   ];
   expected.container.instances[0].image = null;
+  assert.deepEqual(
+    await adapter.readObservation({ phase: "baseline" }),
+    expected,
+  );
+});
+
+test("production adapter accepts the initial Containers application version zero", async () => {
+  const baseline = productionFetch({
+    currentSchema: true,
+    applicationVersion: 0,
+  });
+  const adapter = createCloudflareRawAdapter({
+    accountId: accountID,
+    apiToken: token,
+    workerName,
+    containerApplicationName: applicationName,
+    fetchImpl: async (url, options) => {
+      if (
+        new URL(url).pathname.endsWith(
+          `/containers/applications/${ids.application}/rollouts`,
+        )
+      ) {
+        const value = rawRollout(1);
+        value.id = ids.oldRollout;
+        value.created_at = "2026-09-07T00:00:00.000Z";
+        value.current_version = 0;
+        value.target_version = 0;
+        value.current_configuration = {};
+        value.target_configuration = {};
+        return response(envelope([value]));
+      }
+      return baseline.fetchImpl(url, options);
+    },
+  });
+  const expected = observation({
+    baselineVersion: 0,
+    instances: [instance({ version: 0, image: null })],
+  });
+  expected.container.rollouts = [
+    rollout({ currentVersion: 0, targetVersion: 0, targetImage: null }),
+  ];
   assert.deepEqual(
     await adapter.readObservation({ phase: "baseline" }),
     expected,

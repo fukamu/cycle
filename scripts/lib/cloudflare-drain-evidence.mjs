@@ -90,6 +90,10 @@ function isPositiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
 }
 
+function isNonNegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
 function parseTimestamp(value) {
   if (
     typeof value !== "string" ||
@@ -157,7 +161,7 @@ function parseNormalizedObservation(value) {
       "instances",
     ]) ||
     !parseIdentifier(container.applicationId) ||
-    !isPositiveInteger(container.version) ||
+    !isNonNegativeInteger(container.version) ||
     !parseImage(container.image) ||
     !(
       container.activeRolloutId === null ||
@@ -186,8 +190,8 @@ function parseNormalizedObservation(value) {
       rolloutIDs.has(rollout.id) ||
       !parseTimestamp(rollout.createdAt) ||
       !rolloutStatuses.has(rollout.status) ||
-      !isPositiveInteger(rollout.currentVersion) ||
-      !isPositiveInteger(rollout.targetVersion) ||
+      !isNonNegativeInteger(rollout.currentVersion) ||
+      !isNonNegativeInteger(rollout.targetVersion) ||
       !(rollout.targetImage === null || parseImage(rollout.targetImage))
     ) {
       throw new Error("container rollout is invalid");
@@ -208,7 +212,7 @@ function parseNormalizedObservation(value) {
       !parseIdentifier(instance.id) ||
       instanceIDs.has(instance.id) ||
       !instanceStatuses.has(instance.status) ||
-      !isPositiveInteger(instance.version) ||
+      !isNonNegativeInteger(instance.version) ||
       !(instance.image === null || parseImage(instance.image))
     ) {
       throw new Error("container instance is invalid");
@@ -705,7 +709,7 @@ function normalizeApplication(value, expectedName) {
     !isRecord(value) ||
     value.name !== expectedName ||
     !parseIdentifier(value.id) ||
-    !isPositiveInteger(value.version) ||
+    !isNonNegativeInteger(value.version) ||
     !(
       value.instances === undefined ||
       (Number.isSafeInteger(value.instances) && value.instances >= 0)
@@ -730,8 +734,8 @@ function normalizeRollout(value) {
     !parseIdentifier(value.id) ||
     !parseTimestamp(value.created_at) ||
     !rolloutStatuses.has(value.status) ||
-    !isPositiveInteger(value.current_version) ||
-    !isPositiveInteger(value.target_version) ||
+    !isNonNegativeInteger(value.current_version) ||
+    !isNonNegativeInteger(value.target_version) ||
     !isRecord(value.target_configuration) ||
     !(targetImage === undefined || parseImage(targetImage))
   ) {
@@ -755,7 +759,7 @@ function normalizeInstance(value) {
     !isRecord(value) ||
     !parseIdentifier(value.id) ||
     !instanceStatuses.has(status) ||
-    !isPositiveInteger(value.app_version) ||
+    !isNonNegativeInteger(value.app_version) ||
     !(image === undefined || parseImage(image))
   ) {
     throw new Error("container instance response is invalid");
@@ -1275,9 +1279,9 @@ export function serializeCloudflareDrainEvidence(evidence) {
     !parseIdentifier(evidence.drainedWorkerVersionId) ||
     !parseIdentifier(evidence.containerApplicationId) ||
     !parseIdentifier(evidence.containerRolloutId) ||
-    !isPositiveInteger(evidence.containerVersion) ||
+    !isNonNegativeInteger(evidence.containerVersion) ||
     !imageDigestPattern.test(evidence.containerImageDigest) ||
-    !isPositiveInteger(evidence.drainedContainerVersion) ||
+    !isNonNegativeInteger(evidence.drainedContainerVersion) ||
     !imageDigestPattern.test(evidence.drainedContainerImageDigest) ||
     !parseTimestamp(evidence.observedAt)
   ) {
