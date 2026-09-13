@@ -262,7 +262,6 @@ function baselineProjection(observation, candidateCommitSHA) {
   }
   if (
     container.activeRolloutId !== null ||
-    container.instances.length === 0 ||
     container.instances.some(
       (instance) =>
         instance.status !== "running" ||
@@ -313,7 +312,6 @@ function candidateProjection(
     container.version === baseline.containerVersion ||
     container.image === baseline.containerImage ||
     imageDigest(container.image) !== expectedCandidateImageDigest ||
-    container.instances.length === 0 ||
     container.instances.some(
       (instance) =>
         instance.status !== "running" ||
