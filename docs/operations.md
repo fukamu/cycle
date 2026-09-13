@@ -218,14 +218,14 @@ Generic pre-switch hard gateはmigration、Worker secrets file作成、Wrangler 
 
 Post-deploy `full`だけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。Candidate critical journeyまたはcleanupの失敗ではreleaseを成功としません。Migration失敗時もWrangler deployへ進みません。Recovery modeはApplication authorization boundaryであり、stable初回rolloutのpartial resumeやsmoke bypassには使いません。
 
-`Deploy Staging`のattempt 1が失敗した場合、同じworkflow runを一度だけ安全に再試行できるのは、attempt 1が`completed` / `failure`であり、自動生成された`staging-deploy-retry-<commit>-<run-id>-1` artifactが次の全条件を満たす場合だけです。
+`Deploy Staging`のattempt 1が失敗した場合、同じworkflow runを一度だけ安全に再試行できるのは、attempt 1が`completed` / `failure`であり、自動生成されたcheckpointをhuman audit用artifactとexact immutable Actions cache key `staging-deploy-retry-<commit>-<run-id>-1`へ保存し、attempt 2が同じkeyから復元したfileについて次の全条件を満たす場合だけです。
 
 - `result=no_mutation_started`かつ`mutationBoundary=not_crossed`である。
 - 一時accountをまだ作り得ない`cleanupState=not_started`、または公開Delete 204と旧Session 401を確認した`cleanupState=verified`である。`unverified`は受理しない。
 - Repository、workflow path、同じrun ID、source attempt 1、candidate SHA、deploy mode、configured operator、exact-main CI run、mode固有のno-change Plan / Apply evidenceが今回の入力と完全一致する。
-- Artifactが一意、未失効、許容size内の通常fileで、strict schemaを満たす。
+- Fallback keyを使わないexact cache hitであり、復元したcheckpointが許容size内の通常fileで、strict schemaを満たす。Audit artifactは人がattempt 1を確認するための証跡であり、rerun間のruntime transportには使わない。
 
-条件を確認できた場合だけ、Actions画面から同じrunの`Re-run all jobs`を選びます。WorkflowはrerunのUI種別そのものではなく、attempt 2のdeployが同じattemptで生成されたfresh resolve outputを受け取ったことを検証します。Deploy jobだけを対象にして成功済みresolverを再実行しない`Re-run failed jobs` / selected-job rerunは拒否されます。Resolverとdependentを対象にしたselected-job rerunがfresh resolve条件を満たし得る場合も、運用手順としては使用しません。Attempt 2はcurrent main、同一SHAの成功CI、通常modeのno-change Plan / Apply evidenceまたはrecovery modeの空のTerraform evidence、actor / triggering actorを再検証して最初から実行し、途中phaseから再開しません。Attempt 2の失敗後はattempt 3を実行せず、artifactの欠落、cancel / timeout、schema / binding不一致も安全の証拠として補完しません。
+条件を確認できた場合だけ、Actions画面から同じrunの`Re-run all jobs`を選びます。WorkflowはrerunのUI種別そのものではなく、attempt 2のdeployが同じattemptで生成されたfresh resolve outputを受け取ったことを検証します。Deploy jobだけを対象にして成功済みresolverを再実行しない`Re-run failed jobs` / selected-job rerunは拒否されます。Resolverとdependentを対象にしたselected-job rerunがfresh resolve条件を満たし得る場合も、運用手順としては使用しません。Attempt 2はcurrent main、同一SHAの成功CI、通常modeのno-change Plan / Apply evidenceまたはrecovery modeの空のTerraform evidence、actor / triggering actorを再検証して最初から実行し、途中phaseから再開しません。Attempt 2の失敗後はattempt 3を実行せず、cache miss、checkpoint fileの欠落、cancel / timeout、schema / binding不一致も安全の証拠として補完しません。
 
 Custom domainは [`wrangler.jsonc`](../cloudflare/wrangler.jsonc) が所有し、CloudflareがDNS recordとcertificateを管理します。同名recordがある場合は所有用途を確認し、不要と確認できたrecordだけをDashboardから除去します。`workers.dev`とpreview URLは無効のまま維持します。
 

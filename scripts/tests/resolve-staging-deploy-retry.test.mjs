@@ -7,8 +7,7 @@ import {
 } from "../resolve-staging-deploy-retry.mjs";
 
 const commitSHA = "a".repeat(40);
-const digest = `sha256:${"b".repeat(64)}`;
-const artifactName = `staging-deploy-retry-${commitSHA}-123-1`;
+const cacheKey = `staging-deploy-retry-${commitSHA}-123-1`;
 
 function environment(overrides = {}) {
   return {
@@ -43,28 +42,6 @@ function sourceAttempt(overrides = {}) {
   };
 }
 
-function artifact(overrides = {}) {
-  return {
-    id: 456,
-    name: artifactName,
-    expired: false,
-    size_in_bytes: 512,
-    digest,
-    workflow_run: {
-      id: 123,
-      head_branch: "main",
-      head_sha: commitSHA,
-      repository_id: 11,
-      head_repository_id: 11,
-    },
-    ...overrides,
-  };
-}
-
-function listing(overrides = {}) {
-  return { total_count: 1, artifacts: [artifact()], ...overrides };
-}
-
 function response(value, { ok = true } = {}) {
   return {
     ok,
@@ -76,7 +53,7 @@ function response(value, { ok = true } = {}) {
   };
 }
 
-function fakeFetch({ source = sourceAttempt(), artifacts = listing() } = {}) {
+function fakeFetch({ source = sourceAttempt() } = {}) {
   const calls = [];
   const implementation = async (url, options) => {
     calls.push({ url, options });
@@ -88,28 +65,25 @@ function fakeFetch({ source = sourceAttempt(), artifacts = listing() } = {}) {
       "X-GitHub-Api-Version": "2022-11-28",
     });
     assert.ok(options.signal instanceof AbortSignal);
-    if (url.endsWith("/actions/runs/123/attempts/1")) {
-      return typeof source === "function" ? source() : response(source);
-    }
     assert.equal(
       url,
-      `https://api.github.com/repos/fukamu/cycle/actions/runs/123/artifacts?name=${artifactName}&per_page=100`,
+      "https://api.github.com/repos/fukamu/cycle/actions/runs/123/attempts/1",
     );
-    return typeof artifacts === "function" ? artifacts() : response(artifacts);
+    return typeof source === "function" ? source() : response(source);
   };
   return { calls, implementation };
 }
 
-test("resolves the only exact nonexpired checkpoint from failed attempt one", async () => {
+test("resolves the exact immutable cache key from failed attempt one", async () => {
   const fake = fakeFetch();
   assert.equal(
     await resolveStagingDeployRetry({
       environment: environment(),
       fetchImplementation: fake.implementation,
     }),
-    artifactName,
+    cacheKey,
   );
-  assert.equal(fake.calls.length, 2);
+  assert.equal(fake.calls.length, 1);
 });
 
 test("accepts the same strict provenance in recovery mode", async () => {
@@ -119,7 +93,7 @@ test("accepts the same strict provenance in recovery mode", async () => {
       environment: environment({ DEPLOY_MODE: "recovery" }),
       fetchImplementation: fake.implementation,
     }),
-    artifactName,
+    cacheKey,
   );
 });
 
@@ -179,64 +153,6 @@ test("rejects any source attempt that is not the exact completed failure", async
   }
 });
 
-test("rejects missing, duplicate, paginated, expired, and mismatched artifacts", async () => {
-  const invalidListings = [
-    listing({ total_count: 0, artifacts: [] }),
-    listing({ total_count: 2, artifacts: [artifact(), artifact({ id: 457 })] }),
-    listing({ total_count: 101 }),
-    listing({ artifacts: [artifact({ name: "wrong" })] }),
-    listing({ artifacts: [artifact({ expired: true })] }),
-    listing({ artifacts: [artifact({ size_in_bytes: 0 })] }),
-    listing({ artifacts: [artifact({ size_in_bytes: 64 * 1024 + 1 })] }),
-    listing({ artifacts: [artifact({ digest: "invalid" })] }),
-    listing({
-      artifacts: [
-        artifact({
-          workflow_run: { ...artifact().workflow_run, id: "123" },
-        }),
-      ],
-    }),
-    listing({
-      artifacts: [
-        artifact({ workflow_run: { ...artifact().workflow_run, id: 124 } }),
-      ],
-    }),
-    listing({
-      artifacts: [
-        artifact({
-          workflow_run: { ...artifact().workflow_run, head_branch: "topic" },
-        }),
-      ],
-    }),
-    listing({
-      artifacts: [
-        artifact({
-          workflow_run: {
-            ...artifact().workflow_run,
-            head_sha: "c".repeat(40),
-          },
-        }),
-      ],
-    }),
-    listing({
-      artifacts: [
-        artifact({
-          workflow_run: { ...artifact().workflow_run, repository_id: 12 },
-        }),
-      ],
-    }),
-  ];
-  for (const artifacts of invalidListings) {
-    const fake = fakeFetch({ artifacts });
-    await assert.rejects(() =>
-      resolveStagingDeployRetry({
-        environment: environment(),
-        fetchImplementation: fake.implementation,
-      }),
-    );
-  }
-});
-
 test("fails closed on GitHub API, JSON, and response-size errors", async () => {
   for (const source of [
     () => response({}, { ok: false }),
@@ -255,14 +171,14 @@ test("fails closed on GitHub API, JSON, and response-size errors", async () => {
   }
 });
 
-test("CLI prints only the resolved public artifact name", async () => {
+test("CLI prints only the resolved public cache key", async () => {
   let output = "";
   await runResolveStagingDeployRetryCLI({
     environment: environment(),
     fetchImplementation: fakeFetch().implementation,
     stdout: { write: (value) => (output += value) },
   });
-  assert.equal(output, `${artifactName}\n`);
+  assert.equal(output, `${cacheKey}\n`);
   assert.doesNotMatch(output, /private-token|Owner/);
   await assert.rejects(() =>
     runResolveStagingDeployRetryCLI({

@@ -353,21 +353,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          artifact_name="$(node ./scripts/resolve-staging-deploy-retry.mjs)"
-          if [[ ! "${artifact_name}" =~ ^staging-deploy-retry-[0-9a-f]{40}-[1-9][0-9]*-1$ ]]; then
-            echo '::error::Resolved Staging deploy retry artifact name is invalid.'
+          cache_key="$(node ./scripts/resolve-staging-deploy-retry.mjs)"
+          if [[ ! "${cache_key}" =~ ^staging-deploy-retry-[0-9a-f]{40}-[1-9][0-9]*-1$ ]]; then
+            echo '::error::Resolved Staging deploy retry cache key is invalid.'
             exit 1
           fi
-          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+          echo "cache_key=${cache_key}" >> "${GITHUB_OUTPUT}"
 
-      - name: Download prior safe retry checkpoint
+      - name: Restore prior safe retry checkpoint
         if: github.run_attempt == '2'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        id: restore_retry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: ${{ steps.resolve_retry.outputs.artifact_name }}
-          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-source
-          github-token: ${{ github.token }}
-          run-id: ${{ github.run_id }}
+          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json
+          key: ${{ steps.resolve_retry.outputs.cache_key }}
+          fail-on-cache-miss: true
 
       - name: Download approved Terraform evidence
         if: inputs.mode == 'normal'
@@ -417,10 +417,15 @@ jobs:
           INFRA_EVIDENCE_KIND: ${{ steps.resolve.outputs.infra_evidence_kind }}
           INFRA_EVIDENCE_RUN_ID: ${{ steps.resolve.outputs.infra_evidence_run_id }}
           INFRA_PLAN_SHA256: ${{ steps.verify_evidence.outputs.plan_sha256 }}
+          RETRY_CACHE_HIT: ${{ steps.restore_retry.outputs.cache-hit }}
           STAGING_DEPLOY_CHECKPOINT_OPERATION: verify_retry
-          STAGING_DEPLOY_RETRY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-source/fukamu-cycle-staging-deploy-retry.json
+          STAGING_DEPLOY_RETRY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json
         run: |
           set -euo pipefail
+          if [[ "${RETRY_CACHE_HIT}" != 'true' ]]; then
+            echo '::error::Exact Staging deploy retry checkpoint cache was not restored.'
+            exit 1
+          fi
           node ./scripts/staging-deploy-retry-checkpoint.mjs
           echo 'verified=true' >> "${GITHUB_OUTPUT}"
 
@@ -715,17 +720,39 @@ jobs:
 
       - name: Finalize safe deployment retry checkpoint
         if: ${{ always() && github.run_attempt == '1' }}
+        id: finalize_retry
         env:
           STAGING_DEPLOY_CHECKPOINT_OPERATION: finalize
           STAGING_DEPLOY_CHECKPOINT_STATE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-state.json
           STAGING_DEPLOY_RETRY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json
-        run: node ./scripts/staging-deploy-retry-checkpoint.mjs
+        run: |
+          set -euo pipefail
+          result="$(node ./scripts/staging-deploy-retry-checkpoint.mjs)"
+          case "${result}" in
+            staging_deploy_retry_checkpoint_created)
+              echo 'created=true' >> "${GITHUB_OUTPUT}"
+              ;;
+            staging_deploy_retry_checkpoint_not_created)
+              echo 'created=false' >> "${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo '::error::Staging deploy retry checkpoint result is invalid.'
+              exit 1
+              ;;
+          esac
+
+      - name: Save safe deployment retry checkpoint for attempt two
+        if: ${{ always() && github.run_attempt == '1' && steps.finalize_retry.outputs.created == 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json
+          key: staging-deploy-retry-${{ env.COMMIT_SHA }}-${{ github.run_id }}-1
 
       - name: Upload safe deployment retry checkpoint
-        if: ${{ always() && github.run_attempt == '1' }}
+        if: ${{ always() && github.run_attempt == '1' && steps.finalize_retry.outputs.created == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: staging-deploy-retry-${{ env.COMMIT_SHA }}-${{ github.run_id }}-1
           path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 90

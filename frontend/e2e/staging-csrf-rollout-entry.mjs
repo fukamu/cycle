@@ -91,7 +91,7 @@ export function createStagingCSRFRolloutBrowserAdapter({
     },
 
     async prepareLegacySession() {
-      await seedBootstrapID(pageA, bootstrapID);
+      await prepareStagingBootstrapStorage(pageA, baseURL, bootstrapID);
       let session;
       const anonymousSessionCheckpoint =
         createStagingDeployAnonymousSessionRoute({
@@ -477,6 +477,27 @@ export function createStagingCSRFRolloutBrowserAdapter({
       }
     },
   };
+}
+
+export async function prepareStagingBootstrapStorage(
+  page,
+  baseURL,
+  bootstrapID,
+) {
+  const healthURL = new URL("/healthz", baseURL).href;
+  const response = await page.goto(healthURL, {
+    waitUntil: "domcontentloaded",
+  });
+  if (
+    response === null ||
+    typeof response.status !== "function" ||
+    typeof response.url !== "function" ||
+    response.status() !== 200 ||
+    response.url() !== healthURL
+  ) {
+    throw new Error("staging bootstrap origin preparation failed");
+  }
+  await seedBootstrapID(page, bootstrapID);
 }
 
 export function createStagingDeployAnonymousSessionRoute({
