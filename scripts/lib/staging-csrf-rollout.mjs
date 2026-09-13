@@ -199,6 +199,25 @@ export async function runStagingCSRFRollout({ adapter, retryOptions } = {}) {
     phase = "cleanup_verification";
     requireExpiredSession(await adapter.verifyRevokedSession());
   } catch (failure) {
+    try {
+      const retainedSession =
+        await adapter.consumeCandidateSessionForCleanup?.();
+      const retainedUserID = extractUserID(retainedSession);
+      if (retainedUserID !== undefined) {
+        candidateUserID = retainedUserID;
+        try {
+          latestCandidateSession = validateRolloutSession(
+            retainedSession,
+            "account_delete",
+          );
+        } catch {
+          latestCandidateSession = undefined;
+        }
+        await adapter.captureRevokedSessionProbe();
+      }
+    } catch {
+      // The primary closed failure remains authoritative.
+    }
     record(failure);
   }
 

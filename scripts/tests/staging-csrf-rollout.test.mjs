@@ -186,6 +186,19 @@ test("preserves closed candidate anonymous session failures after drain", async 
   }
 });
 
+test("claims an initial session Retry only once before any POST is observed", () => {
+  const checkpoint = createStagingDeployAnonymousSessionRoute({
+    checkpointEnabled: true,
+    markCleanupUnverified() {
+      throw new Error("cleanup must not run while claiming Retry");
+    },
+  });
+  assert.equal(checkpoint.hasObservedRequest(), false);
+  assert.equal(checkpoint.claimInitialSessionRetry(), true);
+  assert.equal(checkpoint.claimInitialSessionRetry(), false);
+  assert.equal(checkpoint.failure(), undefined);
+});
+
 test("writes the cleanup fence before releasing anonymous account creation", async () => {
   const calls = [];
   const checkpoint = createStagingDeployAnonymousSessionRoute({
@@ -203,6 +216,8 @@ test("writes the cleanup fence before releasing anonymous account creation", asy
     },
   });
   assert.deepEqual(calls, ["cleanup-unverified", "request-continued"]);
+  assert.equal(checkpoint.hasObservedRequest(), true);
+  assert.equal(checkpoint.claimInitialSessionRetry(), false);
   assert.equal(checkpoint.failure(), undefined);
 });
 
@@ -225,7 +240,22 @@ test("aborts anonymous account creation when the cleanup fence cannot be written
     },
   });
   assert.deepEqual(calls, ["cleanup-unverified", "request-aborted:failed"]);
+  assert.equal(checkpoint.hasObservedRequest(), true);
+  assert.equal(checkpoint.claimInitialSessionRetry(), false);
   assert.equal(checkpoint.failure(), checkpointFailure);
+});
+
+test("observes handler entry before rejecting an invalid anonymous route", async () => {
+  const checkpoint = createStagingDeployAnonymousSessionRoute({
+    checkpointEnabled: false,
+  });
+  await assert.rejects(
+    checkpoint.handle({}),
+    /staging deploy anonymous route is invalid/,
+  );
+  assert.equal(checkpoint.hasObservedRequest(), true);
+  assert.equal(checkpoint.claimInitialSessionRetry(), false);
+  assert.equal(checkpoint.failure(), undefined);
 });
 
 test("marks cleanup verified only from the exact revoked-session proof", () => {
@@ -331,6 +361,40 @@ test("fails closed when the candidate session cannot be created", async () => {
   assert.equal(fake.calls.includes("deploy-drain"), true);
   assert.equal(fake.calls.includes("discover-both"), false);
   assert.deepEqual(fake.deletedSessions, []);
+});
+
+test("cleans a retained successful session after candidate entry failure", async () => {
+  let retainedSession = stableSession;
+  const entryFailure = new StagingCriticalFailure(
+    "entry",
+    "anonymous_session_request_not_observed",
+  );
+  const fake = createFakeAdapter({
+    async prepareCandidateSession() {
+      fake.calls.push("prepare-candidate");
+      throw entryFailure;
+    },
+    consumeCandidateSessionForCleanup() {
+      fake.calls.push("consume-retained-candidate");
+      const session = retainedSession;
+      retainedSession = undefined;
+      return session;
+    },
+  });
+  const failures = await runFake(fake.adapter);
+  assert.deepEqual(classifications(failures), [
+    "candidate_session:anonymous_session_request_not_observed",
+  ]);
+  assert.equal(retainedSession, undefined);
+  assert.equal(fake.calls.filter((call) => call === "capture-probe").length, 1);
+  assert.deepEqual(fake.deletedSessions, [stableSession]);
+  assert.ok(
+    fake.calls.indexOf("consume-retained-candidate") <
+      fake.calls.indexOf("capture-probe"),
+  );
+  assert.ok(
+    fake.calls.indexOf("capture-probe") < fake.calls.indexOf("close-pages"),
+  );
 });
 
 test("cleans a known candidate identity when its captured token is malformed", async () => {
