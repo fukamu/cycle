@@ -445,9 +445,9 @@ test("deployment contract is the exact repository handoff classification", () =>
     GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
   });
   for (const fragment of [
-    'artifact_name="$(node ./scripts/resolve-staging-deploy-retry.mjs)"',
+    'cache_key="$(node ./scripts/resolve-staging-deploy-retry.mjs)"',
     "^staging-deploy-retry-[0-9a-f]{40}-[1-9][0-9]*-1$",
-    'echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"',
+    'echo "cache_key=${cache_key}" >> "${GITHUB_OUTPUT}"',
   ]) {
     assert.equal(
       resolveRetryStep.split(fragment).length - 1,
@@ -456,23 +456,23 @@ test("deployment contract is the exact repository handoff classification", () =>
     );
   }
 
-  const downloadRetryStep = extractStep(
+  const restoreRetryStep = extractStep(
     workflow,
-    "Download prior safe retry checkpoint",
+    "Restore prior safe retry checkpoint",
   );
   assert.equal(
-    downloadRetryStep.trimEnd(),
+    restoreRetryStep.trimEnd(),
     [
-      "      - name: Download prior safe retry checkpoint",
+      "      - name: Restore prior safe retry checkpoint",
       "        if: github.run_attempt == '2'",
-      "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+      "        id: restore_retry",
+      "        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0",
       "        with:",
-      "          name: ${{ steps.resolve_retry.outputs.artifact_name }}",
-      "          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-source",
-      "          github-token: ${{ github.token }}",
-      "          run-id: ${{ github.run_id }}",
+      "          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json",
+      "          key: ${{ steps.resolve_retry.outputs.cache_key }}",
+      "          fail-on-cache-miss: true",
     ].join("\n"),
-    "attempt 2 must download only the checkpoint resolved from its own workflow run",
+    "attempt 2 must restore only the exact immutable checkpoint cache key resolved from its own workflow run",
   );
 
   const verifyRetryStep = extractStep(
@@ -506,17 +506,21 @@ test("deployment contract is the exact repository handoff classification", () =>
       kind: "literal",
       value: "${{ steps.verify_evidence.outputs.plan_sha256 }}",
     },
+    RETRY_CACHE_HIT: {
+      kind: "literal",
+      value: "${{ steps.restore_retry.outputs.cache-hit }}",
+    },
     STAGING_DEPLOY_CHECKPOINT_OPERATION: {
       kind: "literal",
       value: "verify_retry",
     },
     STAGING_DEPLOY_RETRY_EVIDENCE_FILE: {
       kind: "literal",
-      value:
-        "${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-source/fukamu-cycle-staging-deploy-retry.json",
+      value: "${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json",
     },
   });
   for (const fragment of [
+    "if [[ \"${RETRY_CACHE_HIT}\" != 'true' ]]; then",
     "node ./scripts/staging-deploy-retry-checkpoint.mjs",
     "echo 'verified=true' >> \"${GITHUB_OUTPUT}\"",
   ]) {
@@ -585,17 +589,17 @@ test("deployment contract is the exact repository handoff classification", () =>
   assert.ok(
     resolveJob.indexOf("      - name: Resolve prior safe retry checkpoint\n") <
       resolveJob.indexOf(
-        "      - name: Download prior safe retry checkpoint\n",
+        "      - name: Restore prior safe retry checkpoint\n",
       ) &&
       resolveJob.indexOf(
-        "      - name: Download prior safe retry checkpoint\n",
+        "      - name: Restore prior safe retry checkpoint\n",
       ) <
         resolveJob.indexOf(
           "      - name: Verify prior safe retry checkpoint\n",
         ) &&
       resolveJob.indexOf("      - name: Verify prior safe retry checkpoint\n") <
         resolveJob.indexOf("      - name: Authorize deploy job attempt\n"),
-    "attempt 2 must resolve, download, verify, and authorize its checkpoint in order",
+    "attempt 2 must resolve, restore, verify, and authorize its checkpoint in order",
   );
 
   const deployJob = between(workflow, "  deploy:\n", "");
@@ -1195,7 +1199,6 @@ test("deployment contract is the exact repository handoff classification", () =>
 
   for (const fragment of [
     "const maximumResponseBytes = 64 * 1024;",
-    "const maximumArtifactBytes = 64 * 1024;",
     'environment.GITHUB_RUN_ATTEMPT !== "2"',
     "value.id.toString() !== metadata.runID",
     "value.run_attempt !== 1",
@@ -1207,30 +1210,21 @@ test("deployment contract is the exact repository handoff classification", () =>
     "value.head_sha !== metadata.commitSHA",
     'value.head_branch !== "main"',
     "value.repository.full_name !== metadata.repository",
-    "value.total_count !== 1",
-    "artifact.name !== expectedName",
-    "artifact.expired !== false",
-    "artifact.size_in_bytes > maximumArtifactBytes",
-    '!artifactDigestPattern.test(artifact.digest ?? "")',
-    "artifact.workflow_run.id.toString() !== metadata.runID",
-    'artifact.workflow_run.head_branch !== "main"',
-    "artifact.workflow_run.head_sha !== metadata.commitSHA",
-    "artifact.workflow_run.repository_id !==",
-    "const expectedName = `staging-deploy-retry-${metadata.commitSHA}-${metadata.runID}-1`;",
+    "const cacheKey = `staging-deploy-retry-${metadata.commitSHA}-${metadata.runID}-1`;",
     'redirect: "error"',
     "signal: AbortSignal.timeout(30_000)",
   ]) {
     assert.equal(
       stagingDeployRetryResolver.split(fragment).length - 1,
       1,
-      `retry resolver must keep a bounded exact-attempt artifact contract: ${fragment}`,
+      `retry resolver must keep a bounded exact-attempt cache contract: ${fragment}`,
     );
   }
   assert.equal(
-    stagingDeployRetryResolver.split("stdout.write(`${artifactName}\\n`);")
-      .length - 1,
+    stagingDeployRetryResolver.split("stdout.write(`${cacheKey}\\n`);").length -
+      1,
     1,
-    "retry resolution may output only the validated artifact name",
+    "retry resolution may output only the validated exact cache key",
   );
   assert.doesNotMatch(
     stagingDeployRetryResolver,
@@ -1268,13 +1262,44 @@ test("deployment contract is the exact repository handoff classification", () =>
     [
       "      - name: Finalize safe deployment retry checkpoint",
       "        if: ${{ always() && github.run_attempt == '1' }}",
+      "        id: finalize_retry",
       "        env:",
       "          STAGING_DEPLOY_CHECKPOINT_OPERATION: finalize",
       "          STAGING_DEPLOY_CHECKPOINT_STATE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-state.json",
       "          STAGING_DEPLOY_RETRY_EVIDENCE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json",
-      "        run: node ./scripts/staging-deploy-retry-checkpoint.mjs",
+      "        run: |",
+      "          set -euo pipefail",
+      '          result="$(node ./scripts/staging-deploy-retry-checkpoint.mjs)"',
+      '          case "${result}" in',
+      "            staging_deploy_retry_checkpoint_created)",
+      "              echo 'created=true' >> \"${GITHUB_OUTPUT}\"",
+      "              ;;",
+      "            staging_deploy_retry_checkpoint_not_created)",
+      "              echo 'created=false' >> \"${GITHUB_OUTPUT}\"",
+      "              ;;",
+      "            *)",
+      "              echo '::error::Staging deploy retry checkpoint result is invalid.'",
+      "              exit 1",
+      "              ;;",
+      "          esac",
     ].join("\n"),
     "attempt 1 must finalize retry evidence after every deploy outcome",
+  );
+  const saveRetryCheckpointStep = extractStep(
+    workflow,
+    "Save safe deployment retry checkpoint for attempt two",
+  );
+  assert.equal(
+    saveRetryCheckpointStep.trimEnd(),
+    [
+      "      - name: Save safe deployment retry checkpoint for attempt two",
+      "        if: ${{ always() && github.run_attempt == '1' && steps.finalize_retry.outputs.created == 'true' }}",
+      "        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0",
+      "        with:",
+      "          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json",
+      "          key: staging-deploy-retry-${{ env.COMMIT_SHA }}-${{ github.run_id }}-1",
+    ].join("\n"),
+    "attempt 1 must save one exact run- and SHA-bound checkpoint cache key",
   );
   const uploadRetryCheckpointStep = extractStep(
     workflow,
@@ -1284,12 +1309,12 @@ test("deployment contract is the exact repository handoff classification", () =>
     uploadRetryCheckpointStep.trimEnd(),
     [
       "      - name: Upload safe deployment retry checkpoint",
-      "        if: ${{ always() && github.run_attempt == '1' }}",
+      "        if: ${{ always() && github.run_attempt == '1' && steps.finalize_retry.outputs.created == 'true' }}",
       "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
       "        with:",
       "          name: staging-deploy-retry-${{ env.COMMIT_SHA }}-${{ github.run_id }}-1",
       "          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json",
-      "          if-no-files-found: ignore",
+      "          if-no-files-found: error",
       "          retention-days: 90",
     ].join("\n"),
     "attempt 1 retry evidence must use an immutable run- and SHA-bound artifact name",
@@ -1305,10 +1330,16 @@ test("deployment contract is the exact repository handoff classification", () =>
         "      - name: Finalize safe deployment retry checkpoint\n",
       ) <
         deployJob.indexOf(
+          "      - name: Save safe deployment retry checkpoint for attempt two\n",
+        ) &&
+      deployJob.indexOf(
+        "      - name: Save safe deployment retry checkpoint for attempt two\n",
+      ) <
+        deployJob.indexOf(
           "      - name: Upload safe deployment retry checkpoint\n",
         ) &&
       deployJob.trimEnd().endsWith(uploadRetryCheckpointStep.trimEnd()),
-    "retry checkpoint finalization and upload must be the final deploy steps",
+    "retry checkpoint finalization, cache save, and audit upload must be the final deploy steps",
   );
 
   assert.equal(
@@ -1727,6 +1758,9 @@ test("deployment contract is the exact repository handoff classification", () =>
   const retryCheckpointFinalizationPosition = workflow.indexOf(
     "      - name: Finalize safe deployment retry checkpoint\n",
   );
+  const retryCheckpointSavePosition = workflow.indexOf(
+    "      - name: Save safe deployment retry checkpoint for attempt two\n",
+  );
   const retryCheckpointUploadPosition = workflow.indexOf(
     "      - name: Upload safe deployment retry checkpoint\n",
   );
@@ -1740,7 +1774,8 @@ test("deployment contract is the exact repository handoff classification", () =>
       evidenceUploadPosition < smokeTestPosition &&
       smokeTestPosition < postDeployStagingCriticalPosition &&
       postDeployStagingCriticalPosition < retryCheckpointFinalizationPosition &&
-      retryCheckpointFinalizationPosition < retryCheckpointUploadPosition,
+      retryCheckpointFinalizationPosition < retryCheckpointSavePosition &&
+      retryCheckpointSavePosition < retryCheckpointUploadPosition,
     "checkpoint init, browser install, build, runtime validation, pre-switch health/readiness, same-process rollout/drain, evidence, smoke, post journey, and checkpoint finalization order",
   );
 

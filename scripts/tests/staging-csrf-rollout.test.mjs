@@ -14,6 +14,7 @@ import {
 import {
   createStagingDeployAnonymousSessionRoute,
   markStagingDeployCleanupFromRevokedResult,
+  prepareStagingBootstrapStorage,
 } from "../../frontend/e2e/staging-csrf-rollout-entry.mjs";
 
 const userID = "0198c20b-7b95-7000-8000-000000000001";
@@ -24,6 +25,71 @@ const stableToken = "S".repeat(43);
 const preparedLegacySession = { userID, csrfToken: preparedLegacyToken };
 const originalSession = { userID, csrfToken: legacyToken };
 const stableSession = { userID, csrfToken: stableToken };
+
+test("establishes the canonical Staging origin before seeding IndexedDB", async () => {
+  const calls = [];
+  const page = {
+    async goto(url, options) {
+      calls.push(["goto", url, options]);
+      return {
+        status: () => 200,
+        url: () => "https://cycle.staging.fukamu.matoruru.com/healthz",
+      };
+    },
+    async evaluate(_operation, value) {
+      calls.push(["evaluate", value]);
+    },
+  };
+  await prepareStagingBootstrapStorage(
+    page,
+    "https://cycle.staging.fukamu.matoruru.com",
+    userID,
+  );
+  assert.deepEqual(calls, [
+    [
+      "goto",
+      "https://cycle.staging.fukamu.matoruru.com/healthz",
+      { waitUntil: "domcontentloaded" },
+    ],
+    [
+      "evaluate",
+      {
+        databaseName: "fukamu-cycle-bootstrap",
+        storeName: "bootstrap",
+        key: "pending",
+        value: userID,
+      },
+    ],
+  ]);
+});
+
+test("does not seed IndexedDB without an exact healthy Staging origin", async () => {
+  for (const response of [
+    null,
+    {
+      status: () => 503,
+      url: () => "https://cycle.staging.fukamu.matoruru.com/healthz",
+    },
+    { status: () => 200, url: () => "https://example.com/healthz" },
+  ]) {
+    let evaluated = false;
+    await assert.rejects(() =>
+      prepareStagingBootstrapStorage(
+        {
+          async goto() {
+            return response;
+          },
+          async evaluate() {
+            evaluated = true;
+          },
+        },
+        "https://cycle.staging.fukamu.matoruru.com",
+        userID,
+      ),
+    );
+    assert.equal(evaluated, false);
+  }
+});
 
 test("writes the cleanup fence before releasing anonymous account creation", async () => {
   const calls = [];

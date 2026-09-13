@@ -722,6 +722,8 @@ validate_deploy_approval_gate() {
   local deploy_attempt_script="${test_root}/deploy-attempt.sh"
   local authorize_attempt_step="${test_root}/deploy-authorize-attempt.step"
   local authorize_attempt_script="${test_root}/deploy-authorize-attempt.sh"
+  local restore_retry_step="${test_root}/deploy-restore-retry.step"
+  local save_retry_step="${test_root}/deploy-save-retry.step"
   local fake_bin="${test_root}/deploy-fake-bin"
   local output="${test_root}/deploy-gate.output"
   local github_output="${test_root}/deploy-gate.github-output"
@@ -1125,21 +1127,21 @@ FAKE_GH
   fi
 
   local resolve_retry_line
-  local download_retry_line
+  local restore_retry_line
   local verify_infra_line
   local verify_retry_line
   local reverify_main_line
   local authorize_line
   resolve_retry_line="$(grep -nF '      - name: Resolve prior safe retry checkpoint' "${resolve_job}" | cut -d: -f1)"
-  download_retry_line="$(grep -nF '      - name: Download prior safe retry checkpoint' "${resolve_job}" | cut -d: -f1)"
+  restore_retry_line="$(grep -nF '      - name: Restore prior safe retry checkpoint' "${resolve_job}" | cut -d: -f1)"
   verify_infra_line="$(grep -nF '      - name: Verify approved Terraform evidence' "${resolve_job}" | cut -d: -f1)"
   verify_retry_line="$(grep -nF '      - name: Verify prior safe retry checkpoint' "${resolve_job}" | cut -d: -f1)"
   reverify_main_line="$(grep -nF '      - name: Re-verify deployment commit before Staging approval' "${resolve_job}" | cut -d: -f1)"
   authorize_line="$(grep -nF '      - name: Authorize deploy job attempt' "${resolve_job}" | cut -d: -f1)"
-  if [[ -z "${resolve_retry_line}" || -z "${download_retry_line}" || -z "${verify_infra_line}" || -z "${verify_retry_line}" || -z "${reverify_main_line}" || -z "${authorize_line}" ]] \
+  if [[ -z "${resolve_retry_line}" || -z "${restore_retry_line}" || -z "${verify_infra_line}" || -z "${verify_retry_line}" || -z "${reverify_main_line}" || -z "${authorize_line}" ]] \
     || ! ((\
-    resolve_retry_line < download_retry_line && \
-    download_retry_line < verify_infra_line && \
+    resolve_retry_line < restore_retry_line && \
+    restore_retry_line < verify_infra_line && \
     verify_infra_line < verify_retry_line && \
     verify_retry_line < reverify_main_line && \
     reverify_main_line < authorize_line)) \
@@ -1147,6 +1149,40 @@ FAKE_GH
     violation "Deploy Staging retry provenance, current evidence, and final authorization order is invalid"
     return 1
   fi
+
+  extract_named_step "${resolve_job}" "Restore prior safe retry checkpoint" >"${restore_retry_step}" || {
+    violation "Deploy Staging retry checkpoint cache restore step is missing"
+    return 1
+  }
+  # GitHub expressions and the immutable action pin below are intentional workflow literals.
+  # shellcheck disable=SC2016
+  require_nonblank_lines "${restore_retry_step}" \
+    "      - name: Restore prior safe retry checkpoint" \
+    "        if: github.run_attempt == '2'" \
+    "        id: restore_retry" \
+    "        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0" \
+    "        with:" \
+    '          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json' \
+    '          key: ${{ steps.resolve_retry.outputs.cache_key }}' \
+    "          fail-on-cache-miss: true" || return 1
+  if grep -Fq 'restore-keys:' "${restore_retry_step}"; then
+    violation "Deploy Staging retry checkpoint cache must use one exact key"
+    return 1
+  fi
+
+  extract_named_step "${deploy_job}" "Save safe deployment retry checkpoint for attempt two" >"${save_retry_step}" || {
+    violation "Deploy Staging retry checkpoint cache save step is missing"
+    return 1
+  }
+  # GitHub expressions and the immutable action pin below are intentional workflow literals.
+  # shellcheck disable=SC2016
+  require_nonblank_lines "${save_retry_step}" \
+    "      - name: Save safe deployment retry checkpoint for attempt two" \
+    "        if: \${{ always() && github.run_attempt == '1' && steps.finalize_retry.outputs.created == 'true' }}" \
+    "        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0" \
+    "        with:" \
+    '          path: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry.json' \
+    '          key: staging-deploy-retry-${{ env.COMMIT_SHA }}-${{ github.run_id }}-1' || return 1
 
 }
 

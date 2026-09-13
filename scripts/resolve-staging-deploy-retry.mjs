@@ -3,11 +3,9 @@
 import { fileURLToPath } from "node:url";
 
 const maximumResponseBytes = 64 * 1024;
-const maximumArtifactBytes = 64 * 1024;
 const commitSHAPattern = /^[0-9a-f]{40}$/;
 const positiveIntegerPattern = /^[1-9][0-9]*$/;
 const githubLoginPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
-const artifactDigestPattern = /^sha256:[0-9a-f]{64}$/;
 const workflowName = "Deploy Staging";
 const workflowPath = ".github/workflows/deploy.yml";
 
@@ -115,45 +113,6 @@ function validateSourceAttempt(value, metadata) {
   }
 }
 
-function validateArtifactListing(value, metadata, expectedName) {
-  if (
-    !isRecord(value) ||
-    !Number.isSafeInteger(value.total_count) ||
-    value.total_count !== 1 ||
-    !Array.isArray(value.artifacts) ||
-    value.artifacts.length !== value.total_count
-  ) {
-    fail();
-  }
-  const artifact = value.artifacts[0];
-  if (
-    !isRecord(artifact) ||
-    !Number.isSafeInteger(artifact.id) ||
-    artifact.id <= 0 ||
-    artifact.name !== expectedName ||
-    artifact.expired !== false ||
-    !Number.isSafeInteger(artifact.size_in_bytes) ||
-    artifact.size_in_bytes <= 0 ||
-    artifact.size_in_bytes > maximumArtifactBytes ||
-    !artifactDigestPattern.test(artifact.digest ?? "") ||
-    !isRecord(artifact.workflow_run) ||
-    !Number.isSafeInteger(artifact.workflow_run.id) ||
-    artifact.workflow_run.id <= 0 ||
-    artifact.workflow_run.id.toString() !== metadata.runID ||
-    artifact.workflow_run.head_branch !== "main" ||
-    artifact.workflow_run.head_sha !== metadata.commitSHA ||
-    !Number.isSafeInteger(artifact.workflow_run.repository_id) ||
-    artifact.workflow_run.repository_id <= 0 ||
-    !Number.isSafeInteger(artifact.workflow_run.head_repository_id) ||
-    artifact.workflow_run.head_repository_id <= 0 ||
-    artifact.workflow_run.repository_id !==
-      artifact.workflow_run.head_repository_id
-  ) {
-    fail();
-  }
-  return artifact.name;
-}
-
 export async function resolveStagingDeployRetry({
   environment = process.env,
   fetchImplementation = globalThis.fetch,
@@ -164,20 +123,14 @@ export async function resolveStagingDeployRetry({
     .split("/")
     .map(encodeURIComponent)
     .join("/");
-  const expectedName = `staging-deploy-retry-${metadata.commitSHA}-${metadata.runID}-1`;
+  const cacheKey = `staging-deploy-retry-${metadata.commitSHA}-${metadata.runID}-1`;
   const sourceAttempt = await fetchGitHubJSON(
     fetchImplementation,
     `${metadata.apiURL}/repos/${encodedRepository}/actions/runs/${metadata.runID}/attempts/1`,
     metadata.token,
   );
   validateSourceAttempt(sourceAttempt, metadata);
-  const query = new URLSearchParams({ name: expectedName, per_page: "100" });
-  const artifacts = await fetchGitHubJSON(
-    fetchImplementation,
-    `${metadata.apiURL}/repos/${encodedRepository}/actions/runs/${metadata.runID}/artifacts?${query}`,
-    metadata.token,
-  );
-  return validateArtifactListing(artifacts, metadata, expectedName);
+  return cacheKey;
 }
 
 export async function runResolveStagingDeployRetryCLI({
@@ -187,11 +140,11 @@ export async function runResolveStagingDeployRetryCLI({
   stdout = process.stdout,
 } = {}) {
   if (argv.length !== 0) fail();
-  const artifactName = await resolveStagingDeployRetry({
+  const cacheKey = await resolveStagingDeployRetry({
     environment,
     fetchImplementation,
   });
-  stdout.write(`${artifactName}\n`);
+  stdout.write(`${cacheKey}\n`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
