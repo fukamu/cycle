@@ -24,8 +24,12 @@ touch -- "${summary}" "${log}"
 cat >"${fake_bin}/node" <<'FAKE_NODE'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+fd3_is_open() {
+  { true >&3; } 2>/dev/null
+}
 case "$1" in
   ./scripts/check-cloudflare-drain-evidence.mjs)
+    fd3_is_open
     printf '%s\n' drain-start >>"${TEST_COMMAND_LOG}"
     printf '%s\n' cloudflare_drain_baseline_ready
     IFS= read -r acknowledgement
@@ -35,12 +39,14 @@ case "$1" in
       "${COMMIT_SHA}" "$(printf '1%.0s' {1..64})" "$(printf '2%.0s' {1..64})"
     ;;
   ./scripts/materialize-staging-worker-secrets.mjs)
+    ! fd3_is_open
     [[ "${WORKER_SECRETS_FILE}" == "${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json" ]]
     printf '%s\n' materialize >>"${TEST_COMMAND_LOG}"
     printf '%s' '{"private":"worker-private-value"}' >"${WORKER_SECRETS_FILE}"
     chmod 600 "${WORKER_SECRETS_FILE}"
     ;;
   ./scripts/write-staging-rollout-evidence.mjs)
+    ! fd3_is_open
     [[ "${STAGING_ROLLOUT_EVIDENCE_STAGE}" == drained ]]
     IFS= read -r evidence
     [[ "${evidence}" == *'"result":"drained"'* ]]
@@ -49,6 +55,7 @@ case "$1" in
     printf '%s\n' 'safe summary' >>"${GITHUB_STEP_SUMMARY}"
     ;;
   ./scripts/staging-deploy-retry-checkpoint.mjs)
+    ! fd3_is_open
     [[ "${STAGING_DEPLOY_CHECKPOINT_OPERATION}" == mark_mutation_boundary ]]
     printf '%s\n' mutation-boundary >>"${TEST_COMMAND_LOG}"
     [[ "${FAKE_CHECKPOINT_FAIL:-0}" == 0 ]]
@@ -60,6 +67,7 @@ FAKE_NODE
 cat >"${fake_bin}/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if { true >&3; } 2>/dev/null; then exit 96; fi
 printf '%s\n' gh >>"${TEST_COMMAND_LOG}"
 printf '%s\n' "${FAKE_MAIN_SHA:-${COMMIT_SHA}}"
 FAKE_GH
@@ -67,6 +75,7 @@ FAKE_GH
 cat >"${fake_bin}/go" <<'FAKE_GO'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if { true >&3; } 2>/dev/null; then exit 96; fi
 [[ "${PWD}" == */backend ]]
 [[ "$*" == 'run ./cmd/migrate' ]]
 [[ "${DATABASE_URL}" == migration-private-value ]]
@@ -80,7 +89,12 @@ set -Eeuo pipefail
 [[ "$*" == *'wrangler deploy'* ]]
 [[ "$*" == *"--tag ${COMMIT_SHA}"* ]]
 [[ "$*" == *"--secrets-file ${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"* ]]
+if { true >&3; } 2>/dev/null; then exit 96; fi
 printf '%s\n' deploy >>"${TEST_COMMAND_LOG}"
+if [[ "${FAKE_PNPM_FAIL:-0}" != 0 ]]; then
+  printf '%*s\n' 5000 '' >&2
+  exit 1
+fi
 [[ "${FAKE_PNPM_FAIL:-0}" == 0 ]]
 FAKE_PNPM
 chmod +x -- "${fake_bin}/node" "${fake_bin}/gh" "${fake_bin}/go" "${fake_bin}/pnpm"
@@ -146,7 +160,7 @@ run_child() {
     RATE_ANONYMOUS_CREATE_PER_IP_24H=1 RATE_GOAL_START_PER_USER_MINUTE=1 \
     RATE_GOAL_START_PER_SESSION_MINUTE=1 RATE_AI_PER_USER_MINUTE=1 \
     RATE_AI_PER_SESSION_MINUTE=1 RATE_AI_PER_IP_MINUTE=1 \
-    bash "${repo_root}/scripts/run-staging-candidate-deploy-and-drain.sh"
+    bash "${repo_root}/scripts/run-staging-candidate-deploy-and-drain.sh" 3>&2
 }
 
 : >"${log}"
@@ -208,5 +222,7 @@ fi
 if grep -Fq drain-ack "${log}"; then
   fail "failed deployment started drain polling"
 fi
+grep -Fxq '::error::Staging candidate deployment failed; source=wrangler_deploy.' "${output}" \
+  || fail "failed deployment did not emit its closed source"
 
 printf '%s\n' "Staging candidate deploy/drain wrapper tests passed."

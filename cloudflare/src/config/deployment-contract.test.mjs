@@ -1032,7 +1032,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     "      cwd: repositoryRoot,",
     "      detached: true,",
     "      shell: false,",
-    '      stdio: ["ignore", "ignore", "pipe"],',
+    '      stdio: ["ignore", "ignore", "ignore", "pipe"],',
     "    },",
     "  );",
   ].join("\n");
@@ -1043,10 +1043,10 @@ test("deployment contract is the exact repository handoff classification", () =>
   );
   assert.equal(
     stagingRolloutBrowserEntry.split(
-      "selectCloudflareDrainDiagnostic(standardError)",
+      "selectStagingDeployDiagnostic(diagnosticOutput)",
     ).length - 1,
     1,
-    "the live Browser process must expose only one parsed closed drain diagnostic",
+    "the live Browser process must expose only one parsed closed deploy or drain diagnostic",
   );
   assert.equal(
     stagingRolloutBrowserEntry.split("await deploymentChildCompletion").length -
@@ -1422,7 +1422,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     "set -Eeuo pipefail",
     "trap cleanup EXIT",
     'secrets_file="${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"',
-    "coproc DRAIN_EVIDENCE { node ./scripts/check-cloudflare-drain-evidence.mjs; }",
+    "coproc DRAIN_EVIDENCE { node ./scripts/check-cloudflare-drain-evidence.mjs 2>&3; }",
     '[[ "${baseline_signal}" == "cloudflare_drain_baseline_ready" ]]',
     'DATABASE_URL="${MIGRATION_DATABASE_URL}"',
     "go run ./cmd/migrate",

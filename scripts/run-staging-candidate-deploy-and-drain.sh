@@ -10,7 +10,7 @@ cleanup() {
   local status="$?"
   trap - EXIT
   if [[ -n "${secrets_file}" ]]; then
-    rm -f -- "${secrets_file}"
+    rm -f -- "${secrets_file}" 3>&-
     secrets_file=""
   fi
   if [[ -n "${drain_pid}" ]] && kill -0 "${drain_pid}" 2>/dev/null; then
@@ -24,7 +24,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 fail() {
-  printf '%s\n' "::error::Staging candidate deployment and drain failed." >&2
+  local source="${1:-configuration}"
+  case "${source}" in
+    configuration | baseline_handshake | main_guard | mutation_checkpoint | migration | secret_materialization | wrangler_deploy | drain_handshake | evidence_serialization) ;;
+    *) source="configuration" ;;
+  esac
+  printf '%s\n' "::error::Staging candidate deployment failed; source=${source}." >&3 || true
   exit 1
 }
 
@@ -65,35 +70,40 @@ fi
 [[ "${GITHUB_STEP_SUMMARY}" == /* && ! -L "${GITHUB_STEP_SUMMARY}" ]] || fail
 [[ "${BETA_ADMISSION_MODE}" == "off" || "${BETA_ADMISSION_MODE}" == "closed" ]] || fail
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-repo_root="$(realpath -e -- "${script_dir}/..")"
-cd -- "${repo_root}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}" 3>&-)" && pwd -P)"
+repo_root="$(realpath -e -- "${script_dir}/.." 3>&-)"
+cd -- "${repo_root}" || fail configuration
 
 secrets_file="${RUNNER_TEMP}/fukamu-cycle-worker-secrets.json"
 evidence_file="${RUNNER_TEMP}/fukamu-cycle-stable-csrf-rollout-drained.json"
 [[ ! -e "${secrets_file}" && ! -L "${secrets_file}" ]] || fail
 [[ ! -e "${evidence_file}" && ! -L "${evidence_file}" ]] || fail
 
-coproc DRAIN_EVIDENCE { node ./scripts/check-cloudflare-drain-evidence.mjs; }
+coproc DRAIN_EVIDENCE { node ./scripts/check-cloudflare-drain-evidence.mjs 2>&3; }
 drain_pid="${DRAIN_EVIDENCE_PID}"
 drain_read_fd="${DRAIN_EVIDENCE[0]}"
 drain_write_fd="${DRAIN_EVIDENCE[1]}"
 
-IFS= read -r baseline_signal <&"${drain_read_fd}" || fail
-[[ "${baseline_signal}" == "cloudflare_drain_baseline_ready" ]] || fail
+IFS= read -r baseline_signal <&"${drain_read_fd}" || exit 1
+[[ "${baseline_signal}" == "cloudflare_drain_baseline_ready" ]] || fail baseline_handshake
 
-current_main_sha="$(
+if ! current_main_sha="$(
   gh api \
     -H 'Accept: application/vnd.github+json' \
     "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-    --jq '.object.sha'
-)"
-[[ "${current_main_sha}" =~ ^[0-9a-f]{40}$ && "${current_main_sha}" == "${COMMIT_SHA}" ]] || fail
+    --jq '.object.sha' \
+    3>&-
+)"; then
+  fail main_guard
+fi
+[[ "${current_main_sha}" =~ ^[0-9a-f]{40}$ && "${current_main_sha}" == "${COMMIT_SHA}" ]] || fail main_guard
 
-STAGING_DEPLOY_CHECKPOINT_OPERATION=mark_mutation_boundary \
-  node ./scripts/staging-deploy-retry-checkpoint.mjs
+if ! STAGING_DEPLOY_CHECKPOINT_OPERATION=mark_mutation_boundary \
+  node ./scripts/staging-deploy-retry-checkpoint.mjs 3>&-; then
+  fail mutation_checkpoint
+fi
 
-(
+if ! (
   cd -- backend
   DATABASE_URL="${MIGRATION_DATABASE_URL}" \
     MIGRATIONS_DIR=migrations \
@@ -102,19 +112,26 @@ STAGING_DEPLOY_CHECKPOINT_OPERATION=mark_mutation_boundary \
     GOTOOLCHAIN=local \
     GOFLAGS=-mod=readonly \
     go run ./cmd/migrate
-)
+) 3>&-; then
+  fail migration
+fi
 
-current_main_sha="$(
+if ! current_main_sha="$(
   gh api \
     -H 'Accept: application/vnd.github+json' \
     "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-    --jq '.object.sha'
-)"
-[[ "${current_main_sha}" =~ ^[0-9a-f]{40}$ && "${current_main_sha}" == "${COMMIT_SHA}" ]] || fail
+    --jq '.object.sha' \
+    3>&-
+)"; then
+  fail main_guard
+fi
+[[ "${current_main_sha}" =~ ^[0-9a-f]{40}$ && "${current_main_sha}" == "${COMMIT_SHA}" ]] || fail main_guard
 
 umask 077
-WORKER_SECRETS_FILE="${secrets_file}" \
-  node ./scripts/materialize-staging-worker-secrets.mjs
+if ! WORKER_SECRETS_FILE="${secrets_file}" \
+  node ./scripts/materialize-staging-worker-secrets.mjs 3>&-; then
+  fail secret_materialization
+fi
 
 variable_names=(
   PUBLIC_ORIGIN OTEL_EXPORTER_OTLP_ENDPOINT BETA_ADMISSION_MODE DB_MAX_OPEN_CONNS
@@ -148,28 +165,33 @@ if [[ "${BETA_ADMISSION_MODE}" == "closed" ]]; then
 fi
 variable_args+=(--var "AI_PRICING_MODEL:${AI_MODEL}")
 
-pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \
+if ! pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \
   "${variable_args[@]}" \
   --secrets-file "${secrets_file}" \
   --containers-rollout=immediate \
-  --tag "${COMMIT_SHA}"
+  --tag "${COMMIT_SHA}" \
+  3>&-; then
+  fail wrangler_deploy
+fi
 
-rm -f -- "${secrets_file}"
+rm -f -- "${secrets_file}" 3>&-
 secrets_file=""
 
-printf '%s\n' "candidate_deploy_completed" >&"${drain_write_fd}" || fail
+printf '%s\n' "candidate_deploy_completed" >&"${drain_write_fd}" || fail drain_handshake
 exec {drain_write_fd}>&-
-IFS= read -r drain_evidence <&"${drain_read_fd}" || fail
+IFS= read -r drain_evidence <&"${drain_read_fd}" || exit 1
 if IFS= read -r _ <&"${drain_read_fd}"; then
-  fail
+  fail drain_handshake
 fi
 exec {drain_read_fd}<&-
-wait "${drain_pid}" || fail
+wait "${drain_pid}" || exit 1
 drain_pid=""
 
-printf '%s\n' "${drain_evidence}" \
+if ! printf '%s\n' "${drain_evidence}" \
   | STAGING_ROLLOUT_EVIDENCE_STAGE=drained \
     STAGING_ROLLOUT_EVIDENCE_FILE="${evidence_file}" \
-    node ./scripts/write-staging-rollout-evidence.mjs
+    node ./scripts/write-staging-rollout-evidence.mjs 3>&-; then
+  fail evidence_serialization
+fi
 
 printf '%s\n' "Staging candidate deployment and authoritative drain succeeded."

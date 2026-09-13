@@ -21,6 +21,17 @@ const authenticatedUserIDHeader = "x-fukamu-authenticated-user-id";
 const expectedUserIDHeader = "X-Fukamu-Expected-User-ID";
 const sessionCookieName = "__Host-fukamu_cycle_session";
 const maximumDeployDiagnosticBytes = 4 * 1024;
+const stagingCandidateDeploySourceSet = new Set([
+  "configuration",
+  "baseline_handshake",
+  "main_guard",
+  "mutation_checkpoint",
+  "migration",
+  "secret_materialization",
+  "wrangler_deploy",
+  "drain_handshake",
+  "evidence_serialization",
+]);
 const uuidV7Pattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -536,7 +547,10 @@ function configurePage(page, timeout) {
   page.setDefaultNavigationTimeout(timeout);
 }
 
-function startFixedDeployAndDrain(repositoryRoot) {
+export function startFixedDeployAndDrain(
+  repositoryRoot,
+  errorOutput = process.stderr,
+) {
   const child = spawn(
     "bash",
     ["./scripts/run-staging-candidate-deploy-and-drain.sh"],
@@ -544,24 +558,24 @@ function startFixedDeployAndDrain(repositoryRoot) {
       cwd: repositoryRoot,
       detached: true,
       shell: false,
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "ignore", "ignore", "pipe"],
     },
   );
-  let standardError = "";
-  let standardErrorOverflow = false;
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => {
-    if (standardErrorOverflow) return;
+  let diagnosticOutput = "";
+  let diagnosticOutputOverflow = false;
+  child.stdio[3].setEncoding("utf8");
+  child.stdio[3].on("data", (chunk) => {
+    if (diagnosticOutputOverflow) return;
     if (
-      Buffer.byteLength(standardError, "utf8") +
+      Buffer.byteLength(diagnosticOutput, "utf8") +
         Buffer.byteLength(chunk, "utf8") >
       maximumDeployDiagnosticBytes
     ) {
-      standardError = "";
-      standardErrorOverflow = true;
+      diagnosticOutput = "";
+      diagnosticOutputOverflow = true;
       return;
     }
-    standardError += chunk;
+    diagnosticOutput += chunk;
   });
   const completion = new Promise((resolve, reject) => {
     let settled = false;
@@ -579,11 +593,11 @@ function startFixedDeployAndDrain(repositoryRoot) {
           resolve();
           return;
         }
-        const diagnostic = standardErrorOverflow
+        const diagnostic = diagnosticOutputOverflow
           ? undefined
-          : selectCloudflareDrainDiagnostic(standardError);
+          : selectStagingDeployDiagnostic(diagnosticOutput);
         if (diagnostic !== undefined) {
-          process.stderr.write(`${diagnostic}\n`);
+          errorOutput.write(`${diagnostic}\n`);
         }
         reject(new Error("deploy adapter failed"));
       });
@@ -592,17 +606,21 @@ function startFixedDeployAndDrain(repositoryRoot) {
   return { child, completion };
 }
 
-export function selectCloudflareDrainDiagnostic(value) {
+export function selectStagingDeployDiagnostic(value) {
   if (
     typeof value !== "string" ||
     Buffer.byteLength(value, "utf8") > maximumDeployDiagnosticBytes
   ) {
     return undefined;
   }
-  const diagnostics = value
-    .split("\n")
-    .map((line) => parseCloudflareDrainDiagnosticLine(line))
-    .filter((line) => line !== undefined);
+  const lines = value.split("\n");
+  const diagnostics = lines.filter((line) => {
+    if (parseCloudflareDrainDiagnosticLine(line) !== undefined) return true;
+    const match = line.match(
+      /^::error::Staging candidate deployment failed; source=([a-z_]+)\.$/,
+    );
+    return match !== null && stagingCandidateDeploySourceSet.has(match[1]);
+  });
   return diagnostics.length === 1 ? diagnostics[0] : undefined;
 }
 

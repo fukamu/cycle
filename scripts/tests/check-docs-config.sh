@@ -2062,8 +2062,8 @@ test_config_gate() {
   # shellcheck disable=SC1003,SC2016 # Trailing backslash and child variables are intentional fixture literals.
   replace_exact_line_after_marker \
     "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
-    'pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \' \
-    'rm -f -- "${secrets_file}"' \
+    'if ! pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \' \
+    'rm -f -- "${secrets_file}" 3>&-' \
     ':'
   assert_failure_contains "disabled Worker secret cleanup" \
     "ephemeral Worker secrets must be removed both on EXIT and immediately after deploy" \
@@ -2323,7 +2323,7 @@ test_config_gate() {
   # shellcheck disable=SC1003 # Trailing backslash is intentional child-script fixture text.
   insert_before_exact_line \
     "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
-    'pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \' \
+    'if ! pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy \' \
     'pnpm --filter fukamu-cycle-cloudflare --fail-if-no-match exec wrangler deploy'
   assert_failure_contains "duplicate Worker deploy step" \
     "the child script must be the sole Wrangler deploy consumer" \
