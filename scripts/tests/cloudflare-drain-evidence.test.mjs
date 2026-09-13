@@ -255,7 +255,67 @@ test("does not treat a changed untagged worker as the candidate", async () => {
   );
 });
 
-test("does not accept scale-to-zero, mixed old instances, or one observation", async () => {
+test("accepts idle zero-instance inventories across an exact rollout", async () => {
+  const cases = [
+    {
+      baseline: observation({ instances: [] }),
+      candidate: observation({ candidate: true, instances: [] }),
+    },
+    {
+      baseline: observation(),
+      candidate: observation({ candidate: true, instances: [] }),
+    },
+    {
+      baseline: observation({ instances: [] }),
+      candidate: observation({ candidate: true }),
+    },
+  ];
+
+  for (const { baseline, candidate } of cases) {
+    const wakeInputs = [];
+    const evidence = await proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: sequenceAdapter([
+        baseline,
+        candidate,
+        structuredClone(candidate),
+      ]),
+      now: tickingClock(),
+      sleep: async () => undefined,
+      wake: async (value) => wakeInputs.push(value),
+    });
+
+    assert.equal(wakeInputs.length, 1);
+    assert.equal(wakeInputs[0].containerVersion, 1);
+    assert.equal(evidence.result, "drained");
+    assert.equal(
+      evidence.drainedContainerImageDigest,
+      `sha256:${"1".repeat(64)}`,
+    );
+    assert.equal(evidence.containerImageDigest, candidateImageDigest);
+  }
+});
+
+test("rejects an idle baseline while a rollout remains active", async () => {
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: sequenceAdapter([
+        observation({
+          activeRolloutId: ids.oldRollout,
+          instances: [],
+        }),
+      ]),
+      wake: async () => undefined,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "baseline" &&
+      error.reason === "baseline_not_stable",
+  );
+});
+
+test("does not accept mixed old instances or one candidate observation", async () => {
   const mixed = observation({
     candidate: true,
     instances: [
@@ -265,9 +325,8 @@ test("does not accept scale-to-zero, mixed old instances, or one observation", a
   });
   const adapter = sequenceAdapter([
     observation(),
-    observation({ candidate: true, instances: [] }),
-    mixed,
     observation({ candidate: true }),
+    mixed,
   ]);
   await assert.rejects(
     proveCloudflareDrain({
@@ -277,12 +336,12 @@ test("does not accept scale-to-zero, mixed old instances, or one observation", a
       sleep: async () => undefined,
       wake: async () => undefined,
       pollIntervalMilliseconds: 1,
-      timeoutMilliseconds: 8,
+      timeoutMilliseconds: 10,
     }),
     (error) =>
       error instanceof CloudflareDrainFailure &&
       error.phase === "stability" &&
-      error.reason === "evidence_timeout",
+      error.reason === "evidence_changed",
   );
 });
 
@@ -444,9 +503,14 @@ test("accepts an initial application version of zero and drains it to the candid
   );
 });
 
-test("rejects zero running instances, mixed images, and ambiguous candidate rollouts", async () => {
+test("rejects mixed images and ambiguous candidate rollouts", async () => {
   const invalidCandidates = [
-    observation({ candidate: true, instances: [] }),
+    observation({
+      candidate: true,
+      activeRolloutId: ids.newRollout,
+      rolloutStatus: "progressing",
+      instances: [],
+    }),
     observation({
       candidate: true,
       instances: [
@@ -526,6 +590,37 @@ test("rejects zero running instances, mixed images, and ambiguous candidate roll
       (error) =>
         error instanceof CloudflareDrainFailure &&
         ["evidence_changed", "evidence_timeout"].includes(error.reason),
+    );
+  }
+});
+
+test("does not accept an idle candidate while its rollout remains active", async () => {
+  for (const rolloutStatus of ["pending", "progressing"]) {
+    const active = observation({
+      candidate: true,
+      activeRolloutId: ids.newRollout,
+      rolloutStatus,
+      instances: [],
+    });
+    await assert.rejects(
+      proveCloudflareDrain({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: sequenceAdapter([
+          observation({ instances: [] }),
+          active,
+          structuredClone(active),
+          structuredClone(active),
+        ]),
+        now: tickingClock(1),
+        sleep: async () => undefined,
+        wake: async () => undefined,
+        pollIntervalMilliseconds: 1,
+        timeoutMilliseconds: 8,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "drain" &&
+        error.reason === "evidence_timeout",
     );
   }
 });
@@ -1120,6 +1215,63 @@ test("production adapter accepts the current Containers application and placemen
     await adapter.readObservation({ phase: "baseline" }),
     expected,
   );
+});
+
+test("production adapter preserves a complete idle instance inventory", async () => {
+  const fake = productionFetch();
+  const adapter = createCloudflareRawAdapter({
+    accountId: accountID,
+    apiToken: token,
+    workerName,
+    containerApplicationName: applicationName,
+    fetchImpl: async (url, options) => {
+      if (
+        new URL(url).pathname.endsWith(
+          `/containers/dash/applications/${ids.application}/instances`,
+        )
+      ) {
+        return response(
+          envelope({ instances: [] }, { per_page: 50, next_page_token: null }),
+        );
+      }
+      return fake.fetchImpl(url, options);
+    },
+  });
+  const expected = observation({ instances: [] });
+  expected.container.rollouts = [];
+  assert.deepEqual(
+    await adapter.readObservation({ phase: "baseline" }),
+    expected,
+  );
+});
+
+test("production adapter rejects a missing or non-array instance inventory", async () => {
+  for (const invalidResult of [{}, { instances: null }]) {
+    const fake = productionFetch();
+    const adapter = createCloudflareRawAdapter({
+      accountId: accountID,
+      apiToken: token,
+      workerName,
+      containerApplicationName: applicationName,
+      fetchImpl: async (url, options) => {
+        if (
+          new URL(url).pathname.endsWith(
+            `/containers/dash/applications/${ids.application}/instances`,
+          )
+        ) {
+          return response(envelope(invalidResult));
+        }
+        return fake.fetchImpl(url, options);
+      },
+    });
+    await assert.rejects(
+      adapter.readObservation({ phase: "baseline" }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.reason === "invalid_evidence" &&
+        error.source === "instance_inventory",
+    );
+  }
 });
 
 test("production adapter classifies an invalid application without exposing it", async () => {
