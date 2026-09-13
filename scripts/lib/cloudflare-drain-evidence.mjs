@@ -39,8 +39,22 @@ export const cloudflareDrainReasons = Object.freeze([
   "evidence_timeout",
 ]);
 
+export const cloudflareDrainSources = Object.freeze([
+  "none",
+  "provider_response",
+  "worker_deployment",
+  "worker_version",
+  "application_inventory",
+  "application",
+  "rollout_inventory",
+  "instance_inventory",
+  "observation",
+  "candidate_image",
+]);
+
 const phaseSet = new Set(cloudflareDrainPhases);
 const reasonSet = new Set(cloudflareDrainReasons);
+const sourceSet = new Set(cloudflareDrainSources);
 const rolloutStatuses = new Set([
   "pending",
   "progressing",
@@ -58,19 +72,25 @@ const instanceStatuses = new Set([
 ]);
 
 export class CloudflareDrainFailure extends Error {
-  constructor(phase, reason) {
-    if (!phaseSet.has(phase) || !reasonSet.has(reason)) {
+  constructor(phase, reason, source = "none") {
+    if (
+      !phaseSet.has(phase) ||
+      !reasonSet.has(reason) ||
+      !sourceSet.has(source) ||
+      (reason === "invalid_evidence") !== (source !== "none")
+    ) {
       throw new Error("cloudflare drain failure classification is invalid");
     }
     super("cloudflare drain evidence failed");
     this.name = "CloudflareDrainFailure";
     this.phase = phase;
     this.reason = reason;
+    this.source = source;
   }
 }
 
-function fail(phase, reason) {
-  throw new CloudflareDrainFailure(phase, reason);
+function fail(phase, reason, source = "none") {
+  throw new CloudflareDrainFailure(phase, reason, source);
 }
 
 function isRecord(value) {
@@ -146,8 +166,10 @@ function parseNormalizedObservation(value) {
     !parseIdentifier(worker.deploymentId) ||
     !parseIdentifier(worker.versionId) ||
     worker.trafficPercentage !== 100 ||
-    typeof worker.tag !== "string" ||
-    !commitSHAPattern.test(worker.tag)
+    !(
+      worker.tag === null ||
+      (typeof worker.tag === "string" && commitSHAPattern.test(worker.tag))
+    )
   ) {
     throw new Error("worker observation is invalid");
   }
@@ -540,7 +562,7 @@ export async function proveCloudflareDrain({
     );
   } catch (error) {
     if (error instanceof CloudflareDrainFailure) throw error;
-    fail("baseline", "invalid_evidence");
+    fail("baseline", "invalid_evidence", "observation");
   }
   const baseline = baselineProjection(baselineObservation, candidateCommitSHA);
 
@@ -572,7 +594,7 @@ export async function proveCloudflareDrain({
       );
     } catch (error) {
       if (error instanceof CloudflareDrainFailure) throw error;
-      fail("drain", "invalid_evidence");
+      fail("drain", "invalid_evidence", "observation");
     }
     currentTime = readClock(now, currentTime);
     if (currentTime >= deadline) {
@@ -595,7 +617,7 @@ export async function proveCloudflareDrain({
           throw new Error("candidate image digest is invalid");
         }
       } catch {
-        fail("drain", "invalid_evidence");
+        fail("drain", "invalid_evidence", "candidate_image");
       }
       currentTime = readClock(now, currentTime);
       if (currentTime >= deadline) {
@@ -680,14 +702,25 @@ function normalizeWorkerVersion(envelope, expectedVersionID) {
     !hasOnlyKeys(envelope, ["success", "result"], ["errors", "messages"]) ||
     envelope.success !== true ||
     !isRecord(envelope.result) ||
-    envelope.result.id !== expectedVersionID ||
-    !isRecord(envelope.result.annotations) ||
-    typeof envelope.result.annotations["workers/tag"] !== "string" ||
-    !commitSHAPattern.test(envelope.result.annotations["workers/tag"])
+    envelope.result.id !== expectedVersionID
   ) {
     throw new Error("worker version response is invalid");
   }
-  return envelope.result.annotations["workers/tag"];
+  const annotations = envelope.result.annotations;
+  if (annotations === undefined) {
+    return null;
+  }
+  if (!isRecord(annotations)) {
+    throw new Error("worker version response is invalid");
+  }
+  if (!Object.hasOwn(annotations, "workers/tag")) {
+    return null;
+  }
+  const tag = annotations["workers/tag"];
+  if (typeof tag !== "string" || !commitSHAPattern.test(tag)) {
+    throw new Error("worker version response is invalid");
+  }
+  return tag;
 }
 
 function parseV4Envelope(value) {
@@ -785,14 +818,14 @@ async function readBoundedJSON(response, phase) {
   const declaredLengthValue = response.headers?.get?.("content-length");
   if (declaredLengthValue !== null && declaredLengthValue !== undefined) {
     if (!/^(?:0|[1-9][0-9]*)$/.test(declaredLengthValue)) {
-      fail(phase, "invalid_evidence");
+      fail(phase, "invalid_evidence", "provider_response");
     }
     const declaredLength = Number(declaredLengthValue);
     if (
       !Number.isSafeInteger(declaredLength) ||
       declaredLength > maximumResponseBytes
     ) {
-      fail(phase, "invalid_evidence");
+      fail(phase, "invalid_evidence", "provider_response");
     }
   }
 
@@ -808,7 +841,7 @@ async function readBoundedJSON(response, phase) {
         bytes += value.byteLength;
         if (bytes > maximumResponseBytes) {
           await reader.cancel();
-          fail(phase, "invalid_evidence");
+          fail(phase, "invalid_evidence", "provider_response");
         }
         body += decoder.decode(value, { stream: true });
       }
@@ -824,13 +857,13 @@ async function readBoundedJSON(response, phase) {
       fail(phase, "provider_rejected");
     }
     if (Buffer.byteLength(body, "utf8") > maximumResponseBytes) {
-      fail(phase, "invalid_evidence");
+      fail(phase, "invalid_evidence", "provider_response");
     }
   }
   try {
     return JSON.parse(body);
   } catch {
-    fail(phase, "invalid_evidence");
+    fail(phase, "invalid_evidence", "provider_response");
   }
 }
 
@@ -964,6 +997,7 @@ export function createCloudflareRawAdapter({
     path,
     phase,
     deadlineMilliseconds,
+    invalidEvidenceSource,
     selectItems = (result) => result,
   ) => {
     const items = [];
@@ -996,10 +1030,10 @@ export function createCloudflareRawAdapter({
         seen.add(next);
         cursor = next;
       } catch {
-        fail(phase, "invalid_evidence");
+        fail(phase, "invalid_evidence", invalidEvidenceSource);
       }
     }
-    fail(phase, "invalid_evidence");
+    fail(phase, "invalid_evidence", invalidEvidenceSource);
   };
 
   return Object.freeze({
@@ -1037,7 +1071,7 @@ export function createCloudflareRawAdapter({
       try {
         worker = normalizeWorkerDeployment(workerEnvelope);
       } catch {
-        fail(phase, "invalid_evidence");
+        fail(phase, "invalid_evidence", "worker_deployment");
       }
       const versionEnvelope = await fetchJSON(
         fetchImpl,
@@ -1055,23 +1089,26 @@ export function createCloudflareRawAdapter({
       try {
         workerTag = normalizeWorkerVersion(versionEnvelope, worker.versionId);
       } catch {
-        fail(phase, "invalid_evidence");
+        fail(phase, "invalid_evidence", "worker_version");
       }
 
       const applications = await readPaginated(
         "containers/dash/applications",
         phase,
         deadlineMilliseconds,
+        "application_inventory",
       );
       const matches = applications.filter(
         (application) => application?.name === containerApplicationName,
       );
-      if (matches.length !== 1) fail(phase, "invalid_evidence");
+      if (matches.length !== 1) {
+        fail(phase, "invalid_evidence", "application_inventory");
+      }
       let applicationID;
       try {
         applicationID = parseIdentifier(matches[0].id);
       } catch {
-        fail(phase, "invalid_evidence");
+        fail(phase, "invalid_evidence", "application_inventory");
       }
 
       const [applicationEnvelope, rolloutEnvelope] = await Promise.all([
@@ -1123,16 +1160,17 @@ export function createCloudflareRawAdapter({
               }
               last = nextLast;
             } catch {
-              fail(phase, "invalid_evidence");
+              fail(phase, "invalid_evidence", "rollout_inventory");
             }
           }
-          fail(phase, "invalid_evidence");
+          fail(phase, "invalid_evidence", "rollout_inventory");
         })(),
       ]);
       const instanceValues = await readPaginated(
         `containers/dash/applications/${applicationID}/instances`,
         phase,
         deadlineMilliseconds,
+        "instance_inventory",
         (result) => {
           if (!isRecord(result) || !Array.isArray(result.instances)) {
             throw new Error("instance page is invalid");
@@ -1179,52 +1217,73 @@ export function createCloudflareRawAdapter({
           phase,
         ),
       ]);
+      let application;
       try {
-        const application = normalizeApplication(
+        application = normalizeApplication(
           parseV4Envelope(applicationEnvelope).result,
           containerApplicationName,
         );
-        const finalWorker = normalizeWorkerDeployment(finalWorkerEnvelope);
-        const finalWorkerTag = normalizeWorkerVersion(
+      } catch {
+        fail(phase, "invalid_evidence", "application");
+      }
+      let finalWorker;
+      try {
+        finalWorker = normalizeWorkerDeployment(finalWorkerEnvelope);
+      } catch {
+        fail(phase, "invalid_evidence", "worker_deployment");
+      }
+      let finalWorkerTag;
+      try {
+        finalWorkerTag = normalizeWorkerVersion(
           finalWorkerVersionEnvelope,
           worker.versionId,
         );
-        const finalApplication = normalizeApplication(
+      } catch {
+        fail(phase, "invalid_evidence", "worker_version");
+      }
+      let finalApplication;
+      try {
+        finalApplication = normalizeApplication(
           parseV4Envelope(finalApplicationEnvelope).result,
           containerApplicationName,
         );
-        if (
-          finalWorker.deploymentId !== worker.deploymentId ||
-          finalWorker.versionId !== worker.versionId ||
-          finalWorkerTag !== workerTag ||
-          finalApplication.id !== application.id ||
-          finalApplication.version !== application.version ||
-          finalApplication.configuration.image !==
-            application.configuration.image ||
-          (finalApplication.active_rollout_id ?? null) !==
-            (application.active_rollout_id ?? null)
-        ) {
-          fail(phase, "evidence_changed");
-        }
-        return {
-          worker: {
-            ...worker,
-            trafficPercentage: 100,
-            tag: workerTag,
-          },
-          container: {
-            applicationId: application.id,
-            version: application.version,
-            image: application.configuration.image,
-            activeRolloutId: application.active_rollout_id ?? null,
-            rollouts: rolloutEnvelope,
-            instances: instanceValues.map(normalizeInstance),
-          },
-        };
-      } catch (error) {
-        if (error instanceof CloudflareDrainFailure) throw error;
-        fail(phase, "invalid_evidence");
+      } catch {
+        fail(phase, "invalid_evidence", "application");
       }
+      let instances;
+      try {
+        instances = instanceValues.map(normalizeInstance);
+      } catch {
+        fail(phase, "invalid_evidence", "instance_inventory");
+      }
+      if (
+        finalWorker.deploymentId !== worker.deploymentId ||
+        finalWorker.versionId !== worker.versionId ||
+        finalWorkerTag !== workerTag ||
+        finalApplication.id !== application.id ||
+        finalApplication.version !== application.version ||
+        finalApplication.configuration.image !==
+          application.configuration.image ||
+        (finalApplication.active_rollout_id ?? null) !==
+          (application.active_rollout_id ?? null)
+      ) {
+        fail(phase, "evidence_changed");
+      }
+      return {
+        worker: {
+          ...worker,
+          trafficPercentage: 100,
+          tag: workerTag,
+        },
+        container: {
+          applicationId: application.id,
+          version: application.version,
+          image: application.configuration.image,
+          activeRolloutId: application.active_rollout_id ?? null,
+          rollouts: rolloutEnvelope,
+          instances,
+        },
+      };
     },
   });
 }
@@ -1239,7 +1298,7 @@ export function formatCloudflareDrainDiagnostic(failure, metadata) {
   ) {
     throw new Error("cloudflare drain diagnostic metadata is invalid");
   }
-  return `::error::Cloudflare drain evidence failed; phase=${failure.phase}; reason=${failure.reason}; run_id=${metadata.runID}; run_attempt=${metadata.runAttempt}; commit_sha=${metadata.commitSHA}.`;
+  return `::error::Cloudflare drain evidence failed; phase=${failure.phase}; reason=${failure.reason}; source=${failure.source}; run_id=${metadata.runID}; run_attempt=${metadata.runAttempt}; commit_sha=${metadata.commitSHA}.`;
 }
 
 export function parseCloudflareDrainDiagnosticLine(value) {
@@ -1247,9 +1306,15 @@ export function parseCloudflareDrainDiagnosticLine(value) {
     return undefined;
   }
   const match = value.match(
-    /^::error::Cloudflare drain evidence failed; phase=([a-z_]+); reason=([a-z_]+); run_id=(local|[1-9][0-9]*); run_attempt=(local|[1-9][0-9]*); commit_sha=(local|[0-9a-f]{40})\.$/,
+    /^::error::Cloudflare drain evidence failed; phase=([a-z_]+); reason=([a-z_]+); source=([a-z_]+); run_id=(local|[1-9][0-9]*); run_attempt=(local|[1-9][0-9]*); commit_sha=(local|[0-9a-f]{40})\.$/,
   );
-  if (match === null || !phaseSet.has(match[1]) || !reasonSet.has(match[2])) {
+  if (
+    match === null ||
+    !phaseSet.has(match[1]) ||
+    !reasonSet.has(match[2]) ||
+    !sourceSet.has(match[3]) ||
+    (match[2] === "invalid_evidence") !== (match[3] !== "none")
+  ) {
     return undefined;
   }
   return value;
