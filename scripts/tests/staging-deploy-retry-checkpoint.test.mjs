@@ -102,39 +102,47 @@ test("creates and verifies a bounded retry checkpoint before any side effect", (
   );
 });
 
-test("permits retry only after temporary account cleanup is verified", () => {
-  const unverified = fixture();
-  initialize(unverified.environment);
-  markStagingDeployCleanupUnverified(unverified.environment);
-  assert.equal(
-    finalizeStagingDeployRetryEvidence(unverified.environment),
-    false,
-  );
-  assert.throws(() =>
-    verifyStagingDeployRetryEvidence({
-      ...unverified.environment,
-      GITHUB_RUN_ATTEMPT: "2",
-    }),
-  );
-
-  const verified = fixture();
-  initialize(verified.environment);
-  markStagingDeployCleanupUnverified(verified.environment);
-  markStagingDeployCleanupVerified(verified.environment);
-  assert.equal(finalizeStagingDeployRetryEvidence(verified.environment), true);
-  assert.equal(
-    readJSON(verified.environment.STAGING_DEPLOY_RETRY_EVIDENCE_FILE)
-      .cleanupState,
-    "verified",
-  );
-});
-
-test("never creates retry evidence after the mutation boundary is crossed", () => {
+test("tracks mutation before the candidate account cleanup lifecycle", () => {
   const { environment } = fixture();
   initialize(environment);
-  markStagingDeployCleanupUnverified(environment);
   markStagingDeployMutationBoundaryCrossed(environment);
+  assert.deepEqual(readJSON(environment.STAGING_DEPLOY_CHECKPOINT_STATE_FILE), {
+    schemaVersion: 1,
+    kind: "staging_deploy_retry_state",
+    repository: "fukamu/cycle",
+    workflowName: "Deploy Staging",
+    workflowPath: ".github/workflows/deploy.yml",
+    commitSHA,
+    operator: "owner",
+    deployRunID: "123",
+    deployRunAttempt: "1",
+    deployMode: "normal",
+    terraformEvidence: {
+      kind: "no_changes_plan",
+      workflowRunID: "456",
+      planSHA256,
+    },
+    exactMainCI: {
+      commitSHA,
+      result: "verified",
+      workflowRunID: "789",
+    },
+    mutationBoundary: "crossed",
+    cleanupState: "not_started",
+  });
+  assert.equal(finalizeStagingDeployRetryEvidence(environment), false);
+  markStagingDeployCleanupUnverified(environment);
+  const unverifiedState = readJSON(
+    environment.STAGING_DEPLOY_CHECKPOINT_STATE_FILE,
+  );
+  assert.equal(unverifiedState.mutationBoundary, "crossed");
+  assert.equal(unverifiedState.cleanupState, "unverified");
+  assert.equal(finalizeStagingDeployRetryEvidence(environment), false);
   markStagingDeployCleanupVerified(environment);
+  assert.equal(
+    readJSON(environment.STAGING_DEPLOY_CHECKPOINT_STATE_FILE).cleanupState,
+    "verified",
+  );
   assert.equal(finalizeStagingDeployRetryEvidence(environment), false);
   assert.throws(() =>
     verifyStagingDeployRetryEvidence({
@@ -149,11 +157,32 @@ test("rejects invalid lifecycle transitions and exclusive-file replacement", () 
   initialize(environment);
   assert.throws(() => initializeStagingDeployCheckpoint(environment));
   assert.throws(() => markStagingDeployCleanupVerified(environment));
+  assert.throws(() => markStagingDeployCleanupUnverified(environment));
+  markStagingDeployMutationBoundaryCrossed(environment);
   assert.throws(() => markStagingDeployMutationBoundaryCrossed(environment));
   markStagingDeployCleanupUnverified(environment);
   markStagingDeployCleanupVerified(environment);
   assert.throws(() => markStagingDeployCleanupVerified(environment));
+  assert.throws(() => markStagingDeployCleanupUnverified(environment));
   assert.throws(() => markStagingDeployMutationBoundaryCrossed(environment));
+
+  for (const cleanupState of ["unverified", "verified"]) {
+    const invalid = fixture();
+    initialize(invalid.environment);
+    writeFileSync(
+      invalid.environment.STAGING_DEPLOY_CHECKPOINT_STATE_FILE,
+      JSON.stringify({
+        ...readJSON(invalid.environment.STAGING_DEPLOY_CHECKPOINT_STATE_FILE),
+        cleanupState,
+      }),
+    );
+    assert.throws(() =>
+      finalizeStagingDeployRetryEvidence(invalid.environment),
+    );
+    assert.throws(() =>
+      markStagingDeployMutationBoundaryCrossed(invalid.environment),
+    );
+  }
 });
 
 test("rejects invalid GitHub execution identity", () => {
@@ -183,6 +212,18 @@ test("supports recovery only with an exact null Terraform evidence binding", () 
       GITHUB_RUN_ATTEMPT: "2",
     }),
   );
+
+  const crossed = fixture({
+    DEPLOY_MODE: "recovery",
+    INFRA_EVIDENCE_KIND: "",
+    INFRA_EVIDENCE_RUN_ID: "",
+    INFRA_PLAN_SHA256: "",
+  });
+  initialize(crossed.environment);
+  markStagingDeployMutationBoundaryCrossed(crossed.environment);
+  markStagingDeployCleanupUnverified(crossed.environment);
+  markStagingDeployCleanupVerified(crossed.environment);
+  assert.equal(finalizeStagingDeployRetryEvidence(crossed.environment), false);
 
   for (const overrides of [
     { INFRA_EVIDENCE_KIND: "no_changes_plan" },
@@ -241,6 +282,7 @@ test("rejects malformed, extended, oversized, symlinked, and escaped evidence", 
     (value) => ({ ...value, result: "unknown" }),
     (value) => ({ ...value, mutationBoundary: "crossed" }),
     (value) => ({ ...value, cleanupState: "unverified" }),
+    (value) => ({ ...value, cleanupState: "verified" }),
   ]) {
     writeFileSync(
       environment.STAGING_DEPLOY_RETRY_EVIDENCE_FILE,
@@ -296,7 +338,6 @@ test("CLI returns only closed status values", () => {
   });
   assert.equal(output, "staging_deploy_checkpoint_initialized\n");
   assert.doesNotMatch(output, new RegExp(`${commitSHA}|${planSHA256}|Owner`));
-  markStagingDeployCleanupUnverified(environment);
   output = "";
   runStagingDeployRetryCheckpointCLI({
     environment: {

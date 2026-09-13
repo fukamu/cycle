@@ -1183,7 +1183,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     'metadata.deployRunAttempt !== "2"',
     'value.result !== "no_mutation_started"',
     'value.mutationBoundary !== "not_crossed"',
-    "!/^(?:not_started|verified)$/.test(value.cleanupState)",
+    'value.cleanupState !== "not_started"',
   ]) {
     assert.equal(
       stagingDeployRetryCheckpoint.split(fragment).length - 1,
@@ -1204,6 +1204,18 @@ test("deployment contract is the exact repository handoff classification", () =>
         'return { ...current, mutationBoundary: "crossed" };',
       ),
     "mutation-boundary transition must only move from not_crossed to crossed",
+  );
+  assert.equal(
+    stagingDeployRetryCheckpoint.split('current.mutationBoundary !== "crossed"')
+      .length - 1,
+    2,
+    "cleanup transitions must only run after the mutation boundary is crossed",
+  );
+  assert.equal(
+    stagingDeployRetryCheckpoint.split('current.cleanupState !== "not_started"')
+      .length - 1,
+    1,
+    "the mutation boundary must be crossed before candidate account creation starts",
   );
   assert.doesNotMatch(
     stagingDeployRetryCheckpoint,
