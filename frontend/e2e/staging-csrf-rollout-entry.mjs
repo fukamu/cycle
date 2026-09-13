@@ -59,6 +59,7 @@ export function createStagingCSRFRolloutBrowserAdapter({
   let deploymentChildTermination;
   let firstDraft;
   let secondDraft;
+  let retainedCandidateSession;
   let closed = false;
   let interrupted = false;
 
@@ -127,6 +128,13 @@ export function createStagingCSRFRolloutBrowserAdapter({
           inviteToken: currentInviteToken,
           captureAnonymousSession: (currentPage) =>
             captureStagingAnonymousSession(currentPage),
+          claimInitialSessionRetry:
+            anonymousSessionCheckpoint.claimInitialSessionRetry,
+          hasObservedAnonymousSessionRequest:
+            anonymousSessionCheckpoint.hasObservedRequest,
+          retainAnonymousSessionForCleanup(currentSession) {
+            retainedCandidateSession = currentSession;
+          },
         });
       } finally {
         await pageA.unroute(
@@ -147,6 +155,12 @@ export function createStagingCSRFRolloutBrowserAdapter({
           "/goals/new",
         );
       });
+      return session;
+    },
+
+    consumeCandidateSessionForCleanup() {
+      const session = retainedCandidateSession;
+      retainedCandidateSession = undefined;
       return session;
     },
 
@@ -497,8 +511,11 @@ export function createStagingDeployAnonymousSessionRoute({
     throw new Error("staging deploy anonymous route configuration is invalid");
   }
   let checkpointFailure;
+  let requestObserved = false;
+  let initialSessionRetryClaimed = false;
   return {
     async handle(route) {
+      requestObserved = true;
       if (
         typeof route?.continue !== "function" ||
         typeof route?.abort !== "function"
@@ -512,6 +529,20 @@ export function createStagingDeployAnonymousSessionRoute({
         checkpointFailure = error;
         await route.abort("failed").catch(() => undefined);
       }
+    },
+    claimInitialSessionRetry() {
+      if (
+        requestObserved ||
+        checkpointFailure !== undefined ||
+        initialSessionRetryClaimed
+      ) {
+        return false;
+      }
+      initialSessionRetryClaimed = true;
+      return true;
+    },
+    hasObservedRequest() {
+      return requestObserved;
     },
     failure() {
       return checkpointFailure;

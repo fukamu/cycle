@@ -196,10 +196,17 @@ function withBrowserGlobals(location, history, callback) {
 
 function entryFixture(
   currentMode,
-  { failEntry = false, showRetry = false } = {},
+  {
+    failEntry = false,
+    showRetry = false,
+    keepRetryVisible = false,
+    failRetryTransition = false,
+    onRetryClick,
+  } = {},
 ) {
   const calls = [];
   const location = { pathname: "/", search: "?source=staging", hash: "" };
+  let retryVisible = showRetry;
   let injectedURL = "";
   const history = {
     state: null,
@@ -217,7 +224,12 @@ function entryFixture(
   };
   const retryButton = {
     async isVisible() {
-      return showRetry;
+      return retryVisible;
+    },
+    async click() {
+      calls.push("click-retry");
+      await onRetryClick?.();
+      if (!keepRetryVisible) retryVisible = false;
     },
   };
   const entryButtons = {
@@ -240,7 +252,15 @@ function entryFixture(
           return entryButtons;
         },
         first() {
-          return entryButtons.first();
+          return {
+            async waitFor(options) {
+              assert.deepEqual(options, { state: "visible" });
+              calls.push("wait-entry-after-retry");
+              if (failRetryTransition) {
+                throw new Error("private retry transition failure");
+              }
+            },
+          };
         },
       };
     },
@@ -571,8 +591,80 @@ test("preserves a closed anonymous session rejection when entry also fails", asy
   ]);
 });
 
-test("classifies a retry state before an anonymous session request starts", async () => {
+test("does not retry an unobserved anonymous session without an accepted claim", async (t) => {
+  for (const [name, claimInitialSessionRetry] of [
+    ["missing", undefined],
+    ["denied", () => false],
+  ]) {
+    await t.test(name, async () => {
+      const fixture = entryFixture("off", { showRetry: true });
+      await assert.rejects(
+        enterStagingCritical({
+          context: fixture.context,
+          page: fixture.page,
+          baseURL: canonicalBaseURL,
+          admissionMode: "off",
+          inviteToken: "",
+          captureAnonymousSession() {
+            fixture.calls.push("capture-session");
+            return new Promise(() => undefined);
+          },
+          claimInitialSessionRetry,
+        }),
+        (error) =>
+          error instanceof StagingCriticalFailure &&
+          error.phase === "entry" &&
+          error.reason === "anonymous_session_request_not_observed",
+      );
+      assert.deepEqual(fixture.calls, [
+        "capture-session",
+        "goto",
+        "wait-entry-cta",
+      ]);
+    });
+  }
+});
+
+test("retries the initial pre-request state once with the same capture", async () => {
   const fixture = entryFixture("off", { showRetry: true });
+  const session = { userID, csrfToken: "private-csrf-token" };
+  let captures = 0;
+  let claims = 0;
+  const result = await enterStagingCritical({
+    context: fixture.context,
+    page: fixture.page,
+    baseURL: canonicalBaseURL,
+    admissionMode: "off",
+    inviteToken: "",
+    captureAnonymousSession() {
+      captures += 1;
+      fixture.calls.push("capture-session");
+      return Promise.resolve(session);
+    },
+    claimInitialSessionRetry() {
+      claims += 1;
+      return true;
+    },
+  });
+  assert.equal(result, session);
+  assert.equal(captures, 1);
+  assert.equal(claims, 1);
+  assert.deepEqual(fixture.calls, [
+    "capture-session",
+    "goto",
+    "wait-entry-cta",
+    "click-retry",
+    "wait-entry-after-retry",
+    "wait-new-goal",
+  ]);
+});
+
+test("fails closed after the claimed retry reaches Retry again", async () => {
+  const fixture = entryFixture("off", {
+    showRetry: true,
+    keepRetryVisible: true,
+  });
+  let claims = 0;
   await assert.rejects(
     enterStagingCritical({
       context: fixture.context,
@@ -584,17 +676,192 @@ test("classifies a retry state before an anonymous session request starts", asyn
         fixture.calls.push("capture-session");
         return new Promise(() => undefined);
       },
+      claimInitialSessionRetry() {
+        claims += 1;
+        return true;
+      },
     }),
     (error) =>
       error instanceof StagingCriticalFailure &&
       error.phase === "entry" &&
       error.reason === "anonymous_session_request_not_observed",
   );
+  assert.equal(
+    fixture.calls.filter((call) => call === "click-retry").length,
+    1,
+  );
+  assert.equal(claims, 1);
   assert.deepEqual(fixture.calls, [
     "capture-session",
     "goto",
     "wait-entry-cta",
+    "click-retry",
+    "wait-entry-after-retry",
   ]);
+});
+
+test("does not await capture when a POST is unobserved or observation is unavailable", async (t) => {
+  for (const [name, hasObservedAnonymousSessionRequest] of [
+    ["observation callback unavailable", undefined],
+    ["POST unobserved", () => false],
+  ]) {
+    await t.test(name, async () => {
+      const fixture = entryFixture("off", {
+        showRetry: true,
+        failRetryTransition: true,
+      });
+      const entry = enterStagingCritical({
+        context: fixture.context,
+        page: fixture.page,
+        baseURL: canonicalBaseURL,
+        admissionMode: "off",
+        inviteToken: "",
+        captureAnonymousSession() {
+          fixture.calls.push("capture-session");
+          return new Promise(() => undefined);
+        },
+        claimInitialSessionRetry: () => true,
+        hasObservedAnonymousSessionRequest,
+      });
+      let timeoutID;
+      const failure = await Promise.race([
+        entry.catch((error) => error),
+        new Promise((resolve) => {
+          timeoutID = globalThis.setTimeout(resolve, 500);
+        }),
+      ]);
+      globalThis.clearTimeout(timeoutID);
+      assert.equal(
+        failure instanceof StagingCriticalFailure &&
+          failure.phase === "entry" &&
+          failure.reason === "anonymous_session_request_not_observed" &&
+          !failure.message.includes("private retry transition failure"),
+        true,
+      );
+      assert.equal(
+        fixture.calls.filter((call) => call === "click-retry").length,
+        1,
+      );
+    });
+  }
+});
+
+test("retains a delayed successful POST session when the Retry transition times out", async () => {
+  const session = { userID, csrfToken: "private-csrf-token" };
+  const retained = [];
+  let captures = 0;
+  let resolveCapture;
+  const fixture = entryFixture("off", {
+    showRetry: true,
+    failRetryTransition: true,
+    onRetryClick() {
+      globalThis.setTimeout(() => resolveCapture(session), 10);
+    },
+  });
+  await assert.rejects(
+    enterStagingCritical({
+      context: fixture.context,
+      page: fixture.page,
+      baseURL: canonicalBaseURL,
+      admissionMode: "off",
+      inviteToken: "",
+      captureAnonymousSession() {
+        captures += 1;
+        fixture.calls.push("capture-session");
+        return new Promise((resolve) => {
+          resolveCapture = resolve;
+        });
+      },
+      claimInitialSessionRetry: () => true,
+      hasObservedAnonymousSessionRequest: () => true,
+      retainAnonymousSessionForCleanup(currentSession) {
+        retained.push(currentSession);
+      },
+    }),
+    (error) =>
+      error instanceof StagingCriticalFailure &&
+      error.phase === "entry" &&
+      error.reason === "anonymous_session_request_not_observed",
+  );
+  assert.equal(captures, 1);
+  assert.deepEqual(retained, [session]);
+  assert.equal(
+    fixture.calls.filter((call) => call === "click-retry").length,
+    1,
+  );
+});
+
+test("waits boundedly for a late classified POST failure before entry failure", async () => {
+  const captureFailure = new StagingCriticalFailure(
+    "entry",
+    "anonymous_session_unavailable",
+  );
+  let rejectCapture;
+  const fixture = entryFixture("off", {
+    showRetry: true,
+    failRetryTransition: true,
+    onRetryClick() {
+      globalThis.setTimeout(() => rejectCapture(captureFailure), 5);
+    },
+  });
+  await assert.rejects(
+    enterStagingCritical({
+      context: fixture.context,
+      page: fixture.page,
+      baseURL: canonicalBaseURL,
+      admissionMode: "off",
+      inviteToken: "",
+      captureAnonymousSession() {
+        fixture.calls.push("capture-session");
+        return new Promise((_resolve, reject) => {
+          rejectCapture = reject;
+        });
+      },
+      claimInitialSessionRetry: () => true,
+      hasObservedAnonymousSessionRequest: () => true,
+    }),
+    (error) => error === captureFailure,
+  );
+  assert.equal(
+    fixture.calls.filter((call) => call === "click-retry").length,
+    1,
+  );
+});
+
+test("prioritizes a classified POST failure during the claimed retry", async () => {
+  const captureFailure = new StagingCriticalFailure(
+    "entry",
+    "anonymous_session_rate_limited",
+  );
+  let rejectCapture;
+  const fixture = entryFixture("off", {
+    showRetry: true,
+    keepRetryVisible: true,
+    onRetryClick() {
+      rejectCapture(captureFailure);
+    },
+  });
+  await assert.rejects(
+    enterStagingCritical({
+      context: fixture.context,
+      page: fixture.page,
+      baseURL: canonicalBaseURL,
+      admissionMode: "off",
+      inviteToken: "",
+      captureAnonymousSession() {
+        fixture.calls.push("capture-session");
+        return new Promise((_resolve, reject) => {
+          rejectCapture = reject;
+        });
+      },
+      claimInitialSessionRetry: () => true,
+    }),
+    (error) => error === captureFailure,
+  );
+  assert.equal(
+    fixture.calls.filter((call) => call === "click-retry").length,
+    1,
+  );
 });
 
 test("retains the post-deploy full journey", async () => {
