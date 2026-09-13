@@ -3259,8 +3259,8 @@ assert_invalid_workflow_set "Terraform Apply permission escalation" "${workflow_
 
 workflow_set="$(new_workflow_set_fixture deploy-default-shell-bypass)"
 replace_line_once "${workflow_set}/deploy.yml" \
-  "    timeout-minutes: 45" \
-  $'    timeout-minutes: 45\n    defaults:\n      run:\n        shell: bash {0} || true'
+  "    timeout-minutes: 50" \
+  $'    timeout-minutes: 50\n    defaults:\n      run:\n        shell: bash {0} || true'
 assert_invalid_workflow_set "deploy defaults.run.shell failure bypass" "${workflow_set}"
 
 fixture="$(new_fixture renamed-ci-workflow)"

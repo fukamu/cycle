@@ -607,7 +607,7 @@ test("deployment contract is the exact repository handoff classification", () =>
   for (const expectedJobLine of [
     "    needs: resolve",
     "    runs-on: ubuntu-latest",
-    "    timeout-minutes: 45",
+    "    timeout-minutes: 50",
     "      name: staging",
     "      url: https://cycle.staging.fukamu.matoruru.com",
   ]) {

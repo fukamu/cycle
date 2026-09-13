@@ -490,7 +490,7 @@ jobs:
   deploy:
     needs: resolve
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     environment:
       name: staging
       url: https://cycle.staging.fukamu.matoruru.com

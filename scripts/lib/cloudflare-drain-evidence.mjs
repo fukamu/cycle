@@ -6,6 +6,7 @@ const pageSize = 50;
 const maximumRollouts = pageSize * maximumPages;
 const defaultPollIntervalMilliseconds = 10_000;
 const defaultTimeoutMilliseconds = 20 * 60_000;
+const maximumBaselineTimeoutMilliseconds = 5 * 60_000;
 const requestRetryDelaysMilliseconds = Object.freeze([250, 1_000, 2_000]);
 
 const uuidPattern =
@@ -32,6 +33,10 @@ export const cloudflareDrainReasons = Object.freeze([
   "provider_rejected",
   "invalid_evidence",
   "baseline_not_stable",
+  "baseline_active_rollout",
+  "baseline_instance_not_running",
+  "baseline_instance_version_mismatch",
+  "baseline_instance_image_reference_mismatch",
   "candidate_already_active",
   "deployment_failed",
   "rollout_failed",
@@ -255,22 +260,32 @@ function parseRawObservation(raw) {
   return parseNormalizedObservation(value);
 }
 
-function baselineProjection(observation, candidateCommitSHA) {
+function baselinePendingReason(observation, candidateCommitSHA) {
   const { worker, container } = observation;
   if (worker.tag === candidateCommitSHA) {
     fail("baseline", "candidate_already_active");
   }
+  if (container.activeRolloutId !== null) return "baseline_active_rollout";
+  if (container.instances.some(({ status }) => status !== "running")) {
+    return "baseline_instance_not_running";
+  }
   if (
-    container.activeRolloutId !== null ||
+    container.instances.some(({ version }) => version !== container.version)
+  ) {
+    return "baseline_instance_version_mismatch";
+  }
+  if (
     container.instances.some(
-      (instance) =>
-        instance.status !== "running" ||
-        instance.version !== container.version ||
-        (instance.image !== null && instance.image !== container.image),
+      ({ image }) => image !== null && image !== container.image,
     )
   ) {
-    fail("baseline", "baseline_not_stable");
+    return "baseline_instance_image_reference_mismatch";
   }
+  return undefined;
+}
+
+function baselineProjection(observation) {
+  const { worker, container } = observation;
   return Object.freeze({
     workerDeploymentId: worker.deploymentId,
     workerVersionId: worker.versionId,
@@ -279,7 +294,9 @@ function baselineProjection(observation, candidateCommitSHA) {
     containerVersion: container.version,
     containerImage: container.image,
     containerImageDigest: imageDigest(container.image),
-    rolloutIds: Object.freeze(container.rollouts.map(({ id }) => id)),
+    rolloutIds: Object.freeze(
+      container.rollouts.map(({ id }) => id).toSorted(),
+    ),
   });
 }
 
@@ -553,16 +570,67 @@ export async function proveCloudflareDrain({
   }
 
   let currentTime = readClock(now, 0);
-  let baselineObservation;
-  try {
-    baselineObservation = parseRawObservation(
-      await rawAdapter.readObservation({ phase: "baseline", attempt: 0 }),
+  const baselineDeadline =
+    currentTime +
+    Math.min(timeoutMilliseconds, maximumBaselineTimeoutMilliseconds);
+  let firstStableBaseline;
+  let previousBaselineWasStable = false;
+  let baseline;
+  let lastBaselineReason;
+  let baselineAttempt = 0;
+  while (baselineAttempt < 256) {
+    currentTime = readClock(now, currentTime);
+    if (currentTime >= baselineDeadline) {
+      fail("baseline", lastBaselineReason ?? "evidence_timeout");
+    }
+    let baselineObservation;
+    try {
+      baselineObservation = parseRawObservation(
+        await rawAdapter.readObservation({
+          phase: "baseline",
+          attempt: baselineAttempt,
+          timeoutMilliseconds: baselineDeadline - currentTime,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof CloudflareDrainFailure) throw error;
+      fail("baseline", "invalid_evidence", "observation");
+    }
+    currentTime = readClock(now, currentTime);
+    if (currentTime >= baselineDeadline) {
+      fail("baseline", lastBaselineReason ?? "evidence_timeout");
+    }
+
+    const pendingReason = baselinePendingReason(
+      baselineObservation,
+      candidateCommitSHA,
     );
-  } catch (error) {
-    if (error instanceof CloudflareDrainFailure) throw error;
-    fail("baseline", "invalid_evidence", "observation");
+    if (pendingReason !== undefined) {
+      previousBaselineWasStable = false;
+      lastBaselineReason = pendingReason;
+    } else {
+      const currentBaseline = baselineProjection(baselineObservation);
+      if (firstStableBaseline === undefined) {
+        firstStableBaseline = currentBaseline;
+      } else if (!sameProjection(firstStableBaseline, currentBaseline)) {
+        fail("baseline", "evidence_changed");
+      } else if (previousBaselineWasStable) {
+        baseline = currentBaseline;
+        break;
+      }
+      previousBaselineWasStable = true;
+    }
+
+    baselineAttempt += 1;
+    try {
+      await sleep(pollIntervalMilliseconds);
+    } catch {
+      fail("baseline", "provider_rejected");
+    }
   }
-  const baseline = baselineProjection(baselineObservation, candidateCommitSHA);
+  if (baseline === undefined) {
+    fail("baseline", lastBaselineReason ?? "evidence_timeout");
+  }
 
   try {
     await wake(baseline);
