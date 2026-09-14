@@ -146,7 +146,9 @@ function sequenceAdapter(values) {
     async readObservation(input) {
       calls.push(input);
       assert.notEqual(values.length, 0);
-      return structuredClone(values.shift());
+      const value = values.shift();
+      if (value instanceof Error) throw value;
+      return structuredClone(value);
     },
   };
 }
@@ -163,6 +165,38 @@ function reusedImageObservation({ instances } = {}) {
     trafficPercentage: 100,
     tag: candidateSHA,
   };
+  return value;
+}
+
+function rolloutInventoryVisibilityLagObservation() {
+  const value = observation({ candidate: true, instances: [] });
+  value.container.activeRolloutId = ids.newRollout;
+  value.container.rollouts = [rollout()];
+  return value;
+}
+
+function applicationRolloutVisibilityLagObservation({
+  rolloutStatus = "completed",
+  instances,
+} = {}) {
+  const value = observation({ instances });
+  value.worker = {
+    deploymentId: ids.newDeployment,
+    versionId: ids.newWorkerVersion,
+    trafficPercentage: 100,
+    tag: candidateSHA,
+  };
+  value.container.activeRolloutId = ids.newRollout;
+  value.container.rollouts = [
+    rollout({
+      id: ids.newRollout,
+      status: rolloutStatus,
+      currentVersion: 1,
+      targetVersion: 2,
+      targetImage: newImage,
+    }),
+    rollout(),
+  ];
   return value;
 }
 
@@ -234,6 +268,627 @@ test("requires two identical authoritative observations after waking the deploy"
   assert.equal(
     JSON.parse(serializeCloudflareDrainEvidence(evidence)).result,
     "drained",
+  );
+});
+
+test("retries only torn Worker or Application drain observations", async () => {
+  for (const reason of [
+    "worker_observation_changed",
+    "application_observation_changed",
+  ]) {
+    const candidate = observation({ candidate: true });
+    const adapter = sequenceAdapter([
+      ...stableBaseline(),
+      new CloudflareDrainFailure("drain", reason),
+      candidate,
+      structuredClone(candidate),
+    ]);
+    const sleeps = [];
+    const evidence = await proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async (milliseconds) => sleeps.push(milliseconds),
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    });
+
+    assert.equal(evidence.result, "drained");
+    assert.equal(
+      adapter.calls.filter(({ phase }) => phase === "drain").length,
+      3,
+    );
+    assert.deepEqual(sleeps, [1, 1, 1]);
+  }
+});
+
+test("resets candidate stability after a torn drain observation", async () => {
+  const candidate = observation({ candidate: true });
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    candidate,
+    new CloudflareDrainFailure("drain", "worker_observation_changed"),
+    structuredClone(candidate),
+    structuredClone(candidate),
+  ]);
+
+  const evidence = await proveCloudflareDrain({
+    candidateCommitSHA: candidateSHA,
+    rawAdapter: adapter,
+    now: tickingClock(1),
+    sleep: async () => undefined,
+    wake: async () => undefined,
+    pollIntervalMilliseconds: 1,
+    timeoutMilliseconds: 20,
+  });
+
+  assert.equal(evidence.result, "drained");
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    4,
+  );
+});
+
+test("does not rebind the candidate Worker after a torn observation", async () => {
+  const candidate = observation({ candidate: true });
+  const changedCandidate = structuredClone(candidate);
+  changedCandidate.worker.versionId = ids.changedWorkerVersion;
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    candidate,
+    new CloudflareDrainFailure("drain", "worker_observation_changed"),
+    changedCandidate,
+  ]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "worker_identity_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    3,
+  );
+});
+
+test("rejects a baseline Worker regression after fixing the candidate identity", async () => {
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    reusedImageObservation(),
+    observation(),
+  ]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "worker_identity_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    2,
+  );
+});
+
+test("retries bounded cross-endpoint visibility lag before two candidate observations", async () => {
+  for (const lagging of [
+    rolloutInventoryVisibilityLagObservation(),
+    applicationRolloutVisibilityLagObservation(),
+    applicationRolloutVisibilityLagObservation({
+      instances: [
+        instance({
+          id: ids.newInstance,
+          status: "placed",
+          version: 2,
+          image: newImage,
+        }),
+      ],
+    }),
+  ]) {
+    const candidate = observation({ candidate: true });
+    const adapter = sequenceAdapter([
+      ...stableBaseline(),
+      lagging,
+      candidate,
+      structuredClone(candidate),
+    ]);
+
+    const evidence = await proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    });
+
+    assert.equal(evidence.result, "drained");
+    assert.equal(
+      adapter.calls.filter(({ phase }) => phase === "drain").length,
+      3,
+    );
+  }
+});
+
+test("does not rebind an active rollout ID pinned before its row is visible", async () => {
+  const replacement = observation({
+    candidate: true,
+    activeRolloutId: ids.ambiguousRollout,
+    rollouts: [
+      rollout({
+        id: ids.ambiguousRollout,
+        currentVersion: 1,
+        targetVersion: 2,
+        targetImage: newImage,
+      }),
+      rollout(),
+    ],
+  });
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    rolloutInventoryVisibilityLagObservation(),
+    replacement,
+  ]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "rollout_identity_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    2,
+  );
+});
+
+test("upgrades a pinned active rollout ID when its exact row becomes visible", async () => {
+  const candidate = observation({ candidate: true });
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    rolloutInventoryVisibilityLagObservation(),
+    candidate,
+    structuredClone(candidate),
+  ]);
+
+  const evidence = await proveCloudflareDrain({
+    candidateCommitSHA: candidateSHA,
+    rawAdapter: adapter,
+    now: tickingClock(1),
+    sleep: async () => undefined,
+    wake: async () => undefined,
+    pollIntervalMilliseconds: 1,
+    timeoutMilliseconds: 20,
+  });
+
+  assert.equal(evidence.result, "drained");
+  assert.equal(evidence.containerRolloutId, ids.newRollout);
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    3,
+  );
+});
+
+test("binds a rollout after missing-row lag with no active rollout ID", async () => {
+  const missing = rolloutInventoryVisibilityLagObservation();
+  missing.container.activeRolloutId = null;
+  const candidate = observation({ candidate: true });
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    missing,
+    candidate,
+    structuredClone(candidate),
+  ]);
+
+  const evidence = await proveCloudflareDrain({
+    candidateCommitSHA: candidateSHA,
+    rawAdapter: adapter,
+    now: tickingClock(1),
+    sleep: async () => undefined,
+    wake: async () => undefined,
+    pollIntervalMilliseconds: 1,
+    timeoutMilliseconds: 20,
+  });
+
+  assert.equal(evidence.result, "drained");
+  assert.equal(evidence.containerRolloutId, ids.newRollout);
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    3,
+  );
+});
+
+test("rejects an additional new rollout before binding the candidate", async () => {
+  const ambiguous = observation({
+    candidate: true,
+    rollouts: [
+      rollout({
+        id: ids.unrelatedRollout,
+        currentVersion: 1,
+        targetVersion: 3,
+        targetImage: unrelatedImage,
+      }),
+      rollout({
+        id: ids.newRollout,
+        currentVersion: 1,
+        targetVersion: 2,
+        targetImage: newImage,
+      }),
+      rollout(),
+    ],
+  });
+  const adapter = sequenceAdapter([...stableBaseline(), ambiguous]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "unexpected_rollout",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    1,
+  );
+});
+
+test("rejects an additional new rollout after the first stable candidate", async () => {
+  const candidate = observation({ candidate: true });
+  const changed = structuredClone(candidate);
+  changed.container.rollouts.unshift(
+    rollout({
+      id: ids.unrelatedRollout,
+      currentVersion: 1,
+      targetVersion: 3,
+      targetImage: unrelatedImage,
+    }),
+  );
+  const adapter = sequenceAdapter([...stableBaseline(), candidate, changed]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "unexpected_rollout",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    2,
+  );
+});
+
+test("resets candidate stability across cross-endpoint visibility lag", async () => {
+  const candidate = observation({ candidate: true });
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    candidate,
+    rolloutInventoryVisibilityLagObservation(),
+    structuredClone(candidate),
+    structuredClone(candidate),
+  ]);
+
+  const evidence = await proveCloudflareDrain({
+    candidateCommitSHA: candidateSHA,
+    rawAdapter: adapter,
+    now: tickingClock(1),
+    sleep: async () => undefined,
+    wake: async () => undefined,
+    pollIntervalMilliseconds: 1,
+    timeoutMilliseconds: 20,
+  });
+
+  assert.equal(evidence.result, "drained");
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    4,
+  );
+});
+
+test("reports repeated cross-endpoint visibility lag at the original deadline", async () => {
+  for (const { lagging, reason } of [
+    {
+      lagging: rolloutInventoryVisibilityLagObservation(),
+      reason: "rollout_inventory_visibility_lag",
+    },
+    {
+      lagging: applicationRolloutVisibilityLagObservation(),
+      reason: "application_rollout_visibility_lag",
+    },
+  ]) {
+    const adapter = sequenceAdapter([
+      ...stableBaseline(),
+      ...Array.from({ length: 10 }, () => structuredClone(lagging)),
+    ]);
+
+    await assert.rejects(
+      proveCloudflareDrain({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: adapter,
+        now: tickingClock(1),
+        sleep: async () => undefined,
+        wake: async () => undefined,
+        pollIntervalMilliseconds: 1,
+        timeoutMilliseconds: 10,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "drain" &&
+        error.reason === reason,
+    );
+    assert.ok(
+      adapter.calls.filter(({ phase }) => phase === "drain").length < 10,
+    );
+  }
+});
+
+test("caps repeated visibility lag at 256 observations", async () => {
+  const lagging = rolloutInventoryVisibilityLagObservation();
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    ...Array.from({ length: 256 }, () => structuredClone(lagging)),
+  ]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: () => 0,
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 100,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "rollout_inventory_visibility_lag",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    256,
+  );
+});
+
+test("fails immediately when visibility lag is followed by a hard contradiction", async () => {
+  const wrongImage = observation({ candidate: true, instances: [] });
+  wrongImage.container.image = unrelatedImage;
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    applicationRolloutVisibilityLagObservation(),
+    wrongImage,
+  ]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "candidate_image_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    2,
+  );
+});
+
+test("does not rebind a rollout first observed during Application visibility lag", async () => {
+  const replacement = observation({
+    candidate: true,
+    rollouts: [
+      rollout({
+        id: ids.ambiguousRollout,
+        currentVersion: 1,
+        targetVersion: 2,
+        targetImage: newImage,
+      }),
+      rollout(),
+    ],
+  });
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    applicationRolloutVisibilityLagObservation(),
+    replacement,
+    structuredClone(replacement),
+  ]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "rollout_identity_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    2,
+  );
+});
+
+test("rejects a different active rollout while the fixed candidate row is hidden", async () => {
+  const hidden = rolloutInventoryVisibilityLagObservation();
+  hidden.container.activeRolloutId = ids.ambiguousRollout;
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    applicationRolloutVisibilityLagObservation(),
+    hidden,
+  ]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "rollout_identity_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    2,
+  );
+});
+
+test("does not classify competing or terminal rollout/instance state as visibility lag", async () => {
+  const competing = applicationRolloutVisibilityLagObservation();
+  competing.container.rollouts.unshift(
+    rollout({
+      id: ids.ambiguousRollout,
+      currentVersion: 1,
+      targetVersion: 2,
+      targetImage: newImage,
+    }),
+  );
+  const terminalInstance = rolloutInventoryVisibilityLagObservation();
+  terminalInstance.container.instances = [
+    instance({
+      id: ids.newInstance,
+      status: "failed",
+      version: 2,
+      image: newImage,
+    }),
+  ];
+  const wrongVersion = applicationRolloutVisibilityLagObservation({
+    instances: [
+      instance({
+        id: ids.newInstance,
+        version: 3,
+        image: newImage,
+      }),
+    ],
+  });
+  const wrongImage = applicationRolloutVisibilityLagObservation({
+    instances: [
+      instance({
+        id: ids.newInstance,
+        version: 2,
+        image: unrelatedImage,
+      }),
+    ],
+  });
+  for (const { value, reason } of [
+    { value: competing, reason: "unexpected_rollout" },
+    {
+      value: applicationRolloutVisibilityLagObservation({
+        rolloutStatus: "reverted",
+      }),
+      reason: "rollout_failed",
+    },
+    { value: terminalInstance, reason: "rollout_failed" },
+    { value: wrongVersion, reason: "instance_binding_changed" },
+    { value: wrongImage, reason: "instance_binding_changed" },
+  ]) {
+    await assert.rejects(
+      proveCloudflareDrain({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: sequenceAdapter([...stableBaseline(), value]),
+        now: tickingClock(1),
+        sleep: async () => undefined,
+        wake: async () => undefined,
+        pollIntervalMilliseconds: 1,
+        timeoutMilliseconds: 20,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "drain" &&
+        error.reason === reason,
+    );
+  }
+});
+
+test("keeps torn drain observation retries inside the original deadline", async () => {
+  const adapter = sequenceAdapter([
+    ...stableBaseline(),
+    new CloudflareDrainFailure("drain", "worker_observation_changed"),
+    new CloudflareDrainFailure("drain", "application_observation_changed"),
+  ]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 5,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "application_observation_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    2,
   );
 });
 
@@ -312,7 +967,7 @@ test("rejects historical rollout metadata drift during image reuse", async () =>
     (error) =>
       error instanceof CloudflareDrainFailure &&
       error.phase === "drain" &&
-      error.reason === "evidence_changed",
+      error.reason === "rollout_history_changed",
   );
 });
 
@@ -383,7 +1038,7 @@ test("rejects drift after the first stable image reuse observation", async () =>
     }),
     (error) =>
       error instanceof CloudflareDrainFailure &&
-      error.reason === "evidence_changed",
+      error.reason === "instance_binding_changed",
   );
 });
 
@@ -427,7 +1082,33 @@ test("does not treat a changed untagged worker as the candidate", async () => {
     (error) =>
       error instanceof CloudflareDrainFailure &&
       error.phase === "drain" &&
-      error.reason === "evidence_changed",
+      error.reason === "worker_identity_changed",
+  );
+});
+
+test("rejects an unknown Application identity immediately", async () => {
+  const candidate = observation({ candidate: true });
+  candidate.container.applicationId = ids.changedWorkerVersion;
+  const adapter = sequenceAdapter([...stableBaseline(), candidate]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 10,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "application_identity_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    1,
   );
 });
 
@@ -534,6 +1215,91 @@ test("reports the highest-priority closed baseline reason without waking", async
   }
 });
 
+test("keeps a missing active rollout row pending during baseline without waking", async () => {
+  const missingActiveRow = observation({
+    activeRolloutId: ids.newRollout,
+  });
+  let woke = false;
+  const adapter = sequenceAdapter([
+    missingActiveRow,
+    structuredClone(missingActiveRow),
+  ]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => {
+        woke = true;
+      },
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 5,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "baseline" &&
+      error.reason === "baseline_active_rollout",
+  );
+  assert.equal(woke, false);
+  assert.equal(adapter.calls.length, 2);
+});
+
+test("rejects a missing active rollout row without a candidate envelope", async () => {
+  const missingActiveRow = observation({
+    activeRolloutId: ids.newRollout,
+  });
+  const adapter = sequenceAdapter([...stableBaseline(), missingActiveRow]);
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 10,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "application_state_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    1,
+  );
+});
+
+test("does not promote same-image missing-row state to visibility lag", async () => {
+  const missingActiveRow = reusedImageObservation();
+  missingActiveRow.container.activeRolloutId = ids.newRollout;
+  const adapter = sequenceAdapter([...stableBaseline(), missingActiveRow]);
+
+  await assert.rejects(
+    proveCloudflareDrainImplementation({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: adapter,
+      resolveCandidateImageDigest: async () => baselineImageDigest,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 10,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "application_state_changed",
+  );
+  assert.equal(
+    adapter.calls.filter(({ phase }) => phase === "drain").length,
+    1,
+  );
+});
+
 test("waits for transient baseline rollout and placement states before waking", async () => {
   const pendingValues = [
     observation({ activeRolloutId: ids.oldRollout }),
@@ -626,7 +1392,7 @@ test("does not accept mixed old instances or one candidate observation", async (
     (error) =>
       error instanceof CloudflareDrainFailure &&
       error.phase === "stability" &&
-      error.reason === "evidence_changed",
+      error.reason === "candidate_stability_changed",
   );
 });
 
@@ -675,6 +1441,15 @@ test("keeps invalid and provider baseline failures immediate", async () => {
       reason: "provider_rejected",
       source: "none",
     },
+    ...["worker_observation_changed", "application_observation_changed"].map(
+      (reason) => ({
+        adapter: sequenceAdapter([
+          new CloudflareDrainFailure("baseline", reason),
+        ]),
+        reason,
+        source: "none",
+      }),
+    ),
   ]) {
     let woke = false;
     let slept = false;
@@ -722,8 +1497,8 @@ test("fails closed when a stable semantic projection changes or rollout reverts"
     }),
     (error) =>
       error instanceof CloudflareDrainFailure &&
-      error.phase === "stability" &&
-      error.reason === "evidence_changed",
+      error.phase === "drain" &&
+      error.reason === "worker_identity_changed",
   );
 
   for (const rolloutStatus of ["reverted", "replaced"]) {
@@ -750,13 +1525,14 @@ test("fails closed when a stable semantic projection changes or rollout reverts"
   }
 });
 
-test("accepts version gaps, unrelated rollouts, and reordered candidate instances", async () => {
+test("accepts version gaps, historical unrelated rollouts, and reordered candidate instances", async () => {
   const unrelated = rollout({
     id: ids.unrelatedRollout,
     currentVersion: 1,
     targetVersion: 2,
     targetImage: unrelatedImage,
   });
+  const baseline = observation({ rollouts: [unrelated, rollout()] });
   const candidateRollout = rollout({
     id: ids.newRollout,
     currentVersion: 1,
@@ -778,7 +1554,7 @@ test("accepts version gaps, unrelated rollouts, and reordered candidate instance
 
   const evidence = await proveCloudflareDrain({
     candidateCommitSHA: candidateSHA,
-    rawAdapter: sequenceAdapter([...stableBaseline(), first, second]),
+    rawAdapter: sequenceAdapter([...stableBaseline(baseline), first, second]),
     now: tickingClock(),
     sleep: async () => undefined,
     wake: async () => undefined,
@@ -936,7 +1712,15 @@ test("rejects mixed images and ambiguous candidate rollouts", async () => {
       }),
       (error) =>
         error instanceof CloudflareDrainFailure &&
-        ["evidence_changed", "evidence_timeout"].includes(error.reason),
+        [
+          "application_state_changed",
+          "candidate_image_changed",
+          "candidate_stability_changed",
+          "instance_binding_changed",
+          "rollout_identity_changed",
+          "unexpected_rollout",
+          "evidence_timeout",
+        ].includes(error.reason),
     );
   }
 });
@@ -1134,9 +1918,15 @@ test("rejects unknown schemas, enums, oversized raw input, and clock regression"
 });
 
 test("binds the rollout to the locally pushed candidate image digest", async () => {
-  for (const digest of [
-    `sha256:${"1".repeat(64)}`,
-    `sha256:${"3".repeat(64)}`,
+  for (const { digest, reason } of [
+    {
+      digest: `sha256:${"1".repeat(64)}`,
+      reason: "unexpected_rollout",
+    },
+    {
+      digest: `sha256:${"3".repeat(64)}`,
+      reason: "candidate_image_changed",
+    },
   ]) {
     await assert.rejects(
       proveCloudflareDrainImplementation({
@@ -1153,9 +1943,7 @@ test("binds the rollout to the locally pushed candidate image digest", async () 
       (error) =>
         error instanceof CloudflareDrainFailure &&
         error.phase === "drain" &&
-        ["evidence_changed", "invalid_evidence"].includes(error.reason) &&
-        (error.reason !== "invalid_evidence" ||
-          error.source === "candidate_image"),
+        error.reason === reason,
     );
   }
 });
@@ -2035,7 +2823,7 @@ test("production adapter rejects repeated and unbounded rollout pages", async ()
   }
 });
 
-test("production adapter rejects worker or container changes inside one observation", async () => {
+test("production adapter classifies Worker or Application changes inside one observation", async () => {
   for (const changedResource of ["worker", "worker-tag", "container"]) {
     const baseline = productionFetch();
     const candidate = productionFetch({ candidate: true });
@@ -2077,7 +2865,10 @@ test("production adapter rejects worker or container changes inside one observat
       (error) =>
         error instanceof CloudflareDrainFailure &&
         error.phase === "drain" &&
-        error.reason === "evidence_changed",
+        error.reason ===
+          (changedResource === "container"
+            ? "application_observation_changed"
+            : "worker_observation_changed"),
     );
   }
 });
@@ -2108,7 +2899,7 @@ test("production adapter rejects a tag appearing during an untagged observation"
     (error) =>
       error instanceof CloudflareDrainFailure &&
       error.phase === "baseline" &&
-      error.reason === "evidence_changed",
+      error.reason === "worker_observation_changed",
   );
 });
 
@@ -2269,6 +3060,28 @@ test("diagnostics expose only closed enums and validated run metadata", () => {
       baselineDiagnostic,
     );
     assert.doesNotMatch(baselineDiagnostic, new RegExp(token));
+  }
+  for (const reason of [
+    "worker_observation_changed",
+    "application_observation_changed",
+    "worker_identity_changed",
+    "application_identity_changed",
+    "instance_binding_changed",
+    "rollout_history_changed",
+    "unexpected_rollout",
+    "application_state_changed",
+    "rollout_identity_changed",
+    "candidate_image_changed",
+    "candidate_stability_changed",
+    "application_rollout_visibility_lag",
+    "rollout_inventory_visibility_lag",
+  ]) {
+    const diagnostic = formatCloudflareDrainDiagnostic(
+      new CloudflareDrainFailure("drain", reason),
+      { runID: "123", runAttempt: "2", commitSHA: candidateSHA },
+    );
+    assert.equal(parseCloudflareDrainDiagnosticLine(diagnostic), diagnostic);
+    assert.doesNotMatch(diagnostic, /private|token|response|account_id/i);
   }
   assert.deepEqual(cloudflareDrainSources, [
     "none",
