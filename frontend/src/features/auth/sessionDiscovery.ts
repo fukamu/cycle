@@ -139,3 +139,13 @@ export function isInitialSessionRateLimited(error: unknown): boolean {
     error.code === "RATE_LIMIT_EXCEEDED"
   );
 }
+
+export function isInitialSessionAnonymousCreationBlocked(
+  error: unknown,
+): boolean {
+  return (
+    error instanceof APIError &&
+    error.status === 403 &&
+    error.code === "ANONYMOUS_CREATION_BLOCKED"
+  );
+}

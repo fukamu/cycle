@@ -330,6 +330,56 @@ describe("SessionProvider admission boundary", () => {
     expect(anonymousRequests).toBe(2);
   });
 
+  it("does not automatically retry a blocked anonymous bootstrap and explains when to retry", async () => {
+    let sessionRequests = 0;
+    let anonymousRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = typeof input === "string" ? input : input.toString();
+        if (path === "/api/v1/session") {
+          sessionRequests += 1;
+          return errorResponse(401, "SESSION_MISSING");
+        }
+        if (
+          path === "/api/v1/session/anonymous" &&
+          (init?.method ?? "GET") === "POST"
+        ) {
+          anonymousRequests += 1;
+          return anonymousRequests === 1
+            ? errorResponse(403, "ANONYMOUS_CREATION_BLOCKED")
+            : sessionResponse(session);
+        }
+        throw new Error(`unexpected request: ${path}`);
+      }),
+    );
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, retryDelay: 0 } },
+    });
+
+    renderProvider(undefined, client);
+
+    const blockedAlert = await screen.findByRole("alert");
+    expect(blockedAlert).toHaveAttribute(
+      "data-initial-session-state",
+      "anonymous-creation-blocked",
+    );
+    expect(blockedAlert).toHaveTextContent(
+      "現在、新しい利用を開始できません。時間をおいてお試しください。",
+    );
+    expect(sessionRequests).toBe(2);
+    expect(anonymousRequests).toBe(1);
+    expect(screen.queryByText("application ready")).not.toBeInTheDocument();
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "再試行" }));
+
+    expect(await screen.findByText("application ready")).toBeInTheDocument();
+    expect(sessionRequests).toBe(4);
+    expect(anonymousRequests).toBe(2);
+  });
+
   it("aborts a lock-waiting anonymous bootstrap when another tab changes identity", async () => {
     const previousGuidePreferences = seedAllFirstUseGuidePreferences();
     const advisory = createAdvisoryChannelHarness();
