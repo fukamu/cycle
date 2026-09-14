@@ -604,6 +604,42 @@ test("rejects an additional new rollout after the first stable candidate", async
   );
 });
 
+test("rejects competing new rollouts when historical rows are absent", async () => {
+  const ambiguous = observation({
+    candidate: true,
+    rollouts: [
+      rollout({
+        id: ids.newRollout,
+        currentVersion: 1,
+        targetVersion: 2,
+        targetImage: newImage,
+      }),
+      rollout({
+        id: ids.unrelatedRollout,
+        currentVersion: 1,
+        targetVersion: 3,
+        targetImage: unrelatedImage,
+      }),
+    ],
+  });
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: sequenceAdapter([...stableBaseline(), ambiguous]),
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "unexpected_rollout",
+  );
+});
+
 test("resets candidate stability across cross-endpoint visibility lag", async () => {
   const candidate = observation({ candidate: true });
   const adapter = sequenceAdapter([
@@ -950,9 +986,57 @@ test("requires an idle Container inventory before proving image reuse", async ()
   );
 });
 
-test("rejects historical rollout metadata drift during image reuse", async () => {
+test("rejects historical rollout drift or removal during image reuse", async () => {
+  for (const changeHistory of [
+    (candidate) => {
+      candidate.container.rollouts[0].status = "reverted";
+    },
+    (candidate) => {
+      candidate.container.rollouts[0].currentVersion = 0;
+    },
+    (candidate) => {
+      candidate.container.rollouts[0].targetVersion = 0;
+    },
+    (candidate) => {
+      candidate.container.rollouts[0].targetImage = unrelatedImage;
+    },
+    (candidate) => {
+      candidate.container.rollouts = [];
+    },
+  ]) {
+    const candidate = reusedImageObservation({ instances: [] });
+    changeHistory(candidate);
+    await assert.rejects(
+      proveCloudflareDrainImplementation({
+        candidateCommitSHA: candidateSHA,
+        rawAdapter: sequenceAdapter([...stableBaseline(), candidate]),
+        resolveCandidateImageDigest: async () => `sha256:${"1".repeat(64)}`,
+        now: tickingClock(1),
+        sleep: async () => undefined,
+        wake: async () => undefined,
+        pollIntervalMilliseconds: 1,
+        timeoutMilliseconds: 10,
+      }),
+      (error) =>
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "drain" &&
+        error.reason === "rollout_history_changed",
+    );
+  }
+});
+
+test("prioritizes an unexpected new rollout over historical drift during image reuse", async () => {
   const candidate = reusedImageObservation({ instances: [] });
   candidate.container.rollouts[0].status = "reverted";
+  candidate.container.rollouts.unshift(
+    rollout({
+      id: ids.newRollout,
+      currentVersion: 1,
+      targetVersion: 2,
+      targetImage: newImage,
+    }),
+  );
+
   await assert.rejects(
     proveCloudflareDrainImplementation({
       candidateCommitSHA: candidateSHA,
@@ -967,7 +1051,7 @@ test("rejects historical rollout metadata drift during image reuse", async () =>
     (error) =>
       error instanceof CloudflareDrainFailure &&
       error.phase === "drain" &&
-      error.reason === "rollout_history_changed",
+      error.reason === "unexpected_rollout",
   );
 });
 
@@ -1523,6 +1607,95 @@ test("fails closed when a stable semantic projection changes or rollout reverts"
         error.reason === "rollout_failed",
     );
   }
+});
+
+test("ignores historical rollout metadata drift and removal for a different-image candidate", async () => {
+  for (const changeHistory of [
+    (candidate) => {
+      candidate.container.rollouts[1].status = "reverted";
+    },
+    (candidate) => {
+      candidate.container.rollouts[1].currentVersion = 0;
+    },
+    (candidate) => {
+      candidate.container.rollouts[1].targetVersion = 0;
+    },
+    (candidate) => {
+      candidate.container.rollouts[1].targetImage = unrelatedImage;
+    },
+    (candidate) => {
+      candidate.container.rollouts = candidate.container.rollouts.filter(
+        ({ id }) => id !== ids.oldRollout,
+      );
+    },
+  ]) {
+    const candidate = observation({ candidate: true });
+    changeHistory(candidate);
+    const evidence = await proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: sequenceAdapter([
+        ...stableBaseline(),
+        candidate,
+        observation({ candidate: true }),
+      ]),
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    });
+
+    assert.equal(evidence.result, "drained");
+    assert.equal(evidence.containerRolloutId, ids.newRollout);
+  }
+});
+
+test("rejects a historical rollout as the active different-image rollout", async () => {
+  const candidate = observation({
+    candidate: true,
+    activeRolloutId: ids.oldRollout,
+  });
+  candidate.container.rollouts[1].status = "reverted";
+
+  await assert.rejects(
+    proveCloudflareDrain({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: sequenceAdapter([...stableBaseline(), candidate]),
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 20,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "rollout_identity_changed",
+  );
+});
+
+test("ignores historical rollout drift before resolving a different candidate image", async () => {
+  const unresolved = observation();
+  unresolved.container.rollouts[0].status = "reverted";
+  const candidate = observation({ candidate: true });
+
+  const evidence = await proveCloudflareDrain({
+    candidateCommitSHA: candidateSHA,
+    rawAdapter: sequenceAdapter([
+      ...stableBaseline(),
+      unresolved,
+      candidate,
+      structuredClone(candidate),
+    ]),
+    now: tickingClock(1),
+    sleep: async () => undefined,
+    wake: async () => undefined,
+    pollIntervalMilliseconds: 1,
+    timeoutMilliseconds: 20,
+  });
+
+  assert.equal(evidence.result, "drained");
+  assert.equal(evidence.containerRolloutId, ids.newRollout);
 });
 
 test("accepts version gaps, historical unrelated rollouts, and reordered candidate instances", async () => {
