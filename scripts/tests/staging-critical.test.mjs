@@ -8,6 +8,7 @@ import {
   deriveBootstrapUUIDv7,
   formatStagingCriticalDiagnostic,
   parseAnonymousSession,
+  parsePublicAnonymousSession,
   parseStagingAdmissionMode,
   parseStagingBaseURL,
   parseStagingCriticalMode,
@@ -97,7 +98,39 @@ test("accepts only closed staging mode enums", () => {
   );
 });
 
-test("accepts only an anonymous session bound to its response identity", () => {
+test("parses a public anonymous Session body without an authenticated response identity", () => {
+  const payload = {
+    user: {
+      id: userID,
+      googleConnected: false,
+      googleEmail: null,
+    },
+    csrfToken: "csrf-private-value",
+  };
+  assert.deepEqual(parsePublicAnonymousSession(payload), {
+    userID,
+    csrfToken: "csrf-private-value",
+  });
+
+  for (const invalid of [
+    { ...payload, csrfToken: "" },
+    {
+      ...payload,
+      user: { ...payload.user, googleConnected: true },
+    },
+  ]) {
+    assert.throws(
+      () => parsePublicAnonymousSession(invalid),
+      (error) =>
+        error instanceof Error &&
+        error.message === "staging session response is invalid" &&
+        !error.message.includes(userID) &&
+        !error.message.includes("csrf-private-value"),
+    );
+  }
+});
+
+test("binds an authenticated Session body to its exact response identity", () => {
   const payload = {
     user: {
       id: userID,
@@ -111,19 +144,13 @@ test("accepts only an anonymous session bound to its response identity", () => {
     csrfToken: "csrf-private-value",
   });
 
-  for (const invalid of [
-    [payload, "0198c20b-7b95-7000-8000-000000000002"],
-    [{ ...payload, csrfToken: "" }, userID],
-    [
-      {
-        ...payload,
-        user: { ...payload.user, googleConnected: true },
-      },
-      userID,
-    ],
+  for (const authenticatedUserID of [
+    undefined,
+    "not-a-user-id",
+    "0198c20b-7b95-7000-8000-000000000002",
   ]) {
     assert.throws(
-      () => parseAnonymousSession(invalid[0], invalid[1]),
+      () => parseAnonymousSession(payload, authenticatedUserID),
       (error) =>
         error instanceof Error &&
         error.message === "staging session response is invalid" &&
@@ -157,6 +184,17 @@ test("keeps the browser harness free of secret-bearing diagnostics and artifacts
     source.match(/process\.env\.STAGING_E2E_INVITE_TOKEN/g)?.length,
     4,
   );
+  const anonymousCapture = source.slice(
+    source.indexOf("function captureAnonymousSession("),
+    source.indexOf("async function discoverSession("),
+  );
+  assert.notEqual(anonymousCapture, "");
+  assert.match(anonymousCapture, /parsePublicAnonymousSession/);
+  assert.match(
+    anonymousCapture,
+    /response\.headers\(\)\[authenticatedUserIDHeader\] !== undefined/,
+  );
+  assert.doesNotMatch(anonymousCapture, /parseAnonymousSession/);
   for (const name of [
     "DEBUG",
     "NODE_DEBUG",
