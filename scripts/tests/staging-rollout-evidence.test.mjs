@@ -13,6 +13,7 @@ const safeDrainEvidence = Object.freeze({
   workerVersionId: "00000000-0000-4000-8000-000000000002",
   drainedWorkerVersionId: "00000000-0000-4000-8000-000000000003",
   containerApplicationId: "00000000-0000-4000-8000-000000000004",
+  containerProof: "rolled_out",
   containerRolloutId: "00000000-0000-4000-8000-000000000005",
   containerVersion: 2,
   containerImageDigest: `sha256:${"1".repeat(64)}`,
@@ -192,6 +193,34 @@ test("records drain as smoke-pending with only release-safe metadata", () => {
       }),
     /evidence write failed/,
   );
+});
+
+test("records image reuse without inventing a Container rollout", () => {
+  const reusedDigest = `sha256:${"2".repeat(64)}`;
+  const reusedEvidence = {
+    ...safeDrainEvidence,
+    containerProof: "image_reused",
+    containerRolloutId: null,
+    containerVersion: 1,
+    containerImageDigest: reusedDigest,
+    drainedContainerVersion: 1,
+    drainedContainerImageDigest: reusedDigest,
+  };
+  const files = [];
+  const summaries = [];
+  writeStagingRolloutEvidence({
+    argv: [],
+    env: normalEnvironment(),
+    readInput: () => `${JSON.stringify(reusedEvidence)}\n`,
+    writeFile: (...values) => files.push(values),
+    appendFile: (...values) => summaries.push(values),
+  });
+
+  const record = JSON.parse(files[0][1]);
+  assert.equal(record.cloudflareDrain.containerProof, "image_reused");
+  assert.equal(record.cloudflareDrain.containerRolloutId, null);
+  assert.match(summaries[0][1], /\| Container proof \| image_reused \|/);
+  assert.match(summaries[0][1], /\| Container rollout \| `not_applicable` \|/);
 });
 
 test("accepts applied Plan evidence and rejects malformed Terraform metadata", () => {

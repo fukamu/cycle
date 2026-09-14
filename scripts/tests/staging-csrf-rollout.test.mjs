@@ -636,9 +636,36 @@ test("forwards only one closed deploy or Cloudflare drain diagnostic", () => {
     selectStagingDeployDiagnostic(`${diagnostic}\n${deployDiagnostic}\n`),
     undefined,
   );
+  const baselineReaderDiagnostic =
+    "::error::Staging candidate deployment failed; source=baseline_handshake.";
+  assert.equal(
+    selectStagingDeployDiagnostic(
+      `${diagnostic}\n${baselineReaderDiagnostic}\n`,
+    ),
+    diagnostic,
+  );
+  const drainDiagnostic = `::error::Cloudflare drain evidence failed; phase=drain; reason=invalid_evidence; source=candidate_image; run_id=123; run_attempt=2; commit_sha=${"a".repeat(40)}.`;
+  const drainReaderDiagnostic =
+    "::error::Staging candidate deployment failed; source=drain_handshake.";
+  assert.equal(
+    selectStagingDeployDiagnostic(
+      `${drainDiagnostic}\n${drainReaderDiagnostic}\n`,
+    ),
+    drainDiagnostic,
+  );
+  const configurationDiagnostic = `::error::Cloudflare drain evidence failed; phase=configuration; reason=invalid_configuration; source=none; run_id=123; run_attempt=2; commit_sha=${"a".repeat(40)}.`;
+  assert.equal(
+    selectStagingDeployDiagnostic(
+      `${configurationDiagnostic}\n${drainReaderDiagnostic}\n`,
+    ),
+    configurationDiagnostic,
+  );
   for (const invalid of [
     "private provider output",
     `${diagnostic}\n${diagnostic}\n`,
+    `${diagnostic}\n${drainReaderDiagnostic}\n`,
+    `${drainDiagnostic}\n${baselineReaderDiagnostic}\n`,
+    `${drainDiagnostic}\n${drainReaderDiagnostic}\n${drainReaderDiagnostic}\n`,
     "::error::Staging candidate deployment failed; source=private_response.",
     `${deployDiagnostic}\n${deployDiagnostic}\n`,
     `${diagnostic}\n${"x".repeat(4 * 1024)}\n`,

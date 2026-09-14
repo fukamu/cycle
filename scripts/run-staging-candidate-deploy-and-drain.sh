@@ -84,7 +84,7 @@ drain_pid="${DRAIN_EVIDENCE_PID}"
 drain_read_fd="${DRAIN_EVIDENCE[0]}"
 drain_write_fd="${DRAIN_EVIDENCE[1]}"
 
-IFS= read -r baseline_signal <&"${drain_read_fd}" || exit 1
+IFS= read -r baseline_signal <&"${drain_read_fd}" || fail baseline_handshake
 [[ "${baseline_signal}" == "cloudflare_drain_baseline_ready" ]] || fail baseline_handshake
 
 if ! current_main_sha="$(
@@ -179,12 +179,12 @@ secrets_file=""
 
 printf '%s\n' "candidate_deploy_completed" >&"${drain_write_fd}" || fail drain_handshake
 exec {drain_write_fd}>&-
-IFS= read -r drain_evidence <&"${drain_read_fd}" || exit 1
+IFS= read -r drain_evidence <&"${drain_read_fd}" || fail drain_handshake
 if IFS= read -r _ <&"${drain_read_fd}"; then
   fail drain_handshake
 fi
 exec {drain_read_fd}<&-
-wait "${drain_pid}" || exit 1
+wait "${drain_pid}" || fail drain_handshake
 drain_pid=""
 
 if ! printf '%s\n' "${drain_evidence}" \
