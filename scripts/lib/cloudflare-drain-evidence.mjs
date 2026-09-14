@@ -41,6 +41,19 @@ export const cloudflareDrainReasons = Object.freeze([
   "deployment_failed",
   "rollout_failed",
   "evidence_changed",
+  "worker_observation_changed",
+  "application_observation_changed",
+  "worker_identity_changed",
+  "application_identity_changed",
+  "instance_binding_changed",
+  "rollout_history_changed",
+  "unexpected_rollout",
+  "application_state_changed",
+  "rollout_identity_changed",
+  "candidate_image_changed",
+  "candidate_stability_changed",
+  "application_rollout_visibility_lag",
+  "rollout_inventory_visibility_lag",
   "evidence_timeout",
 ]);
 
@@ -60,6 +73,10 @@ export const cloudflareDrainSources = Object.freeze([
 const phaseSet = new Set(cloudflareDrainPhases);
 const reasonSet = new Set(cloudflareDrainReasons);
 const sourceSet = new Set(cloudflareDrainSources);
+const retryableTornObservationReasonSet = new Set([
+  "worker_observation_changed",
+  "application_observation_changed",
+]);
 const rolloutStatuses = new Set([
   "pending",
   "progressing",
@@ -225,13 +242,6 @@ function parseNormalizedObservation(value) {
     }
     rolloutIDs.add(rollout.id);
   }
-  if (
-    container.activeRolloutId !== null &&
-    !rolloutIDs.has(container.activeRolloutId)
-  ) {
-    throw new Error("active rollout is missing");
-  }
-
   const instanceIDs = new Set();
   for (const instance of container.instances) {
     if (
@@ -421,6 +431,53 @@ function rolloutIdentity(rollout) {
   });
 }
 
+function pinnedRolloutId(id) {
+  return Object.freeze({ id });
+}
+
+function isFullRolloutIdentity(identity) {
+  return (
+    identity !== undefined &&
+    Object.hasOwn(identity, "currentVersion") &&
+    Object.hasOwn(identity, "targetVersion") &&
+    Object.hasOwn(identity, "targetImage")
+  );
+}
+
+function drainTransition(candidateRolloutIdentity, pendingReason = undefined) {
+  return Object.freeze({ candidateRolloutIdentity, pendingReason });
+}
+
+function validateCandidateRolloutSafety(container, candidateRollout) {
+  if (
+    candidateRollout.status === "reverted" ||
+    candidateRollout.status === "replaced"
+  ) {
+    fail("drain", "rollout_failed");
+  }
+  if (
+    container.instances.some(
+      (instance) =>
+        instance.version === candidateRollout.targetVersion &&
+        instance.image !== null &&
+        instance.image !== candidateRollout.targetImage,
+    )
+  ) {
+    fail("drain", "instance_binding_changed");
+  }
+  if (
+    container.instances.some(
+      (instance) =>
+        instance.version === candidateRollout.targetVersion &&
+        ["failed", "stopped", "stopping", "unhealthy"].includes(
+          instance.status,
+        ),
+    )
+  ) {
+    fail("drain", "rollout_failed");
+  }
+}
+
 function validateDrainTransition(
   observation,
   baseline,
@@ -437,11 +494,11 @@ function validateDrainTransition(
     worker.tag === candidateCommitSHA &&
     worker.deploymentId !== baseline.workerDeploymentId &&
     worker.versionId !== baseline.workerVersionId;
-  if (
-    (!workerIsBaseline && !workerIsCandidate) ||
-    container.applicationId !== baseline.containerApplicationId
-  ) {
-    fail("drain", "evidence_changed");
+  if (!workerIsBaseline && !workerIsCandidate) {
+    fail("drain", "worker_identity_changed");
+  }
+  if (container.applicationId !== baseline.containerApplicationId) {
+    fail("drain", "application_identity_changed");
   }
   if (
     container.instances.some(
@@ -454,7 +511,7 @@ function validateDrainTransition(
           instance.image !== container.image),
     )
   ) {
-    fail("drain", "evidence_changed");
+    fail("drain", "instance_binding_changed");
   }
 
   const newRollouts = container.rollouts.filter(
@@ -466,18 +523,125 @@ function validateDrainTransition(
   if (
     !sameProjection(rolloutProjection(historicalRollouts), baseline.rollouts)
   ) {
-    fail("drain", "evidence_changed");
+    fail("drain", "rollout_history_changed");
   }
+
+  const applicationIsBaseline =
+    container.version === baseline.containerVersion &&
+    container.image === baseline.containerImage;
+  const candidateUsesDifferentImage =
+    expectedCandidateImageDigest !== undefined &&
+    expectedCandidateImageDigest !== baseline.containerImageDigest;
+  const applicationIsCandidate =
+    candidateUsesDifferentImage &&
+    container.version !== baseline.containerVersion &&
+    container.image !== baseline.containerImage &&
+    imageDigest(container.image) === expectedCandidateImageDigest;
+  const expectedRolloutIsFullyBound = isFullRolloutIdentity(
+    expectedCandidateRollout,
+  );
+  if (
+    applicationIsCandidate &&
+    container.instances.some(
+      (instance) =>
+        instance.version === container.version &&
+        ["failed", "stopped", "stopping", "unhealthy"].includes(
+          instance.status,
+        ),
+    )
+  ) {
+    fail("drain", "rollout_failed");
+  }
+
   if (newRollouts.length === 0) {
     if (
-      expectedCandidateRollout !== undefined ||
+      container.instances.some(
+        (instance) =>
+          instance.version !== baseline.containerVersion &&
+          instance.version !== container.version,
+      )
+    ) {
+      fail("drain", "instance_binding_changed");
+    }
+    if (expectedCandidateRollout !== undefined) {
+      if (
+        workerIsCandidate &&
+        candidateUsesDifferentImage &&
+        (applicationIsCandidate ||
+          (!expectedRolloutIsFullyBound && applicationIsBaseline))
+      ) {
+        if (
+          container.activeRolloutId === null ||
+          container.activeRolloutId === expectedCandidateRollout.id
+        ) {
+          return drainTransition(
+            expectedCandidateRollout,
+            "rollout_inventory_visibility_lag",
+          );
+        }
+        fail("drain", "rollout_identity_changed");
+      }
+      fail("drain", "rollout_identity_changed");
+    }
+    if (
+      workerIsCandidate &&
+      candidateUsesDifferentImage &&
+      ((applicationIsBaseline && container.activeRolloutId !== null) ||
+        applicationIsCandidate)
+    ) {
+      return drainTransition(
+        container.activeRolloutId === null
+          ? undefined
+          : pinnedRolloutId(container.activeRolloutId),
+        "rollout_inventory_visibility_lag",
+      );
+    }
+    if (
       container.activeRolloutId !== null ||
       container.version !== baseline.containerVersion ||
       container.image !== baseline.containerImage
     ) {
-      fail("drain", "evidence_changed");
+      fail("drain", "application_state_changed");
     }
-    return undefined;
+    return drainTransition(undefined);
+  }
+  if (expectedCandidateImageDigest === baseline.containerImageDigest) {
+    fail("drain", "unexpected_rollout");
+  }
+  if (newRollouts.length !== 1) {
+    fail("drain", "unexpected_rollout");
+  }
+
+  const candidateRollouts = newRollouts.filter(
+    (rollout) =>
+      rollout.targetImage !== null &&
+      rollout.currentVersion === baseline.containerVersion &&
+      rollout.targetVersion !== baseline.containerVersion &&
+      imageDigest(rollout.targetImage) === expectedCandidateImageDigest,
+  );
+  for (const candidateRollout of candidateRollouts) {
+    validateCandidateRolloutSafety(container, candidateRollout);
+  }
+  const expectedVisibleRollout =
+    expectedCandidateRollout === undefined
+      ? undefined
+      : newRollouts.find(({ id }) => id === expectedCandidateRollout.id);
+  if (
+    expectedCandidateRollout !== undefined &&
+    (expectedVisibleRollout === undefined ||
+      (expectedRolloutIsFullyBound &&
+        (expectedVisibleRollout.currentVersion !==
+          expectedCandidateRollout.currentVersion ||
+          expectedVisibleRollout.targetVersion !==
+            expectedCandidateRollout.targetVersion ||
+          expectedVisibleRollout.targetImage !==
+            expectedCandidateRollout.targetImage)) ||
+      (!expectedRolloutIsFullyBound &&
+        !candidateRollouts.some(
+          ({ id }) => id === expectedCandidateRollout.id,
+        )))
+  ) {
+    fail("drain", "rollout_identity_changed");
   }
 
   const activeRollout =
@@ -485,7 +649,54 @@ function validateDrainTransition(
       ? undefined
       : newRollouts.find(({ id }) => id === container.activeRolloutId);
   if (container.activeRolloutId !== null && activeRollout === undefined) {
-    fail("drain", "evidence_changed");
+    fail("drain", "rollout_identity_changed");
+  }
+
+  const possibleLaggingApplicationRollout =
+    applicationIsBaseline && workerIsCandidate
+      ? (expectedVisibleRollout ??
+        (newRollouts.length === 1 && candidateRollouts.length === 1
+          ? candidateRollouts[0]
+          : undefined))
+      : undefined;
+  const laggingApplicationRollout =
+    possibleLaggingApplicationRollout !== undefined &&
+    newRollouts.length === 1 &&
+    (activeRollout === undefined ||
+      activeRollout.id === possibleLaggingApplicationRollout.id)
+      ? possibleLaggingApplicationRollout
+      : undefined;
+  if (
+    container.instances.some(
+      (instance) =>
+        instance.version !== baseline.containerVersion &&
+        instance.version !== container.version &&
+        (laggingApplicationRollout === undefined ||
+          instance.version !== laggingApplicationRollout.targetVersion),
+    )
+  ) {
+    fail("drain", "instance_binding_changed");
+  }
+
+  if (applicationIsBaseline && workerIsCandidate) {
+    if (laggingApplicationRollout !== undefined) {
+      validateCandidateRolloutSafety(container, laggingApplicationRollout);
+      return drainTransition(
+        rolloutIdentity(laggingApplicationRollout),
+        "application_rollout_visibility_lag",
+      );
+    }
+    fail("drain", "unexpected_rollout");
+  }
+  if (!applicationIsBaseline && !applicationIsCandidate) {
+    if (
+      candidateUsesDifferentImage &&
+      container.image !== baseline.containerImage &&
+      imageDigest(container.image) !== expectedCandidateImageDigest
+    ) {
+      fail("drain", "candidate_image_changed");
+    }
+    fail("drain", "application_state_changed");
   }
 
   const applicationMatches = newRollouts.filter(
@@ -494,88 +705,53 @@ function validateDrainTransition(
       rollout.targetVersion === container.version &&
       rollout.targetImage === container.image,
   );
-  if (
-    container.version !== baseline.containerVersion &&
-    applicationMatches.length !== 1
-  ) {
-    fail("drain", "evidence_changed");
+  if (applicationIsCandidate && applicationMatches.length !== 1) {
+    fail("drain", "application_state_changed");
   }
 
   let candidateRollout;
   if (expectedCandidateRollout !== undefined) {
-    candidateRollout = newRollouts.find(
-      ({ id }) => id === expectedCandidateRollout.id,
-    );
-    if (
-      !workerIsCandidate ||
-      candidateRollout === undefined ||
-      candidateRollout.currentVersion !==
-        expectedCandidateRollout.currentVersion ||
-      candidateRollout.targetVersion !==
-        expectedCandidateRollout.targetVersion ||
-      candidateRollout.targetImage !== expectedCandidateRollout.targetImage
-    ) {
-      fail("drain", "evidence_changed");
+    candidateRollout = expectedVisibleRollout;
+    if (!workerIsCandidate) {
+      fail("drain", "worker_identity_changed");
     }
   } else if (workerIsCandidate) {
     candidateRollout = activeRollout ?? applicationMatches[0];
   } else if (activeRollout !== undefined) {
-    fail("drain", "evidence_changed");
+    fail("drain", "unexpected_rollout");
   }
 
   if (
     candidateRollout !== undefined &&
     (candidateRollout.targetImage === null ||
-      candidateRollout.currentVersion !== baseline.containerVersion ||
-      candidateRollout.targetVersion === baseline.containerVersion ||
       candidateRollout.targetImage === baseline.containerImage ||
       imageDigest(candidateRollout.targetImage) !==
         expectedCandidateImageDigest)
   ) {
-    fail("drain", "evidence_changed");
+    fail("drain", "candidate_image_changed");
+  }
+  if (
+    candidateRollout !== undefined &&
+    (candidateRollout.currentVersion !== baseline.containerVersion ||
+      candidateRollout.targetVersion === baseline.containerVersion)
+  ) {
+    fail("drain", "rollout_identity_changed");
   }
   if (
     activeRollout !== undefined &&
     (candidateRollout === undefined || activeRollout.id !== candidateRollout.id)
   ) {
-    fail("drain", "evidence_changed");
+    fail("drain", "rollout_identity_changed");
   }
   if (
     applicationMatches.length === 1 &&
     (candidateRollout === undefined ||
       applicationMatches[0].id !== candidateRollout.id)
   ) {
-    fail("drain", "evidence_changed");
+    fail("drain", "rollout_identity_changed");
   }
-  if (
-    candidateRollout !== undefined &&
-    (candidateRollout.status === "reverted" ||
-      candidateRollout.status === "replaced")
-  ) {
-    fail("drain", "rollout_failed");
-  }
-  if (
-    candidateRollout !== undefined &&
-    container.instances.some(
-      (instance) =>
-        instance.version === candidateRollout.targetVersion &&
-        instance.image !== null &&
-        instance.image !== candidateRollout.targetImage,
-    )
-  ) {
-    fail("drain", "evidence_changed");
-  }
-  if (
-    candidateRollout !== undefined &&
-    container.instances.some(
-      (instance) =>
-        instance.version === candidateRollout.targetVersion &&
-        ["failed", "stopped", "stopping", "unhealthy"].includes(
-          instance.status,
-        ),
-    )
-  ) {
-    fail("drain", "rollout_failed");
+  if (candidateRollout !== undefined) {
+    validateCandidateRolloutSafety(container, candidateRollout);
   }
   if (
     (container.version === baseline.containerVersion &&
@@ -584,11 +760,19 @@ function validateDrainTransition(
       (activeRollout.currentVersion !== baseline.containerVersion ||
         activeRollout.targetImage === baseline.containerImage))
   ) {
-    fail("drain", "evidence_changed");
+    fail(
+      "drain",
+      container.version === baseline.containerVersion &&
+        container.image !== baseline.containerImage
+        ? "application_state_changed"
+        : "rollout_identity_changed",
+    );
   }
-  return candidateRollout === undefined
-    ? undefined
-    : rolloutIdentity(candidateRollout);
+  return drainTransition(
+    candidateRollout === undefined
+      ? undefined
+      : rolloutIdentity(candidateRollout),
+  );
 }
 
 function sameProjection(left, right) {
@@ -707,15 +891,21 @@ export async function proveCloudflareDrain({
   currentTime = readClock(now, currentTime);
   const deadline = currentTime + timeoutMilliseconds;
   let candidateImageDigest;
+  let candidateWorkerIdentity;
   let candidateRolloutIdentity;
   let firstStable;
+  let lastTransientDrainReason;
   let attempt = 0;
   while (attempt < 256) {
     currentTime = readClock(now, currentTime);
     if (currentTime >= deadline) {
-      fail(firstStable ? "stability" : "drain", "evidence_timeout");
+      fail(
+        firstStable ? "stability" : "drain",
+        lastTransientDrainReason ?? "evidence_timeout",
+      );
     }
     let observation;
+    let transientDrainReason;
     try {
       observation = parseRawObservation(
         await rawAdapter.readObservation({
@@ -725,17 +915,50 @@ export async function proveCloudflareDrain({
         }),
       );
     } catch (error) {
-      if (error instanceof CloudflareDrainFailure) throw error;
-      fail("drain", "invalid_evidence", "observation");
+      if (
+        error instanceof CloudflareDrainFailure &&
+        error.phase === "drain" &&
+        retryableTornObservationReasonSet.has(error.reason)
+      ) {
+        transientDrainReason = error.reason;
+        lastTransientDrainReason = error.reason;
+        firstStable = undefined;
+      } else if (error instanceof CloudflareDrainFailure) {
+        throw error;
+      } else {
+        fail("drain", "invalid_evidence", "observation");
+      }
     }
     currentTime = readClock(now, currentTime);
     if (currentTime >= deadline) {
-      fail(firstStable ? "stability" : "drain", "evidence_timeout");
+      fail(
+        firstStable ? "stability" : "drain",
+        transientDrainReason ?? "evidence_timeout",
+      );
     }
+    if (transientDrainReason !== undefined) {
+      attempt += 1;
+      try {
+        await sleep(pollIntervalMilliseconds);
+      } catch {
+        fail("drain", "provider_rejected");
+      }
+      continue;
+    }
+    lastTransientDrainReason = undefined;
 
     if (
-      observation.worker.tag === candidateCommitSHA &&
-      candidateImageDigest === undefined
+      candidateWorkerIdentity !== undefined &&
+      (observation.worker.tag !== candidateCommitSHA ||
+        observation.worker.deploymentId !==
+          candidateWorkerIdentity.deploymentId ||
+        observation.worker.versionId !== candidateWorkerIdentity.versionId)
+    ) {
+      fail("drain", "worker_identity_changed");
+    }
+    if (
+      candidateWorkerIdentity === undefined &&
+      observation.worker.tag === candidateCommitSHA
     ) {
       try {
         candidateImageDigest = await resolveCandidateImageDigest({
@@ -751,19 +974,35 @@ export async function proveCloudflareDrain({
       } catch {
         fail("drain", "invalid_evidence", "candidate_image");
       }
+      candidateWorkerIdentity = Object.freeze({
+        deploymentId: observation.worker.deploymentId,
+        versionId: observation.worker.versionId,
+      });
       currentTime = readClock(now, currentTime);
       if (currentTime >= deadline) {
         fail(firstStable ? "stability" : "drain", "evidence_timeout");
       }
     }
 
-    candidateRolloutIdentity = validateDrainTransition(
+    const transition = validateDrainTransition(
       observation,
       baseline,
       candidateCommitSHA,
       candidateRolloutIdentity,
       candidateImageDigest,
     );
+    candidateRolloutIdentity = transition.candidateRolloutIdentity;
+    if (transition.pendingReason !== undefined) {
+      lastTransientDrainReason = transition.pendingReason;
+      firstStable = undefined;
+      attempt += 1;
+      try {
+        await sleep(pollIntervalMilliseconds);
+      } catch {
+        fail("drain", "provider_rejected");
+      }
+      continue;
+    }
 
     const candidate = candidateProjection(
       observation,
@@ -776,13 +1015,13 @@ export async function proveCloudflareDrain({
       if (firstStable === undefined) {
         firstStable = candidate;
       } else if (!sameProjection(firstStable, candidate)) {
-        fail("stability", "evidence_changed");
+        fail("stability", "candidate_stability_changed");
       } else {
         const observedAt = new Date(currentTime).toISOString();
         return Object.freeze({ ...candidate, observedAt });
       }
     } else if (firstStable !== undefined) {
-      fail("stability", "evidence_changed");
+      fail("stability", "candidate_stability_changed");
     }
 
     attempt += 1;
@@ -792,7 +1031,7 @@ export async function proveCloudflareDrain({
       fail("drain", "provider_rejected");
     }
   }
-  fail("drain", "evidence_timeout");
+  fail("drain", lastTransientDrainReason ?? "evidence_timeout");
 }
 
 function normalizeWorkerDeployment(envelope) {
@@ -1391,7 +1630,11 @@ export function createCloudflareRawAdapter({
       if (
         finalWorker.deploymentId !== worker.deploymentId ||
         finalWorker.versionId !== worker.versionId ||
-        finalWorkerTag !== workerTag ||
+        finalWorkerTag !== workerTag
+      ) {
+        fail(phase, "worker_observation_changed");
+      }
+      if (
         finalApplication.id !== application.id ||
         finalApplication.version !== application.version ||
         finalApplication.configuration.image !==
@@ -1399,7 +1642,7 @@ export function createCloudflareRawAdapter({
         (finalApplication.active_rollout_id ?? null) !==
           (application.active_rollout_id ?? null)
       ) {
-        fail(phase, "evidence_changed");
+        fail(phase, "application_observation_changed");
       }
       return {
         worker: {
