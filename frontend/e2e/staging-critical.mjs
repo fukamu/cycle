@@ -9,6 +9,7 @@ import {
   deriveBootstrapUUIDv7,
   formatStagingCriticalDiagnostic,
   parseAnonymousSession,
+  parsePublicAnonymousSession,
   parseStagingAdmissionMode,
   parseStagingBaseURL,
   parseStagingCriticalMode,
@@ -420,10 +421,10 @@ function captureAnonymousSession(currentPage) {
     .then(
       async (response) => {
         try {
-          return parseAnonymousSession(
-            await response.json(),
-            response.headers()[authenticatedUserIDHeader],
-          );
+          if (response.headers()[authenticatedUserIDHeader] !== undefined) {
+            return undefined;
+          }
+          return parsePublicAnonymousSession(await response.json());
         } catch {
           return undefined;
         }

@@ -344,7 +344,7 @@ export function deriveBootstrapUUIDv7(runKey, timestampMilliseconds) {
   ].join("-");
 }
 
-export function parseAnonymousSession(payload, authenticatedUserID) {
+function parseSessionPayload(payload) {
   if (
     typeof payload !== "object" ||
     payload === null ||
@@ -364,12 +364,23 @@ export function parseAnonymousSession(payload, authenticatedUserID) {
     typeof session.csrfToken !== "string" ||
     session.csrfToken.length === 0 ||
     session.csrfToken.length > 4096 ||
-    /[\u0000-\u001f\u007f]/.test(session.csrfToken) ||
-    authenticatedUserID !== session.user.id
+    /[\u0000-\u001f\u007f]/.test(session.csrfToken)
   ) {
     throw new Error("staging session response is invalid");
   }
   return { userID: session.user.id, csrfToken: session.csrfToken };
+}
+
+export function parsePublicAnonymousSession(payload) {
+  return parseSessionPayload(payload);
+}
+
+export function parseAnonymousSession(payload, authenticatedUserID) {
+  const session = parseSessionPayload(payload);
+  if (authenticatedUserID !== session.userID) {
+    throw new Error("staging session response is invalid");
+  }
+  return session;
 }
 
 export async function retryPublicAccountDelete(

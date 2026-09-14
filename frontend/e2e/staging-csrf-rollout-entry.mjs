@@ -9,6 +9,7 @@ import { chromium, request } from "@playwright/test";
 import { parseCloudflareDrainDiagnosticLine } from "../../scripts/lib/cloudflare-drain-evidence.mjs";
 import {
   parseAnonymousSession,
+  parsePublicAnonymousSession,
   StagingCriticalFailure,
 } from "../../scripts/lib/staging-critical.mjs";
 import {
@@ -760,10 +761,10 @@ export async function captureStagingAnonymousSession(page) {
     throw new StagingCriticalFailure("entry", failureReason);
   }
   try {
-    return parseAnonymousSession(
-      await response.json(),
-      response.headers()[authenticatedUserIDHeader],
-    );
+    if (response.headers()[authenticatedUserIDHeader] !== undefined) {
+      return undefined;
+    }
+    return parsePublicAnonymousSession(await response.json());
   } catch {
     return undefined;
   }

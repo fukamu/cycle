@@ -146,7 +146,7 @@ test("captures a successful anonymous session response", async () => {
       "https://cycle.staging.fukamu.matoruru.com/api/v1/session/anonymous",
     request: () => ({ method: () => "POST" }),
     status: () => 201,
-    headers: () => ({ "x-fukamu-authenticated-user-id": userID }),
+    headers: () => ({}),
     async json() {
       return {
         user: { id: userID, googleConnected: false, googleEmail: null },
@@ -162,6 +162,32 @@ test("captures a successful anonymous session response", async () => {
   });
   assert.deepEqual(session, stableSession);
   assert.equal(classifyStagingAnonymousSessionStatus(201), undefined);
+});
+
+test("rejects an authenticated identity header on a public anonymous session response", async () => {
+  let bodyRead = false;
+  const response = {
+    url: () =>
+      "https://cycle.staging.fukamu.matoruru.com/api/v1/session/anonymous",
+    request: () => ({ method: () => "POST" }),
+    status: () => 201,
+    headers: () => ({ "x-fukamu-authenticated-user-id": userID }),
+    async json() {
+      bodyRead = true;
+      return {
+        user: { id: userID, googleConnected: false, googleEmail: null },
+        csrfToken: stableToken,
+      };
+    },
+  };
+  const session = await captureStagingAnonymousSession({
+    async waitForResponse(predicate) {
+      assert.equal(predicate(response), true);
+      return response;
+    },
+  });
+  assert.equal(session, undefined);
+  assert.equal(bodyRead, false);
 });
 
 test("preserves closed candidate anonymous session failures after drain", async () => {
