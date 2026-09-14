@@ -517,21 +517,25 @@ function validateDrainTransition(
   const newRollouts = container.rollouts.filter(
     ({ id }) => !baseline.rolloutIds.includes(id),
   );
-  const historicalRollouts = container.rollouts.filter(({ id }) =>
-    baseline.rolloutIds.includes(id),
-  );
-  if (
-    !sameProjection(rolloutProjection(historicalRollouts), baseline.rollouts)
-  ) {
-    fail("drain", "rollout_history_changed");
-  }
-
   const applicationIsBaseline =
     container.version === baseline.containerVersion &&
     container.image === baseline.containerImage;
   const candidateUsesDifferentImage =
     expectedCandidateImageDigest !== undefined &&
     expectedCandidateImageDigest !== baseline.containerImageDigest;
+  if (expectedCandidateImageDigest === baseline.containerImageDigest) {
+    if (newRollouts.length !== 0) {
+      fail("drain", "unexpected_rollout");
+    }
+    const historicalRollouts = container.rollouts.filter(({ id }) =>
+      baseline.rolloutIds.includes(id),
+    );
+    if (
+      !sameProjection(rolloutProjection(historicalRollouts), baseline.rollouts)
+    ) {
+      fail("drain", "rollout_history_changed");
+    }
+  }
   const applicationIsCandidate =
     candidateUsesDifferentImage &&
     container.version !== baseline.containerVersion &&
@@ -604,9 +608,6 @@ function validateDrainTransition(
       fail("drain", "application_state_changed");
     }
     return drainTransition(undefined);
-  }
-  if (expectedCandidateImageDigest === baseline.containerImageDigest) {
-    fail("drain", "unexpected_rollout");
   }
   if (newRollouts.length !== 1) {
     fail("drain", "unexpected_rollout");
