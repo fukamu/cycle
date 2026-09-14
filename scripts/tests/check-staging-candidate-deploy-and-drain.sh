@@ -31,11 +31,19 @@ case "$1" in
   ./scripts/check-cloudflare-drain-evidence.mjs)
     fd3_is_open
     printf '%s\n' drain-start >>"${TEST_COMMAND_LOG}"
+    if [[ "${FAKE_DRAIN_FAILURE_PHASE:-}" == baseline ]]; then
+      printf '%s\n' "::error::Cloudflare drain evidence failed; phase=baseline; reason=invalid_evidence; source=observation; run_id=${GITHUB_RUN_ID}; run_attempt=${GITHUB_RUN_ATTEMPT}; commit_sha=${COMMIT_SHA}." >&3
+      exit 1
+    fi
     printf '%s\n' cloudflare_drain_baseline_ready
     IFS= read -r acknowledgement
     [[ "${acknowledgement}" == candidate_deploy_completed ]]
     printf '%s\n' drain-ack >>"${TEST_COMMAND_LOG}"
-    printf '{"result":"drained","commitSHA":"%s","workerDeploymentId":"00000000-0000-4000-8000-000000000001","workerVersionId":"00000000-0000-4000-8000-000000000002","drainedWorkerVersionId":"00000000-0000-4000-8000-000000000003","containerApplicationId":"00000000-0000-4000-8000-000000000004","containerRolloutId":"00000000-0000-4000-8000-000000000005","containerVersion":2,"containerImageDigest":"sha256:%s","drainedContainerVersion":1,"drainedContainerImageDigest":"sha256:%s","observedAt":"2026-09-07T00:00:00.000Z"}\n' \
+    if [[ "${FAKE_DRAIN_FAILURE_PHASE:-}" == drain ]]; then
+      printf '%s\n' "::error::Cloudflare drain evidence failed; phase=drain; reason=invalid_evidence; source=candidate_image; run_id=${GITHUB_RUN_ID}; run_attempt=${GITHUB_RUN_ATTEMPT}; commit_sha=${COMMIT_SHA}." >&3
+      exit 1
+    fi
+    printf '{"result":"drained","commitSHA":"%s","workerDeploymentId":"00000000-0000-4000-8000-000000000001","workerVersionId":"00000000-0000-4000-8000-000000000002","drainedWorkerVersionId":"00000000-0000-4000-8000-000000000003","containerApplicationId":"00000000-0000-4000-8000-000000000004","containerProof":"rolled_out","containerRolloutId":"00000000-0000-4000-8000-000000000005","containerVersion":2,"containerImageDigest":"sha256:%s","drainedContainerVersion":1,"drainedContainerImageDigest":"sha256:%s","observedAt":"2026-09-07T00:00:00.000Z"}\n' \
       "${COMMIT_SHA}" "$(printf '1%.0s' {1..64})" "$(printf '2%.0s' {1..64})"
     ;;
   ./scripts/materialize-staging-worker-secrets.mjs)
@@ -109,6 +117,7 @@ run_child() {
   local infra_evidence_run_id="${5-456}"
   local infra_plan_sha256="${6-$(printf '3%.0s' {1..64})}"
   local checkpoint_fail="${7-0}"
+  local drain_failure_phase="${8-}"
   env -i \
     PATH="${fake_bin}:/usr/bin:/bin" \
     TEST_COMMAND_LOG="${log}" \
@@ -126,6 +135,7 @@ run_child() {
     FAKE_MAIN_SHA="${main_sha}" \
     FAKE_PNPM_FAIL="${pnpm_fail}" \
     FAKE_CHECKPOINT_FAIL="${checkpoint_fail}" \
+    FAKE_DRAIN_FAILURE_PHASE="${drain_failure_phase}" \
     DEPLOY_MODE="${deploy_mode}" \
     INFRA_EVIDENCE_KIND="${infra_evidence_kind}" \
     INFRA_EVIDENCE_RUN_ID="${infra_evidence_run_id}" \
@@ -224,5 +234,28 @@ if grep -Fq drain-ack "${log}"; then
 fi
 grep -Fxq '::error::Staging candidate deployment failed; source=wrangler_deploy.' "${output}" \
   || fail "failed deployment did not emit its closed source"
+
+: >"${log}"
+if run_child "${commit_sha}" 0 normal no_changes_plan 456 "$(printf '3%.0s' {1..64})" 0 baseline >"${output}" 2>&1; then
+  fail "candidate deploy/drain accepted failed baseline evidence"
+fi
+grep -Fxq "::error::Cloudflare drain evidence failed; phase=baseline; reason=invalid_evidence; source=observation; run_id=123; run_attempt=1; commit_sha=${commit_sha}." "${output}" \
+  || fail "failed baseline reader did not preserve the Cloudflare diagnostic"
+grep -Fxq '::error::Staging candidate deployment failed; source=baseline_handshake.' "${output}" \
+  || fail "failed baseline reader did not emit its wrapper source"
+if grep -Fq mutation-boundary "${log}"; then
+  fail "failed baseline evidence reached the mutation boundary"
+fi
+
+: >"${log}"
+if run_child "${commit_sha}" 0 normal no_changes_plan 456 "$(printf '3%.0s' {1..64})" 0 drain >"${output}" 2>&1; then
+  fail "candidate deploy/drain accepted failed drain evidence"
+fi
+grep -Fxq "::error::Cloudflare drain evidence failed; phase=drain; reason=invalid_evidence; source=candidate_image; run_id=123; run_attempt=1; commit_sha=${commit_sha}." "${output}" \
+  || fail "failed drain reader did not preserve the Cloudflare diagnostic"
+grep -Fxq '::error::Staging candidate deployment failed; source=drain_handshake.' "${output}" \
+  || fail "failed drain reader did not emit its wrapper source"
+grep -Fxq deploy "${log}" \
+  || fail "failed drain fixture did not reach the deployment"
 
 printf '%s\n' "Staging candidate deploy/drain wrapper tests passed."

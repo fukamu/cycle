@@ -204,10 +204,11 @@ function formatSummary(releaseEvidence) {
     `| Deploy operator | \`${releaseEvidence.operator}\` |`,
     `| Worker version | \`${drainEvidence.workerVersionId}\` |`,
     `| Drained Worker version | \`${drainEvidence.drainedWorkerVersionId}\` |`,
-    `| Container rollout | \`${drainEvidence.containerRolloutId}\` |`,
+    `| Container proof | ${drainEvidence.containerProof} |`,
+    `| Container rollout | \`${drainEvidence.containerRolloutId ?? "not_applicable"}\` |`,
     `| Container image digest | \`${drainEvidence.containerImageDigest}\` |`,
-    `| Drained Container image digest | \`${drainEvidence.drainedContainerImageDigest}\` |`,
-    `| Drain observed at | \`${drainEvidence.observedAt}\` |`,
+    `| Pre-deploy Container image digest | \`${drainEvidence.drainedContainerImageDigest}\` |`,
+    `| Candidate-only observed at | \`${drainEvidence.observedAt}\` |`,
     "",
   ].join("\n");
 }

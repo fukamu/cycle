@@ -645,14 +645,36 @@ export function selectStagingDeployDiagnostic(value) {
     return undefined;
   }
   const lines = value.split("\n");
-  const diagnostics = lines.filter((line) => {
-    if (parseCloudflareDrainDiagnosticLine(line) !== undefined) return true;
+  const cloudflareDiagnostics = lines.filter(
+    (line) => parseCloudflareDrainDiagnosticLine(line) !== undefined,
+  );
+  const candidateDiagnostics = lines.filter((line) => {
     const match = line.match(
       /^::error::Staging candidate deployment failed; source=([a-z_]+)\.$/,
     );
     return match !== null && stagingCandidateDeploySourceSet.has(match[1]);
   });
-  return diagnostics.length === 1 ? diagnostics[0] : undefined;
+  if (cloudflareDiagnostics.length === 1 && candidateDiagnostics.length === 0) {
+    return cloudflareDiagnostics[0];
+  }
+  if (cloudflareDiagnostics.length === 0 && candidateDiagnostics.length === 1) {
+    return candidateDiagnostics[0];
+  }
+  if (cloudflareDiagnostics.length !== 1 || candidateDiagnostics.length !== 1) {
+    return undefined;
+  }
+
+  const phase = cloudflareDiagnostics[0].match(/; phase=([a-z_]+);/)?.[1];
+  const source = candidateDiagnostics[0].match(/source=([a-z_]+)\./)?.[1];
+  const matchesFailedReader =
+    (source === "baseline_handshake" &&
+      (phase === "configuration" || phase === "baseline")) ||
+    (source === "drain_handshake" &&
+      (phase === "configuration" ||
+        phase === "deployment" ||
+        phase === "drain" ||
+        phase === "stability"));
+  return matchesFailedReader ? cloudflareDiagnostics[0] : undefined;
 }
 
 async function terminateDeploymentChild(child, completion) {

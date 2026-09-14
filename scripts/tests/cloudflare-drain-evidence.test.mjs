@@ -44,6 +44,7 @@ const oldImage = `registry.cloudflare.com/${accountID}/cycle:${previousSHA}@sha2
 const newImage = `registry.cloudflare.com/${accountID}/cycle:${candidateSHA}@sha256:${"2".repeat(64)}`;
 const unrelatedImage = `registry.cloudflare.com/${accountID}/cycle:${"c".repeat(40)}@sha256:${"3".repeat(64)}`;
 const candidateImageDigest = `sha256:${"2".repeat(64)}`;
+const baselineImageDigest = `sha256:${"1".repeat(64)}`;
 
 function proveCloudflareDrain(options) {
   return proveCloudflareDrainImplementation({
@@ -154,6 +155,17 @@ function stableBaseline(value = observation()) {
   return [value, structuredClone(value)];
 }
 
+function reusedImageObservation({ instances } = {}) {
+  const value = observation({ instances });
+  value.worker = {
+    deploymentId: ids.newDeployment,
+    versionId: ids.newWorkerVersion,
+    trafficPercentage: 100,
+    tag: candidateSHA,
+  };
+  return value;
+}
+
 function tickingClock(step = 10_000) {
   let value = -step;
   return () => {
@@ -211,6 +223,7 @@ test("requires two identical authoritative observations after waking the deploy"
     workerVersionId: ids.newWorkerVersion,
     drainedWorkerVersionId: ids.oldWorkerVersion,
     containerApplicationId: ids.application,
+    containerProof: "rolled_out",
     containerRolloutId: ids.newRollout,
     containerVersion: 2,
     containerImageDigest: `sha256:${"2".repeat(64)}`,
@@ -221,6 +234,156 @@ test("requires two identical authoritative observations after waking the deploy"
   assert.equal(
     JSON.parse(serializeCloudflareDrainEvidence(evidence)).result,
     "drained",
+  );
+});
+
+test("proves an exact candidate image reuse without inventing a Container rollout", async () => {
+  const candidate = reusedImageObservation({ instances: [] });
+  const evidence = await proveCloudflareDrainImplementation({
+    candidateCommitSHA: candidateSHA,
+    rawAdapter: sequenceAdapter([
+      ...stableBaseline(),
+      candidate,
+      structuredClone(candidate),
+    ]),
+    resolveCandidateImageDigest: async ({
+      workerVersionId,
+      baselineContainerImageDigest,
+    }) => {
+      assert.equal(workerVersionId, ids.newWorkerVersion);
+      assert.equal(baselineContainerImageDigest, baselineImageDigest);
+      return `sha256:${"1".repeat(64)}`;
+    },
+    now: tickingClock(),
+    sleep: async () => undefined,
+    wake: async () => undefined,
+  });
+
+  assert.equal(evidence.containerProof, "image_reused");
+  assert.equal(evidence.containerRolloutId, null);
+  assert.equal(evidence.containerVersion, evidence.drainedContainerVersion);
+  assert.equal(
+    evidence.containerImageDigest,
+    evidence.drainedContainerImageDigest,
+  );
+  assert.equal(
+    JSON.parse(serializeCloudflareDrainEvidence(evidence)).result,
+    "drained",
+  );
+});
+
+test("requires an idle Container inventory before proving image reuse", async () => {
+  const candidate = reusedImageObservation();
+  await assert.rejects(
+    proveCloudflareDrainImplementation({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: sequenceAdapter([
+        ...stableBaseline(),
+        ...Array.from({ length: 10 }, () => structuredClone(candidate)),
+      ]),
+      resolveCandidateImageDigest: async () => `sha256:${"1".repeat(64)}`,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 10,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "evidence_timeout",
+  );
+});
+
+test("rejects historical rollout metadata drift during image reuse", async () => {
+  const candidate = reusedImageObservation({ instances: [] });
+  candidate.container.rollouts[0].status = "reverted";
+  await assert.rejects(
+    proveCloudflareDrainImplementation({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: sequenceAdapter([...stableBaseline(), candidate]),
+      resolveCandidateImageDigest: async () => `sha256:${"1".repeat(64)}`,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 10,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.phase === "drain" &&
+      error.reason === "evidence_changed",
+  );
+});
+
+test("keeps Container proof, rollout identity, version, and digest mutually consistent", () => {
+  const evidence = {
+    result: "drained",
+    commitSHA: candidateSHA,
+    workerDeploymentId: ids.newDeployment,
+    workerVersionId: ids.newWorkerVersion,
+    drainedWorkerVersionId: ids.oldWorkerVersion,
+    containerApplicationId: ids.application,
+    containerProof: "rolled_out",
+    containerRolloutId: ids.newRollout,
+    containerVersion: 2,
+    containerImageDigest: candidateImageDigest,
+    drainedContainerVersion: 1,
+    drainedContainerImageDigest: `sha256:${"1".repeat(64)}`,
+    observedAt: "2026-09-07T00:00:00.000Z",
+  };
+  for (const invalid of [
+    { ...evidence, containerRolloutId: null },
+    { ...evidence, containerVersion: 1 },
+    {
+      ...evidence,
+      containerImageDigest: evidence.drainedContainerImageDigest,
+    },
+    { ...evidence, containerProof: "image_reused" },
+    {
+      ...evidence,
+      containerProof: "image_reused",
+      containerRolloutId: null,
+      containerVersion: 1,
+    },
+  ]) {
+    assert.throws(
+      () => serializeCloudflareDrainEvidence(invalid),
+      /success evidence is invalid/,
+    );
+  }
+
+  const reused = {
+    ...evidence,
+    containerProof: "image_reused",
+    containerRolloutId: null,
+    containerVersion: 1,
+    containerImageDigest: evidence.drainedContainerImageDigest,
+  };
+  assert.equal(
+    JSON.parse(serializeCloudflareDrainEvidence(reused)).containerProof,
+    "image_reused",
+  );
+});
+
+test("rejects drift after the first stable image reuse observation", async () => {
+  const candidate = reusedImageObservation({ instances: [] });
+  const drifted = structuredClone(candidate);
+  drifted.container.instances.push(instance({ image: unrelatedImage }));
+  await assert.rejects(
+    proveCloudflareDrainImplementation({
+      candidateCommitSHA: candidateSHA,
+      rawAdapter: sequenceAdapter([...stableBaseline(), candidate, drifted]),
+      resolveCandidateImageDigest: async () => `sha256:${"1".repeat(64)}`,
+      now: tickingClock(1),
+      sleep: async () => undefined,
+      wake: async () => undefined,
+      pollIntervalMilliseconds: 1,
+      timeoutMilliseconds: 10,
+    }),
+    (error) =>
+      error instanceof CloudflareDrainFailure &&
+      error.reason === "evidence_changed",
   );
 });
 
@@ -1012,12 +1175,21 @@ function envelope(result, resultInfo = undefined) {
   };
 }
 
+function expectedDockerEnvironmentKeys() {
+  return [
+    "PATH",
+    ...(process.env.HOME ? ["HOME"] : []),
+    ...(process.env.DOCKER_CONFIG ? ["DOCKER_CONFIG"] : []),
+  ].toSorted();
+}
+
 test("resolves one exact candidate RepoDigest without inheriting secrets", async () => {
   const calls = [];
   const digest = await resolveLocalCandidateImageDigest({
     accountId: accountID,
     applicationName,
     workerVersionId: ids.newWorkerVersion,
+    baselineContainerImageDigest: baselineImageDigest,
     execFileImpl: (...values) => {
       calls.push(values.slice(0, 3));
       values[3](
@@ -1039,12 +1211,173 @@ test("resolves one exact candidate RepoDigest without inheriting secrets", async
     "{{json .RepoDigests}}",
     `${applicationName}:10000000`,
   ]);
-  assert.deepEqual(Object.keys(calls[0][2].env), ["PATH"]);
+  assert.deepEqual(
+    Object.keys(calls[0][2].env).toSorted(),
+    expectedDockerEnvironmentKeys(),
+  );
+  assert.equal(calls[0][2].env.CLOUDFLARE_API_TOKEN, undefined);
   assert.equal(calls[0][2].maxBuffer, 64 * 1024);
   assert.equal(calls[0][2].timeout, 30_000);
 });
 
-test("rejects missing, ambiguous, malformed, or failed local image evidence", async () => {
+test("falls back to the exact remote candidate manifest after Wrangler removes the local tag", async () => {
+  const calls = [];
+  const remoteImageTag = `registry.cloudflare.com/${accountID}/${applicationName}@${baselineImageDigest}`;
+  const digest = await resolveLocalCandidateImageDigest({
+    accountId: accountID,
+    applicationName,
+    workerVersionId: ids.newWorkerVersion,
+    baselineContainerImageDigest: baselineImageDigest,
+    execFileImpl: (...values) => {
+      calls.push(values.slice(0, 3));
+      if (calls.length === 1) {
+        values[3](new Error("local tag not found"), "", token);
+        return;
+      }
+      values[3](
+        null,
+        JSON.stringify({
+          Ref: remoteImageTag,
+          Descriptor: {
+            mediaType: "application/vnd.oci.image.manifest.v1+json",
+            digest: baselineImageDigest,
+            size: 1234,
+          },
+          OCIManifest: {
+            schemaVersion: 2,
+            mediaType: "application/vnd.oci.image.manifest.v1+json",
+            config: {},
+            layers: [],
+          },
+        }),
+        token,
+      );
+    },
+  });
+
+  assert.equal(digest, baselineImageDigest);
+  assert.deepEqual(calls[1][0], "docker");
+  assert.deepEqual(calls[1][1], ["manifest", "inspect", "-v", remoteImageTag]);
+  assert.deepEqual(
+    Object.keys(calls[1][2].env).toSorted(),
+    expectedDockerEnvironmentKeys(),
+  );
+  assert.equal(calls[1][2].env.CLOUDFLARE_API_TOKEN, undefined);
+  assert.equal(calls[1][2].maxBuffer, 64 * 1024);
+  assert.equal(calls[1][2].timeout, 30_000);
+});
+
+test("accepts a Docker schema v2 single-image remote manifest", async () => {
+  const remoteImageTag = `registry.cloudflare.com/${accountID}/${applicationName}@${baselineImageDigest}`;
+  let call = 0;
+  const digest = await resolveLocalCandidateImageDigest({
+    accountId: accountID,
+    applicationName,
+    workerVersionId: ids.newWorkerVersion,
+    baselineContainerImageDigest: baselineImageDigest,
+    execFileImpl: (_file, _args, _options, callback) => {
+      call += 1;
+      if (call === 1) {
+        callback(new Error("local tag not found"), "", token);
+        return;
+      }
+      callback(
+        null,
+        JSON.stringify({
+          Ref: remoteImageTag,
+          Descriptor: {
+            mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+            digest: baselineImageDigest,
+            size: 1234,
+          },
+          SchemaV2Manifest: {
+            schemaVersion: 2,
+            mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+            config: {},
+            layers: [],
+          },
+        }),
+        token,
+      );
+    },
+  });
+
+  assert.equal(digest, baselineImageDigest);
+});
+
+test("rejects malformed, oversized, or inaccessible remote candidate manifests", async () => {
+  const remoteImageTag = `registry.cloudflare.com/${accountID}/${applicationName}@${baselineImageDigest}`;
+  const validManifest = {
+    Ref: remoteImageTag,
+    Descriptor: {
+      mediaType: "application/vnd.oci.image.manifest.v1+json",
+      digest: baselineImageDigest,
+      size: 1234,
+    },
+    OCIManifest: {
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.manifest.v1+json",
+      config: {},
+      layers: [],
+    },
+  };
+  const outputs = [
+    "not-json",
+    JSON.stringify([]),
+    JSON.stringify({}),
+    JSON.stringify({ Descriptor: { digest: "sha256:PRIVATE" } }),
+    JSON.stringify({ ...validManifest, Ref: `${remoteImageTag}-other` }),
+    JSON.stringify({
+      ...validManifest,
+      Descriptor: {
+        ...validManifest.Descriptor,
+        digest: candidateImageDigest,
+      },
+    }),
+    JSON.stringify({
+      ...validManifest,
+      Descriptor: {
+        ...validManifest.Descriptor,
+        mediaType: "application/vnd.docker.distribution.manifest.list.v2+json",
+      },
+    }),
+    "x".repeat(64 * 1024 + 1),
+  ];
+  for (const output of outputs) {
+    let call = 0;
+    await assert.rejects(
+      resolveLocalCandidateImageDigest({
+        accountId: accountID,
+        applicationName,
+        workerVersionId: ids.newWorkerVersion,
+        baselineContainerImageDigest: baselineImageDigest,
+        execFileImpl: (_file, _args, _options, callback) => {
+          call += 1;
+          if (call === 1) callback(new Error("missing"), "", "");
+          else callback(null, output, token);
+        },
+      }),
+      (error) => error instanceof Error && !error.message.includes(token),
+    );
+  }
+
+  let call = 0;
+  await assert.rejects(
+    resolveLocalCandidateImageDigest({
+      accountId: accountID,
+      applicationName,
+      workerVersionId: ids.newWorkerVersion,
+      baselineContainerImageDigest: baselineImageDigest,
+      execFileImpl: (_file, _args, _options, callback) => {
+        call += 1;
+        callback(new Error(call === 1 ? "missing" : token), token, token);
+      },
+    }),
+    (error) => error instanceof Error && !error.message.includes(token),
+  );
+});
+
+test("rejects missing, ambiguous, or malformed local image evidence", async () => {
   const outputs = [
     [],
     [
@@ -1064,22 +1397,13 @@ test("rejects missing, ambiguous, malformed, or failed local image evidence", as
         accountId: accountID,
         applicationName,
         workerVersionId: ids.newWorkerVersion,
+        baselineContainerImageDigest: baselineImageDigest,
         execFileImpl: (_file, _args, _options, callback) =>
           callback(null, JSON.stringify(output), ""),
       }),
       /local candidate image evidence is invalid/,
     );
   }
-  await assert.rejects(
-    resolveLocalCandidateImageDigest({
-      accountId: accountID,
-      applicationName,
-      workerVersionId: ids.newWorkerVersion,
-      execFileImpl: (_file, _args, _options, callback) =>
-        callback(new Error(token), token, token),
-    }),
-    (error) => error instanceof Error,
-  );
 });
 
 function workerDeploymentEnvelope(candidate = false) {
@@ -2050,8 +2374,12 @@ test("argumentless CLI keeps the wake protocol and result free of raw payloads",
     output: stdout.stream,
     errorOutput: stderr.stream,
     fetchImpl,
-    resolveCandidateImageDigest: async ({ workerVersionId }) => {
+    resolveCandidateImageDigest: async ({
+      workerVersionId,
+      baselineContainerImageDigest,
+    }) => {
       assert.equal(workerVersionId, ids.newWorkerVersion);
+      assert.equal(baselineContainerImageDigest, baselineImageDigest);
       return candidateImageDigest;
     },
     now: tickingClock(),

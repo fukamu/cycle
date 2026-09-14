@@ -22,11 +22,35 @@ const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const namePattern = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const imageDigestPattern = /^sha256:[0-9a-f]{64}$/;
+const dockerImageManifestMediaTypes = new Set([
+  "application/vnd.docker.distribution.manifest.v2+json",
+  "application/vnd.oci.image.manifest.v1+json",
+]);
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function remoteManifestDigest(value, remoteImageTag) {
+  if (
+    !isRecord(value) ||
+    value.Ref !== remoteImageTag ||
+    !isRecord(value.Descriptor) ||
+    !dockerImageManifestMediaTypes.has(value.Descriptor.mediaType) ||
+    !Number.isSafeInteger(value.Descriptor.size) ||
+    value.Descriptor.size <= 0 ||
+    !imageDigestPattern.test(value.Descriptor.digest)
+  ) {
+    throw new Error("remote candidate image evidence is invalid");
+  }
+  return value.Descriptor.digest;
+}
 
 export async function resolveLocalCandidateImageDigest({
   accountId,
   applicationName,
   workerVersionId,
+  baselineContainerImageDigest,
   execFileImpl = execFile,
 }) {
   if (
@@ -36,30 +60,40 @@ export async function resolveLocalCandidateImageDigest({
     !namePattern.test(applicationName) ||
     typeof workerVersionId !== "string" ||
     !uuidPattern.test(workerVersionId) ||
+    typeof baselineContainerImageDigest !== "string" ||
+    !imageDigestPattern.test(baselineContainerImageDigest) ||
     typeof execFileImpl !== "function"
   ) {
     throw new Error("local candidate image identity is invalid");
   }
 
   const localImageTag = `${applicationName}:${workerVersionId.split("-")[0]}`;
-  const stdout = await new Promise((resolve, reject) => {
-    execFileImpl(
-      "docker",
+  let stdout;
+  try {
+    stdout = await executeDocker(
       ["image", "inspect", "--format", "{{json .RepoDigests}}", localImageTag],
-      {
-        encoding: "utf8",
-        env: { PATH: process.env.PATH ?? "" },
-        killSignal: "SIGTERM",
-        maxBuffer: maximumDockerOutputBytes,
-        timeout: 30_000,
-        windowsHide: true,
-      },
-      (error, output) => {
-        if (error !== null) reject(error);
-        else resolve(output);
-      },
+      execFileImpl,
     );
-  });
+  } catch {
+    const remoteImageTag = `registry.cloudflare.com/${accountId}/${applicationName}@${baselineContainerImageDigest}`;
+    const manifest = await executeDocker(
+      ["manifest", "inspect", "-v", remoteImageTag],
+      execFileImpl,
+    ).catch(() => {
+      throw new Error("remote candidate image evidence is unavailable");
+    });
+    let value;
+    try {
+      value = JSON.parse(manifest);
+    } catch {
+      throw new Error("remote candidate image evidence is invalid");
+    }
+    const digest = remoteManifestDigest(value, remoteImageTag);
+    if (digest !== baselineContainerImageDigest) {
+      throw new Error("remote candidate image evidence is invalid");
+    }
+    return digest;
+  }
   if (
     typeof stdout !== "string" ||
     Buffer.byteLength(stdout, "utf8") > maximumDockerOutputBytes
@@ -94,6 +128,40 @@ export async function resolveLocalCandidateImageDigest({
     throw new Error("local candidate image evidence is invalid");
   }
   return matches[0];
+}
+
+async function executeDocker(args, execFileImpl) {
+  const dockerEnvironment = { PATH: process.env.PATH ?? "" };
+  for (const name of ["HOME", "DOCKER_CONFIG"]) {
+    if (typeof process.env[name] === "string" && process.env[name] !== "") {
+      dockerEnvironment[name] = process.env[name];
+    }
+  }
+  const stdout = await new Promise((resolve, reject) => {
+    execFileImpl(
+      "docker",
+      args,
+      {
+        encoding: "utf8",
+        env: dockerEnvironment,
+        killSignal: "SIGTERM",
+        maxBuffer: maximumDockerOutputBytes,
+        timeout: 30_000,
+        windowsHide: true,
+      },
+      (error, output) => {
+        if (error !== null) reject(error);
+        else resolve(output);
+      },
+    );
+  });
+  if (
+    typeof stdout !== "string" ||
+    Buffer.byteLength(stdout, "utf8") > maximumDockerOutputBytes
+  ) {
+    throw new Error("candidate image command output is invalid");
+  }
+  return stdout;
 }
 
 function metadata(env) {
@@ -209,11 +277,12 @@ export async function runCloudflareDrainEvidenceCLI({
       rawAdapter: adapter,
       resolveCandidateImageDigest:
         resolveCandidateImageDigest ??
-        (({ workerVersionId }) =>
+        (({ workerVersionId, baselineContainerImageDigest }) =>
           resolveLocalCandidateImageDigest({
             accountId,
             applicationName: containerApplicationName,
             workerVersionId,
+            baselineContainerImageDigest,
           })),
       ...(now === undefined ? {} : { now }),
       ...(sleep === undefined ? {} : { sleep }),
