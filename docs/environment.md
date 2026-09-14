@@ -85,6 +85,7 @@ OTLP endpoint、header credential ownerと実値は未決です。使用するpi
 | `AI_PRICE_OUTPUT_USD_PER_MILLION` | output単価、`0` | deploy日の公式値を設定 | GitHub variable |
 | `GOOGLE_WEB_CLIENT_ID` | GIS audience | Production profile必須 | 公開可、GitHub variable |
 | `TURNSTILE_ENABLED` | Siteverify有効、`true` | Production profileはtrue | Container code固定 |
+| `TURNSTILE_CREDENTIAL_PROFILE` | `live` / `staging_test` | Stagingは`staging_test`、Productionは`live` | Container code固定 |
 | `TURNSTILE_SECRET_KEY` | Siteverify secret | Production profile必須 | **secret**、GitHub secret |
 | `TURNSTILE_EXPECTED_ACTION` | `anonymous_bootstrap` | non-empty | Container code固定 |
 | `RATE_ANONYMOUS_CREATE_PER_IP_HOUR` | anon/IP/hour、`5` | positive | GitHub variable |
@@ -102,9 +103,9 @@ OTLP endpoint、header credential ownerと実値は未決です。使用するpi
 | `VITE_DEPLOYMENT_ENV` | Search engine indexing制御。`staging`ではHTMLへ`noindex, nofollow`を追加し、`production`または未設定では追加しない | **public**、Staging deploy workflowが`staging`に固定。Production deployでは`production`を明示 |
 | `VITE_APP_REFERRAL_URL` | HomeのApplication紹介導線を有効化し、共有するtop page URL。空ならComponentを非表示 | **public**、local `.env.local` / Staging `APP_REFERRAL_URL`。HTTPS absolute root URLのみ |
 | `VITE_GOOGLE_WEB_CLIENT_ID` | Google Identity JS client | **public**、local `.env.local` / Staging `GOOGLE_WEB_CLIENT_ID` |
-| `VITE_TURNSTILE_SITE_KEY` | Turnstile widget | **public**、local `.env.local` / Staging `TURNSTILE_SITE_KEY` |
+| `VITE_TURNSTILE_SITE_KEY` | Turnstile widget | **public**、local `.env.local` / Staging `TURNSTILE_SITE_KEY`。Staging buildはCloudflare公式invisible always-pass test sitekeyだけを受理 |
 
-Frontend public valueとBackendの対応値は同じGitHub Environment入力からbuild/deployします。
+Frontend public valueとBackendの対応値は同じGitHub Environment入力からbuild/deployします。Stagingの`TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`はCloudflare公式の対応するalways-pass test pairとし、headless自動E2Eだけの検証profileとして扱います。Server-side Siteverify、Origin検証、Application rate limitは維持しますが、実bot判定の証拠にはしません。Staging以外のproduction originとProduction buildは公式test credentialを拒否し、`live` profileの実credentialを使います。
 
 `VITE_DEPLOYMENT_ENV`はBackendのsecurity profileを表す`APP_ENV`とは別です。Staging Lightは`APP_ENV=production`を維持しつつ、Frontend buildだけ`VITE_DEPLOYMENT_ENV=staging`として検索engineへ`noindex, nofollow`を指示します。未知の値はbuild errorにします。Production buildでは`production`を明示し、検索除外meta tagを生成しません。
 
@@ -231,6 +232,8 @@ STAGING_E2E_INVITE_TOKEN
 ```
 
 `STAGING_E2E_INVITE_TOKEN`は常に非個人Inviteとして専用発行し、Raw値をpassword managerからGitHub Environmentへ一度だけ登録します。Pre-switch `auto`は現在配信中revisionがclosedでも通過できるようこのTokenを必須とします。Post-deploy `off`はTokenを要求せずharness processへ渡しません。`BETA_ADMISSION_MODE=closed`では対応する非個人Invite ID/digestを`BETA_INVITES`へ含めます。Application runtimeへRaw Tokenを渡しません。
+
+`TURNSTILE_SECRET_KEY`はStagingではCloudflare公式always-pass test secretを登録し、variable `TURNSTILE_SITE_KEY`には対応するinvisible test sitekeyを登録します。両値は同時に切り替え、片側だけを実credentialへ戻しません。WorkflowとBackend startupはcanonical Staging originへの`staging_test` profileを固定し、不一致をcredential値を出さずに拒否します。Terraformが所有する実widgetは変更・削除せず、blocking E2Eのcredential sourceとしては使用しません。
 
 Closed BetaをStagingで検証する場合だけ、secretへ`BETA_ADMISSION_COOKIE_KEY`を追加します。`BETA_ADMISSION_MODE=off`では不要です。
 

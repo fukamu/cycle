@@ -66,22 +66,40 @@ export async function enterStagingCritical({
   const newGoalButton = page.getByRole("button", {
     name: newGoalButtonName,
   });
-  const retryButton = page.getByRole("button", {
+  const initialSessionRetryBoundary = page.locator(
+    '[data-initial-session-state="retryable"]',
+  );
+  const initialSessionRateLimitBoundary = page.locator(
+    '[data-initial-session-state="rate-limited"]',
+  );
+  const applicationErrorBoundary = page.locator(
+    '[data-application-error-boundary="true"]',
+  );
+  const retryButton = initialSessionRetryBoundary.getByRole("button", {
     name: "\u518d\u8a66\u884c",
     exact: true,
   });
   try {
     await admissionButton
       .or(newGoalButton)
-      .or(retryButton)
+      .or(initialSessionRetryBoundary)
+      .or(initialSessionRateLimitBoundary)
+      .or(applicationErrorBoundary)
       .first()
       .waitFor({ state: "visible" });
   } catch {
     await throwEntryFailure("entry_cta_timeout");
   }
 
+  if (await initialSessionRateLimitBoundary.isVisible()) {
+    await throwEntryFailure("anonymous_session_rate_limited");
+  }
+  if (await applicationErrorBoundary.isVisible()) {
+    await throwEntryFailure("unexpected_entry_boundary");
+  }
+
   let initialSessionRetryAttempted = false;
-  if (await retryButton.isVisible()) {
+  if (await initialSessionRetryBoundary.isVisible()) {
     if (sessionCaptureFailure !== undefined) {
       throw sessionCaptureFailure;
     }
@@ -97,18 +115,28 @@ export async function enterStagingCritical({
     initialSessionRetryAttempted = true;
     try {
       await retryButton.click();
+      await initialSessionRetryBoundary.waitFor({ state: "hidden" });
       await admissionButton
         .or(newGoalButton)
+        .or(initialSessionRetryBoundary)
+        .or(initialSessionRateLimitBoundary)
+        .or(applicationErrorBoundary)
         .first()
         .waitFor({ state: "visible" });
     } catch {
-      await throwEntryFailure("anonymous_session_request_not_observed");
+      await throwEntryFailure("initial_session_retry_exhausted");
     }
     if (sessionCaptureFailure !== undefined) {
       throw sessionCaptureFailure;
     }
-    if (await retryButton.isVisible()) {
-      await throwEntryFailure("anonymous_session_request_not_observed");
+    if (await initialSessionRateLimitBoundary.isVisible()) {
+      await throwEntryFailure("anonymous_session_rate_limited");
+    }
+    if (await applicationErrorBoundary.isVisible()) {
+      await throwEntryFailure("unexpected_entry_boundary");
+    }
+    if (await initialSessionRetryBoundary.isVisible()) {
+      await throwEntryFailure("initial_session_retry_exhausted");
     }
   }
 
@@ -127,7 +155,7 @@ export async function enterStagingCritical({
     try {
       await finishEntryTransition();
     } catch {
-      await throwEntryFailure("anonymous_session_request_not_observed");
+      await throwEntryFailure("initial_session_retry_exhausted");
     }
   } else {
     await finishEntryTransition();

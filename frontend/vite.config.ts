@@ -5,12 +5,17 @@ import { defineConfig } from "vitest/config";
 import {
   parseDeploymentEnvironment,
   searchIndexingPlugin,
+  validateTurnstileSiteKey,
 } from "./vite/searchIndexing.ts";
 
 export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, process.cwd(), "VITE_");
   const deploymentEnvironment = parseDeploymentEnvironment(
     environment.VITE_DEPLOYMENT_ENV,
+  );
+  validateTurnstileSiteKey(
+    deploymentEnvironment,
+    environment.VITE_TURNSTILE_SITE_KEY,
   );
 
   return {

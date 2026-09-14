@@ -147,6 +147,7 @@ export class Backend extends Container {
       env.GOOGLE_WEB_CLIENT_ID,
     ),
     TURNSTILE_ENABLED: "true",
+    TURNSTILE_CREDENTIAL_PROFILE: "staging_test",
     TURNSTILE_SECRET_KEY: required(
       "TURNSTILE_SECRET_KEY",
       env.TURNSTILE_SECRET_KEY,

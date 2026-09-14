@@ -309,7 +309,12 @@ describe("SessionProvider admission boundary", () => {
 
     renderProvider(undefined, client);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    const rateLimitAlert = await screen.findByRole("alert");
+    expect(rateLimitAlert).toHaveAttribute(
+      "data-initial-session-state",
+      "rate-limited",
+    );
+    expect(rateLimitAlert).toHaveTextContent(
       "時間を空けてから再試行してください。再試行を繰り返すと、待ち時間が延びる場合があります。",
     );
     expect(sessionRequests).toBe(2);
@@ -490,7 +495,12 @@ describe("SessionProvider admission boundary", () => {
       client,
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    const retryableAlert = await screen.findByRole("alert");
+    expect(retryableAlert).toHaveAttribute(
+      "data-initial-session-state",
+      "retryable",
+    );
+    expect(retryableAlert).toHaveTextContent(
       "FUKAMU Cycleを開始できませんでした。",
     );
     await userEvent

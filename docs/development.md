@@ -73,7 +73,7 @@ Terminalを解放したまま起動する場合は`--detached`を使い、終了
 ./scripts/local-app.sh --down
 ```
 
-このprofileは`APP_ENV=development`、空の`OPENAI_API_KEY`、無効なTurnstile、未設定のGoogle Client IDで起動します。Telemetryはin-memory exporterを使い、`OTEL_EXPORTER_OTLP_ENDPOINT`と`OTEL_EXPORTER_OTLP_HEADERS`を設定せず、外部collectorへ送信しません。AIは決定的なFake Adapterを使用し、Google連携以外のGoal/Cycle/Review操作を外部credentialなしで確認できます。これは手動の実機確認環境であり、format、lint、typecheck、unit/integration test、E2E、Terraform、Wranglerの品質checkを代替しません。
+このprofileは`APP_ENV=development`、空の`OPENAI_API_KEY`、無効なTurnstile、未設定のGoogle Client IDで起動します。Telemetryはin-memory exporterを使い、`OTEL_EXPORTER_OTLP_ENDPOINT`と`OTEL_EXPORTER_OTLP_HEADERS`を設定せず、外部collectorへ送信しません。AIは決定的なFake Adapterを使用し、Google連携以外のGoal/Cycle/Review操作を外部credentialなしで確認できます。これは手動の実機確認環境であり、format、lint、typecheck、unit/integration test、E2E、Terraform、Wranglerの品質checkを代替しません。Local/testのFake Turnstileと、canonical Stagingだけに固定した公式test credential profileは別のcontractです。
 
 ## 初回Cycleユーザビリティ調査
 
@@ -582,7 +582,7 @@ Manual Terraform PlanとDeployはAPI応答のschemaと非paginationをfail-close
 |---|---|---|
 | Google buttonが出ない / login失敗 | Public client ID、origin、Browser Network | Frontend / Backendのclient IDとauthorized originを合わせる。Secretは使わない |
 | Login後にsessionがない | Cookie属性、origin、server error code | `PUBLIC_ORIGIN`と実originを一致させる |
-| Anonymous session作成失敗 | Turnstile site / secret、hostname / action | 対応値を揃え、期限切れtokenを再利用しない。Productionで無効化しない |
+| Anonymous session作成失敗 | Turnstile credential profile、site / secret pair、hostname / action | Staging公式test pairは`success`だけ、Production実pairは公開hostname / `anonymous_bootstrap`も照合する。片側だけ切り替えず、期限切れtokenを再利用しない。Productionで無効化しない |
 | Local AIが外部APIを呼ばない | `APP_ENV`とkeyの有無だけを確認 | Keyが空のdevelopment / testは仕様どおりFake。通常testでは外部keyを設定しない |
 | AI model / Prompt候補の品質確認 | [AI quality evaluation](#ai-quality-evaluation) | Deterministic gateとreviewer rubricを通し、Production dataを使わない |
 

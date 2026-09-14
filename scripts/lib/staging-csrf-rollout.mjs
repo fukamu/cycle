@@ -11,6 +11,8 @@ export const stagingCSRFRolloutFailureReasons = Object.freeze([
   "anonymous_session_forbidden",
   "anonymous_session_rate_limited",
   "anonymous_session_unavailable",
+  "initial_session_retry_exhausted",
+  "unexpected_entry_boundary",
   "deploy_or_drain_failed",
   "session_identity_changed",
   "stable_token_invalid",

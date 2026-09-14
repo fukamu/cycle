@@ -200,6 +200,85 @@ func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
 	if config.Telemetry.OTLPEndpoint != environment["OTEL_EXPORTER_OTLP_ENDPOINT"] || config.Telemetry.OTLPHeaders != environment["OTEL_EXPORTER_OTLP_HEADERS"] {
 		t.Fatalf("Telemetry = %#v", config.Telemetry)
 	}
+	if config.Turnstile.CredentialProfile != TurnstileCredentialProfileLive {
+		t.Fatalf("Turnstile credential profile = %q, want live default", config.Turnstile.CredentialProfile)
+	}
+}
+
+func TestLoadAcceptsTurnstileStagingTestProfileOnlyForExactStagingConfiguration(t *testing.T) {
+	t.Parallel()
+
+	environment := validProductionEnvironment()
+	environment["TURNSTILE_CREDENTIAL_PROFILE"] = TurnstileCredentialProfileStagingTest
+	environment["TURNSTILE_SECRET_KEY"] = officialTurnstileAlwaysPassTestSecret
+
+	loaded, err := Load(mapLookup(environment))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Turnstile.CredentialProfile != TurnstileCredentialProfileStagingTest {
+		t.Fatalf("Turnstile credential profile = %q, want staging_test", loaded.Turnstile.CredentialProfile)
+	}
+}
+
+func TestLoadRejectsTurnstileStagingTestProfileConfigurationMismatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(map[string]string)
+	}{
+		{name: "non-production app environment", mutate: func(environment map[string]string) {
+			environment["APP_ENV"] = "development"
+		}},
+		{name: "different public origin", mutate: func(environment map[string]string) {
+			environment["PUBLIC_ORIGIN"] = "https://cycle.example.com"
+		}},
+		{name: "disabled Turnstile", mutate: func(environment map[string]string) {
+			environment["TURNSTILE_ENABLED"] = "false"
+		}},
+		{name: "live secret", mutate: func(environment map[string]string) {
+			environment["TURNSTILE_SECRET_KEY"] = "live-turnstile-secret"
+		}},
+		{name: "live profile with official test secret", mutate: func(environment map[string]string) {
+			environment["TURNSTILE_CREDENTIAL_PROFILE"] = TurnstileCredentialProfileLive
+		}},
+		{name: "live profile with always-fail test secret", mutate: func(environment map[string]string) {
+			environment["TURNSTILE_CREDENTIAL_PROFILE"] = TurnstileCredentialProfileLive
+			environment["TURNSTILE_SECRET_KEY"] = officialTurnstileAlwaysFailTestSecret
+		}},
+		{name: "live profile with spent-token test secret", mutate: func(environment map[string]string) {
+			environment["TURNSTILE_CREDENTIAL_PROFILE"] = TurnstileCredentialProfileLive
+			environment["TURNSTILE_SECRET_KEY"] = officialTurnstileSpentTestSecret
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			environment := validProductionEnvironment()
+			environment["TURNSTILE_CREDENTIAL_PROFILE"] = TurnstileCredentialProfileStagingTest
+			environment["TURNSTILE_SECRET_KEY"] = officialTurnstileAlwaysPassTestSecret
+			test.mutate(environment)
+			_, err := Load(mapLookup(environment))
+			if err == nil {
+				t.Fatal("Load() accepted an invalid Turnstile staging test profile")
+			}
+			if strings.Contains(err.Error(), officialTurnstileAlwaysPassTestSecret) {
+				t.Fatal("Load() error exposed the configured Turnstile secret")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnsupportedTurnstileCredentialProfile(t *testing.T) {
+	t.Parallel()
+
+	environment := validProductionEnvironment()
+	environment["TURNSTILE_CREDENTIAL_PROFILE"] = "other"
+	_, err := Load(mapLookup(environment))
+	if err == nil || !strings.Contains(err.Error(), "TURNSTILE_CREDENTIAL_PROFILE must be live or staging_test") {
+		t.Fatalf("Load() error = %v", err)
+	}
 }
 
 func TestLoadAcceptsSupportedReasoningEfforts(t *testing.T) {
@@ -378,6 +457,21 @@ func validEnvironment() map[string]string {
 		"CURSOR_SIGNING_SECRET":  "123456789012345678901234",
 		"TURNSTILE_ENABLED":      "false",
 	}
+}
+
+func validProductionEnvironment() map[string]string {
+	environment := validEnvironment()
+	environment["APP_ENV"] = "production"
+	environment["PUBLIC_ORIGIN"] = stagingPublicOrigin
+	environment["OPENAI_API_KEY"] = "test-openai-key"
+	environment["GOOGLE_WEB_CLIENT_ID"] = "test.apps.googleusercontent.com"
+	environment["TURNSTILE_ENABLED"] = "true"
+	environment["TURNSTILE_SECRET_KEY"] = "live-turnstile-secret"
+	environment["AI_PRICE_INPUT_USD_PER_MILLION"] = "1"
+	environment["AI_PRICE_OUTPUT_USD_PER_MILLION"] = "1"
+	environment["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://telemetry.example.test"
+	environment["OTEL_EXPORTER_OTLP_HEADERS"] = "authorization=Bearer%20test-only"
+	return environment
 }
 
 func mapLookup(environment map[string]string) LookupEnv {

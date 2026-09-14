@@ -9,9 +9,12 @@ import (
 	"go/token"
 	"log/slog"
 	"math"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fukamu/cycle/backend/internal/config"
 )
 
 type recordingTelemetryShutdown struct {
@@ -176,5 +179,41 @@ func TestMaximumAIReservationUSDUsesOperationOutputLimit(t *testing.T) {
 	}
 	if goalRefine >= action {
 		t.Fatalf("Goal Refine reservation %.12f must be lower than Action reservation %.12f", goalRefine, action)
+	}
+}
+
+func TestBuildTurnstileSettingsPassesCredentialProfileExplicitly(t *testing.T) {
+	t.Parallel()
+
+	origin, err := url.Parse("https://cycle.staging.fukamu.matoruru.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name        string
+		profile     string
+		testProfile bool
+	}{
+		{name: "live", profile: config.TurnstileCredentialProfileLive},
+		{name: "staging test", profile: config.TurnstileCredentialProfileStagingTest, testProfile: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			settings := config.Config{
+				App:     config.AppConfig{PublicOrigin: origin},
+				Session: config.SessionConfig{RateLimitHMACSecret: "rate-secret"},
+				Turnstile: config.TurnstileConfig{
+					SecretKey: "turnstile-secret", ExpectedAction: "anonymous_bootstrap", CredentialProfile: test.profile,
+				},
+			}
+			wired := buildTurnstileSettings(settings, nil)
+			if wired.TestProfile != test.testProfile {
+				t.Fatalf("TestProfile = %v, want %v", wired.TestProfile, test.testProfile)
+			}
+			if wired.SecretKey != settings.Turnstile.SecretKey || wired.ExpectedAction != settings.Turnstile.ExpectedAction ||
+				wired.ExpectedHost != origin.Hostname() || string(wired.RateHashKey) != settings.Session.RateLimitHMACSecret {
+				t.Fatalf("wired Turnstile settings = %#v", wired)
+			}
+		})
 	}
 }

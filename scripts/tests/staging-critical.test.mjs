@@ -199,6 +199,8 @@ function entryFixture(
   {
     failEntry = false,
     showRetry = false,
+    showRateLimit = false,
+    showApplicationError = false,
     keepRetryVisible = false,
     failRetryTransition = false,
     onRetryClick,
@@ -232,11 +234,48 @@ function entryFixture(
       if (!keepRetryVisible) retryVisible = false;
     },
   };
+  const initialSessionRetryBoundary = {
+    getByRole(role, options) {
+      assert.equal(role, "button");
+      assert.equal(options.name, "\u518d\u8a66\u884c");
+      assert.equal(options.exact, true);
+      return retryButton;
+    },
+    async isVisible() {
+      return retryVisible;
+    },
+    async waitFor(options) {
+      assert.deepEqual(options, { state: "hidden" });
+      calls.push("wait-retry-hidden");
+      if (retryVisible)
+        throw new Error("private retry did not leave error state");
+    },
+  };
+  const initialSessionRateLimitBoundary = {
+    async isVisible() {
+      return showRateLimit;
+    },
+  };
+  const applicationErrorBoundary = {
+    async isVisible() {
+      return showApplicationError;
+    },
+  };
   const entryButtons = {
+    or() {
+      return entryButtons;
+    },
     first() {
       return {
         async waitFor(options) {
           assert.deepEqual(options, { state: "visible" });
+          if (calls.includes("click-retry")) {
+            calls.push("wait-entry-after-retry");
+            if (failRetryTransition) {
+              throw new Error("private retry transition failure");
+            }
+            return;
+          }
           calls.push("wait-entry-cta");
           if (failEntry) throw new Error("private entry failure");
         },
@@ -244,25 +283,8 @@ function entryFixture(
     },
   };
   const admissionButton = {
-    or(candidate) {
-      assert.equal(candidate, newGoalButton);
-      return {
-        or(lastCandidate) {
-          assert.equal(lastCandidate, retryButton);
-          return entryButtons;
-        },
-        first() {
-          return {
-            async waitFor(options) {
-              assert.deepEqual(options, { state: "visible" });
-              calls.push("wait-entry-after-retry");
-              if (failRetryTransition) {
-                throw new Error("private retry transition failure");
-              }
-            },
-          };
-        },
-      };
+    or() {
+      return entryButtons;
     },
     async isVisible() {
       return currentMode === "closed";
@@ -297,12 +319,23 @@ function entryFixture(
         if (options.name === "\u5229\u7528\u3092\u958b\u59cb\u3059\u308b") {
           return admissionButton;
         }
-        if (options.name === "\u518d\u8a66\u884c") return retryButton;
         assert.equal(
           options.name,
           "\u65b0\u3057\u3044\u76ee\u6a19\u3092\u8a2d\u5b9a",
         );
         return newGoalButton;
+      },
+      locator(selector) {
+        if (selector === '[data-initial-session-state="retryable"]') {
+          return initialSessionRetryBoundary;
+        }
+        if (selector === '[data-initial-session-state="rate-limited"]') {
+          return initialSessionRateLimitBoundary;
+        }
+        if (selector === '[data-application-error-boundary="true"]') {
+          return applicationErrorBoundary;
+        }
+        assert.fail(`unexpected selector: ${selector}`);
       },
       async waitForFunction(callback) {
         calls.push("wait-fragment-cleared");
@@ -625,6 +658,39 @@ test("does not retry an unobserved anonymous session without an accepted claim",
   }
 });
 
+test("does not confuse other entry boundaries with the initial Session Retry", async (t) => {
+  for (const [name, options, reason] of [
+    ["rate limit", { showRateLimit: true }, "anonymous_session_rate_limited"],
+    [
+      "application error boundary",
+      { showApplicationError: true },
+      "unexpected_entry_boundary",
+    ],
+  ]) {
+    await t.test(name, async () => {
+      const fixture = entryFixture("off", options);
+      await assert.rejects(
+        enterStagingCritical({
+          context: fixture.context,
+          page: fixture.page,
+          baseURL: canonicalBaseURL,
+          admissionMode: "off",
+          inviteToken: "",
+          captureAnonymousSession() {
+            fixture.calls.push("capture-session");
+            return new Promise(() => undefined);
+          },
+        }),
+        (error) =>
+          error instanceof StagingCriticalFailure &&
+          error.phase === "entry" &&
+          error.reason === reason,
+      );
+      assert.equal(fixture.calls.includes("click-retry"), false);
+    });
+  }
+});
+
 test("retries the initial pre-request state once with the same capture", async () => {
   const fixture = entryFixture("off", { showRetry: true });
   const session = { userID, csrfToken: "private-csrf-token" };
@@ -654,6 +720,7 @@ test("retries the initial pre-request state once with the same capture", async (
     "goto",
     "wait-entry-cta",
     "click-retry",
+    "wait-retry-hidden",
     "wait-entry-after-retry",
     "wait-new-goal",
   ]);
@@ -684,7 +751,7 @@ test("fails closed after the claimed retry reaches Retry again", async () => {
     (error) =>
       error instanceof StagingCriticalFailure &&
       error.phase === "entry" &&
-      error.reason === "anonymous_session_request_not_observed",
+      error.reason === "initial_session_retry_exhausted",
   );
   assert.equal(
     fixture.calls.filter((call) => call === "click-retry").length,
@@ -696,7 +763,7 @@ test("fails closed after the claimed retry reaches Retry again", async () => {
     "goto",
     "wait-entry-cta",
     "click-retry",
-    "wait-entry-after-retry",
+    "wait-retry-hidden",
   ]);
 });
 
@@ -734,7 +801,7 @@ test("does not await capture when a POST is unobserved or observation is unavail
       assert.equal(
         failure instanceof StagingCriticalFailure &&
           failure.phase === "entry" &&
-          failure.reason === "anonymous_session_request_not_observed" &&
+          failure.reason === "initial_session_retry_exhausted" &&
           !failure.message.includes("private retry transition failure"),
         true,
       );
@@ -781,7 +848,7 @@ test("retains a delayed successful POST session when the Retry transition times 
     (error) =>
       error instanceof StagingCriticalFailure &&
       error.phase === "entry" &&
-      error.reason === "anonymous_session_request_not_observed",
+      error.reason === "initial_session_retry_exhausted",
   );
   assert.equal(captures, 1);
   assert.deepEqual(retained, [session]);
@@ -1163,6 +1230,8 @@ test("formats only closed-enum diagnostics and validated run metadata", () => {
     "anonymous_session_forbidden",
     "anonymous_session_rate_limited",
     "anonymous_session_unavailable",
+    "initial_session_retry_exhausted",
+    "unexpected_entry_boundary",
     "unexpected_status",
     "session_discovery_failed",
     "account_delete_failed",

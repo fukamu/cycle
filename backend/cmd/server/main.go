@@ -32,6 +32,15 @@ func maximumAIReservationUSD(maxInputTokens, maxOutputTokens, maxProviderAttempt
 		float64(maxOutputTokens)*outputUSDPerMillionTokens) / 1_000_000 * float64(maxProviderAttempts)
 }
 
+func buildTurnstileSettings(settings config.Config, observer turnstileinfra.Observer) turnstileinfra.Settings {
+	return turnstileinfra.Settings{
+		SecretKey: settings.Turnstile.SecretKey, ExpectedAction: settings.Turnstile.ExpectedAction,
+		ExpectedHost: settings.App.PublicOrigin.Hostname(),
+		TestProfile:  settings.Turnstile.CredentialProfile == config.TurnstileCredentialProfileStagingTest,
+		RateHashKey:  []byte(settings.Session.RateLimitHMACSecret), Observer: observer,
+	}
+}
+
 type telemetryShutdowner interface {
 	Shutdown(context.Context) error
 }
@@ -115,11 +124,7 @@ func run() (exitCode int) {
 			&http.Client{Timeout: 10 * time.Second},
 			postgres.NewAnonymousRateLimiter(pool, settings.RateLimit.AnonymousCreatePerIPHour, settings.RateLimit.AnonymousCreatePerIP24h),
 			system.Clock{},
-			turnstileinfra.Settings{
-				SecretKey: settings.Turnstile.SecretKey, ExpectedAction: settings.Turnstile.ExpectedAction,
-				ExpectedHost: settings.App.PublicOrigin.Hostname(), RateHashKey: []byte(settings.Session.RateLimitHMACSecret),
-				Observer: metrics,
-			},
+			buildTurnstileSettings(settings, metrics),
 		)
 	}
 	sessionService := appsession.NewService(

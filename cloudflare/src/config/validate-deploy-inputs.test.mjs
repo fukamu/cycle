@@ -24,6 +24,8 @@ const validatorPath = resolve(
 const stagingOrigin = "https://cycle.staging.fukamu.matoruru.com";
 const productionReferralURL = "https://cycle.fukamu.com/";
 const benignCookieKey = Buffer.alloc(32, 7).toString("base64url");
+const stagingTurnstileSiteKey = "1x00000000000000000000BB";
+const stagingTurnstileSecretKey = "1x0000000000000000000000000000000AA";
 
 test("deployment validator accepts valid off and closed inputs", () => {
   assert.deepEqual(validateDeploymentInputs(validEnvironment()), []);
@@ -134,6 +136,18 @@ test("deployment-specific URL policies remain exact", () => {
   );
 });
 
+test("deployment validator binds the official Turnstile test pair to staging", () => {
+  for (const [name, value] of [
+    ["TURNSTILE_SITE_KEY", "live-site-key"],
+    ["TURNSTILE_SECRET_KEY", "live-secret-key"],
+  ]) {
+    assert.deepEqual(
+      validateDeploymentInputs(validEnvironment({ [name]: value })),
+      [{ code: "INVALID_INPUT", key: name }],
+    );
+  }
+});
+
 test("CLI reports stable identifiers without input values", () => {
   const inviteCanary = "RAW_TOKEN_CANARY";
   const digestCanary = "DIGEST_CANARY";
@@ -177,6 +191,8 @@ function validEnvironment(overrides = {}) {
     PUBLIC_ORIGIN: stagingOrigin,
     BETA_ADMISSION_MODE: "off",
     APP_REFERRAL_URL: "",
+    TURNSTILE_SITE_KEY: stagingTurnstileSiteKey,
+    TURNSTILE_SECRET_KEY: stagingTurnstileSecretKey,
     ...overrides,
   };
 }
