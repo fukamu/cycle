@@ -6,6 +6,7 @@ import { suppressFirstUseGuideUntilReconciliation } from "../../shared/preferenc
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
 import type { PublishSessionIdentityAdvisory } from "./sessionIdentityAdvisory";
 import {
+  isInitialSessionAnonymousCreationBlocked,
   isBetaAdmissionRequired,
   isInitialSessionRateLimited,
   isSessionBoundaryOwnedError,
@@ -72,6 +73,7 @@ export function useInitialSessionDiscovery(
     retry: (failureCount, error) =>
       !isBetaAdmissionRequired(error) &&
       !isInitialSessionRateLimited(error) &&
+      !isInitialSessionAnonymousCreationBlocked(error) &&
       !isSessionBoundaryOwnedError(error) &&
       failureCount < 2,
   });
