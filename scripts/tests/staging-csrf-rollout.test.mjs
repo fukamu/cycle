@@ -27,11 +27,14 @@ import {
   prepareStagingBootstrapStorage,
   selectStagingDeployDiagnostic,
   startFixedDeployAndDrain,
+  validateStagingGoalStartResult,
 } from "../../frontend/e2e/staging-csrf-rollout-entry.mjs";
 import { StagingCriticalFailure } from "../lib/staging-critical.mjs";
 
 const userID = "0198c20b-7b95-7000-8000-000000000001";
 const otherUserID = "0198c20b-7b95-7000-8000-000000000002";
+const goalID = "0198c20b-7b95-7000-8000-000000000003";
+const cycleID = "0198c20b-7b95-7000-8000-000000000004";
 const stableToken = "S".repeat(43);
 const stableSession = { userID, csrfToken: stableToken };
 
@@ -331,6 +334,76 @@ test("accepts only UUIDv7 identities and exact base64url CSRF tokens", () => {
   }
 });
 
+test("accepts only the exact StartGoal response and request proofs", () => {
+  const exact = {
+    status: 200,
+    authenticatedUserID: userID,
+    requestCSRFTokenVerified: true,
+    requestExpectedUserIDVerified: true,
+    goalID,
+    cycleID,
+  };
+  assert.equal(validateStagingGoalStartResult(exact, userID), true);
+
+  const invalidCases = [
+    ["created status", { ...exact, status: 201 }, userID],
+    ["no-content status", { ...exact, status: 204 }, userID],
+    ["client-error status", { ...exact, status: 400 }, userID],
+    ["server-error status", { ...exact, status: 500 }, userID],
+    [
+      "missing response identity",
+      { ...exact, authenticatedUserID: undefined },
+      userID,
+    ],
+    [
+      "mismatched response identity",
+      { ...exact, authenticatedUserID: otherUserID },
+      userID,
+    ],
+    ["missing expected identity", exact, undefined],
+    ["malformed expected identity", exact, "invalid"],
+    [
+      "missing CSRF proof",
+      { ...exact, requestCSRFTokenVerified: undefined },
+      userID,
+    ],
+    [
+      "failed CSRF proof",
+      { ...exact, requestCSRFTokenVerified: false },
+      userID,
+    ],
+    [
+      "missing expected-user proof",
+      { ...exact, requestExpectedUserIDVerified: undefined },
+      userID,
+    ],
+    [
+      "failed expected-user proof",
+      { ...exact, requestExpectedUserIDVerified: false },
+      userID,
+    ],
+    ["missing goal identity", { ...exact, goalID: undefined }, userID],
+    [
+      "non-v7 goal identity",
+      { ...exact, goalID: goalID.replace("-7000-", "-6000-") },
+      userID,
+    ],
+    ["missing cycle identity", { ...exact, cycleID: undefined }, userID],
+    [
+      "non-v7 cycle identity",
+      { ...exact, cycleID: cycleID.replace("-7000-", "-6000-") },
+      userID,
+    ],
+  ];
+  for (const [name, result, expectedUserID] of invalidCases) {
+    assert.throws(
+      () => validateStagingGoalStartResult(result, expectedUserID),
+      (error) => error.message === "tab A command failed",
+      name,
+    );
+  }
+});
+
 test("runs the one-time candidate rollout after deploy and drain", async () => {
   const fake = createFakeAdapter();
   const failures = await runFake(fake.adapter);
@@ -453,6 +526,38 @@ test("keeps the active operation phase when an adapter reports failure", async (
   ]);
   assert.equal(fake.calls.includes("command-a"), false);
   assert.deepEqual(fake.deletedSessions, [stableSession]);
+});
+
+test("classifies a tab A command failure, skips later mutations, and cleans up", async () => {
+  const fake = createFakeAdapter({
+    async runTabACommand() {
+      fake.calls.push("command-a");
+      throw new Error("private command response");
+    },
+  });
+  const failures = await runFake(fake.adapter);
+  assert.deepEqual(classifications(failures), [
+    "tab_a_command:unexpected_status",
+  ]);
+  for (const skipped of [
+    "command-b",
+    "autosave-b",
+    "reject:invalid_token",
+    "reject:invalid_origin",
+  ]) {
+    assert.equal(fake.calls.includes(skipped), false);
+  }
+  assert.deepEqual(fake.deletedSessions, [stableSession]);
+  assert.ok(
+    fake.calls.indexOf("command-a") < fake.calls.indexOf("close-pages"),
+  );
+  assert.ok(
+    fake.calls.indexOf("close-pages") < fake.calls.indexOf("delete-candidate"),
+  );
+  assert.ok(
+    fake.calls.indexOf("delete-candidate") <
+      fake.calls.indexOf("verify-revoked"),
+  );
 });
 
 test("never selects a rediscovered different identity for deletion", async () => {
