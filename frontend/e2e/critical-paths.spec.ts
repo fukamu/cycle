@@ -3,6 +3,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 import {
   cycleFrameCopy,
   cycleFrameTemplateCopy,
+  cyclePreviousActionReferenceCopy,
   frameCopy,
   homeCopy,
   textCounterCopy,
@@ -1053,6 +1054,99 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     "aria-selected",
     "true",
   );
+  const previousActionReference = page.getByRole("region", {
+    name: cyclePreviousActionReferenceCopy.heading,
+  });
+  await expect(previousActionReference).toBeVisible();
+  await expect(
+    previousActionReference.getByText(reviewNarrowContent.action),
+  ).toBeVisible();
+  await expect(
+    previousActionReference.getByText("Cycle 1 · Goal v1"),
+  ).toBeVisible();
+  await expect(
+    previousActionReference.getByText(
+      cyclePreviousActionReferenceCopy.referenceOnly,
+    ),
+  ).toBeVisible();
+  await expect(
+    previousActionReference.getByText(cyclePreviousActionReferenceCopy.guide),
+  ).toBeVisible();
+  await expect(
+    page.getByText(cyclePreviousActionReferenceCopy.goalVersionChanged),
+  ).toHaveCount(0);
+  await expect(previousActionReference.getByRole("textbox")).toHaveCount(0);
+  await expect(previousActionReference.getByRole("button")).toHaveCount(0);
+  await expect(previousActionReference.getByRole("link")).toHaveCount(0);
+  const planTemplate = page.getByRole("region", {
+    name: cycleFrameTemplateCopy.heading,
+  });
+  await expect(planTemplate).toBeVisible();
+  expect(
+    await page.evaluate(
+      ({ guideId, referenceSelector, templateSelector, editorId }) => {
+        const guide = document.getElementById(guideId);
+        const reference = document.querySelector(referenceSelector);
+        const template = document.querySelector(templateSelector);
+        const editor = document.getElementById(editorId);
+        return Boolean(
+          guide &&
+          reference &&
+          template &&
+          editor &&
+          guide.compareDocumentPosition(reference) &
+            Node.DOCUMENT_POSITION_FOLLOWING &&
+          reference.compareDocumentPosition(template) &
+            Node.DOCUMENT_POSITION_FOLLOWING &&
+          template.compareDocumentPosition(editor) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+      },
+      {
+        guideId: "cycle-frame-guide",
+        referenceSelector: ".cycle-previous-action-reference",
+        templateSelector: ".frame-templates",
+        editorId: "cycle-frame-editor",
+      },
+    ),
+  ).toBe(true);
+
+  const assertPreviousActionNarrowLayout = async () => {
+    await previousActionReference.scrollIntoViewIfNeeded();
+    await expect(previousActionReference).toBeVisible();
+    expect(
+      await previousActionReference.evaluate((element) => {
+        const style = window.getComputedStyle(element);
+        return {
+          overflowX: style.overflowX,
+          overflowY: style.overflowY,
+          horizontalOverflow:
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        };
+      }),
+    ).toEqual({
+      overflowX: "visible",
+      overflowY: "visible",
+      horizontalOverflow: false,
+    });
+  };
+  await page.setViewportSize({ width: 320, height: 844 });
+  await assertPreviousActionNarrowLayout();
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await assertPreviousActionNarrowLayout();
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.getByRole("tab", { name: "D Do" }).click();
+  await expect(previousActionReference).toHaveCount(0);
+  await page.getByRole("tab", { name: "P Plan" }).click();
+  await expect(previousActionReference).toBeVisible();
   await page.goto("/history");
   await page
     .getByRole("link", { name: new RegExp(goalText.replace("\n", "\\s+")) })
@@ -1790,6 +1884,18 @@ test("timeline distinguishes V1, V2, and V3 goal segments", async ({
   await saveText(page, review, goalVersions[1], "/review");
   await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
   await expect(page.getByText("Goal v2 · Cycle 2")).toBeVisible();
+  const previousActionReference = page.getByRole("region", {
+    name: cyclePreviousActionReferenceCopy.heading,
+  });
+  await expect(previousActionReference.getByText("改善 V1")).toBeVisible();
+  await expect(
+    previousActionReference.getByText("Cycle 1 · Goal v1"),
+  ).toBeVisible();
+  await expect(
+    previousActionReference.getByText(
+      cyclePreviousActionReferenceCopy.goalVersionChanged,
+    ),
+  ).toBeVisible();
   await completeCurrentCycle(page, "V2");
 
   await saveText(page, review, goalVersions[2], "/review");

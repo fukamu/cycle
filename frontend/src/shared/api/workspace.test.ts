@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ZodError } from "zod";
 
 import type { AuthenticatedRequestLease } from "./client";
 import { reviewSchema } from "./schemas";
@@ -42,6 +43,15 @@ const authenticatedJSON = (payload: unknown) =>
     headers: { "X-Fukamu-Authenticated-User-ID": goalId },
   });
 
+const collectZodIssuePaths = (
+  issues: ZodError["issues"],
+): ReadonlyArray<ReadonlyArray<PropertyKey>> =>
+  issues.flatMap((issue) =>
+    issue.code === "invalid_union"
+      ? issue.errors.flatMap((branch) => collectZodIssuePaths(branch))
+      : [issue.path],
+  );
+
 const reviewResponse = (responseGoalId = goalId) => {
   const goalVersion = {
     id: "00000000-0000-7000-8000-000000000005",
@@ -82,6 +92,7 @@ const reviewResponse = (responseGoalId = goalId) => {
       sequenceNumber: 3,
       status: "completed",
       goalVersion: { ...goalVersion },
+      previousCompletedCycleAction: null,
       startedAt: "2026-08-19T00:00:00Z",
       completedAt: "2026-08-20T00:00:00Z",
       canceledAt: null,
@@ -165,7 +176,7 @@ describe("goal-scoped workspace API", () => {
       previousCompletedCycleAction: null,
     },
   ])(
-    "keeps the pre-activation Cycle parser compatible with an additive $label previous Action",
+    "requires and preserves the activated $label previous Action",
     async ({
       sequenceNumber,
       goalVersionNumber,
@@ -207,8 +218,105 @@ describe("goal-scoped workspace API", () => {
         id: cycleId,
         sequenceNumber,
         status: "active",
+        previousCompletedCycleAction,
       });
-      expect(parsed.cycle).not.toHaveProperty("previousCompletedCycleAction");
+    },
+  );
+
+  it.each([
+    {
+      name: "Goal Start",
+      surface: "start",
+      field: "cycle",
+      invoke: () => startGoal(lease, goalId, 0, commandOptions),
+    },
+    {
+      name: "Cycle detail",
+      surface: "detail",
+      field: "cycle",
+      invoke: () => getCycle(lease, goalId, cycleId),
+    },
+    {
+      name: "Goal Review trigger",
+      surface: "review",
+      field: "triggerCycle",
+      invoke: () => getReview(lease, goalId),
+    },
+    {
+      name: "Cycle Complete",
+      surface: "complete",
+      field: "completedCycle",
+      invoke: () => completeCycle(lease, goalId, cycleId, 4, 9, commandOptions),
+    },
+    {
+      name: "Goal Review Continue",
+      surface: "continue",
+      field: "cycle",
+      invoke: () => continueReview(lease, goalId, 4, 2, commandOptions),
+    },
+    {
+      name: "Goal Terminate",
+      surface: "terminate",
+      field: "canceledCycle",
+      invoke: () =>
+        terminateGoal(
+          lease,
+          goalId,
+          "ended",
+          4,
+          "active_cycle",
+          commandOptions,
+          { id: cycleId, revision: 9 },
+        ),
+    },
+  ] as const)(
+    "rejects a $name full Cycle response that omits the activated previous Action field",
+    async ({ field, invoke, surface }) => {
+      const review = reviewResponse();
+      const cycleWithoutField: Record<string, unknown> = {
+        ...review.triggerCycle,
+      };
+      delete cycleWithoutField.previousCompletedCycleAction;
+      const responsePayload =
+        surface === "review"
+          ? { ...review, triggerCycle: cycleWithoutField }
+          : surface === "complete"
+            ? {
+                goal: review.goal,
+                reviewDraft: review.reviewDraft,
+                completedCycle: cycleWithoutField,
+              }
+            : surface === "terminate"
+              ? { goal: review.goal, canceledCycle: cycleWithoutField }
+              : surface === "start"
+                ? { goal: review.goal, cycle: cycleWithoutField }
+                : surface === "continue"
+                  ? {
+                      goal: review.goal,
+                      versionCreated: false,
+                      cycle: cycleWithoutField,
+                    }
+                  : { cycle: cycleWithoutField };
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(authenticatedJSON(responsePayload)),
+      );
+
+      let failure: unknown;
+      try {
+        await invoke();
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(ZodError);
+      if (failure instanceof ZodError) {
+        expect(collectZodIssuePaths(failure.issues)).toContainEqual([
+          field,
+          "previousCompletedCycleAction",
+        ]);
+      }
     },
   );
 

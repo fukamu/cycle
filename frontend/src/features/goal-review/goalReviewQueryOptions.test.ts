@@ -70,6 +70,7 @@ function reviewGeneration({
     sequenceNumber,
     status: "completed",
     goalVersion: version,
+    previousCompletedCycleAction: null,
     startedAt: "2026-08-20T00:00:00.000Z",
     completedAt: "2026-08-20T01:00:00.000Z",
     canceledAt: null,

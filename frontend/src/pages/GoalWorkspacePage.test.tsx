@@ -28,6 +28,7 @@ import { APIError } from "../shared/api/client";
 import {
   cycleFrameCopy,
   cycleFrameTemplateCopy,
+  cyclePreviousActionReferenceCopy,
   firstUseGuideCopy,
   frameCopy,
 } from "../shared/copy/ja";
@@ -109,6 +110,7 @@ const cycle: Cycle = {
   sequenceNumber: 1,
   status: "active",
   goalVersion: goal.currentVersion,
+  previousCompletedCycleAction: null,
   startedAt: "2026-08-20T00:00:00.000Z",
   completedAt: null,
   canceledAt: null,
@@ -132,6 +134,26 @@ const completableCycle: Cycle = {
 };
 
 const currentCycleId = "40000000-0000-7000-8000-000000000002";
+const cycleWithPreviousAction: Cycle = {
+  ...cycle,
+  sequenceNumber: 2,
+  previousCompletedCycleAction: {
+    cycleId: "40000000-0000-7000-8000-000000000009",
+    cycleSequenceNumber: 1,
+    goalVersionNumber: 1,
+    action: "通知を切る\n30分集中する",
+  },
+};
+const goalWithPreviousAction: Goal = {
+  ...goal,
+  currentWork: {
+    kind: "active_cycle",
+    cycleId: cycleWithPreviousAction.id,
+    cycleSequenceNumber: cycleWithPreviousAction.sequenceNumber,
+  },
+  nextCycleSequenceNumber: 3,
+  cycleCount: 2,
+};
 const reviewDraftId = "50000000-0000-7000-8000-000000000001";
 const activeCycleReplay = {
   replayed: true,
@@ -234,6 +256,186 @@ describe("GoalWorkspacePage", () => {
       expect(counter).toHaveTextContent(`${count} / 200文字`);
       expect(counter).toHaveAttribute("aria-live", "off");
     }
+  });
+
+  it("shows the exact previous Action between the Plan guide and editor only on active Plan", async () => {
+    vi.mocked(getCycle).mockResolvedValue({ cycle: cycleWithPreviousAction });
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    const reference = await screen.findByRole("region", {
+      name: cyclePreviousActionReferenceCopy.heading,
+    });
+    const guide = screen.getByText(frameCopy.plan.guide);
+    const template = screen.getByRole("region", {
+      name: cycleFrameTemplateCopy.heading,
+    });
+    const editor = screen.getByRole("textbox", { name: "P — Plan" });
+    expect(
+      guide.compareDocumentPosition(reference) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      reference.compareDocumentPosition(template) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      template.compareDocumentPosition(editor) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(reference).getByText("Cycle 1 · Goal v1")).toBeVisible();
+    expect(
+      within(reference).getByText(
+        (_content, element) =>
+          element?.textContent ===
+          cycleWithPreviousAction.previousCompletedCycleAction?.action,
+      ),
+    ).toBeVisible();
+    expect(within(reference).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(reference).queryByRole("button")).not.toBeInTheDocument();
+    expect(saveCycleFrame).not.toHaveBeenCalled();
+
+    for (const tab of [/D\s*Do/, /C\s*Check/, /A\s*Action/]) {
+      fireEvent.click(screen.getByRole("tab", { name: tab }));
+      expect(
+        screen.queryByRole("region", {
+          name: cyclePreviousActionReferenceCopy.heading,
+        }),
+      ).not.toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole("tab", { name: /P\s*Plan/ }));
+    expect(
+      screen.getByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).toBeVisible();
+  });
+
+  it("does not render an empty previous Action reference for Cycle 1", async () => {
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    await screen.findByText("保存済み");
+    expect(
+      screen.queryByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the previous Action before workspace-move conflict navigation", async () => {
+    const movedGoal: Goal = {
+      ...goalWithPreviousAction,
+      status: "goal_review",
+      revision: goalWithPreviousAction.revision + 1,
+      currentWork: {
+        kind: "goal_review",
+        reviewDraftId,
+        triggerCycleId: cycleWithPreviousAction.id,
+        triggerCycleSequenceNumber: cycleWithPreviousAction.sequenceNumber,
+      },
+    };
+    const completedCycle: Cycle = {
+      ...cycleWithPreviousAction,
+      status: "completed",
+      previousCompletedCycleAction: null,
+      completedAt: "2026-08-20T00:06:00.000Z",
+    };
+    vi.mocked(getGoal)
+      .mockReset()
+      .mockResolvedValueOnce({ goal: goalWithPreviousAction })
+      .mockResolvedValueOnce({ goal: movedGoal });
+    vi.mocked(getCycle)
+      .mockReset()
+      .mockResolvedValueOnce({ cycle: cycleWithPreviousAction })
+      .mockResolvedValueOnce({ cycle: completedCycle });
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockRejectedValueOnce(
+        new APIError(
+          409,
+          "GOAL_STATE_CONFLICT",
+          "workspace moved",
+          "request-previous-action-workspace-moved",
+        ),
+      );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache);
+
+    expect(
+      await screen.findByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).toBeVisible();
+    const editor = screen.getByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: "移動前の計画" } });
+    fireEvent.blur(editor);
+
+    expect(
+      await screen.findByText("現在の作業状態が更新されました"),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("現在の目標レビュー")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "現在の作業へ移動" }),
+    ).toHaveAttribute("href", `/goals/${goal.id}/review`);
+  });
+
+  it("hides the previous Action before a deletion advisory cleanup completes", async () => {
+    const cleanup = deferred<void>();
+    vi.mocked(getGoal).mockResolvedValue({ goal: goalWithPreviousAction });
+    vi.mocked(getCycle).mockResolvedValue({
+      cycle: cycleWithPreviousAction,
+    });
+    vi.mocked(tombstoneDeletedGoalAndClearDrafts).mockReturnValue(
+      cleanup.promise,
+    );
+    const advisory = createGoalDeletionAdvisoryHarness();
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache, { goalDeletionAdvisory: advisory });
+
+    expect(
+      await screen.findByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).toBeVisible();
+    const editor = screen.getByRole("textbox", { name: "P — Plan" });
+    expect(await screen.findByText("保存済み")).toBeVisible();
+
+    await act(async () => {
+      advisory.dispatch(session.user.id, goal.id);
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.queryByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
+    expect(editor).toHaveAttribute("readonly");
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(tombstoneDeletedGoalAndClearDrafts).toHaveBeenCalledWith(
+        session.user.id,
+        goal.id,
+      ),
+    );
+    expect(screen.queryByText("ホーム")).not.toBeInTheDocument();
+
+    await act(async () => cleanup.resolve());
+    expect(await screen.findByText("ホーム")).toBeVisible();
   });
 
   it("moves the eligible Cycle 1 guide from Plan to Do without stealing tab focus or saving", async () => {
@@ -468,7 +670,9 @@ describe("GoalWorkspacePage", () => {
   });
 
   it("blocks template insertion while browser recovery needs a choice", async () => {
-    vi.mocked(getCycle).mockResolvedValue({ cycle: { ...cycle, plan: "" } });
+    vi.mocked(getCycle).mockResolvedValue({
+      cycle: { ...cycleWithPreviousAction, plan: "" },
+    });
     vi.mocked(getBrowserDraft).mockImplementation(async (_userId, key) =>
       key.endsWith(":plan")
         ? {
@@ -487,6 +691,11 @@ describe("GoalWorkspacePage", () => {
     renderPage(cache);
 
     await screen.findByText("別の更新が見つかりました");
+    expect(
+      screen.queryByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
     expandFrameTemplates();
     const editor = screen.getByRole("textbox", { name: "P — Plan" });
     const insert = screen.getByRole("button", {
@@ -1223,6 +1432,11 @@ describe("GoalWorkspacePage", () => {
           }),
         ).not.toBeInTheDocument();
         expect(
+          screen.queryByRole("region", {
+            name: cyclePreviousActionReferenceCopy.heading,
+          }),
+        ).not.toBeInTheDocument();
+        expect(
           document.querySelector('label[for="cycle-frame-editor"]'),
         ).toHaveTextContent(frameCopy[frame].name);
         const count = Array.from(terminalCycle[frame]).length;
@@ -1841,6 +2055,7 @@ describe("GoalWorkspacePage", () => {
   it("keeps hydration-time input and saves it only after every draft read completes", async () => {
     const hydration = deferred<Awaited<ReturnType<typeof getBrowserDraft>>>();
     const localBody = "読込中に編集した計画";
+    vi.mocked(getCycle).mockResolvedValue({ cycle: cycleWithPreviousAction });
     vi.mocked(getBrowserDraft).mockReturnValue(hydration.promise);
     vi.mocked(saveCycleFrame).mockResolvedValue({
       cycleId: cycle.id,
@@ -1856,6 +2071,11 @@ describe("GoalWorkspacePage", () => {
     renderPage(cache);
     const editor = await screen.findByRole("textbox", { name: "P — Plan" });
     await waitFor(() => expect(getBrowserDraft).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
 
     fireEvent.change(editor, { target: { value: localBody } });
     fireEvent.blur(editor);
@@ -1870,6 +2090,11 @@ describe("GoalWorkspacePage", () => {
     await act(async () => hydration.resolve(null));
 
     await waitFor(() => expect(getBrowserDraft).toHaveBeenCalledTimes(4));
+    expect(
+      await screen.findByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).toBeVisible();
     await waitFor(
       () =>
         expect(saveCycleFrame).toHaveBeenCalledWith(
@@ -2620,13 +2845,14 @@ describe("GoalWorkspacePage", () => {
 
   it("rebases a runtime cycle conflict only after the user chooses the local frame", async () => {
     const latestCycle: Cycle = {
-      ...cycle,
+      ...cycleWithPreviousAction,
       plan: "別の端末で保存された計画",
       contentRevision: 1,
-      frameRevisions: { ...cycle.frameRevisions, plan: 1 },
+      frameRevisions: { ...cycleWithPreviousAction.frameRevisions, plan: 1 },
     };
+    vi.mocked(getGoal).mockResolvedValue({ goal: goalWithPreviousAction });
     vi.mocked(getCycle)
-      .mockResolvedValueOnce({ cycle })
+      .mockResolvedValueOnce({ cycle: cycleWithPreviousAction })
       .mockResolvedValueOnce({ cycle: latestCycle });
     vi.mocked(saveCycleFrame)
       .mockRejectedValueOnce(cycleRevisionConflict())
@@ -2644,11 +2870,21 @@ describe("GoalWorkspacePage", () => {
     renderPage(cache);
 
     const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    expect(
+      screen.getByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).toBeVisible();
     fireEvent.change(editor, { target: { value: "この端末の計画" } });
 
     expect(
       await screen.findByText("別の更新が見つかりました"),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).not.toBeInTheDocument();
     expect(editor).toHaveValue("この端末の計画");
     expect(editor).toHaveAttribute("readonly");
     expect(
@@ -2678,6 +2914,11 @@ describe("GoalWorkspacePage", () => {
       screen.getByRole("button", { name: "この端末の入力を復元" }),
     );
     expect(editor).not.toHaveAttribute("readonly");
+    expect(
+      await screen.findByRole("region", {
+        name: cyclePreviousActionReferenceCopy.heading,
+      }),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "D — Doへ進む" })).toBeEnabled();
 
     await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledTimes(2));

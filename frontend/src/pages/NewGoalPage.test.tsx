@@ -109,6 +109,7 @@ const startedCycle: Cycle = {
     body: draft.body,
     createdAt: "2026-08-20T00:02:00.000Z",
   },
+  previousCompletedCycleAction: null,
   startedAt: "2026-08-20T00:02:00.000Z",
   completedAt: null,
   canceledAt: null,

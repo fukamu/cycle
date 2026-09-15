@@ -84,6 +84,17 @@ export const cycleFrameCopy = {
   terminalEmpty: "未入力",
 } as const;
 
+export const cyclePreviousActionReferenceCopy = {
+  heading: "前回のA — Action",
+  referenceOnly: "参照のみ",
+  metadata: (cycleSequenceNumber: number, goalVersionNumber: number) =>
+    `Cycle ${cycleSequenceNumber} · Goal v${goalVersionNumber}`,
+  guide:
+    "前回決めた次のアクションです。今回も続けること・変えることを考える手がかりにしてください。",
+  goalVersionChanged:
+    "前回のCycle後に目標が変更されています。現在の目標に合う内容を参考にしてください。",
+} as const;
+
 export type CycleFrameTemplate = {
   readonly id: string;
   readonly name: string;
