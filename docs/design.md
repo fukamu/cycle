@@ -470,7 +470,7 @@ Homeは`progressingGoals: GoalView[]`をCollectionとして扱う。Freeでは0�
 
 - Section見出し横の件数は`{現在数} / {上限}件`と表示し、同じ要素のaccessible nameを`取り組んでいる目標は上限{上限}件中{現在数}件です`とする。件数と上限にはHome read modelの値を使い、Free上限へ固定しない。
 - `progressingGoals`はGoalの作成日時が古い順（`created_at ASC, id ASC`）で返し、Goalの更新によってCard位置を変えない。
-- `currentWork.kind=active_cycle`は`reviewSchedule`を必ず含み、未設定を`reviewDate=null`、`reviewScheduleRevision=0`で表す。見直す日の変更でHomeの安定したGoal順序を変えない。`goal_review`では`reviewSchedule`を含めない。
+- `currentWork.kind=active_cycle`は`reviewSchedule`を必ず含み、初期の未設定を`reviewDate=null`、`reviewScheduleRevision=0`で表す。一度設定した日をClearした後は`reviewDate=null`のまま独立revisionを維持する。見直す日の変更でHomeの安定したGoal順序を変えない。`goal_review`では`reviewSchedule`を含めない。
 - Progressing Goal 0件: Creation Draftがあれば「目標の設定を続ける」、なければ「新しい目標を設定」。
 - Progressing Goal 1〜2件: GoalごとにCardを表示する。Creation Draftがある場合はDraft Cardも別に表示する。
 - Open Creation Draftがなければ、Progressing Goal上限到達中でもDraft作成自体は可能とする。Creation DraftはGoal Entityではなく、Progressing Goalではないためである。

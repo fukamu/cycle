@@ -112,6 +112,7 @@ const messageByCode = {
   GOAL_DRAFT_DELETE_FAILED: operationMessage,
   GOAL_START_FAILED: preservedInputMessage,
   FRAME_SAVE_FAILED: preservedInputMessage,
+  REVIEW_SCHEDULE_UPDATE_FAILED: preservedInputMessage,
   CYCLE_COMPLETION_FAILED: preservedInputMessage,
   GOAL_REVIEW_INVARIANT_BROKEN: operationMessage,
   GOAL_REVIEW_DRAFT_SAVE_FAILED: preservedInputMessage,

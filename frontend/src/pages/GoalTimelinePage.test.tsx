@@ -1104,6 +1104,7 @@ function makeGoal(versionNumber: number): Goal {
       kind: "active_cycle",
       cycleId: cycleId(versionNumber * 2),
       cycleSequenceNumber: versionNumber * 2,
+      reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
     },
     nextCycleSequenceNumber: versionNumber * 2 + 1,
     cycleCount: versionNumber * 2,

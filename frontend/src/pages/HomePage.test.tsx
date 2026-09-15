@@ -455,6 +455,7 @@ function makeGoal({
       kind: "active_cycle",
       cycleId,
       cycleSequenceNumber: 1,
+      reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
     },
     nextCycleSequenceNumber: 2,
     cycleCount: 1,

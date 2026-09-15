@@ -18,7 +18,9 @@ import {
   preferGoal,
   preferGoalReview,
   publishGoalReview,
+  publishReviewSchedule,
   removeGoalFromCache,
+  resolvePreferredGoal,
   resolveGoalReviewPublication,
   userMutationKeys,
   userQueryKeys,
@@ -41,6 +43,7 @@ const goal: Goal = {
     kind: "active_cycle",
     cycleId: "40000000-0000-7000-8000-000000000001",
     cycleSequenceNumber: 1,
+    reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
   },
   nextCycleSequenceNumber: 2,
   cycleCount: 1,
@@ -55,6 +58,8 @@ const cycle: Cycle = {
   status: "active",
   goalVersion: goal.currentVersion,
   previousCompletedCycleAction: null,
+  reviewDate: null,
+  reviewScheduleRevision: 0,
   startedAt: "2026-08-20T00:00:00.000Z",
   completedAt: null,
   canceledAt: null,
@@ -312,6 +317,383 @@ describe("goal cache", () => {
     });
   });
 
+  describe("Review schedule publication", () => {
+    const otherGoal: Goal = {
+      ...goal,
+      id: "20000000-0000-7000-8000-000000000099",
+      currentWork: {
+        kind: "active_cycle",
+        cycleId: "40000000-0000-7000-8000-000000000099",
+        cycleSequenceNumber: 1,
+        reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
+      },
+    };
+
+    it("converges equal-Goal-revision Home schedule data into matching Goal and Cycle caches", () => {
+      const cache = new QueryClient();
+      const homeSchedule = {
+        reviewDate: "2026-09-25",
+        reviewScheduleRevision: 1,
+      } as const;
+      const homeGoal: Goal = {
+        ...goal,
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: cycle.id,
+          cycleSequenceNumber: 1,
+          reviewSchedule: homeSchedule,
+        },
+      };
+      const editedCycle: Cycle = { ...cycle, plan: "編集中のP" };
+      cache.setQueryData(userQueryKeys.goal(userId, goal.id), { goal });
+      cache.setQueryData(userQueryKeys.cycle(userId, goal.id, cycle.id), {
+        cycle: editedCycle,
+      });
+      cache.setQueryData<Home>(userQueryKeys.home(userId), {
+        progressingGoals: [homeGoal],
+        creationDraft: null,
+        canCreateGoalDraft: true,
+        progressingGoalLimit: 3,
+        canStartProgressingGoal: true,
+      });
+
+      cacheGoals(cache, userId, [homeGoal]);
+
+      expect(
+        cache.getQueryData<{ goal: Goal }>(userQueryKeys.goal(userId, goal.id))
+          ?.goal.currentWork,
+      ).toMatchObject({ reviewSchedule: homeSchedule });
+      expect(
+        cache.getQueryData<{ cycle: Cycle }>(
+          userQueryKeys.cycle(userId, goal.id, cycle.id),
+        )?.cycle,
+      ).toEqual({
+        ...editedCycle,
+        reviewDate: homeSchedule.reviewDate,
+        reviewScheduleRevision: homeSchedule.reviewScheduleRevision,
+      });
+    });
+
+    it("removes conflicting detail caches when Home disagrees at the same schedule revision", () => {
+      const cache = new QueryClient();
+      const currentSchedule = {
+        reviewDate: "2026-09-24",
+        reviewScheduleRevision: 1,
+      } as const;
+      const incomingSchedule = {
+        reviewDate: "2026-09-25",
+        reviewScheduleRevision: 1,
+      } as const;
+      const currentGoal: Goal = {
+        ...goal,
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: cycle.id,
+          cycleSequenceNumber: 1,
+          reviewSchedule: currentSchedule,
+        },
+      };
+      const homeGoal: Goal = {
+        ...currentGoal,
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: cycle.id,
+          cycleSequenceNumber: 1,
+          reviewSchedule: incomingSchedule,
+        },
+      };
+      const cycleKey = userQueryKeys.cycle(userId, goal.id, cycle.id);
+      const goalKey = userQueryKeys.goal(userId, goal.id);
+      cache.setQueryData(goalKey, { goal: currentGoal });
+      cache.setQueryData(cycleKey, {
+        cycle: {
+          ...cycle,
+          reviewDate: currentSchedule.reviewDate,
+          reviewScheduleRevision: currentSchedule.reviewScheduleRevision,
+        },
+      });
+      cache.setQueryData<Home>(userQueryKeys.home(userId), {
+        progressingGoals: [homeGoal],
+        creationDraft: null,
+        canCreateGoalDraft: true,
+        progressingGoalLimit: 3,
+        canStartProgressingGoal: true,
+      });
+
+      cacheGoals(cache, userId, [homeGoal]);
+
+      expect(cache.getQueryData(goalKey)).toBeUndefined();
+      expect(cache.getQueryData(cycleKey)).toBeUndefined();
+      expect(
+        cache.getQueryData<Home>(userQueryKeys.home(userId))
+          ?.progressingGoals[0],
+      ).toBe(homeGoal);
+    });
+
+    it("evicts a Goal detail instead of freshening an equal-revision schedule disagreement", () => {
+      const cache = new QueryClient();
+      const goalKey = userQueryKeys.goal(userId, goal.id);
+      const currentGoal: Goal = {
+        ...goal,
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: cycle.id,
+          cycleSequenceNumber: 1,
+          reviewSchedule: {
+            reviewDate: "2026-09-24",
+            reviewScheduleRevision: 1,
+          },
+        },
+      };
+      const incomingGoal: Goal = {
+        ...currentGoal,
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: cycle.id,
+          cycleSequenceNumber: 1,
+          reviewSchedule: {
+            reviewDate: "2026-09-25",
+            reviewScheduleRevision: 1,
+          },
+        },
+      };
+      cache.setQueryData(goalKey, { goal: currentGoal });
+
+      expect(resolvePreferredGoal(currentGoal, incomingGoal)).toEqual({
+        kind: "invariant",
+      });
+      expect(cacheGoal(cache, userId, incomingGoal)).toBe(currentGoal);
+      expect(cache.getQueryData(goalKey)).toBeUndefined();
+    });
+
+    it("updates only schedule fields across Cycle, Goal, and Home without reordering or regressing frames", () => {
+      const cache = new QueryClient();
+      const currentCycle = { ...cycle, plan: "編集中のP" };
+      const home: Home = {
+        progressingGoals: [otherGoal, goal],
+        creationDraft: null,
+        canCreateGoalDraft: true,
+        progressingGoalLimit: 3,
+        canStartProgressingGoal: true,
+      };
+      cache.setQueryData(userQueryKeys.cycle(userId, goal.id, cycle.id), {
+        cycle: currentCycle,
+      });
+      cache.setQueryData(userQueryKeys.goal(userId, goal.id), { goal });
+      cache.setQueryData(userQueryKeys.home(userId), home);
+      cache.setQueryData(userQueryKeys.home(otherUserId), home);
+      const incoming = {
+        ...cycle,
+        reviewDate: "2026-09-25",
+        reviewScheduleRevision: 1,
+      };
+
+      expect(
+        publishReviewSchedule(cache, userId, goal.id, cycle.id, incoming),
+      ).toEqual({
+        kind: "accept",
+        schedule: {
+          reviewDate: "2026-09-25",
+          reviewScheduleRevision: 1,
+        },
+      });
+      expect(
+        cache.getQueryData<{ cycle: Cycle }>(
+          userQueryKeys.cycle(userId, goal.id, cycle.id),
+        )?.cycle,
+      ).toEqual({
+        ...currentCycle,
+        reviewDate: "2026-09-25",
+        reviewScheduleRevision: 1,
+      });
+      expect(
+        cache.getQueryData<{ goal: Goal }>(userQueryKeys.goal(userId, goal.id))
+          ?.goal.currentWork,
+      ).toMatchObject({
+        reviewSchedule: {
+          reviewDate: "2026-09-25",
+          reviewScheduleRevision: 1,
+        },
+      });
+      const nextHome = cache.getQueryData<Home>(userQueryKeys.home(userId));
+      expect(nextHome?.progressingGoals.map(({ id }) => id)).toEqual([
+        otherGoal.id,
+        goal.id,
+      ]);
+      expect(nextHome?.progressingGoals[1]?.currentWork).toMatchObject({
+        reviewSchedule: {
+          reviewDate: "2026-09-25",
+          reviewScheduleRevision: 1,
+        },
+      });
+      expect(cache.getQueryData(userQueryKeys.home(otherUserId))).toBe(home);
+    });
+
+    it("does not republish an already converged schedule", () => {
+      const cache = new QueryClient();
+      const schedule = {
+        reviewDate: "2026-09-25",
+        reviewScheduleRevision: 1,
+      } as const;
+      const scheduledCycle: Cycle = { ...cycle, ...schedule };
+      const scheduledGoal: Goal = {
+        ...goal,
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: cycle.id,
+          cycleSequenceNumber: cycle.sequenceNumber,
+          reviewSchedule: schedule,
+        },
+      };
+      const home: Home = {
+        progressingGoals: [scheduledGoal],
+        creationDraft: null,
+        canCreateGoalDraft: true,
+        progressingGoalLimit: 3,
+        canStartProgressingGoal: true,
+      };
+      const cycleKey = userQueryKeys.cycle(userId, goal.id, cycle.id);
+      const goalKey = userQueryKeys.goal(userId, goal.id);
+      const homeKey = userQueryKeys.home(userId);
+      cache.setQueryData(cycleKey, { cycle: scheduledCycle });
+      cache.setQueryData(goalKey, { goal: scheduledGoal });
+      cache.setQueryData(homeKey, home);
+      const events: unknown[] = [];
+      const unsubscribe = cache
+        .getQueryCache()
+        .subscribe((event) => events.push(event));
+
+      expect(
+        publishReviewSchedule(cache, userId, goal.id, cycle.id, scheduledCycle),
+      ).toEqual({ kind: "accept", schedule });
+
+      expect(events).toEqual([]);
+      expect(cache.getQueryData(cycleKey)).toEqual({ cycle: scheduledCycle });
+      expect(cache.getQueryData(goalKey)).toEqual({ goal: scheduledGoal });
+      expect(cache.getQueryData(homeKey)).toBe(home);
+      unsubscribe();
+    });
+
+    it("preserves and converges on a higher independent schedule revision", () => {
+      const cache = new QueryClient();
+      const newerSchedule = {
+        reviewDate: "2026-09-30",
+        reviewScheduleRevision: 2,
+      } as const;
+      const newerGoal: Goal = {
+        ...goal,
+        currentWork: {
+          kind: "active_cycle",
+          cycleId: cycle.id,
+          cycleSequenceNumber: 1,
+          reviewSchedule: newerSchedule,
+        },
+      };
+      cache.setQueryData(userQueryKeys.cycle(userId, goal.id, cycle.id), {
+        cycle,
+      });
+      cache.setQueryData(userQueryKeys.goal(userId, goal.id), {
+        goal: newerGoal,
+      });
+      cache.setQueryData<Home>(userQueryKeys.home(userId), {
+        progressingGoals: [goal],
+        creationDraft: null,
+        canCreateGoalDraft: true,
+        progressingGoalLimit: 3,
+        canStartProgressingGoal: true,
+      });
+
+      expect(
+        publishReviewSchedule(cache, userId, goal.id, cycle.id, {
+          ...cycle,
+          reviewDate: "2026-09-25",
+          reviewScheduleRevision: 1,
+        }),
+      ).toEqual({ kind: "preserve-current", schedule: newerSchedule });
+      expect(
+        cache.getQueryData<{ cycle: Cycle }>(
+          userQueryKeys.cycle(userId, goal.id, cycle.id),
+        )?.cycle,
+      ).toMatchObject(newerSchedule);
+      expect(
+        cache.getQueryData<Home>(userQueryKeys.home(userId))
+          ?.progressingGoals[0]?.currentWork,
+      ).toMatchObject({ reviewSchedule: newerSchedule });
+    });
+
+    it("fails closed for an equal-revision target disagreement or moved workspace", () => {
+      const cache = new QueryClient();
+      const configuredCycle: Cycle = {
+        ...cycle,
+        reviewDate: "2026-09-25",
+        reviewScheduleRevision: 1,
+      };
+      cache.setQueryData(userQueryKeys.cycle(userId, goal.id, cycle.id), {
+        cycle: configuredCycle,
+      });
+      cache.setQueryData(userQueryKeys.goal(userId, goal.id), { goal });
+
+      expect(
+        publishReviewSchedule(cache, userId, goal.id, cycle.id, {
+          ...configuredCycle,
+          reviewDate: "2026-09-26",
+        }),
+      ).toEqual({ kind: "invariant" });
+      expect(
+        cache.getQueryData<{ cycle: Cycle }>(
+          userQueryKeys.cycle(userId, goal.id, cycle.id),
+        )?.cycle,
+      ).toBe(configuredCycle);
+
+      cache.setQueryData(userQueryKeys.goal(userId, goal.id), {
+        goal: { ...goal, status: "ended", currentWork: null },
+      });
+      expect(
+        publishReviewSchedule(cache, userId, goal.id, cycle.id, {
+          ...configuredCycle,
+          reviewScheduleRevision: 2,
+        }),
+      ).toEqual({ kind: "workspace-moved" });
+    });
+
+    it("does not publish a terminal response into an absent cache", () => {
+      const cache = new QueryClient();
+
+      expect(
+        publishReviewSchedule(cache, userId, goal.id, cycle.id, {
+          ...cycle,
+          status: "completed",
+          completedAt: "2026-09-15T00:00:00.000Z",
+          reviewDate: "2026-09-25",
+          reviewScheduleRevision: 1,
+        }),
+      ).toEqual({ kind: "workspace-moved" });
+      expect(
+        cache.getQueryData(userQueryKeys.cycle(userId, goal.id, cycle.id)),
+      ).toBeUndefined();
+    });
+
+    it("refuses to spread a cached Cycle owned by another Goal", () => {
+      const cache = new QueryClient();
+      const foreignCycle: Cycle = {
+        ...cycle,
+        goalId: otherGoal.id,
+        plan: "別GoalのP",
+      };
+      const cycleKey = userQueryKeys.cycle(userId, goal.id, cycle.id);
+      cache.setQueryData(cycleKey, { cycle: foreignCycle });
+
+      expect(
+        publishReviewSchedule(cache, userId, goal.id, cycle.id, {
+          ...cycle,
+          reviewDate: "2026-09-25",
+          reviewScheduleRevision: 1,
+        }),
+      ).toEqual({ kind: "invariant" });
+      expect(cache.getQueryData(cycleKey)).toEqual({ cycle: foreignCycle });
+    });
+  });
+
   it("does not let a late goal collection snapshot regress a newer detail", () => {
     const cache = new QueryClient();
     const newer = {
@@ -499,6 +881,10 @@ describe("goal cache", () => {
                   kind: "active_cycle",
                   cycleId: "40000000-0000-7000-8000-000000000099",
                   cycleSequenceNumber: 2,
+                  reviewSchedule: {
+                    reviewDate: null,
+                    reviewScheduleRevision: 0,
+                  },
                 }
               : null,
           terminalAt:
@@ -534,6 +920,10 @@ describe("goal cache", () => {
           kind: "active_cycle",
           cycleId: "40000000-0000-7000-8000-000000000099",
           cycleSequenceNumber: 2,
+          reviewSchedule: {
+            reviewDate: null,
+            reviewScheduleRevision: 0,
+          },
         },
       };
 
@@ -858,6 +1248,10 @@ describe("goal cache", () => {
         kind: "active_cycle",
         cycleId: "40000000-0000-7000-8000-000000000099",
         cycleSequenceNumber: 2,
+        reviewSchedule: {
+          reviewDate: null,
+          reviewScheduleRevision: 0,
+        },
       },
       terminalAt: null,
     },

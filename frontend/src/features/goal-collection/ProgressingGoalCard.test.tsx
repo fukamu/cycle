@@ -24,6 +24,7 @@ const activeGoal: ActiveGoal = {
     kind: "active_cycle",
     cycleId: "30000000-0000-7000-8000-000000000001",
     cycleSequenceNumber: 3,
+    reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
   },
   nextCycleSequenceNumber: 4,
   cycleCount: 3,
@@ -106,6 +107,37 @@ describe("ProgressingGoalCard", () => {
   });
 
   it.each([
+    ["2026-09-14", "予定日を過ぎています"],
+    ["2026-09-15", "本日です"],
+    ["2026-09-16", "予定日です"],
+  ])(
+    "presents configured date %s as static local-date context on Home",
+    (reviewDate, stateCopy) => {
+      const configuredGoal: ActiveGoal = {
+        ...activeGoal,
+        currentWork: {
+          ...activeGoal.currentWork,
+          reviewSchedule: { reviewDate, reviewScheduleRevision: 1 },
+        },
+      };
+
+      renderCard(configuredGoal, "2026-09-15");
+
+      const card = screen.getByRole("article", {
+        name: configuredGoal.currentVersion.body,
+      });
+      expect(within(card).getByText(reviewDate)).toHaveAttribute(
+        "datetime",
+        reviewDate,
+      );
+      expect(within(card).getByText(`（${stateCopy}）`)).toBeVisible();
+      expect(
+        card.querySelectorAll("button, input, select, textarea"),
+      ).toHaveLength(0);
+    },
+  );
+
+  it.each([
     ["missing current work", { ...activeGoal, currentWork: null }],
     [
       "mismatched status and current work",
@@ -120,8 +152,8 @@ describe("ProgressingGoalCard", () => {
   });
 });
 
-function renderCard(goal: Goal) {
-  const view = getProgressingGoalCardViewModel(goal);
+function renderCard(goal: Goal, today?: string) {
+  const view = getProgressingGoalCardViewModel(goal, today);
   if (!view) throw new Error("test fixture is not a progressing Goal");
   render(
     <MemoryRouter>

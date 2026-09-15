@@ -1,8 +1,11 @@
 import {
   cycleSchema,
+  currentWorkSchema,
   draftSchema,
   goalVersionSchema,
   reviewSchema,
+  reviewDateSchema,
+  reviewScheduleSchema,
   saveFrameSchema,
   sessionSchema,
   type GoalReview,
@@ -67,6 +70,8 @@ const reviewFixture = (): GoalReview => ({
       createdAt: "2026-08-19T00:00:00Z",
     },
     previousCompletedCycleAction: null,
+    reviewDate: null,
+    reviewScheduleRevision: 0,
     startedAt: "2026-08-19T00:00:00Z",
     completedAt: "2026-08-20T00:00:00Z",
     canceledAt: null,
@@ -116,6 +121,7 @@ const invalidReviewCases: readonly InvalidReviewCase[] = [
         kind: "active_cycle",
         cycleId: otherId,
         cycleSequenceNumber: review.triggerCycle.sequenceNumber,
+        reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
       };
     },
   },
@@ -304,6 +310,8 @@ describe("Cycle previous completed Action schema", () => {
       goalVersionNumber: 1,
       action: "前回の改善\r\n次の一歩",
     },
+    reviewDate: null,
+    reviewScheduleRevision: 0,
     startedAt: "2026-08-20T00:00:00Z",
     completedAt: null,
     canceledAt: null,
@@ -422,6 +430,85 @@ describe("Cycle previous completed Action schema", () => {
         previousCompletedCycleAction: null,
       }).success,
     ).toBe(true);
+  });
+
+  it.each(["reviewDate", "reviewScheduleRevision"] as const)(
+    "rejects a full Cycle missing required %s",
+    (field) => {
+      const candidate: Record<string, unknown> = activeCycle();
+      delete candidate[field];
+
+      const parsed = cycleSchema.safeParse(candidate);
+      expect(parsed.success).toBe(false);
+      if (!parsed.success)
+        expect(parsed.error.issues).toEqual(
+          expect.arrayContaining([expect.objectContaining({ path: [field] })]),
+        );
+    },
+  );
+});
+
+describe("Review schedule schemas", () => {
+  it.each(["0001-01-01", "2000-02-29", "9999-12-31"])(
+    "accepts the canonical Gregorian date %s",
+    (reviewDate) => {
+      expect(reviewDateSchema.parse(reviewDate)).toBe(reviewDate);
+      expect(
+        reviewScheduleSchema.parse({
+          reviewDate,
+          reviewScheduleRevision: 1,
+        }),
+      ).toEqual({ reviewDate, reviewScheduleRevision: 1 });
+    },
+  );
+
+  it.each([
+    "0000-01-01",
+    "10000-01-01",
+    "2026-02-29",
+    "2026-9-15",
+    "2026-09-15T00:00:00Z",
+  ])("rejects the invalid or non-canonical date %s", (reviewDate) => {
+    expect(reviewDateSchema.safeParse(reviewDate).success).toBe(false);
+  });
+
+  it("requires a positive revision for a configured date but retains revision after clear", () => {
+    expect(
+      reviewScheduleSchema.safeParse({
+        reviewDate: "2026-09-15",
+        reviewScheduleRevision: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      reviewScheduleSchema.parse({
+        reviewDate: null,
+        reviewScheduleRevision: 4,
+      }),
+    ).toEqual({ reviewDate: null, reviewScheduleRevision: 4 });
+  });
+
+  it("requires the schedule only on an active Cycle workspace", () => {
+    const active = {
+      kind: "active_cycle",
+      cycleId: reviewCycleId,
+      cycleSequenceNumber: 3,
+    };
+    expect(currentWorkSchema.safeParse(active).success).toBe(false);
+    expect(
+      currentWorkSchema.safeParse({
+        ...active,
+        reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
+      }).success,
+    ).toBe(true);
+    expect(
+      currentWorkSchema.safeParse({
+        kind: "goal_review",
+        reviewDraftId,
+        triggerCycleId: reviewCycleId,
+        triggerCycleSequenceNumber: 3,
+        reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
+      }).success,
+    ).toBe(false);
   });
 });
 
