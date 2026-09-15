@@ -54,6 +54,7 @@ const cycle: Cycle = {
   sequenceNumber: 1,
   status: "active",
   goalVersion: goal.currentVersion,
+  previousCompletedCycleAction: null,
   startedAt: "2026-08-20T00:00:00.000Z",
   completedAt: null,
   canceledAt: null,

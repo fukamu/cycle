@@ -101,6 +101,7 @@ import {
 } from "./model/eligibility";
 import { CycleCheckComparison } from "./CycleCheckComparison";
 import { CycleCompletionSummary } from "./CycleCompletionSummary";
+import { CyclePreviousActionReference } from "./CyclePreviousActionReference";
 import {
   CycleFrameTemplatePicker,
   type TemplateFrame,
@@ -1984,6 +1985,15 @@ function CycleWorkspace({
     composingFrame !== templateFrame &&
     !pendingAction,
   );
+  const previousActionVisible = Boolean(
+    selected === "plan" &&
+    editable &&
+    cycle.previousCompletedCycleAction &&
+    !coordinator.isHydrating() &&
+    !workspaceMoved &&
+    recoveryConflicts.size === 0 &&
+    cycleRevisionConflictsRef.current.size === 0,
+  );
   const comparisonFrames = ["plan", "do"] as const;
   const comparisonRecoveryPending = new Set(
     comparisonFrames.filter((frame) => recoveryConflicts.has(frame)),
@@ -2140,6 +2150,12 @@ function CycleWorkspace({
         <p className="frame-guide" id="cycle-frame-guide">
           {copy.guide}
         </p>
+        {previousActionVisible && cycle.previousCompletedCycleAction && (
+          <CyclePreviousActionReference
+            previousAction={cycle.previousCompletedCycleAction}
+            currentGoalVersionNumber={cycle.goalVersion.versionNumber}
+          />
+        )}
         {selected === "check" && (
           <CycleCheckComparison
             values={comparisonValues}
