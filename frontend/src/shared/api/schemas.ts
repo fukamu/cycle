@@ -7,6 +7,7 @@ import {
   FRAME_TEXT_MAX_CODE_POINTS,
   GOAL_TEXT_MAX_CODE_POINTS,
   hasNoNUL,
+  hasNonWhitespace,
   isWithinCodePointLimit,
   normalizeLineEndings,
 } from "../text/semantics";
@@ -69,25 +70,65 @@ const frameRevisionsSchema = z.object({
   action: z.number().int().nonnegative(),
 });
 
-export const cycleSchema = z.object({
-  id: uuid,
-  goalId: uuid.optional(),
-  sequenceNumber: z.number().int().positive(),
-  status: z.enum(["active", "completed", "canceled"]),
-  goalVersion: goalVersionSchema,
-  startedAt: instant,
-  completedAt: instant.nullable(),
-  canceledAt: instant.nullable(),
-  cancellationReason: z
-    .enum(["goal_achieved", "goal_ended", "goal_deleted"])
-    .nullable(),
-  plan: frameTextSchema,
-  do: frameTextSchema,
-  check: frameTextSchema,
-  action: frameTextSchema,
-  contentRevision: z.number().int().nonnegative(),
-  frameRevisions: frameRevisionsSchema,
+const previousCompletedCycleActionSchema = z.object({
+  cycleId: uuid,
+  cycleSequenceNumber: z.number().int().positive(),
+  goalVersionNumber: z.number().int().positive(),
+  action: frameTextSchema.refine(hasNonWhitespace),
 });
+
+export const cycleSchema = z
+  .object({
+    id: uuid,
+    goalId: uuid.optional(),
+    sequenceNumber: z.number().int().positive(),
+    status: z.enum(["active", "completed", "canceled"]),
+    goalVersion: goalVersionSchema,
+    previousCompletedCycleAction: previousCompletedCycleActionSchema.nullable(),
+    startedAt: instant,
+    completedAt: instant.nullable(),
+    canceledAt: instant.nullable(),
+    cancellationReason: z
+      .enum(["goal_achieved", "goal_ended", "goal_deleted"])
+      .nullable(),
+    plan: frameTextSchema,
+    do: frameTextSchema,
+    check: frameTextSchema,
+    action: frameTextSchema,
+    contentRevision: z.number().int().nonnegative(),
+    frameRevisions: frameRevisionsSchema,
+  })
+  .superRefine((cycle, context) => {
+    const previous = cycle.previousCompletedCycleAction;
+    const addInvariantIssue = (path: PropertyKey[]) =>
+      context.addIssue({
+        code: "custom",
+        message: "Cycle response previous Action is inconsistent",
+        path,
+      });
+
+    if (cycle.status !== "active" || cycle.sequenceNumber === 1) {
+      if (previous !== null)
+        addInvariantIssue(["previousCompletedCycleAction"]);
+      return;
+    }
+    if (previous === null) {
+      addInvariantIssue(["previousCompletedCycleAction"]);
+      return;
+    }
+    if (previous.cycleId === cycle.id)
+      addInvariantIssue(["previousCompletedCycleAction", "cycleId"]);
+    if (previous.cycleSequenceNumber !== cycle.sequenceNumber - 1)
+      addInvariantIssue([
+        "previousCompletedCycleAction",
+        "cycleSequenceNumber",
+      ]);
+    if (
+      previous.goalVersionNumber > cycle.goalVersion.versionNumber ||
+      previous.goalVersionNumber < cycle.goalVersion.versionNumber - 1
+    )
+      addInvariantIssue(["previousCompletedCycleAction", "goalVersionNumber"]);
+  });
 export type Cycle = z.infer<typeof cycleSchema>;
 
 export const currentWorkSchema = z.discriminatedUnion("kind", [

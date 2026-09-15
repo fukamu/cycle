@@ -607,6 +607,10 @@ Goal v2 · Cycle 3
 
 Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、文字数counter、Guide、Placeholder、Auto Save stateで構成する。Counterのvisible textは`{現在のcode point数} / {§14.5の上限}文字`、accessible nameは`{Frame label} — {Frame name}は上限{上限}文字中{現在数}文字です`とし、入力中の1文字ごとのlive announcementは行わない。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Completed / Canceledで選択中Frameが空文字またはUnicode whitespaceだけの場合は編集用Placeholderを表示せず、Textareaの近接textとaccessible descriptionで`未入力`と示す。Active Cycleの通常編集およびAI、Browser Draft Recovery、workspace移動、command処理による一時Read-onlyでは編集用Placeholderを維持し、`未入力`を表示しない。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 
+Active Cycle `N > 1`のP選択中は、P Guideの直後、既存のP templateとTextareaの前に、§14.5の`previousCompletedCycleAction`を常時展開した読み取り専用Panelとして表示する。見出しは`前回のA — Action`、metadataは`Cycle {N-1} · Goal v{V}`、badgeは`参照のみ`、補助文言は`前回決めた次のアクションです。今回も続けること・変えることを考える手がかりにしてください。`とする。前Cycleと現在CycleのGoal Version番号が異なる場合だけ、`前回のCycle後に目標が変更されています。現在の目標に合う内容を参考にしてください。`と文字で示す。A本文はplain textとして改行と全文を保持し、truncate、Panel内scroll、旧Goal本文、Pへの自動copy / append / overwrite、編集または反映操作を設けない。通常の文字選択とcopyは妨げない。
+
+Cycle 1、D / C / A、Completed / Canceled Cycleでは前回A Panelを表示しない。Active PでもBrowser Draft Recoveryまたはrevision recoveryの確認中、workspace移動またはGoal削除のfence中は表示せず、staleな前回Aを現行入力と並べない。通常状態のreading orderはP Guide → 前回A Panel → P template → P Textareaとし、前回A Panelの表示はP本文、Auto Save、Frame revision、Browser Draft、Recovery、AI、選択Frameまたはfocusを変更しない。
+
 Active Cycleでは任意の`見直す日`を`YYYY-MM-DD`のcalendar dateとして表示し、未設定、設定/変更、明示Clearを区別する。設定/変更とClearはFrame Auto Saveへ混ぜず、各操作を明示確定してから送る。設定済み日はBrowser local calendar dateとの比較からToday / Upcoming / Overdueをtextで併記し、timezone/offsetを日付値へ保存しない。Completed / Canceledでは確定時点の値をRead-onlyで表示し、変更controlを出さない。
 
 Active CycleのPまたはD選択中は、Guideの後、Textareaの前に任意のbuilt-in templateを段階表示する。標準では明示操作`テンプレートから書き始める（任意）`だけを閉じた状態で示し、操作時に同じ場所で3件を展開する。展開後は各templateの名称、用途、実際に挿入する全文preview、明示操作`{template名}を挿入`を選択前から示す。P / Dを切り替えた場合は遷移先を閉じた標準状態で表示し、展開状態を永続化しない。現在Frameが空文字またはUnicode whitespaceだけの場合だけ、明示操作で既存本文全体をpreviewどおり置き換え、同じTextarea入力・Auto Save経路へ渡して末尾へfocusする。挿入直後は展開した領域内に`テンプレートの挿入を取り消す`を提供し、その後はtemplate IDや選択情報を持たないplain textとして自由に編集できる。
@@ -4318,7 +4322,7 @@ Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTa
 | Goal Creation editor | Creation Draft、Auto Save state、Goal Refine、Start eligibility、Draft recoveryを統合する |
 | Goal Refine comparison | User draftとAI suggestionを同時表示し、明示Adoptだけを反映する |
 | Goal Review editor | Current Goal Version、Review Draft、Continue、Achieve、Endを扱い、terminal時のDraft破棄を説明する |
-| Cycle editor | P/D/C/A Tab、Textarea、P/Dの任意built-in template、Frame別revision、Save state、Action AI、Cycle completionを扱う |
+| Cycle editor | P/D/C/A Tab、Textarea、Active Pの直前A参照、P/Dの任意built-in template、Frame別revision、Save state、Action AI、Cycle completionを扱う |
 | Action eligibility | Generate / Refine / Completeのpredicateをpure logicとして算出し、UI文言で判定しない |
 | Goal history timeline | Cycleの`goalVersionId`変化からVersion change markerを生成し、Completed / Canceled detailをread-only表示する |
 | Session / account UI | Anonymous state、Google connection、identity collision、Account Deleteを扱う。Anonymous bootstrapの`429 RATE_LIMIT_EXCEEDED`は自動再送せず、待ってからの手動Retryを案内する |
@@ -4418,6 +4422,7 @@ Actions:
 - Mobile First。
 - content max widthは例`720px`。
 - Cycle Frame tabsはmobile bottom固定、desktopでも同じ情報構造。
+- Active Pの前回A Panelは320px幅と200% zoom相当でもmetadata、badge、補助文言、version変更警告、A全文を同じ縦のreading orderで表示し、横scroll、truncate、nested scrollを作らない。
 - CのP/D比較はdesktopで2列、狭幅とzoom時はP→Dの縦配置とし、内部scrollを作らない。
 - P/D templateは320px幅と200% zoom相当で名称、用途、全文preview、操作、disabled理由を切らずに縦のreading orderで表示し、横scrollやnested scrollを作らない。
 - Goal card collectionは1列からresponsiveに拡張可能だが、MVPでdesktop専用layoutを作らない。
@@ -4433,6 +4438,7 @@ Actions:
 - Header Drawerを開いた直後は最初のmenu linkへfocusし、開いている間のTab / Shift+Tabはmenu triggerとDrawer内linkだけを循環する。Skip link、wordmark、main contentはnative `inert`でKeyboard・Pointer・支援技術の操作対象外とし、BackdropはPointerで閉じられるがTab順とAccessibility Treeには含めない。Escape、menu trigger、Backdropで閉じた場合は`inert`を解除してtriggerへfocusを戻す。Drawer linkで`pathname`が実際に変わる場合はtriggerへ戻さず、この節のdestination `h1` focusを適用する。同じ`pathname`のlinkを選択した場合はtriggerへfocusを戻す。
 - AI中Aは`readOnly` + `aria-readonly=true`。disabledにせずcopy/scroll可能。
 - ColorだけでGoal status / save state / version markerを表現しない。
+- Active Pの前回Aはvisible headingを持つstaticな補助領域とし、Guide → 前回A → P Textareaの順で取得できるようにする。追加Textarea、button、link、`aria-live`を設けず、Goal Version変更を色だけで表現しない。
 - CのP/D比較はvisible headingとP→D→Cのreading orderを持ち、Recovery待ちは色だけでなく文字とfocus可能な確認操作で示す。
 - P/D templateの各挿入操作は固有のtemplate名をaccessible nameに含め、用途、全文preview、適用中のdisabled理由を`aria-describedby`で取得できるようにする。
 - Button disabled理由を近接textで示す。
@@ -6434,6 +6440,8 @@ Read operationはcursor tamper、scope mismatch、ordering、pagination境界、
 
 Shared full `CycleView`の`previousCompletedCycleAction`は、Cycle 1の`null`、Active Cycleのexact predecessor、§18.5に従う同一 / `current - 1`のGoal Version、terminalの`null`、missing / Canceled / non-Completed / sequence mismatch / futureまたは2以上gapのGoal Version / 解決不能なGoal Version / blank Aのinvariant error、cross-user / cross-Goal非開示をApplication、Repository mapper、実PostgreSQL、actual HTTPで検証する。Start、Cycle detail、Review trigger、Complete、Continue、Terminateの全full-Cycle surfaceでrequired nullable fieldを検証し、Cycle list / history summaryとFrame PATCH responseが変わらないことも固定する。Continueはfresh、同一operation replay、作成Cycleがterminalへ進んだ後のresponse-loss replay、materialization不整合時のrollback、lock済みReview Draftの`reviewCycleId`との一致を含める。
 
+Frontendは同じrequired nullable fieldを欠落時に拒否し、Cycle 1 / terminalの`null`、Active Cycle `N > 1`のobject、current Cycle IDとの差、exact `N - 1`、同一または直前のGoal Version、非空かつ§14.5上限内のAをschema境界で検証する。Active Pだけの表示、同一 / 異なるGoal Version、改行・長文、static semantics、GuideからTextareaまでのreading order、Cycle 1 / D / C / A / terminal / recovery・workspace fenceでの非表示、320px幅・200% zoom・横overflowなし、P Auto Save・Browser Draft・Frame tab keyboard操作の不変をFrontend testで固定する。
+
 ## 48.5 Critical E2E projection
 
 E2Eは§6のuser flowと§§20–25のpublic contractを投影し、内部module名へ依存しない。少なくとも次のjourney familyをpublic UI/APIで通す。
@@ -6442,7 +6450,7 @@ E2Eは§6のuser flowと§§20–25のpublic contractを投影し、内部module
 - Fresh anonymous bootstrapから初回Guideを通り、AIを使わずGoal開始、Cycle 1のP→D→C→A、Cycle完了、Goal Reviewへ進む。自由なFrame移動、Stage close、全体skip、Hamburgerからのreplay、reload、same-user upgrade / different-user login / Account Delete、320px幅とKeyboard操作をjourney family内で検証する。
 - Goal Refineの比較・明示採用とmanual path。
 - P/D/C/A autosave、reload recovery、Action AI、Cycle completion。
-- Goal維持/変更、terminal、History/Timeline。
+- Goal維持/変更、Cycle 1完了後のReview ContinueとCycle 2 Active Pでの直前A参照、terminal、History/Timeline。
 - 複数Progressing Goalのpolicy境界とDraft保全。
 - Goal Delete、Google upgrade/login collision、Account Delete。
 - 同一Browser Contextの二tabによる同時Session discovery、片方のreload、その後の両tabのcommand / autosave。Advisory欠落、Google Session切替、Account Deleteでもidentity fence / revoke contractへ収束する。
@@ -6692,7 +6700,7 @@ MVP acceptanceは、各canonical ownerのContractと§48で変更に適用され
 | Shared engineering method adoption | vendored Product Engineering Playbook、§§0、44.3、48、50、52、54 | offline hash/validator、empty override、38 rule trace、workflow/security fixtures、source-backed adoption evidence |
 | Bootstrap / Goal collection / Start | §§6、9、12、14、18.2–18.3、21–23 | Domain/API/real-DB concurrency、Frontend、E2E |
 | 初回Guide / Browser-local state | §§2.2–2.3、6.5、9.10、11.6、27.4–29.12、40.7、41.13、42.3、43.9 | Frontend state/storage/identity race、copy/A11y/responsive、AI-free E2E、privacy/telemetry negative assertion |
-| Version / Cycle / Review / terminal | §§12–14、18.4–18.6、23–24 | Domain/full-Cycle API predecessor contract/real-DB scope・replay・rollback、Frontend、E2E |
+| Version / Cycle / Review / terminal | §§9.6、12–14、18.4–18.6、23–24、29.3、29.10–29.11 | Domain/full-Cycle API predecessor contract/real-DB scope・replay・rollback、Frontend required schema・直前A参照UI、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model/authz/CAS/cleanup、E2E |
 | Autosave / recovery / identity isolation | §§20.1、27–28 | Frontend fake-timer/component、HTTP identity matrix、E2E |
 | AI behavior / context / quality | §§32–39、49 | typed fake、mock transport、context/privacy、Cost concurrency、quality gate |

@@ -66,6 +66,7 @@ const reviewFixture = (): GoalReview => ({
       body: "現在の目標",
       createdAt: "2026-08-19T00:00:00Z",
     },
+    previousCompletedCycleAction: null,
     startedAt: "2026-08-19T00:00:00Z",
     completedAt: "2026-08-20T00:00:00Z",
     canceledAt: null,
@@ -280,6 +281,147 @@ describe("text response schemas", () => {
       expect(schema.safeParse("frame\0text").success).toBe(false);
       expect(schema.parse(" frame\r\ntext\r ")).toBe(" frame\ntext\n ");
     }
+  });
+});
+
+describe("Cycle previous completed Action schema", () => {
+  const currentCycleId = "40000000-0000-7000-8000-000000000003";
+  const previousCycleId = "40000000-0000-7000-8000-000000000002";
+  const activeCycle = () => ({
+    id: currentCycleId,
+    goalId: reviewGoalId,
+    sequenceNumber: 3,
+    status: "active" as const,
+    goalVersion: {
+      id: reviewVersionId,
+      versionNumber: 2,
+      body: "現在の目標",
+      createdAt: "2026-08-20T00:00:00Z",
+    },
+    previousCompletedCycleAction: {
+      cycleId: previousCycleId,
+      cycleSequenceNumber: 2,
+      goalVersionNumber: 1,
+      action: "前回の改善\r\n次の一歩",
+    },
+    startedAt: "2026-08-20T00:00:00Z",
+    completedAt: null,
+    canceledAt: null,
+    cancellationReason: null,
+    plan: "",
+    do: "",
+    check: "",
+    action: "",
+    contentRevision: 0,
+    frameRevisions: { plan: 0, do: 0, check: 0, action: 0 },
+  });
+
+  it.each([
+    ["the immediately previous Goal Version", 1],
+    ["the same Goal Version", 2],
+  ])("accepts %s", (_label, goalVersionNumber) => {
+    const candidate = activeCycle();
+    candidate.previousCompletedCycleAction.goalVersionNumber =
+      goalVersionNumber;
+
+    const parsed = cycleSchema.parse(candidate);
+
+    expect(parsed.previousCompletedCycleAction?.action).toBe(
+      "前回の改善\n次の一歩",
+    );
+  });
+
+  it.each([
+    {
+      label: "a missing required field",
+      mutate: (candidate: Record<string, unknown>) => {
+        delete candidate.previousCompletedCycleAction;
+      },
+    },
+    {
+      label: "a null predecessor on Cycle 2 or later",
+      mutate: (candidate: Record<string, unknown>) => {
+        candidate.previousCompletedCycleAction = null;
+      },
+    },
+    {
+      label: "the current Cycle identity",
+      mutate: (candidate: ReturnType<typeof activeCycle>) => {
+        candidate.previousCompletedCycleAction.cycleId = currentCycleId;
+      },
+    },
+    {
+      label: "a non-v7 Cycle identity",
+      mutate: (candidate: ReturnType<typeof activeCycle>) => {
+        candidate.previousCompletedCycleAction.cycleId = "not-a-uuid";
+      },
+    },
+    {
+      label: "a non-direct sequence",
+      mutate: (candidate: ReturnType<typeof activeCycle>) => {
+        candidate.previousCompletedCycleAction.cycleSequenceNumber = 1;
+      },
+    },
+    {
+      label: "a future Goal Version",
+      mutate: (candidate: ReturnType<typeof activeCycle>) => {
+        candidate.previousCompletedCycleAction.goalVersionNumber = 3;
+      },
+    },
+    {
+      label: "a Goal Version more than one behind",
+      mutate: (candidate: ReturnType<typeof activeCycle>) => {
+        candidate.goalVersion.versionNumber = 3;
+      },
+    },
+    {
+      label: "a blank Action",
+      mutate: (candidate: ReturnType<typeof activeCycle>) => {
+        candidate.previousCompletedCycleAction.action = " \n\t";
+      },
+    },
+    {
+      label: "an oversized Action",
+      mutate: (candidate: ReturnType<typeof activeCycle>) => {
+        candidate.previousCompletedCycleAction.action = "😀".repeat(201);
+      },
+    },
+  ])("rejects $label", ({ mutate }) => {
+    const candidate = activeCycle();
+    mutate(candidate);
+
+    expect(cycleSchema.safeParse(candidate).success).toBe(false);
+  });
+
+  it.each([
+    ["Cycle 1", { sequenceNumber: 1, status: "active" }],
+    [
+      "a completed Cycle",
+      {
+        sequenceNumber: 3,
+        status: "completed",
+        completedAt: "2026-08-21T00:00:00Z",
+      },
+    ],
+    [
+      "a canceled Cycle",
+      {
+        sequenceNumber: 3,
+        status: "canceled",
+        canceledAt: "2026-08-21T00:00:00Z",
+        cancellationReason: "goal_ended",
+      },
+    ],
+  ])("requires null for %s", (_label, overrides) => {
+    const candidate = { ...activeCycle(), ...overrides };
+
+    expect(cycleSchema.safeParse(candidate).success).toBe(false);
+    expect(
+      cycleSchema.safeParse({
+        ...candidate,
+        previousCompletedCycleAction: null,
+      }).success,
+    ).toBe(true);
   });
 });
 
