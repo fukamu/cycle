@@ -2840,11 +2840,16 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   ).toBe(false);
 
   const nextDo = page.getByRole("button", { name: "D — Doへ進む" });
+  const replan = page.getByRole("button", {
+    name: "このCycleを中断して再計画",
+  });
   const goalActionsSummary = page.locator(".goal-actions summary");
   const assertGoalActionKeyboardVisibility = async () => {
     await planEditor.focus();
     await page.keyboard.press("Tab");
     await expect(nextDo).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(replan).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(goalActionsSummary).toBeFocused();
     const focusedActionGeometry = await goalActionsSummary.evaluate(
