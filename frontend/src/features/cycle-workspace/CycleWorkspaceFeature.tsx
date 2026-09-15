@@ -10,7 +10,11 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type QueryClient,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../auth";
@@ -159,6 +163,8 @@ type MovedWorkspace = {
   readonly currentWorkspace: CurrentWork | null;
   readonly href?: string;
   readonly recovery?: "loading" | "failed" | "deleted";
+  readonly goalSnapshot?: Goal;
+  readonly cycleSnapshot?: Cycle;
 };
 
 type CycleTerminalCommand = "complete" | "terminate" | "delete";
@@ -218,6 +224,58 @@ function replayWorkspacePath(
   if (currentWorkspace?.kind === "goal_review")
     return `/goals/${goalId}/review`;
   return `/history/goals/${goalId}`;
+}
+
+function publishMovedActiveWorkspace(
+  cache: QueryClient,
+  userId: string,
+  movedWorkspace: MovedWorkspace,
+): boolean {
+  const goalSnapshot = movedWorkspace.goalSnapshot;
+  const cycleSnapshot = movedWorkspace.cycleSnapshot;
+  if (!goalSnapshot && !cycleSnapshot)
+    return movedWorkspace.currentWorkspace?.kind !== "active_cycle";
+  if (!goalSnapshot || !cycleSnapshot) return false;
+
+  const goalKey = userQueryKeys.goal(userId, goalSnapshot.id);
+  const goalResolution = resolvePreferredGoal(
+    cache.getQueryData<{ readonly goal: Goal }>(goalKey)?.goal,
+    goalSnapshot,
+  );
+  if (goalResolution.kind === "invariant") {
+    cache.removeQueries({ queryKey: goalKey, exact: true });
+    return false;
+  }
+  const cycleKey = userQueryKeys.cycle(
+    userId,
+    goalSnapshot.id,
+    cycleSnapshot.id,
+  );
+  const cycleResolution = resolvePreferredCycle(
+    cache.getQueryData<{ readonly cycle: Cycle }>(cycleKey)?.cycle,
+    cycleSnapshot,
+  );
+  if (cycleResolution.kind === "invariant") {
+    cache.removeQueries({ queryKey: cycleKey, exact: true });
+    return false;
+  }
+  const reconciliation = reconcileActiveCycleSchedule(
+    goalResolution.goal,
+    cycleResolution.cycle,
+  );
+  if (reconciliation.kind === "invariant") return false;
+  const currentWork = reconciliation.goal.currentWork;
+  if (
+    reconciliation.goal.status !== "active_cycle" ||
+    currentWork?.kind !== "active_cycle" ||
+    currentWork.cycleId !== reconciliation.cycle.id ||
+    reconciliation.cycle.status !== "active"
+  )
+    return false;
+
+  cacheGoal(cache, userId, reconciliation.goal);
+  cache.setQueryData(cycleKey, { cycle: reconciliation.cycle });
+  return true;
 }
 
 function isCycleWorkspaceRecoveryError(error: unknown): error is APIError {
@@ -852,8 +910,21 @@ function CycleWorkspace({
           });
           if (!isCurrentRefresh()) return;
           forgetSelectedCycleFrame(cycle.id);
+          const canonicalActiveCycle =
+            canonicalGoal.status === "active_cycle" &&
+            canonicalWorkspace?.kind === "active_cycle" &&
+            canonicalWorkspace.cycleId === canonicalCycle.id &&
+            canonicalCycle.status === "active"
+              ? canonicalCycle
+              : undefined;
           const nextMovedWorkspace: MovedWorkspace = {
             currentWorkspace: canonicalWorkspace,
+            ...(canonicalActiveCycle
+              ? {
+                  goalSnapshot: canonicalGoal,
+                  cycleSnapshot: canonicalActiveCycle,
+                }
+              : {}),
           };
           freezeCycleWorkspace(nextMovedWorkspace);
           return;
@@ -1578,10 +1649,11 @@ function CycleWorkspace({
         }
         const canonicalGoal = goalResolution.goal;
         const currentWorkspace = canonicalGoal.currentWork;
-        let currentCycleStillActive =
-          currentWorkspace?.kind === "active_cycle" &&
-          currentWorkspace.cycleId === cycle.id;
+        let currentCycleStillActive = false;
+        let canonicalActiveCycle: Cycle | undefined;
         if (currentWorkspace?.kind === "active_cycle") {
+          const currentWorkspaceTargetsDisplayedCycle =
+            currentWorkspace.cycleId === cycle.id;
           const latestCycle = await getCycle(
             sessionLease,
             goal.id,
@@ -1590,8 +1662,6 @@ function CycleWorkspace({
           );
           if (!isActivePage() || commandRecoveryEpochRef.current !== epoch)
             return;
-          currentCycleStillActive =
-            currentCycleStillActive && latestCycle.cycle.status === "active";
           const cycleKey = userQueryKeys.cycle(
             userId,
             goal.id,
@@ -1605,13 +1675,17 @@ function CycleWorkspace({
             cache.removeQueries({ queryKey: cycleKey, exact: true });
             throw new Error("Cycle review schedule invariant");
           }
-          if (
-            currentCycleStillActive &&
-            cycleResolution.cycle.status === "active"
-          ) {
+          const canonicalCycleStillActive =
+            latestCycle.cycle.status === "active" &&
+            cycleResolution.cycle.status === "active";
+          currentCycleStillActive =
+            currentWorkspaceTargetsDisplayedCycle && canonicalCycleStillActive;
+          if (currentCycleStillActive) {
             cacheGoal(cache, userId, canonicalGoal);
             cache.setQueryData(cycleKey, { cycle: cycleResolution.cycle });
           }
+          if (canonicalCycleStillActive)
+            canonicalActiveCycle = cycleResolution.cycle;
         }
         await cache.invalidateQueries({
           queryKey: userQueryKeys.root(userId),
@@ -1622,7 +1696,15 @@ function CycleWorkspace({
         if (!currentCycleStillActive) forgetSelectedCycleFrame(cycle.id);
         const ready: MovedWorkspace = {
           currentWorkspace,
-          href: `/goals/${goal.id}`,
+          href: currentCycleStillActive
+            ? `/goals/${goal.id}`
+            : replayWorkspacePath(goal.id, currentWorkspace),
+          ...(canonicalActiveCycle
+            ? {
+                goalSnapshot: canonicalGoal,
+                cycleSnapshot: canonicalActiveCycle,
+              }
+            : {}),
         };
         movedWorkspaceRef.current = ready;
         if (mountedRef.current) {
@@ -2365,6 +2447,14 @@ function CycleWorkspace({
                 <Link
                   className="button button--primary"
                   replace
+                  onClick={(event) => {
+                    if (
+                      publishMovedActiveWorkspace(cache, userId, movedWorkspace)
+                    )
+                      return;
+                    event.preventDefault();
+                    void refreshCanonicalWorkspace();
+                  }}
                   to={
                     movedWorkspace.href ??
                     replayWorkspacePath(

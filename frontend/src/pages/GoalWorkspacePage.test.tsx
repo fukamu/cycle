@@ -3711,11 +3711,11 @@ describe("GoalWorkspacePage", () => {
       vi.mocked(getGoal)
         .mockReset()
         .mockResolvedValueOnce({ goal })
-        .mockResolvedValueOnce({ goal: canonicalGoal });
+        .mockResolvedValue({ goal: canonicalGoal });
       vi.mocked(getCycle)
         .mockReset()
         .mockResolvedValueOnce({ cycle })
-        .mockResolvedValueOnce({ cycle: canonicalCycle });
+        .mockResolvedValue({ cycle: canonicalCycle });
       vi.mocked(saveCycleFrame)
         .mockReset()
         .mockRejectedValueOnce(
@@ -3724,7 +3724,9 @@ describe("GoalWorkspacePage", () => {
       const cache = new QueryClient({
         defaultOptions: { queries: { retry: false, staleTime: Infinity } },
       });
-      const view = renderPage(cache);
+      const view = renderPage(cache, {
+        canonicalWorkspaceRoute: !movedToReview,
+      });
 
       const editor = await screen.findByRole("textbox", { name: "P — Plan" });
       fireEvent.change(editor, { target: { value: "移動前の端末の計画" } });
@@ -3790,8 +3792,129 @@ describe("GoalWorkspacePage", () => {
       for (const name of ["アクションを生成", "AIで推敲", "サイクルを完了"]) {
         expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
       }
+      if (!movedToReview) {
+        fireEvent.click(screen.getByRole("link", { name: "現在の作業へ移動" }));
+        expect(
+          cache.getQueryData<{ goal: Goal }>(
+            userQueryKeys.goal(session.user.id, goal.id),
+          )?.goal,
+        ).toEqual(canonicalGoal);
+        expect(
+          cache.getQueryData<{ cycle: Cycle }>(
+            userQueryKeys.cycle(session.user.id, goal.id, currentCycleId),
+          )?.cycle,
+        ).toEqual(canonicalCycle);
+        expect(
+          await screen.findByText("Goal v1 · Cycle 2"),
+        ).toBeInTheDocument();
+        expect(getGoal).toHaveBeenCalledTimes(2);
+        expect(getCycle).toHaveBeenCalledTimes(2);
+      }
     },
   );
+
+  it("preserves a newer terminal Cycle cache before moved-workspace navigation", async () => {
+    const movedGoal: Goal = {
+      ...goal,
+      revision: goal.revision + 1,
+      currentWork: {
+        kind: "active_cycle",
+        cycleId: currentCycleId,
+        cycleSequenceNumber: 2,
+        reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
+      },
+      nextCycleSequenceNumber: 3,
+      cycleCount: 2,
+    };
+    const movedCycle: Cycle = {
+      ...cycle,
+      id: currentCycleId,
+      sequenceNumber: 2,
+      plan: "移動先の計画",
+    };
+    const terminalMovedCycle: Cycle = {
+      ...movedCycle,
+      status: "completed",
+      completedAt: "2026-08-20T00:07:00.000Z",
+    };
+    const reviewGoal: Goal = {
+      ...movedGoal,
+      status: "goal_review",
+      revision: movedGoal.revision + 1,
+      currentWork: {
+        kind: "goal_review",
+        reviewDraftId,
+        triggerCycleId: currentCycleId,
+        triggerCycleSequenceNumber: 2,
+      },
+    };
+    vi.mocked(getGoal)
+      .mockReset()
+      .mockResolvedValueOnce({ goal })
+      .mockResolvedValueOnce({ goal: movedGoal })
+      .mockResolvedValueOnce({ goal: movedGoal })
+      .mockResolvedValue({ goal: reviewGoal });
+    vi.mocked(getCycle)
+      .mockReset()
+      .mockResolvedValueOnce({ cycle })
+      .mockResolvedValue({ cycle: movedCycle });
+    vi.mocked(saveCycleFrame)
+      .mockReset()
+      .mockRejectedValueOnce(cycleRevisionConflict());
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache, { canonicalWorkspaceRoute: true });
+
+    const editor = await screen.findByRole("textbox", { name: "P — Plan" });
+    fireEvent.change(editor, { target: { value: "移動前の端末の計画" } });
+    fireEvent.blur(editor);
+    const movedLink = await screen.findByRole("link", {
+      name: "現在の作業へ移動",
+    });
+    expect(movedLink).toHaveAttribute(
+      "href",
+      `/goals/${goal.id}/cycles/${currentCycleId}`,
+    );
+    act(() => {
+      cache.setQueryData(
+        userQueryKeys.cycle(session.user.id, goal.id, currentCycleId),
+        { cycle: terminalMovedCycle },
+      );
+    });
+
+    fireEvent.click(movedLink);
+
+    expect(
+      cache.getQueryData<{ cycle: Cycle }>(
+        userQueryKeys.cycle(session.user.id, goal.id, currentCycleId),
+      )?.cycle,
+    ).toEqual(terminalMovedCycle);
+    await waitFor(() => expect(getGoal).toHaveBeenCalledTimes(3));
+    const laggingActiveLink = screen.getByRole("link", {
+      name: "現在の作業へ移動",
+    });
+    expect(laggingActiveLink).toHaveAttribute(
+      "href",
+      `/goals/${goal.id}/cycles/${currentCycleId}`,
+    );
+
+    fireEvent.click(laggingActiveLink);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("link", { name: "現在の作業へ移動" }),
+      ).toHaveAttribute("href", `/goals/${goal.id}/review`),
+    );
+    expect(editor).toHaveAttribute("readonly");
+    expect(getGoal).toHaveBeenCalledTimes(4);
+    expect(getCycle).toHaveBeenCalledTimes(3);
+    expect(saveCycleFrame).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("link", { name: "現在の作業へ移動" }));
+    expect(await screen.findByText("現在の目標レビュー")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "P — Plan" })).toBeNull();
+  });
 
   it("retries a failed refresh without resending the stale frame or losing local input after the workspace moves", async () => {
     const movedGoal: Goal = {
@@ -5156,9 +5279,15 @@ describe("GoalWorkspacePage", () => {
         await screen.findByText("現在の作業状態が更新されました"),
       ).toBeInTheDocument();
       expect(editor).toHaveAttribute("readonly");
+      const expectedHref =
+        command === "complete"
+          ? `/goals/${goal.id}/review`
+          : command === "terminate"
+            ? `/history/goals/${goal.id}`
+            : `/goals/${goal.id}`;
       expect(
         screen.getByRole("link", { name: "現在の作業へ移動" }),
-      ).toHaveAttribute("href", `/goals/${goal.id}`);
+      ).toHaveAttribute("href", expectedHref);
       expect(getGoal).toHaveBeenCalledTimes(2);
       if (command === "complete") expect(completeCycle).toHaveBeenCalledOnce();
       else if (command === "terminate")
@@ -5176,6 +5305,57 @@ describe("GoalWorkspacePage", () => {
       else expect(deleteGoal).toHaveBeenCalledOnce();
     },
   );
+
+  it("reconstructs the same active Cycle after a stale Delete conflict", async () => {
+    const canonicalGoal: Goal = {
+      ...goal,
+      revision: goal.revision + 1,
+    };
+    const canonicalCycle: Cycle = {
+      ...cycle,
+      plan: "別の端末で更新された計画",
+      contentRevision: cycle.contentRevision + 1,
+      frameRevisions: { ...cycle.frameRevisions, plan: 1 },
+    };
+    vi.mocked(getGoal)
+      .mockResolvedValueOnce({ goal })
+      .mockResolvedValue({ goal: canonicalGoal });
+    vi.mocked(getCycle)
+      .mockResolvedValueOnce({ cycle })
+      .mockResolvedValue({ cycle: canonicalCycle });
+    vi.mocked(deleteGoal).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_DELETE_CONFLICT",
+        "stale workspace",
+        "request-delete-same-cycle",
+      ),
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache, { canonicalWorkspaceRoute: true });
+
+    await invokeCycleTerminalCommand("delete");
+    const movedLink = await screen.findByRole("link", {
+      name: "現在の作業へ移動",
+    });
+    expect(movedLink).toHaveAttribute("href", `/goals/${goal.id}`);
+
+    fireEvent.click(movedLink);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText("現在の作業状態が更新されました"),
+      ).not.toBeInTheDocument(),
+    );
+    const editor = screen.getByRole("textbox", { name: "P — Plan" });
+    expect(editor).toHaveValue(canonicalCycle.plan);
+    expect(editor).not.toHaveAttribute("readonly");
+    expect(getGoal).toHaveBeenCalledTimes(2);
+    expect(getCycle).toHaveBeenCalledTimes(2);
+    expect(deleteGoal).toHaveBeenCalledOnce();
+  });
 
   it("retries only canonical GET after a Complete conflict refresh fails", async () => {
     const reviewGoal: Goal = {
@@ -5214,8 +5394,71 @@ describe("GoalWorkspacePage", () => {
 
     expect(
       await screen.findByRole("link", { name: "現在の作業へ移動" }),
-    ).toHaveAttribute("href", `/goals/${goal.id}`);
+    ).toHaveAttribute("href", `/goals/${goal.id}/review`);
     expect(getGoal).toHaveBeenCalledTimes(3);
+    expect(completeCycle).toHaveBeenCalledOnce();
+  });
+
+  it("moves a stale Complete command directly to the canonical active Cycle", async () => {
+    const canonicalGoal: Goal = {
+      ...goal,
+      revision: goal.revision + 1,
+      currentWork: {
+        kind: "active_cycle",
+        cycleId: currentCycleId,
+        cycleSequenceNumber: 2,
+        reviewSchedule: {
+          reviewDate: "2026-08-22",
+          reviewScheduleRevision: 1,
+        },
+      },
+      nextCycleSequenceNumber: 3,
+      cycleCount: 2,
+    };
+    const canonicalCycle: Cycle = {
+      ...cycle,
+      id: currentCycleId,
+      sequenceNumber: 2,
+      reviewDate: "2026-08-22",
+      reviewScheduleRevision: 1,
+      plan: "別の端末で開始したCycle",
+    };
+    vi.mocked(getGoal)
+      .mockResolvedValueOnce({ goal })
+      .mockResolvedValue({ goal: canonicalGoal });
+    vi.mocked(getCycle)
+      .mockResolvedValueOnce({ cycle: completableCycle })
+      .mockResolvedValue({ cycle: canonicalCycle });
+    vi.mocked(completeCycle).mockRejectedValueOnce(
+      new APIError(
+        409,
+        "GOAL_STATE_CONFLICT",
+        "stale workspace",
+        "request-complete-moved-cycle",
+      ),
+    );
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    renderPage(cache, { canonicalWorkspaceRoute: true });
+
+    await invokeCycleTerminalCommand("complete");
+    const movedLink = await screen.findByRole("link", {
+      name: "現在の作業へ移動",
+    });
+    expect(movedLink).toHaveAttribute(
+      "href",
+      `/goals/${goal.id}/cycles/${currentCycleId}`,
+    );
+
+    fireEvent.click(movedLink);
+
+    expect(await screen.findByText("Goal v1 · Cycle 2")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "P — Plan" })).toHaveValue(
+      canonicalCycle.plan,
+    );
+    expect(getGoal).toHaveBeenCalledTimes(2);
+    expect(getCycle).toHaveBeenCalledTimes(2);
     expect(completeCycle).toHaveBeenCalledOnce();
   });
 
@@ -5892,6 +6135,7 @@ function CacheInspectingHome() {
 function renderPage(
   cache: QueryClient,
   options: {
+    readonly canonicalWorkspaceRoute?: boolean;
     readonly commandRouteSwitch?: boolean;
     readonly cleanupSwitchCycleId?: string;
     readonly goalDeletionAdvisory?: GoalDeletionAdvisoryHarness;
@@ -5915,7 +6159,11 @@ function renderPage(
               value={goalDeletionAdvisory.registry}
             >
               <MemoryRouter
-                initialEntries={[`/workspace/${goal.id}/cycles/${cycle.id}`]}
+                initialEntries={[
+                  options.canonicalWorkspaceRoute
+                    ? `/goals/${goal.id}/cycles/${cycle.id}`
+                    : `/workspace/${goal.id}/cycles/${cycle.id}`,
+                ]}
               >
                 {options.identityQuiesceControl ? (
                   <IdentityQuiesceControl />
@@ -5956,8 +6204,24 @@ function renderPage(
                     />
                     <Route path="/" element={<CacheInspectingHome />} />
                     <Route
+                      path="/goals/:goalId"
+                      element={
+                        options.canonicalWorkspaceRoute ? (
+                          <GoalWorkspacePage />
+                        ) : (
+                          <p>現在の目標</p>
+                        )
+                      }
+                    />
+                    <Route
                       path="/goals/:goalId/cycles/:cycleId"
-                      element={<p>現在のサイクル</p>}
+                      element={
+                        options.canonicalWorkspaceRoute ? (
+                          <GoalWorkspacePage />
+                        ) : (
+                          <p>現在のサイクル</p>
+                        )
+                      }
                     />
                     <Route
                       path="/goals/:goalId/review"

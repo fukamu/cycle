@@ -892,18 +892,28 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   });
   await expect(schedule.getByText(reviewScheduleCopy.unset)).toBeVisible();
   const reviewDateInput = schedule.getByLabel(reviewScheduleCopy.inputLabel);
+  await reviewDateInput.focus();
+  await reviewDateInput.fill(initialReviewDate);
+  const setReviewDate = schedule.getByRole("button", {
+    name: reviewScheduleCopy.set,
+  });
+  await expect(setReviewDate).toBeEnabled();
+  for (let step = 0; step < 6; step += 1) {
+    if (
+      await setReviewDate.evaluate(
+        (button) => document.activeElement === button,
+      )
+    )
+      break;
+    await expect(reviewDateInput).toBeFocused();
+    await page.keyboard.press("Tab");
+  }
+  await expect(setReviewDate).toBeFocused();
   const setRequestPromise = page.waitForRequest(
     (request) =>
       request.method() === "PATCH" &&
       request.url().endsWith("/review-schedule"),
   );
-  await reviewDateInput.focus();
-  await reviewDateInput.fill(initialReviewDate);
-  await reviewDateInput.press("Tab");
-  const setReviewDate = schedule.getByRole("button", {
-    name: reviewScheduleCopy.set,
-  });
-  await expect(setReviewDate).toBeFocused();
   await setReviewDate.press("Enter");
   const setRequest = await setRequestPromise;
   expect(setRequest.postDataJSON()).toEqual({

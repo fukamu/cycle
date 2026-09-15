@@ -299,7 +299,7 @@ export function AppLayout() {
           tabIndex={-1}
           inert={open || undefined}
         >
-          {firstUseGuide.replayPending && !firstUseGuide.canReplay && (
+          {!open && firstUseGuide.replayPending && !firstUseGuide.canReplay && (
             <div
               className="first-use-guide-pending"
               role="status"
