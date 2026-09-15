@@ -124,6 +124,19 @@ export async function clearGoalDrafts(
 ): Promise<void> {
   await clearDrafts((item) => item.userId === userId && item.goalId === goalId);
 }
+export async function clearCycleDrafts(
+  userId: string,
+  goalId: string,
+  cycleId: string,
+): Promise<void> {
+  const subjectPrefix = `cycle:${cycleId}:`;
+  await clearDrafts(
+    (item) =>
+      item.userId === userId &&
+      item.goalId === goalId &&
+      item.subjectKey.startsWith(subjectPrefix),
+  );
+}
 async function clearDrafts(matches: (draft: Stored) => boolean): Promise<void> {
   await withDatabase((db) => deleteStoredMatching(db, matches));
 }

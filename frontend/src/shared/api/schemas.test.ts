@@ -1,5 +1,6 @@
 import {
   cycleSchema,
+  cycleSummarySchema,
   currentWorkSchema,
   draftSchema,
   goalVersionSchema,
@@ -483,6 +484,98 @@ describe("Cycle previous completed Action schema", () => {
           expect.objectContaining({ path: ["cancellationReason"] }),
         ]),
       );
+  });
+});
+
+describe("Cycle summary schema", () => {
+  const summary = () => ({
+    id: reviewCycleId,
+    sequenceNumber: 1,
+    status: "completed" as const,
+    startedAt: "2026-08-19T00:00:00Z",
+    completedAt: "2026-08-20T00:00:00Z",
+    canceledAt: null,
+    cancellationReason: null,
+    goalVersion: {
+      id: reviewVersionId,
+      versionNumber: 1,
+      body: "現在の目標",
+      createdAt: "2026-08-19T00:00:00Z",
+    },
+    planPreview: "最初の計画",
+  });
+
+  it("requires the nullable cancellation reason on every summary", () => {
+    expect(cycleSummarySchema.safeParse(summary()).success).toBe(true);
+    const missing: Record<string, unknown> = summary();
+    delete missing.cancellationReason;
+
+    const parsed = cycleSummarySchema.safeParse(missing);
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success)
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ["cancellationReason"] }),
+        ]),
+      );
+  });
+
+  it("accepts the exact replanned reason and rejects unknown reasons", () => {
+    expect(
+      cycleSummarySchema.safeParse({
+        ...summary(),
+        status: "canceled",
+        completedAt: null,
+        canceledAt: "2026-08-20T00:00:00Z",
+        cancellationReason: "replanned",
+      }).success,
+    ).toBe(true);
+    expect(
+      cycleSummarySchema.safeParse({
+        ...summary(),
+        cancellationReason: "manual_restart",
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "an Active summary with a completion timestamp",
+      overrides: {
+        status: "active",
+        completedAt: "2026-08-20T00:00:00Z",
+      },
+    },
+    {
+      label: "a Completed summary with a cancellation reason",
+      overrides: { cancellationReason: "replanned" },
+    },
+    {
+      label: "a Completed summary with a cancellation timestamp",
+      overrides: { canceledAt: "2026-08-20T00:00:00Z" },
+    },
+    {
+      label: "a Canceled summary without a cancellation reason",
+      overrides: {
+        status: "canceled",
+        completedAt: null,
+        canceledAt: "2026-08-20T00:00:00Z",
+      },
+    },
+    {
+      label: "a Canceled summary without a cancellation timestamp",
+      overrides: {
+        status: "canceled",
+        completedAt: null,
+        canceledAt: null,
+        cancellationReason: "goal_ended",
+      },
+    },
+  ])("rejects $label", ({ overrides }) => {
+    expect(
+      cycleSummarySchema.safeParse({ ...summary(), ...overrides }).success,
+    ).toBe(false);
   });
 });
 

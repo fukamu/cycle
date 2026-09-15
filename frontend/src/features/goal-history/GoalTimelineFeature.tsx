@@ -20,7 +20,7 @@ import {
   PageError,
   PageLoading,
 } from "../../shared/components/AsyncState";
-import { statusLabel } from "../../shared/copy/ja";
+import { cycleCancellationReasonCopy, statusLabel } from "../../shared/copy/ja";
 import {
   formatActivePeriod,
   formatCompletedPeriod,
@@ -181,7 +181,14 @@ function GoalTimelineQueries({
                         <li key={cycle.id}>
                           <Link to={`/goals/${goalId}/cycles/${cycle.id}`}>
                             <span>Cycle {cycle.sequenceNumber}</span>
-                            <strong>{statusLabel[cycle.status]}</strong>
+                            <span className="timeline-cycles__status">
+                              <strong>{statusLabel[cycle.status]}</strong>
+                              {cycle.cancellationReason === "replanned" && (
+                                <span>
+                                  {cycleCancellationReasonCopy.replanned}
+                                </span>
+                              )}
+                            </span>
                             <time>
                               {end
                                 ? formatCompletedPeriod(cycle.startedAt, end)

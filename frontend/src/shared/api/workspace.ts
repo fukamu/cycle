@@ -56,6 +56,12 @@ const completeEnvelope = z.object({
   reviewDraft: draftSchema,
   replayed: z.boolean().optional(),
 });
+const replanEnvelope = z.object({
+  canceledCycle: cycleSchema,
+  goal: goalSchema,
+  cycle: cycleSchema,
+  replayed: z.literal(true).optional(),
+});
 const commandReplayEnvelope = z.object({
   replayed: z.literal(true),
   operation: z.string(),
@@ -82,6 +88,189 @@ const terminateEnvelope = z.object({
   canceledCycle: cycleSchema.nullable(),
   replayed: z.boolean().optional(),
 });
+
+const sameGoalVersion = (
+  left: z.infer<typeof cycleSchema>["goalVersion"],
+  right: z.infer<typeof cycleSchema>["goalVersion"],
+) =>
+  left.id === right.id &&
+  left.versionNumber === right.versionNumber &&
+  left.body === right.body &&
+  (left.createdAt === undefined || right.createdAt === undefined
+    ? left.createdAt === right.createdAt
+    : Date.parse(left.createdAt) === Date.parse(right.createdAt));
+
+const goalWorkspaceIsCoherent = (goal: z.infer<typeof goalSchema>) => {
+  switch (goal.status) {
+    case "active_cycle":
+      return (
+        goal.terminalAt === null &&
+        goal.currentWork?.kind === "active_cycle" &&
+        goal.nextCycleSequenceNumber ===
+          goal.currentWork.cycleSequenceNumber + 1
+      );
+    case "goal_review":
+      return (
+        goal.terminalAt === null &&
+        goal.currentWork?.kind === "goal_review" &&
+        goal.nextCycleSequenceNumber ===
+          goal.currentWork.triggerCycleSequenceNumber + 1
+      );
+    case "achieved":
+    case "ended":
+      return goal.terminalAt !== null && goal.currentWork === null;
+  }
+};
+
+const replanEnvelopeFor = (
+  goalId: string,
+  sourceCycleId: string,
+  expectedGoalRevision: number,
+  expectedContentRevision: number,
+  expectedReviewScheduleRevision: number,
+) =>
+  replanEnvelope.superRefine((response, context) => {
+    const { canceledCycle: source, goal, cycle: successor } = response;
+    const addIssue = (path: PropertyKey[]) =>
+      context.addIssue({
+        code: "custom",
+        message: "Cycle replan response is inconsistent",
+        path,
+      });
+
+    if (goal.id !== goalId) addIssue(["goal", "id"]);
+    if (source.id !== sourceCycleId) addIssue(["canceledCycle", "id"]);
+    if (source.goalId !== undefined && source.goalId !== goalId)
+      addIssue(["canceledCycle", "goalId"]);
+    if (successor.goalId !== undefined && successor.goalId !== goalId)
+      addIssue(["cycle", "goalId"]);
+    if (
+      source.status !== "canceled" ||
+      source.completedAt !== null ||
+      source.canceledAt === null ||
+      source.cancellationReason !== "replanned"
+    )
+      addIssue(["canceledCycle", "status"]);
+    if (source.contentRevision !== expectedContentRevision)
+      addIssue(["canceledCycle", "contentRevision"]);
+    if (source.reviewScheduleRevision !== expectedReviewScheduleRevision)
+      addIssue(["canceledCycle", "reviewScheduleRevision"]);
+    if (
+      successor.id === source.id ||
+      successor.sequenceNumber !== source.sequenceNumber + 1
+    )
+      addIssue(["cycle", "sequenceNumber"]);
+    if (!sameGoalVersion(source.goalVersion, successor.goalVersion))
+      addIssue(["cycle", "goalVersion"]);
+    if (successor.previousCompletedCycleAction !== null)
+      addIssue(["cycle", "previousCompletedCycleAction"]);
+    if (
+      source.canceledAt === null ||
+      Date.parse(source.canceledAt) !== Date.parse(successor.startedAt)
+    )
+      addIssue(["cycle", "startedAt"]);
+
+    switch (successor.status) {
+      case "active":
+        if (
+          successor.completedAt !== null ||
+          successor.canceledAt !== null ||
+          successor.cancellationReason !== null
+        )
+          addIssue(["cycle", "status"]);
+        break;
+      case "completed":
+        if (
+          successor.completedAt === null ||
+          successor.canceledAt !== null ||
+          successor.cancellationReason !== null
+        )
+          addIssue(["cycle", "status"]);
+        break;
+      case "canceled":
+        if (
+          successor.completedAt !== null ||
+          successor.canceledAt === null ||
+          successor.cancellationReason === null
+        )
+          addIssue(["cycle", "status"]);
+        break;
+    }
+
+    if (response.replayed === true) {
+      if (
+        goal.revision < expectedGoalRevision + 1 ||
+        !goalWorkspaceIsCoherent(goal)
+      )
+        addIssue(["goal"]);
+      if (successor.status === "active") {
+        const currentWork = goal.currentWork;
+        if (
+          goal.status !== "active_cycle" ||
+          goal.terminalAt !== null ||
+          !sameGoalVersion(goal.currentVersion, successor.goalVersion) ||
+          goal.nextCycleSequenceNumber !== successor.sequenceNumber + 1 ||
+          currentWork?.kind !== "active_cycle" ||
+          currentWork.cycleId !== successor.id ||
+          currentWork.cycleSequenceNumber !== successor.sequenceNumber ||
+          currentWork.reviewSchedule.reviewDate !== successor.reviewDate ||
+          currentWork.reviewSchedule.reviewScheduleRevision !==
+            successor.reviewScheduleRevision
+        )
+          addIssue(["goal", "currentWork"]);
+      } else {
+        const terminalIsCurrentActiveCycle =
+          goal.currentWork?.kind === "active_cycle" &&
+          goal.currentWork.cycleId === successor.id;
+        const canceledOutcomeMismatch =
+          successor.status === "canceled" &&
+          ((successor.cancellationReason === "goal_achieved" &&
+            goal.status !== "achieved") ||
+            (successor.cancellationReason === "goal_ended" &&
+              goal.status !== "ended"));
+        const canceledReviewTrigger =
+          successor.status === "canceled" &&
+          goal.currentWork?.kind === "goal_review" &&
+          goal.currentWork.triggerCycleId === successor.id;
+        if (
+          terminalIsCurrentActiveCycle ||
+          canceledOutcomeMismatch ||
+          canceledReviewTrigger
+        )
+          addIssue(["goal", "currentWork"]);
+      }
+      return;
+    }
+
+    if (
+      successor.status !== "active" ||
+      successor.reviewDate !== null ||
+      successor.reviewScheduleRevision !== 0 ||
+      successor.plan !== "" ||
+      successor.do !== "" ||
+      successor.check !== "" ||
+      successor.action !== "" ||
+      successor.contentRevision !== 0 ||
+      Object.values(successor.frameRevisions).some((revision) => revision !== 0)
+    )
+      addIssue(["cycle"]);
+
+    const currentWork = goal.currentWork;
+    if (
+      goal.status !== "active_cycle" ||
+      goal.revision !== expectedGoalRevision + 1 ||
+      goal.terminalAt !== null ||
+      !sameGoalVersion(goal.currentVersion, successor.goalVersion) ||
+      goal.nextCycleSequenceNumber !== successor.sequenceNumber + 1 ||
+      currentWork?.kind !== "active_cycle" ||
+      currentWork.cycleId !== successor.id ||
+      currentWork.cycleSequenceNumber !== successor.sequenceNumber ||
+      currentWork.reviewSchedule.reviewDate !== successor.reviewDate ||
+      currentWork.reviewSchedule.reviewScheduleRevision !==
+        successor.reviewScheduleRevision
+    )
+      addIssue(["goal"]);
+  });
 const reviewSchemaForGoal = (goalId: string) =>
   reviewSchema.refine(({ goal }) => goal.id === goalId, {
     message: "Goal Review response does not match the requested Goal",
@@ -501,6 +690,38 @@ export const completeCycle = (
         operationId: options.operationId,
         expectedGoalRevision,
         expectedContentRevision,
+      },
+    },
+  );
+
+export const replanCycle = (
+  lease: AuthenticatedRequestLease,
+  goalId: string,
+  cycleId: string,
+  expectedGoalRevision: number,
+  expectedContentRevision: number,
+  expectedReviewScheduleRevision: number,
+  options: CommandRequestOptions,
+) =>
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goals/${goalId}/cycles/${cycleId}/replan`,
+    replanEnvelopeFor(
+      goalId,
+      cycleId,
+      expectedGoalRevision,
+      expectedContentRevision,
+      expectedReviewScheduleRevision,
+    ),
+    {
+      method: "POST",
+      csrfToken: options.csrfToken,
+      body: {
+        operationId: options.operationId,
+        expectedGoalRevision,
+        expectedContentRevision,
+        expectedReviewScheduleRevision,
+        confirmed: true,
       },
     },
   );

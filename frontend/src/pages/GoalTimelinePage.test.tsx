@@ -655,6 +655,37 @@ describe("GoalTimelinePage", () => {
     );
   });
 
+  it("labels only a replanned cancellation without changing terminal cancellations", async () => {
+    vi.mocked(getGoal).mockResolvedValue({ goal: makeGoal(1) });
+    vi.mocked(listCycles).mockResolvedValue({
+      items: [
+        makeCanceledCycle(3, "replanned"),
+        makeCanceledCycle(2, "goal_ended"),
+        makeCanceledCycle(1, "goal_achieved"),
+      ],
+      nextCursor: null,
+    });
+
+    renderTimeline();
+
+    const replanned = await screen.findByRole("link", {
+      name: /Cycle 3/,
+    });
+    expect(within(replanned).getByText("Canceled")).toBeVisible();
+    expect(within(replanned).getByText("再計画のため中断")).toBeVisible();
+
+    for (const sequenceNumber of [1, 2]) {
+      const terminal = screen.getByRole("link", {
+        name: new RegExp(`Cycle ${sequenceNumber}`),
+      });
+      expect(within(terminal).getByText("Canceled")).toBeVisible();
+      expect(
+        within(terminal).queryByText("再計画のため中断"),
+      ).not.toBeInTheDocument();
+    }
+    expect(screen.getAllByText("再計画のため中断")).toHaveLength(1);
+  });
+
   it.each([
     {
       label: "network failure",
@@ -1140,8 +1171,22 @@ function makeCycle(
     startedAt: "2026-08-01T00:00:00.000Z",
     completedAt: "2026-08-02T00:00:00.000Z",
     canceledAt: null,
+    cancellationReason: null,
     goalVersion: makeVersion(versionNumber),
     planPreview: `Cycle ${sequenceNumber}の計画`,
+  };
+}
+
+function makeCanceledCycle(
+  sequenceNumber: number,
+  cancellationReason: NonNullable<CycleSummary["cancellationReason"]>,
+): CycleSummary {
+  return {
+    ...makeCycle(sequenceNumber, 1),
+    status: "canceled",
+    completedAt: null,
+    canceledAt: "2026-08-02T00:00:00.000Z",
+    cancellationReason,
   };
 }
 

@@ -271,19 +271,38 @@ export const goalPageSchema = z.object({
 });
 export type GoalPage = z.infer<typeof goalPageSchema>;
 
-export const cycleSummarySchema = z.object({
-  id: uuid,
-  sequenceNumber: z.number().int().positive(),
-  status: z.enum(["active", "completed", "canceled"]),
-  startedAt: instant,
-  completedAt: instant.nullable(),
-  canceledAt: instant.nullable(),
-  cancellationReason: cycleSummaryCancellationReasonSchema
-    .nullable()
-    .optional(),
-  goalVersion: goalVersionSchema,
-  planPreview: frameTextSchema,
-});
+export const cycleSummarySchema = z
+  .object({
+    id: uuid,
+    sequenceNumber: z.number().int().positive(),
+    status: z.enum(["active", "completed", "canceled"]),
+    startedAt: instant,
+    completedAt: instant.nullable(),
+    canceledAt: instant.nullable(),
+    cancellationReason: cycleSummaryCancellationReasonSchema.nullable(),
+    goalVersion: goalVersionSchema,
+    planPreview: frameTextSchema,
+  })
+  .superRefine((cycle, context) => {
+    const consistent =
+      cycle.status === "active"
+        ? cycle.completedAt === null &&
+          cycle.canceledAt === null &&
+          cycle.cancellationReason === null
+        : cycle.status === "completed"
+          ? cycle.completedAt !== null &&
+            cycle.canceledAt === null &&
+            cycle.cancellationReason === null
+          : cycle.completedAt === null &&
+            cycle.canceledAt !== null &&
+            cycle.cancellationReason !== null;
+    if (!consistent)
+      context.addIssue({
+        code: "custom",
+        message: "Cycle summary status is inconsistent",
+        path: ["status"],
+      });
+  });
 export type CycleSummary = z.infer<typeof cycleSummarySchema>;
 export const cyclePageSchema = z.object({
   items: z.array(cycleSummarySchema),

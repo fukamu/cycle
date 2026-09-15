@@ -75,4 +75,25 @@ describe("ConfirmationDialog", () => {
     expect(screen.getByRole("heading", { name: "項目" })).toBeVisible();
     expect(screen.getByRole("button", { name: "編集" })).toBeVisible();
   });
+
+  it("keeps a mandatory retry modal while cancel is disabled", async () => {
+    const user = userEvent.setup();
+    render(
+      <ConfirmationDialog
+        title="結果を確認できません"
+        confirmLabel="同じ操作を再試行"
+        cancelDisabled
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+      >
+        <p>結果を確定するには再試行してください。</p>
+      </ConfirmationDialog>,
+    );
+
+    expect(screen.getByRole("button", { name: "キャンセル" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(
+      screen.getByRole("dialog", { name: "結果を確認できません" }),
+    ).toBeVisible();
+  });
 });

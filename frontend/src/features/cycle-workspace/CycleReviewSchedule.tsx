@@ -7,6 +7,7 @@ import {
   isValidLocalDate,
 } from "../../shared/date/localDate";
 import { reviewScheduleCopy } from "../../shared/copy/ja";
+import { CycleCancellationReason } from "./CycleCancellationReason";
 
 export type ReviewScheduleMutationOutcome =
   | { readonly kind: "saved"; readonly schedule: ReviewSchedule }
@@ -28,7 +29,7 @@ export function CycleReviewSchedule({
 }: {
   readonly cycle: Pick<
     Cycle,
-    "status" | "reviewDate" | "reviewScheduleRevision"
+    "status" | "cancellationReason" | "reviewDate" | "reviewScheduleRevision"
   >;
   readonly today: string;
   readonly disabled?: boolean;
@@ -114,92 +115,95 @@ export function CycleReviewSchedule({
     : undefined;
 
   return (
-    <section
-      className="cycle-review-schedule"
-      aria-labelledby={`${inputId}-heading`}
-    >
-      <div className="cycle-review-schedule__summary">
-        <h2 id={`${inputId}-heading`}>{reviewScheduleCopy.heading}</h2>
-        {cycle.reviewDate && currentState ? (
-          <p>
-            見直す日：
-            <time dateTime={cycle.reviewDate}>{cycle.reviewDate}</time>
-            <span>（{reviewScheduleCopy.state[currentState]}）</span>
-          </p>
-        ) : (
-          <p>{reviewScheduleCopy.unset}</p>
-        )}
-        {!editable && <p>{reviewScheduleCopy.terminal}</p>}
-      </div>
-      {editable && (
-        <form onSubmit={(event) => void submitSet(event)}>
-          <label htmlFor={inputId}>{reviewScheduleCopy.inputLabel}</label>
-          <input
-            id={inputId}
-            type="date"
-            min="0001-01-01"
-            max="9999-12-31"
-            value={draft}
-            aria-describedby={guideId}
-            disabled={pending || disabled}
-            onChange={(event) => {
-              const next = event.currentTarget.value;
-              setDraft(next);
-              setDirty(next !== canonicalDate);
-              setFeedback(undefined);
-            }}
-          />
-          <p id={guideId} className="cycle-review-schedule__guide">
-            {disabled
-              ? reviewScheduleCopy.commandPending
-              : reviewScheduleCopy.inputGuide}
-          </p>
-          {pending && (
-            <p
-              id={terminalCommandGuidanceId}
-              className="cycle-review-schedule__terminal-guidance"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              {reviewScheduleCopy.terminalCommandsPending}
+    <>
+      <CycleCancellationReason cycle={cycle} />
+      <section
+        className="cycle-review-schedule"
+        aria-labelledby={`${inputId}-heading`}
+      >
+        <div className="cycle-review-schedule__summary">
+          <h2 id={`${inputId}-heading`}>{reviewScheduleCopy.heading}</h2>
+          {cycle.reviewDate && currentState ? (
+            <p>
+              見直す日：
+              <time dateTime={cycle.reviewDate}>{cycle.reviewDate}</time>
+              <span>（{reviewScheduleCopy.state[currentState]}）</span>
             </p>
+          ) : (
+            <p>{reviewScheduleCopy.unset}</p>
           )}
-          <div className="button-row cycle-review-schedule__actions">
-            <button
-              className="button button--primary"
-              type="submit"
-              disabled={pending || disabled || !dirty || !validDraft}
-            >
-              {pending
-                ? reviewScheduleCopy.saving
-                : cycle.reviewDate
-                  ? reviewScheduleCopy.change
-                  : reviewScheduleCopy.set}
-            </button>
-            {cycle.reviewDate !== null && (
-              <button
-                className="button button--secondary"
-                type="button"
-                disabled={pending || disabled}
-                onClick={() => void submitClear()}
+          {!editable && <p>{reviewScheduleCopy.terminal}</p>}
+        </div>
+        {editable && (
+          <form onSubmit={(event) => void submitSet(event)}>
+            <label htmlFor={inputId}>{reviewScheduleCopy.inputLabel}</label>
+            <input
+              id={inputId}
+              type="date"
+              min="0001-01-01"
+              max="9999-12-31"
+              value={draft}
+              aria-describedby={guideId}
+              disabled={pending || disabled}
+              onChange={(event) => {
+                const next = event.currentTarget.value;
+                setDraft(next);
+                setDirty(next !== canonicalDate);
+                setFeedback(undefined);
+              }}
+            />
+            <p id={guideId} className="cycle-review-schedule__guide">
+              {disabled
+                ? reviewScheduleCopy.commandPending
+                : reviewScheduleCopy.inputGuide}
+            </p>
+            {pending && (
+              <p
+                id={terminalCommandGuidanceId}
+                className="cycle-review-schedule__terminal-guidance"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
               >
-                {reviewScheduleCopy.clear}
-              </button>
+                {reviewScheduleCopy.terminalCommandsPending}
+              </p>
             )}
-          </div>
-          {feedback && (
-            <p
-              className={
-                feedback.kind === "error" ? "inline-error" : "inline-success"
-              }
-              role={feedback.kind === "error" ? "alert" : "status"}
-            >
-              {feedback.message}
-            </p>
-          )}
-        </form>
-      )}
-    </section>
+            <div className="button-row cycle-review-schedule__actions">
+              <button
+                className="button button--primary"
+                type="submit"
+                disabled={pending || disabled || !dirty || !validDraft}
+              >
+                {pending
+                  ? reviewScheduleCopy.saving
+                  : cycle.reviewDate
+                    ? reviewScheduleCopy.change
+                    : reviewScheduleCopy.set}
+              </button>
+              {cycle.reviewDate !== null && (
+                <button
+                  className="button button--secondary"
+                  type="button"
+                  disabled={pending || disabled}
+                  onClick={() => void submitClear()}
+                >
+                  {reviewScheduleCopy.clear}
+                </button>
+              )}
+            </div>
+            {feedback && (
+              <p
+                className={
+                  feedback.kind === "error" ? "inline-error" : "inline-success"
+                }
+                role={feedback.kind === "error" ? "alert" : "status"}
+              >
+                {feedback.message}
+              </p>
+            )}
+          </form>
+        )}
+      </section>
+    </>
   );
 }

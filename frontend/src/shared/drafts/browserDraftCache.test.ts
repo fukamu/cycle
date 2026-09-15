@@ -1,5 +1,6 @@
 import {
   cleanupExpiredBrowserDrafts,
+  clearCycleDrafts,
   clearGoalDrafts,
   clearUserDrafts,
   deleteBrowserDraftIfUnchanged,
@@ -760,6 +761,66 @@ describe("browser draft cache", () => {
     expect(await getBrowserDraft("goal-owner", "cycle:c1:plan")).toEqual(
       laterTerminalDraft,
     );
+  });
+
+  it("clears only the selected Cycle recovery records", async () => {
+    const userId = "cycle-cleanup-owner";
+    const goalId = "cycle-cleanup-goal";
+    const records = [
+      {
+        userId,
+        goalId,
+        subjectKey: "cycle:cycle-to-clear:plan",
+        body: "discarded plan",
+      },
+      {
+        userId,
+        goalId,
+        subjectKey: "cycle:cycle-to-clear:do",
+        body: "discarded do",
+      },
+      {
+        userId,
+        goalId,
+        subjectKey: "cycle:cycle-to-keep:plan",
+        body: "next cycle plan",
+      },
+      {
+        userId: "other-owner",
+        goalId,
+        subjectKey: "cycle:cycle-to-clear:plan",
+        body: "other owner plan",
+      },
+      {
+        userId,
+        goalId,
+        subjectKey: "goal-draft:keep",
+        body: "goal draft",
+      },
+    ] as const;
+    for (const record of records) {
+      await putBrowserDraft({
+        ...record,
+        baseRevision: 0,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    await clearCycleDrafts(userId, goalId, "cycle-to-clear");
+
+    expect(
+      await getBrowserDraft(userId, "cycle:cycle-to-clear:plan"),
+    ).toBeNull();
+    expect(await getBrowserDraft(userId, "cycle:cycle-to-clear:do")).toBeNull();
+    expect(
+      await getBrowserDraft(userId, "cycle:cycle-to-keep:plan"),
+    ).toMatchObject({ body: "next cycle plan" });
+    expect(
+      await getBrowserDraft("other-owner", "cycle:cycle-to-clear:plan"),
+    ).toMatchObject({ body: "other owner plan" });
+    expect(await getBrowserDraft(userId, "goal-draft:keep")).toMatchObject({
+      body: "goal draft",
+    });
   });
 
   it("preserves a newer recovery record when an old save finishes late", async () => {
