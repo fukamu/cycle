@@ -579,10 +579,60 @@ test("header drawer contains focus and deactivates the background", async ({
   await history.click();
   await expect(menuButton).toBeFocused();
 
-  await page.setViewportSize({ width: 320, height: 844 });
+  const assertDrawerKeyboardScroll = async (
+    viewport: { width: number; height: number },
+    zoom: string | null,
+  ) => {
+    await page.setViewportSize(viewport);
+    await page.evaluate((nextZoom) => {
+      if (nextZoom === null) {
+        document.documentElement.style.removeProperty("zoom");
+      } else {
+        document.documentElement.style.setProperty("zoom", nextZoom);
+      }
+    }, zoom);
+    await menuButton.click();
+    await expect(history).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(settings).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(firstUseHelp).toBeFocused();
+    expect(
+      await drawer.evaluate((element) => {
+        const focused = document.activeElement;
+        if (!(focused instanceof HTMLElement))
+          throw new Error("drawer focus is missing");
+        const drawerRect = element.getBoundingClientRect();
+        const focusedRect = focused.getBoundingClientRect();
+        return {
+          drawerInsideViewport:
+            drawerRect.top >= 0 && drawerRect.bottom <= window.innerHeight,
+          focusInsideDrawer:
+            focusedRect.top >= drawerRect.top &&
+            focusedRect.bottom <= drawerRect.bottom,
+          overflowY: window.getComputedStyle(element).overflowY,
+          scrollable: element.scrollHeight > element.clientHeight,
+          scrolled: element.scrollTop > 0,
+        };
+      }),
+    ).toEqual({
+      drawerInsideViewport: true,
+      focusInsideDrawer: true,
+      overflowY: "auto",
+      scrollable: true,
+      scrolled: true,
+    });
+    await history.click();
+    await expect(menuButton).toBeFocused();
+  };
+
+  await assertDrawerKeyboardScroll({ width: 320, height: 200 }, null);
+  await assertDrawerKeyboardScroll({ width: 640, height: 400 }, "2");
+
   await page.evaluate(() =>
     document.documentElement.style.removeProperty("zoom"),
   );
+  await page.setViewportSize({ width: 320, height: 844 });
   await menuButton.click();
   await settings.click();
   const settingsDestination = page.getByRole("heading", {
@@ -2633,10 +2683,47 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
     ),
   ).toBe(false);
 
-  await page.setViewportSize({ width: 640, height: 844 });
+  const nextDo = page.getByRole("button", { name: "D — Doへ進む" });
+  const goalActionsSummary = page.locator(".goal-actions summary");
+  const assertGoalActionKeyboardVisibility = async () => {
+    await planEditor.focus();
+    await page.keyboard.press("Tab");
+    await expect(nextDo).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(goalActionsSummary).toBeFocused();
+    const focusedActionGeometry = await goalActionsSummary.evaluate(
+      (element) => {
+        const tabs = document.querySelector<HTMLElement>(".frame-tabs");
+        if (!tabs) throw new Error("frame tabs are missing");
+        const focusedRect = element.getBoundingClientRect();
+        const tabsRect = tabs.getBoundingClientRect();
+        return {
+          top: focusedRect.top,
+          bottom: focusedRect.bottom,
+          tabTop: tabsRect.top,
+          horizontalOverflow:
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        };
+      },
+    );
+    expect(focusedActionGeometry.top).toBeGreaterThanOrEqual(0);
+    expect(focusedActionGeometry.bottom).toBeLessThanOrEqual(
+      focusedActionGeometry.tabTop,
+    );
+    expect(focusedActionGeometry.horizontalOverflow).toBe(false);
+  };
+
+  await page.setViewportSize({ width: 320, height: 300 });
+  await assertGoalActionKeyboardVisibility();
+
+  await page.setViewportSize({ width: 640, height: 600 });
   await page.evaluate(() =>
     document.documentElement.style.setProperty("zoom", "2"),
   );
+  await assertGoalActionKeyboardVisibility();
+
+  await page.setViewportSize({ width: 640, height: 844 });
   await expect(templatePicker).toBeVisible();
   await expect(
     templatePicker.locator(".frame-template__preview p").nth(0),
@@ -2654,7 +2741,6 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   await page.setViewportSize({ width: 320, height: 844 });
 
   const doTab = page.getByRole("tab", { name: /^D/ });
-  const nextDo = page.getByRole("button", { name: "D — Doへ進む" });
   await expect(nextDo).toBeVisible();
   expect((await nextDo.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   expect(
