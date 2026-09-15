@@ -56,6 +56,26 @@ describe("toErrorPresentation", () => {
     );
   });
 
+  it.each([
+    [
+      "CYCLE_REPLAN_CONFIRMATION_REQUIRED" as const,
+      400,
+      "サイクルを中断して再計画する内容をもう一度確認してください。",
+    ],
+    [
+      "CYCLE_REPLAN_FAILED" as const,
+      500,
+      "処理中にエラーが発生しました。入力内容は保持されています。もう一度お試しください。",
+    ],
+  ])("safely presents the Replan error code %s", (code, status, message) => {
+    const presentation = toErrorPresentation(
+      new APIError(status, code, "private Replan state", requestId),
+    );
+
+    expect(presentation).toEqual({ kind: "api", code, message, requestId });
+    expect(JSON.stringify(presentation)).not.toContain("private Replan state");
+  });
+
   it("preserves a constructed stable code as a literal type", () => {
     const error = new APIError(
       409,

@@ -48,6 +48,7 @@ import {
   generateAction,
   getCycle,
   getGoal,
+  replanCycle,
   refineAction,
   saveCycleFrame,
   terminateGoal,
@@ -74,12 +75,14 @@ import {
   cycleFrameTemplateCopy,
   cycleGoalActionCopy,
   cycleNextFrameCopy,
+  cycleReplanCopy,
   frameCopy,
   reviewScheduleCopy,
   type CycleFrameTemplate,
 } from "../../shared/copy/ja";
 import {
   type BrowserDraft,
+  clearCycleDrafts,
   clearGoalDrafts,
   deleteBrowserDraft,
   deleteBrowserDraftIfUnchanged,
@@ -167,7 +170,13 @@ type MovedWorkspace = {
   readonly cycleSnapshot?: Cycle;
 };
 
-type CycleTerminalCommand = "complete" | "terminate" | "delete";
+type CycleTerminalCommand = "complete" | "replan" | "terminate" | "delete";
+
+type ReplanCommandSnapshot = {
+  readonly expectedGoalRevision: number;
+  readonly expectedContentRevision: number;
+  readonly expectedReviewScheduleRevision: number;
+};
 
 function cycleActionGuidanceText(reason: CycleActionDisabledReason): string {
   switch (reason.kind) {
@@ -327,7 +336,17 @@ function isCycleCommandWorkspaceConflict(
   error: unknown,
 ): error is APIError {
   if (isGoalNotFound(error)) return true;
-  if (!(error instanceof APIError) || error.status !== 409) return false;
+  if (!(error instanceof APIError)) return false;
+  if (command === "replan")
+    return (
+      (error.status === 404 && error.code === "CYCLE_NOT_FOUND") ||
+      (error.status === 409 &&
+        (error.code === "GOAL_STATE_CONFLICT" ||
+          error.code === "GOAL_VERSION_CONFLICT" ||
+          error.code === "CYCLE_NOT_ACTIVE" ||
+          error.code === "CYCLE_REVISION_CONFLICT"))
+    );
+  if (error.status !== 409) return false;
   if (command === "complete")
     return (
       error.code === "GOAL_STATE_CONFLICT" ||
@@ -345,6 +364,9 @@ function isCycleCommandWorkspaceConflict(
 type WorkspaceConfirmation =
   | { readonly kind: "replace-action" }
   | { readonly kind: "complete-cycle" }
+  | { readonly kind: "replan" }
+  | { readonly kind: "replan-discard"; readonly cleanupFailed?: boolean }
+  | { readonly kind: "replan-retry" }
   | { readonly kind: "terminate"; readonly outcome: "achieved" | "ended" }
   | { readonly kind: "delete" };
 
@@ -455,6 +477,7 @@ function CycleWorkspace({
   const generateOperation = useCommandOperation();
   const refineOperation = useCommandOperation();
   const completeOperation = useCommandOperation();
+  const replanOperation = useCommandOperation();
   const terminateOperation = useCommandOperation();
   const deleteOperation = useCommandOperation();
   const [values, setValues] = useState<Values>({
@@ -478,6 +501,7 @@ function CycleWorkspace({
   );
   const [pendingAction, setPendingAction] = useState(false);
   const [reviewSchedulePending, setReviewSchedulePending] = useState(false);
+  const [replanPreparing, setReplanPreparing] = useState(false);
   const [confirmation, setConfirmation] = useState<WorkspaceConfirmation>();
   const [error, setError] = useState<string>();
   const [doQuickEntryUndo, setDoQuickEntryUndo] = useState<DoQuickEntryUndo>();
@@ -491,6 +515,7 @@ function CycleWorkspace({
   const actionGuidanceId = useId();
   const goalActionGuidanceId = useId();
   const reviewSchedulePendingGuidanceId = useId();
+  const replanGuidanceId = useId();
   const textLimitFeedbackId = useId();
   const terminalFrameEmptyId = useId();
   const scopeRegistry = useAutoSaveScopeRegistry();
@@ -519,6 +544,11 @@ function CycleWorkspace({
   const isDoComposingRef = useRef(false);
   const composingFrameRef = useRef<Frame | undefined>(undefined);
   const frameTemplateUndoRef = useRef<FrameTemplateUndo | undefined>(undefined);
+  const replanSnapshotRef = useRef<ReplanCommandSnapshot | undefined>(
+    undefined,
+  );
+  const replanButtonRef = useRef<HTMLButtonElement>(null);
+  const focusReplanWhenEnabledRef = useRef(false);
   const frameEditorRef = useRef<HTMLTextAreaElement>(null);
   const deferredHydrationEditsRef = useRef(new Map<Frame, string>());
   const browserBaseRevisionsRef = useRef(new Map<Frame, number>());
@@ -1602,6 +1632,295 @@ function CycleWorkspace({
     }
   }
 
+  useEffect(() => {
+    if (!replanPreparing || !isActivePage() || movedWorkspaceRef.current)
+      return;
+    if (
+      recoveryConflicts.size > 0 ||
+      cycleRevisionConflictsRef.current.size > 0 ||
+      saveState.kind === "failed"
+    ) {
+      setReplanPreparing(false);
+      cycleRevisionRefreshEpochRef.current += 1;
+      cycleRevisionRefreshInFlightRef.current.clear();
+      coordinator.pause(true);
+      setConfirmation({ kind: "replan-discard" });
+      return;
+    }
+    if (saveState.kind !== "saved" || coordinator.hasPending()) return;
+    setReplanPreparing(false);
+    cycleRevisionRefreshEpochRef.current += 1;
+    cycleRevisionRefreshInFlightRef.current.clear();
+    coordinator.pause(true);
+    setConfirmation({ kind: "replan" });
+  }, [
+    coordinator,
+    isActivePage,
+    recoveryConflicts,
+    replanPreparing,
+    saveState,
+  ]);
+
+  useEffect(() => {
+    if (
+      pendingAction ||
+      !focusReplanWhenEnabledRef.current ||
+      !replanButtonRef.current
+    )
+      return;
+    focusReplanWhenEnabledRef.current = false;
+    replanButtonRef.current.focus();
+  }, [pendingAction]);
+
+  function requestReplan() {
+    if (
+      !editable ||
+      !isActivePage() ||
+      coordinator.isHydrating() ||
+      pendingActionRef.current ||
+      reviewSchedulePendingRef.current ||
+      movedWorkspaceRef.current ||
+      aiState !== "idle"
+    )
+      return;
+    pendingActionRef.current = true;
+    setPendingAction(true);
+    setError(undefined);
+    replanSnapshotRef.current = undefined;
+    if (
+      recoveryConflicts.size > 0 ||
+      cycleRevisionConflictsRef.current.size > 0 ||
+      saveState.kind === "failed"
+    ) {
+      pauseSaves();
+      setConfirmation({ kind: "replan-discard" });
+      return;
+    }
+    setReplanPreparing(true);
+    coordinator.flush();
+  }
+
+  function cancelReplan() {
+    replanSnapshotRef.current = undefined;
+    setReplanPreparing(false);
+    setConfirmation(undefined);
+    focusReplanWhenEnabledRef.current = true;
+    resumeSaves();
+  }
+
+  async function discardLocalCycleDraftsForReplan(
+    routeOwnership: PostCommitRouteOwnershipToken,
+  ): Promise<boolean> {
+    cacheDisabledRef.current = true;
+    coordinator.setPersistenceEnabled(false);
+    try {
+      await browserOperationQueueRef.current(() =>
+        clearCycleDrafts(userId, goal.id, cycle.id),
+      );
+    } catch {
+      cacheDisabledRef.current = false;
+      coordinator.setPersistenceEnabled(true);
+      if (isActivePage())
+        setConfirmation({ kind: "replan-discard", cleanupFailed: true });
+      return false;
+    }
+
+    if (
+      !isActivePage() ||
+      !routeOwnership.isCurrent() ||
+      movedWorkspaceRef.current
+    ) {
+      if (isActivePage() && !movedWorkspaceRef.current) resumeSaves();
+      return false;
+    }
+
+    const savedValues = Object.fromEntries(
+      frames.map((frame) => [
+        frame,
+        coordinator.getSavedValue(frame) ?? initialValuesRef.current[frame],
+      ]),
+    ) as Values;
+    await coordinator.discard();
+    conflictsRef.current = new Map();
+    cycleRevisionConflictsRef.current.clear();
+    deferredHydrationEditsRef.current.clear();
+    valuesRef.current = savedValues;
+    if (mountedRef.current) {
+      setValues(savedValues);
+      setRecoveryConflicts(new Map());
+      setBrowserCacheFailed(false);
+    }
+    for (const frame of frames)
+      coordinator.synchronize(frame, savedValues[frame]);
+    return true;
+  }
+
+  async function runReplan(discardLocalDrafts: boolean) {
+    if (!isActivePage() || movedWorkspaceRef.current) return;
+    const routeOwnership = captureRouteOwnership();
+    if (
+      discardLocalDrafts &&
+      !(await discardLocalCycleDraftsForReplan(routeOwnership))
+    )
+      return;
+    if (
+      !isActivePage() ||
+      !routeOwnership.isCurrent() ||
+      movedWorkspaceRef.current
+    )
+      return;
+    const snapshot = replanSnapshotRef.current ?? {
+      expectedGoalRevision: goal.revision,
+      expectedContentRevision: contentRevision.current,
+      expectedReviewScheduleRevision: cycle.reviewScheduleRevision,
+    };
+    replanSnapshotRef.current = snapshot;
+    setError(undefined);
+
+    try {
+      const result = await replanOperation.invoke(
+        commandFingerprint("cycle_replan", {
+          goalId: goal.id,
+          cycleId: cycle.id,
+          ...snapshot,
+          confirmed: true,
+        }),
+        (operationId) =>
+          replanCycle(
+            sessionLease,
+            goal.id,
+            cycle.id,
+            snapshot.expectedGoalRevision,
+            snapshot.expectedContentRevision,
+            snapshot.expectedReviewScheduleRevision,
+            { operationId, csrfToken: session.csrfToken },
+          ),
+      );
+      replanSnapshotRef.current = undefined;
+      forgetSelectedCycleFrame(cycle.id);
+      let destination: string | undefined;
+      if (isActivePage() && routeOwnership.isCurrent()) {
+        const goalKey = userQueryKeys.goal(userId, goal.id);
+        const goalResolution = resolvePreferredGoal(
+          cache.getQueryData<{ readonly goal: Goal }>(goalKey)?.goal,
+          result.goal,
+        );
+        const sourceCycleKey = userQueryKeys.cycle(
+          userId,
+          goal.id,
+          result.canceledCycle.id,
+        );
+        const sourceCycleResolution = resolvePreferredCycle(
+          cache.getQueryData<{ readonly cycle: Cycle }>(sourceCycleKey)?.cycle,
+          result.canceledCycle,
+        );
+        const successorCycleKey = userQueryKeys.cycle(
+          userId,
+          goal.id,
+          result.cycle.id,
+        );
+        const successorCycleResolution = resolvePreferredCycle(
+          cache.getQueryData<{ readonly cycle: Cycle }>(successorCycleKey)
+            ?.cycle,
+          result.cycle,
+        );
+        if (goalResolution.kind === "invariant")
+          cache.removeQueries({ queryKey: goalKey, exact: true });
+        else cacheGoal(cache, userId, goalResolution.goal);
+        if (sourceCycleResolution.kind === "invariant")
+          cache.removeQueries({ queryKey: sourceCycleKey, exact: true });
+        else
+          cache.setQueryData(sourceCycleKey, {
+            cycle: sourceCycleResolution.cycle,
+          });
+        if (successorCycleResolution.kind === "invariant")
+          cache.removeQueries({ queryKey: successorCycleKey, exact: true });
+        else
+          cache.setQueryData(successorCycleKey, {
+            cycle: successorCycleResolution.cycle,
+          });
+        const canonicalGoal =
+          goalResolution.kind === "accept" ? goalResolution.goal : undefined;
+        const canonicalSuccessor =
+          successorCycleResolution.kind === "accept"
+            ? successorCycleResolution.cycle
+            : undefined;
+        const canonicalWork = canonicalGoal?.currentWork;
+        const canonicalWorkspaceIsConsistent =
+          canonicalGoal !== undefined &&
+          (canonicalWork?.kind !== "active_cycle" ||
+            (canonicalSuccessor?.status === "active" &&
+              canonicalWork.cycleId === canonicalSuccessor.id));
+        destination = canonicalWorkspaceIsConsistent
+          ? replayWorkspacePath(goal.id, canonicalGoal.currentWork)
+          : `/goals/${goal.id}`;
+      }
+      void runPostCommitCleanup({
+        expectedUserId: userId,
+        routeOwnership,
+        cleanup: () => clearCycleDrafts(userId, goal.id, cycle.id),
+        onSuccess: async (publicationIsCurrent) => {
+          if (!publicationIsCurrent() || destination === undefined) return;
+          await cache.invalidateQueries({
+            queryKey: userQueryKeys.root(userId),
+            refetchType: "none",
+          });
+          if (!publicationIsCurrent()) return;
+          navigate(destination, { replace: true });
+        },
+        pendingMessage: cycleReplanCopy.cleanup.pending,
+        failureMessage: cycleReplanCopy.cleanup.failed,
+        retryLabel: cycleReplanCopy.cleanup.retry,
+      });
+    } catch (cause) {
+      if (isGoalNotFound(cause)) {
+        replanSnapshotRef.current = undefined;
+        replanOperation.abandon();
+        forgetSelectedCycleFrame(cycle.id);
+        markDeletedGoal(routeOwnership);
+        return;
+      }
+      if (!isActivePage()) {
+        replanSnapshotRef.current = undefined;
+        replanOperation.abandon();
+        return;
+      }
+      if (!routeOwnership.isCurrent()) {
+        replanSnapshotRef.current = undefined;
+        replanOperation.abandon();
+        if (
+          !(cause instanceof APIError) ||
+          cause.code === "INVALID_ERROR_RESPONSE"
+        ) {
+          await refreshCanonicalWorkspace(captureRouteOwnership());
+        } else {
+          resumeSaves();
+        }
+        return;
+      }
+      if (await recoverTerminalCommand("replan", cause, routeOwnership)) {
+        replanSnapshotRef.current = undefined;
+        return;
+      }
+      if (
+        !(cause instanceof APIError) ||
+        cause.code === "INVALID_ERROR_RESPONSE"
+      ) {
+        setConfirmation({ kind: "replan-retry" });
+        setError(cycleReplanCopy.retry.error);
+        return;
+      }
+      replanSnapshotRef.current = undefined;
+      focusReplanWhenEnabledRef.current = true;
+      resumeSaves();
+      setError(
+        discardLocalDrafts
+          ? cycleReplanCopy.discard.requestFailed
+          : toErrorPresentation(cause).message,
+      );
+    }
+  }
+
   const fenceDeletedGoalEditor = useCallback(() => {
     if (deletedFenceStartedRef.current) return;
     deletedFenceStartedRef.current = true;
@@ -1860,6 +2179,7 @@ function CycleWorkspace({
   ): Promise<boolean> {
     if (!isCycleCommandWorkspaceConflict(command, cause)) return false;
     if (command === "complete") completeOperation.abandon();
+    else if (command === "replan") replanOperation.abandon();
     else if (command === "terminate") terminateOperation.abandon();
     else deleteOperation.abandon();
     if (isGoalNotFound(cause)) {
@@ -2347,6 +2667,17 @@ function CycleWorkspace({
         : undefined,
       reviewSchedulePending ? reviewSchedulePendingGuidanceId : undefined,
     );
+  const replanDisabledReason = coordinator.isHydrating()
+    ? cycleReplanCopy.disabled.hydrating
+    : aiState !== "idle"
+      ? cycleReplanCopy.disabled.ai
+      : reviewSchedulePending
+        ? cycleReplanCopy.disabled.reviewSchedule
+        : pendingAction
+          ? replanPreparing
+            ? cycleReplanCopy.disabled.saving
+            : cycleReplanCopy.disabled.pending
+          : undefined;
   const end = cycle.completedAt ?? cycle.canceledAt;
   return (
     <main className="page editor-page">
@@ -2643,6 +2974,36 @@ function CycleWorkspace({
         )}
       </section>
       {editable && !workspaceMoved && (
+        <section
+          className="cycle-replan-action"
+          aria-label={cycleReplanCopy.sectionLabel}
+        >
+          <div className="button-row">
+            <button
+              ref={replanButtonRef}
+              className="touch-target"
+              type="button"
+              aria-describedby={
+                replanDisabledReason ? replanGuidanceId : undefined
+              }
+              disabled={Boolean(replanDisabledReason)}
+              onClick={requestReplan}
+            >
+              {cycleReplanCopy.action}
+            </button>
+          </div>
+          <p
+            className="goal-actions__guidance"
+            id={replanGuidanceId}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {replanDisabledReason ?? cycleReplanCopy.available}
+          </p>
+        </section>
+      )}
+      {editable && !workspaceMoved && (
         <details className="goal-actions">
           <summary className="touch-target">目標の操作</summary>
           <p
@@ -2725,6 +3086,55 @@ function CycleWorkspace({
             values={values}
             onEdit={editFrameFromCompletionSummary}
           />
+        </ConfirmationDialog>
+      )}
+      {confirmation?.kind === "replan" && (
+        <ConfirmationDialog
+          title={cycleReplanCopy.confirm.title}
+          confirmLabel={cycleReplanCopy.confirm.action}
+          onCancel={cancelReplan}
+          onConfirm={() => {
+            setConfirmation(undefined);
+            void runReplan(false);
+          }}
+        >
+          <p>{cycleReplanCopy.confirm.history}</p>
+          <p>{cycleReplanCopy.confirm.successor}</p>
+        </ConfirmationDialog>
+      )}
+      {confirmation?.kind === "replan-discard" && (
+        <ConfirmationDialog
+          title={cycleReplanCopy.discard.title}
+          confirmLabel={cycleReplanCopy.discard.action}
+          confirmTone="danger"
+          onCancel={cancelReplan}
+          onConfirm={() => {
+            setConfirmation(undefined);
+            void runReplan(true);
+          }}
+        >
+          <p>{cycleReplanCopy.discard.warning}</p>
+          <p>{cycleReplanCopy.discard.retained}</p>
+          {confirmation.cleanupFailed && (
+            <p className="inline-error" role="alert">
+              {cycleReplanCopy.discard.cleanupFailed}
+            </p>
+          )}
+        </ConfirmationDialog>
+      )}
+      {confirmation?.kind === "replan-retry" && (
+        <ConfirmationDialog
+          title={cycleReplanCopy.retry.title}
+          confirmLabel={cycleReplanCopy.retry.action}
+          cancelDisabled
+          onCancel={() => undefined}
+          onConfirm={() => {
+            setConfirmation(undefined);
+            void runReplan(false);
+          }}
+        >
+          <p>{cycleReplanCopy.retry.explanation}</p>
+          <p>{cycleReplanCopy.retry.frozen}</p>
         </ConfirmationDialog>
       )}
       {confirmation?.kind === "terminate" && (

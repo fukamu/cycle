@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 import {
+  cycleCancellationReasonCopy,
   cycleFrameCopy,
   cycleFrameTemplateCopy,
   cyclePreviousActionReferenceCopy,
@@ -1738,6 +1739,98 @@ test("cycle completion reuses its operation after committed response loss and co
   );
 });
 
+test("Replan flushes partial work, starts an empty next Cycle, and labels the old history", async ({
+  page,
+}) => {
+  const goalText = "途中の記録を残して再計画する目標";
+  const partialPlan = "次のCycleへ持ち越さず履歴に残す計画";
+  const expectNoHorizontalOverflow = async () => {
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(false);
+  };
+  await page.setViewportSize({ width: 320, height: 844 });
+  await createProgressingGoal(page, goalText);
+  const sourceRoute = new URL(page.url()).pathname.match(
+    /^\/goals\/([^/]+)\/cycles\/([^/]+)$/,
+  );
+  expect(sourceRoute).not.toBeNull();
+  const [, goalId, sourceCycleId] = sourceRoute!;
+
+  await page.getByRole("textbox", { name: "P — Plan" }).fill(partialPlan);
+  const replanButton = page.getByRole("button", {
+    name: "このCycleを中断して再計画",
+  });
+  await replanButton.focus();
+  await page.keyboard.press("Enter");
+  const confirmation = page.getByRole("dialog", {
+    name: "このCycleを中断して再計画しますか？",
+  });
+  await expect(confirmation).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(confirmation).toHaveCount(0);
+  await expect(replanButton).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "P — Plan" })).toHaveValue(
+    partialPlan,
+  );
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await page.keyboard.press("Enter");
+  await expect(confirmation).toBeVisible();
+  await expectNoHorizontalOverflow();
+  const replanResponse = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "POST" &&
+      new URL(candidate.url()).pathname ===
+        `/api/v1/goals/${goalId}/cycles/${sourceCycleId}/replan` &&
+      candidate.ok(),
+  );
+  await page
+    .getByRole("dialog", {
+      name: "このCycleを中断して再計画しますか？",
+    })
+    .getByRole("button", { name: "中断して再計画" })
+    .click();
+  const replanned = (await (await replanResponse).json()) as {
+    readonly cycle: { readonly id: string; readonly sequenceNumber: number };
+  };
+
+  await expect(page).toHaveURL(`/goals/${goalId}/cycles/${replanned.cycle.id}`);
+  await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "P — Plan" })).toHaveValue("");
+  await expectNoHorizontalOverflow();
+
+  await page.goto("/history");
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await page.getByRole("link", { name: new RegExp(goalText) }).click();
+  const sourceCycle = page.getByRole("link", { name: /Cycle 1/ });
+  await expect(sourceCycle).toContainText("Canceled");
+  await expect(sourceCycle).toContainText(
+    cycleCancellationReasonCopy.replanned,
+  );
+  await expectNoHorizontalOverflow();
+  await sourceCycle.click();
+  await expect(
+    page.getByText(cycleCancellationReasonCopy.replanned),
+  ).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "P — Plan" })).toHaveValue(
+    partialPlan,
+  );
+  await expect(
+    page.getByRole("textbox", { name: "P — Plan" }),
+  ).not.toBeEditable();
+  await expectNoHorizontalOverflow();
+});
+
 test("two stale tabs converge from Cycle Complete and Review Continue without repeating commands", async ({
   context,
   page,
@@ -2747,11 +2840,16 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   ).toBe(false);
 
   const nextDo = page.getByRole("button", { name: "D — Doへ進む" });
+  const replan = page.getByRole("button", {
+    name: "このCycleを中断して再計画",
+  });
   const goalActionsSummary = page.locator(".goal-actions summary");
   const assertGoalActionKeyboardVisibility = async () => {
     await planEditor.focus();
     await page.keyboard.press("Tab");
     await expect(nextDo).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(replan).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(goalActionsSummary).toBeFocused();
     const focusedActionGeometry = await goalActionsSummary.evaluate(

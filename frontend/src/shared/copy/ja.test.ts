@@ -1,10 +1,28 @@
 import {
+  cycleCancellationReasonCopy,
   cycleFrameTemplateCopy,
+  cycleReplanCopy,
   firstUseGuideCopy,
   goalCopy,
   goalReviewDecisionCopy,
   textLimitCopy,
 } from "./ja";
+
+describe("cycle cancellation reason copy", () => {
+  it("keeps the approved replan history label", () => {
+    expect(cycleCancellationReasonCopy.replanned).toBe("再計画のため中断");
+  });
+});
+
+describe("cycle Replan copy", () => {
+  it("states that Replan retains history and starts an empty successor", () => {
+    expect(cycleReplanCopy.confirm.history).toContain("読み取り専用の履歴");
+    expect(cycleReplanCopy.confirm.successor).toContain("空の次Cycle");
+    expect(cycleReplanCopy.discard.requestFailed).toContain(
+      "破棄した未保存内容は復元できません",
+    );
+  });
+});
 
 describe("first-use guide copy", () => {
   it("matches the canonical Goal to Review guide text", () => {

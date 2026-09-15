@@ -5,6 +5,7 @@ type ConfirmationDialogProps = {
   readonly children: ReactNode;
   readonly confirmLabel: string;
   readonly cancelLabel?: string;
+  readonly cancelDisabled?: boolean;
   readonly confirmTone?: "default" | "danger";
   readonly size?: "default" | "wide";
   readonly describeContent?: boolean;
@@ -17,6 +18,7 @@ export function ConfirmationDialog({
   children,
   confirmLabel,
   cancelLabel = "キャンセル",
+  cancelDisabled = false,
   confirmTone = "default",
   size = "default",
   describeContent = true,
@@ -60,10 +62,10 @@ export function ConfirmationDialog({
       aria-describedby={describeContent ? descriptionId : undefined}
       onCancel={(event) => {
         event.preventDefault();
-        onCancel();
+        if (!cancelDisabled) onCancel();
       }}
       onClick={(event) => {
-        if (event.target === event.currentTarget) onCancel();
+        if (event.target === event.currentTarget && !cancelDisabled) onCancel();
       }}
     >
       <div className="confirmation-dialog__content">
@@ -78,7 +80,8 @@ export function ConfirmationDialog({
           <button
             className="button button--secondary"
             type="button"
-            autoFocus
+            autoFocus={!cancelDisabled}
+            disabled={cancelDisabled}
             onClick={onCancel}
           >
             {cancelLabel}
@@ -90,6 +93,7 @@ export function ConfirmationDialog({
                 : "button button--primary"
             }
             type="button"
+            autoFocus={cancelDisabled}
             onClick={onConfirm}
           >
             {confirmLabel}

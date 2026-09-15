@@ -56,6 +56,7 @@ function makeCycle(
     startedAt: "2026-08-01T00:00:00.000Z",
     completedAt: "2026-08-02T00:00:00.000Z",
     canceledAt: null,
+    cancellationReason: null,
     goalVersion: makeVersion(versionNumber),
     planPreview: `Cycle ${sequenceNumber}の計画`,
   };

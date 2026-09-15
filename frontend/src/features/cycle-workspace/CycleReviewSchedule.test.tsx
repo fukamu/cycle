@@ -7,9 +7,10 @@ import { CycleReviewSchedule } from "./CycleReviewSchedule";
 
 const activeSchedule: Pick<
   Cycle,
-  "status" | "reviewDate" | "reviewScheduleRevision"
+  "status" | "cancellationReason" | "reviewDate" | "reviewScheduleRevision"
 > = {
   status: "active",
+  cancellationReason: null,
   reviewDate: null,
   reviewScheduleRevision: 0,
 };
@@ -122,6 +123,7 @@ describe("CycleReviewSchedule", () => {
       <CycleReviewSchedule
         cycle={{
           status: "completed",
+          cancellationReason: null,
           reviewDate: "2026-09-15",
           reviewScheduleRevision: 4,
         }}
@@ -141,5 +143,25 @@ describe("CycleReviewSchedule", () => {
     expect(screen.queryByRole("form")).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(reviewScheduleCopy.inputLabel)).toBeNull();
+  });
+
+  it("shows the exact replan reason on a canceled Cycle detail", () => {
+    render(
+      <CycleReviewSchedule
+        cycle={{
+          status: "canceled",
+          cancellationReason: "replanned",
+          reviewDate: null,
+          reviewScheduleRevision: 0,
+        }}
+        today="2026-09-15"
+        terminalCommandGuidanceId="review-schedule-pending"
+        onSubmit={vi.fn()}
+        onPendingChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("再計画のため中断")).toBeVisible();
+    expect(screen.getByText(reviewScheduleCopy.terminal)).toBeVisible();
   });
 });

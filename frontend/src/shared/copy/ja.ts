@@ -277,6 +277,54 @@ export const cycleGoalActionCopy = {
   },
 } as const;
 
+export const cycleReplanCopy = {
+  action: "このCycleを中断して再計画",
+  sectionLabel: "Cycleの再計画",
+  available: "現在のCycleを履歴に残し、同じ目標で空の次Cycleを始めます。",
+  disabled: {
+    hydrating: "この端末の入力を確認しています。完了後に再計画できます。",
+    ai: "AI処理の完了後に再計画できます。",
+    reviewSchedule: "見直す日の保存完了後に再計画できます。",
+    saving: "入力の保存完了を確認しています。",
+    pending: "ほかの処理が完了するまでお待ちください。",
+  },
+  confirm: {
+    title: "このCycleを中断して再計画しますか？",
+    action: "中断して再計画",
+    history:
+      "現在のCycleは「再計画のため中断」として読み取り専用の履歴に残ります。",
+    successor:
+      "目標は変更せず、保存済みの内容を引き継がない空の次Cycleを始めます。",
+  },
+  discard: {
+    title: "未保存の内容を破棄して再計画しますか？",
+    action: "未保存内容を破棄して再計画",
+    warning:
+      "保存に失敗した入力またはこの端末の復旧用下書きを削除します。削除した内容は元に戻せません。",
+    retained:
+      "サーバーへ保存済みの内容は旧Cycleの読み取り専用履歴に残り、空の次Cycleを始めます。",
+    cleanupFailed:
+      "この端末の下書きを削除できなかったため、再計画は送信していません。端末の保存機能を確認して再試行してください。",
+    requestFailed:
+      "再計画を完了できませんでした。破棄した未保存内容は復元できませんが、サーバーへ保存済みの内容は残っています。もう一度お試しください。",
+  },
+  retry: {
+    title: "再計画の結果を確認できません",
+    action: "同じ操作を再試行",
+    error:
+      "再計画の結果を確認できませんでした。同じ操作を再試行して状態を確定してください。",
+    explanation:
+      "処理が完了した可能性があります。二重にCycleを作らず状態を確定するため、同じ操作を再試行してください。",
+    frozen: "確認が完了するまで編集は再開できません。",
+  },
+  cleanup: {
+    pending: "この端末の旧Cycle下書きを削除しています…",
+    failed:
+      "再計画は完了しましたが、この端末の旧Cycle下書きを削除できませんでした。",
+    retry: "旧Cycle下書きの削除を再試行",
+  },
+} as const;
+
 export const homeCopy = {
   progressingGoalCount: (count: number, limit: number) =>
     `${count} / ${limit}件`,
@@ -376,6 +424,10 @@ export const statusLabel = {
   active: "編集中",
   completed: "Completed",
   canceled: "Canceled",
+} as const;
+
+export const cycleCancellationReasonCopy = {
+  replanned: "再計画のため中断",
 } as const;
 
 export const goalHistoryEmptyCopy = {

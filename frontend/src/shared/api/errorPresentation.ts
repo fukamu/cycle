@@ -56,6 +56,8 @@ const messageByCode = {
     "Googleアカウントを確認して、もう一度お試しください。",
   GOAL_REVIEW_DISCARD_CONFIRMATION_REQUIRED:
     "操作内容をもう一度確認してください。",
+  CYCLE_REPLAN_CONFIRMATION_REQUIRED:
+    "サイクルを中断して再計画する内容をもう一度確認してください。",
   GOAL_DELETE_CONFIRMATION_REQUIRED: "操作内容をもう一度確認してください。",
   ACCOUNT_DELETE_CONFIRMATION_REQUIRED: "操作内容をもう一度確認してください。",
   SESSION_MISSING:
@@ -114,6 +116,7 @@ const messageByCode = {
   FRAME_SAVE_FAILED: preservedInputMessage,
   REVIEW_SCHEDULE_UPDATE_FAILED: preservedInputMessage,
   CYCLE_COMPLETION_FAILED: preservedInputMessage,
+  CYCLE_REPLAN_FAILED: preservedInputMessage,
   GOAL_REVIEW_INVARIANT_BROKEN: operationMessage,
   GOAL_REVIEW_DRAFT_SAVE_FAILED: preservedInputMessage,
   GOAL_REVIEW_CONTINUE_FAILED: preservedInputMessage,

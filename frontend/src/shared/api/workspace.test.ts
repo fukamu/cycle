@@ -14,6 +14,7 @@ import {
   getHome,
   getReview,
   listCycles,
+  replanCycle,
   refineAction,
   refineGoalDraft,
   refineReview,
@@ -138,6 +139,74 @@ const reviewScheduleCycleResponse = (
   frameRevisions: { plan: 1, do: 1, check: 1, action: 1 },
   ...overrides,
 });
+
+const replanResponse = () => {
+  const successorCycleId = "00000000-0000-7000-8000-000000000006";
+  const goalVersion = {
+    id: "00000000-0000-7000-8000-000000000005",
+    versionNumber: 1,
+    body: "現在の目標",
+    createdAt: "2026-08-19T00:00:00Z",
+  };
+  return {
+    canceledCycle: {
+      id: cycleId,
+      goalId,
+      sequenceNumber: 1,
+      status: "canceled",
+      goalVersion: { ...goalVersion },
+      previousCompletedCycleAction: null,
+      reviewDate: "2026-09-25",
+      reviewScheduleRevision: 2,
+      startedAt: "2026-08-20T00:00:00Z",
+      completedAt: null,
+      canceledAt: "2026-08-21T00:00:00Z",
+      cancellationReason: "replanned",
+      plan: "計画",
+      do: "実行",
+      check: "評価",
+      action: "改善",
+      contentRevision: 4,
+      frameRevisions: { plan: 1, do: 1, check: 1, action: 1 },
+    },
+    goal: {
+      id: goalId,
+      status: "active_cycle",
+      revision: 5,
+      currentVersion: { ...goalVersion },
+      currentWork: {
+        kind: "active_cycle",
+        cycleId: successorCycleId,
+        cycleSequenceNumber: 2,
+        reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
+      },
+      nextCycleSequenceNumber: 3,
+      cycleCount: 2,
+      createdAt: "2026-08-19T00:00:00Z",
+      terminalAt: null,
+    },
+    cycle: {
+      id: successorCycleId,
+      goalId,
+      sequenceNumber: 2,
+      status: "active",
+      goalVersion: { ...goalVersion },
+      previousCompletedCycleAction: null,
+      reviewDate: null,
+      reviewScheduleRevision: 0,
+      startedAt: "2026-08-21T00:00:00Z",
+      completedAt: null,
+      canceledAt: null,
+      cancellationReason: null,
+      plan: "",
+      do: "",
+      check: "",
+      action: "",
+      contentRevision: 0,
+      frameRevisions: { plan: 0, do: 0, check: 0, action: 0 },
+    },
+  };
+};
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -724,33 +793,276 @@ describe("goal-scoped workspace API", () => {
     );
   });
 
-  it("dual-reads old and expanded Cycle summary cancellation reasons", async () => {
+  it("sends every Replan precondition and accepts the fresh empty successor", async () => {
+    const response = replanResponse();
+    response.goal.currentVersion.createdAt = "2026-08-19T09:00:00+09:00";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(authenticatedJSON(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      replanCycle(lease, goalId, cycleId, 4, 4, 2, commandOptions),
+    ).resolves.toEqual(response);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `/api/v1/goals/${goalId}/cycles/${cycleId}/replan`,
+    );
+    const options = fetchMock.mock.calls[0]?.[1];
+    expect(options?.method).toBe("POST");
+    expect(JSON.parse(String(options?.body))).toEqual({
+      operationId: suppliedOperationId,
+      expectedGoalRevision: 4,
+      expectedContentRevision: 4,
+      expectedReviewScheduleRevision: 2,
+      confirmed: true,
+    });
+  });
+
+  it("accepts an idempotent Replan replay after its successor reached a later state", async () => {
+    const fresh = replanResponse();
+    const response = {
+      ...fresh,
+      replayed: true as const,
+      goal: {
+        ...fresh.goal,
+        status: "goal_review",
+        revision: 6,
+        currentWork: {
+          kind: "goal_review",
+          reviewDraftId: reviewDraftId,
+          triggerCycleId: fresh.cycle.id,
+          triggerCycleSequenceNumber: fresh.cycle.sequenceNumber,
+        },
+      },
+      cycle: {
+        ...fresh.cycle,
+        status: "completed",
+        completedAt: "2026-08-22T00:00:00Z",
+        plan: "再計画後の計画",
+        do: "再計画後の実行",
+        check: "再計画後の評価",
+        action: "再計画後の改善",
+        contentRevision: 4,
+        frameRevisions: { plan: 1, do: 1, check: 1, action: 1 },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(authenticatedJSON(response)),
+    );
+
+    await expect(
+      replanCycle(lease, goalId, cycleId, 4, 4, 2, commandOptions),
+    ).resolves.toEqual(response);
+  });
+
+  it("accepts an idempotent Replan replay after the active successor changed", async () => {
+    const fresh = replanResponse();
+    const response = {
+      ...fresh,
+      replayed: true as const,
+      goal: {
+        ...fresh.goal,
+        revision: 7,
+        currentWork: {
+          ...fresh.goal.currentWork,
+          reviewSchedule: {
+            reviewDate: "2026-09-30",
+            reviewScheduleRevision: 1,
+          },
+        },
+      },
+      cycle: {
+        ...fresh.cycle,
+        reviewDate: "2026-09-30",
+        reviewScheduleRevision: 1,
+        plan: "再計画後に保存した計画",
+        contentRevision: 1,
+        frameRevisions: { plan: 1, do: 0, check: 0, action: 0 },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(authenticatedJSON(response)),
+    );
+
+    await expect(
+      replanCycle(lease, goalId, cycleId, 4, 4, 2, commandOptions),
+    ).resolves.toEqual(response);
+  });
+
+  it.each([
+    {
+      label: "a different source Cycle",
+      mutate: (response: ReturnType<typeof replanResponse>) => {
+        response.canceledCycle.id = "00000000-0000-7000-8000-000000000009";
+      },
+    },
+    {
+      label: "a non-replanned source",
+      mutate: (response: ReturnType<typeof replanResponse>) => {
+        response.canceledCycle.cancellationReason = "goal_ended";
+      },
+    },
+    {
+      label: "a non-contiguous successor",
+      mutate: (response: ReturnType<typeof replanResponse>) => {
+        response.cycle.sequenceNumber += 1;
+      },
+    },
+    {
+      label: "a successor on another Goal Version",
+      mutate: (response: ReturnType<typeof replanResponse>) => {
+        response.cycle.goalVersion.id = "00000000-0000-7000-8000-000000000009";
+      },
+    },
+    {
+      label: "copied content in a fresh successor",
+      mutate: (response: ReturnType<typeof replanResponse>) => {
+        response.cycle.plan = "引き継がれた計画";
+        response.cycle.contentRevision = 1;
+        response.cycle.frameRevisions.plan = 1;
+      },
+    },
+    {
+      label: "a source content revision other than the request",
+      mutate: (response: ReturnType<typeof replanResponse>) => {
+        response.canceledCycle.contentRevision = 3;
+      },
+    },
+    {
+      label: "a source review schedule revision other than the request",
+      mutate: (response: ReturnType<typeof replanResponse>) => {
+        response.canceledCycle.reviewScheduleRevision = 1;
+      },
+    },
+    {
+      label: "a successor started at a different instant",
+      mutate: (response: ReturnType<typeof replanResponse>) => {
+        response.cycle.startedAt = "2026-08-21T00:00:01Z";
+      },
+    },
+  ])("rejects a Replan response with $label", async ({ mutate }) => {
+    const response = replanResponse();
+    mutate(response);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(authenticatedJSON(response)),
+    );
+
+    await expect(
+      replanCycle(lease, goalId, cycleId, 4, 4, 2, commandOptions),
+    ).rejects.toBeInstanceOf(ZodError);
+  });
+
+  it("rejects an active Replan replay whose Goal points at another workspace", async () => {
+    const fresh = replanResponse();
+    const response = {
+      ...fresh,
+      replayed: true as const,
+      goal: {
+        ...fresh.goal,
+        currentWork: {
+          ...fresh.goal.currentWork,
+          cycleId: "00000000-0000-7000-8000-000000000009",
+        },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(authenticatedJSON(response)),
+    );
+
+    await expect(
+      replanCycle(lease, goalId, cycleId, 4, 4, 2, commandOptions),
+    ).rejects.toBeInstanceOf(ZodError);
+  });
+
+  it("rejects a Replan replay whose Goal revision did not advance", async () => {
+    const response = { ...replanResponse(), replayed: true as const };
+    response.goal.revision = 4;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(authenticatedJSON(response)),
+    );
+
+    await expect(
+      replanCycle(lease, goalId, cycleId, 4, 4, 2, commandOptions),
+    ).rejects.toBeInstanceOf(ZodError);
+  });
+
+  it.each([
+    {
+      label: "a Completed successor still selected as Active work",
+      response: () => {
+        const fresh = replanResponse();
+        return {
+          ...fresh,
+          replayed: true as const,
+          cycle: {
+            ...fresh.cycle,
+            status: "completed",
+            completedAt: "2026-08-22T00:00:00Z",
+          },
+        };
+      },
+    },
+    {
+      label: "a goal-ended successor with an Achieved Goal",
+      response: () => {
+        const fresh = replanResponse();
+        return {
+          ...fresh,
+          replayed: true as const,
+          goal: {
+            ...fresh.goal,
+            status: "achieved",
+            currentWork: null,
+            terminalAt: "2026-08-22T00:00:00Z",
+          },
+          cycle: {
+            ...fresh.cycle,
+            status: "canceled",
+            canceledAt: "2026-08-22T00:00:00Z",
+            cancellationReason: "goal_ended",
+          },
+        };
+      },
+    },
+  ])("rejects terminal Replan replay with $label", async ({ response }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(authenticatedJSON(response())),
+    );
+
+    await expect(
+      replanCycle(lease, goalId, cycleId, 4, 4, 2, commandOptions),
+    ).rejects.toBeInstanceOf(ZodError);
+  });
+
+  it("requires expanded Cycle summary cancellation reasons", async () => {
     const goalVersion = {
       id: "00000000-0000-7000-8000-000000000005",
       versionNumber: 1,
       body: "現在の目標",
       createdAt: "2026-08-19T00:00:00Z",
     };
-    const oldBackendSummary = {
+    const completedSummary = {
       id: "00000000-0000-7000-8000-000000000006",
       sequenceNumber: 1,
       status: "completed",
       startedAt: "2026-08-19T00:00:00Z",
       completedAt: "2026-08-20T00:00:00Z",
       canceledAt: null,
+      cancellationReason: null,
       goalVersion,
       planPreview: "最初の計画",
     };
-    const expandedCompletedSummary = {
-      ...oldBackendSummary,
-      id: "00000000-0000-7000-8000-000000000007",
-      sequenceNumber: 2,
-      cancellationReason: null,
-    };
-    const expandedReplannedSummary = {
-      ...oldBackendSummary,
+    const replannedSummary = {
+      ...completedSummary,
       id: "00000000-0000-7000-8000-000000000008",
-      sequenceNumber: 3,
+      sequenceNumber: 2,
       status: "canceled",
       completedAt: null,
       canceledAt: "2026-08-21T00:00:00Z",
@@ -760,11 +1072,7 @@ describe("goal-scoped workspace API", () => {
       "fetch",
       vi.fn<typeof fetch>().mockResolvedValue(
         authenticatedJSON({
-          items: [
-            oldBackendSummary,
-            expandedCompletedSummary,
-            expandedReplannedSummary,
-          ],
+          items: [completedSummary, replannedSummary],
           nextCursor: null,
         }),
       ),
@@ -772,9 +1080,38 @@ describe("goal-scoped workspace API", () => {
 
     const page = await listCycles(lease, goalId);
 
-    expect(page.items[0]).not.toHaveProperty("cancellationReason");
-    expect(page.items[1]?.cancellationReason).toBeNull();
-    expect(page.items[2]?.cancellationReason).toBe("replanned");
+    expect(page.items[0]?.cancellationReason).toBeNull();
+    expect(page.items[1]?.cancellationReason).toBe("replanned");
+  });
+
+  it("rejects a Cycle summary missing its required cancellation reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        authenticatedJSON({
+          items: [
+            {
+              id: cycleId,
+              sequenceNumber: 1,
+              status: "completed",
+              startedAt: "2026-08-19T00:00:00Z",
+              completedAt: "2026-08-20T00:00:00Z",
+              canceledAt: null,
+              goalVersion: {
+                id: "00000000-0000-7000-8000-000000000005",
+                versionNumber: 1,
+                body: "現在の目標",
+                createdAt: "2026-08-19T00:00:00Z",
+              },
+              planPreview: "最初の計画",
+            },
+          ],
+          nextCursor: null,
+        }),
+      ),
+    );
+
+    await expect(listCycles(lease, goalId)).rejects.toBeInstanceOf(ZodError);
   });
 
   it.each(["manual_restart", "goal_deleted"])(
