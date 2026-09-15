@@ -2856,7 +2856,7 @@ Request:
 
 Preconditions / Transactionは18.3に従う。
 
-Response:
+Response `200`:
 
 ```json
 {

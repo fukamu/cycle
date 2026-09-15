@@ -285,17 +285,7 @@ export function createStagingCSRFRolloutBrowserAdapter({
             })
             .click(),
       });
-      if (
-        result.status !== 201 ||
-        result.authenticatedUserID !== session.userID ||
-        result.requestCSRFTokenVerified !== true ||
-        result.requestExpectedUserIDVerified !== true ||
-        !uuidV7Pattern.test(result.goalID) ||
-        !uuidV7Pattern.test(result.cycleID)
-      ) {
-        throw new Error("tab A command failed");
-      }
-      return true;
+      return validateStagingGoalStartResult(result, session.userID);
     },
 
     async runTabBCommand(session) {
@@ -836,6 +826,24 @@ function parsePageDraftSuccess(result, userID, status, revision) {
     throw new Error("tab draft request failed");
   }
   return { id: result.draftID, revision: result.draftRevision };
+}
+
+export function validateStagingGoalStartResult(result, expectedUserID) {
+  if (
+    typeof result !== "object" ||
+    result === null ||
+    Array.isArray(result) ||
+    !uuidV7Pattern.test(expectedUserID) ||
+    result.status !== 200 ||
+    result.authenticatedUserID !== expectedUserID ||
+    result.requestCSRFTokenVerified !== true ||
+    result.requestExpectedUserIDVerified !== true ||
+    !uuidV7Pattern.test(result.goalID) ||
+    !uuidV7Pattern.test(result.cycleID)
+  ) {
+    throw new Error("tab A command failed");
+  }
+  return true;
 }
 
 async function captureAuthenticatedMutation(
