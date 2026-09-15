@@ -6,6 +6,7 @@ import type {
   GoalDraft,
   GoalReview,
   Home,
+  ReviewSchedule,
   SaveFrameResponse,
 } from "../../shared/api/schemas";
 
@@ -58,8 +59,62 @@ export function removeGoalFromCache(
   });
 }
 
+export type GoalSnapshotResolution =
+  | { readonly kind: "accept"; readonly goal: Goal }
+  | { readonly kind: "invariant" };
+
+export function resolvePreferredGoal(
+  current: Goal | undefined,
+  incoming: Goal,
+): GoalSnapshotResolution {
+  if (!current) return { kind: "accept", goal: incoming };
+  const preferred = current.revision >= incoming.revision ? current : incoming;
+  if (current.id !== incoming.id) return { kind: "accept", goal: preferred };
+  const currentWork = current.currentWork;
+  const incomingWork = incoming.currentWork;
+  if (
+    current.status !== "active_cycle" ||
+    incoming.status !== "active_cycle" ||
+    currentWork?.kind !== "active_cycle" ||
+    incomingWork?.kind !== "active_cycle" ||
+    currentWork.cycleId !== incomingWork.cycleId
+  )
+    return { kind: "accept", goal: preferred };
+
+  if (
+    currentWork.reviewSchedule.reviewScheduleRevision ===
+      incomingWork.reviewSchedule.reviewScheduleRevision &&
+    currentWork.reviewSchedule.reviewDate !==
+      incomingWork.reviewSchedule.reviewDate
+  )
+    return { kind: "invariant" };
+
+  const selectedSchedule =
+    incomingWork.reviewSchedule.reviewScheduleRevision >
+    currentWork.reviewSchedule.reviewScheduleRevision
+      ? incomingWork.reviewSchedule
+      : currentWork.reviewSchedule;
+  const preferredWork = preferred.currentWork;
+  if (
+    preferredWork?.kind !== "active_cycle" ||
+    schedulesEqual(preferredWork.reviewSchedule, selectedSchedule)
+  )
+    return { kind: "accept", goal: preferred };
+  return {
+    kind: "accept",
+    goal: {
+      ...preferred,
+      currentWork: {
+        ...preferredWork,
+        reviewSchedule: selectedSchedule,
+      },
+    },
+  };
+}
+
 export function preferGoal(current: Goal | undefined, incoming: Goal): Goal {
-  return current && current.revision >= incoming.revision ? current : incoming;
+  const resolution = resolvePreferredGoal(current, incoming);
+  return resolution.kind === "accept" ? resolution.goal : (current ?? incoming);
 }
 
 export type GoalReviewPublicationResolution =
@@ -184,7 +239,12 @@ export function cacheGoal(
 ): Goal {
   const queryKey = userQueryKeys.goal(userId, goal.id);
   const current = cache.getQueryData<{ readonly goal: Goal }>(queryKey);
-  const canonicalGoal = preferGoal(current?.goal, goal);
+  const resolution = resolvePreferredGoal(current?.goal, goal);
+  if (resolution.kind === "invariant") {
+    cache.removeQueries({ queryKey, exact: true });
+    return current?.goal ?? goal;
+  }
+  const canonicalGoal = resolution.goal;
   if (current?.goal === canonicalGoal) return canonicalGoal;
 
   cache.setQueryData(
@@ -201,7 +261,58 @@ export function cacheGoals(
   goals: readonly Goal[],
   updatedAt?: number,
 ): void {
-  for (const goal of goals) cacheGoal(cache, userId, goal, updatedAt);
+  for (const goal of goals) {
+    const currentGoal = cache.getQueryData<{ readonly goal: Goal }>(
+      userQueryKeys.goal(userId, goal.id),
+    )?.goal;
+    const currentWork = currentGoal?.currentWork;
+    const incomingWork = goal.currentWork;
+    const scheduleInvariant =
+      currentGoal?.status === "active_cycle" &&
+      goal.status === "active_cycle" &&
+      currentWork?.kind === "active_cycle" &&
+      incomingWork?.kind === "active_cycle" &&
+      currentWork.cycleId === incomingWork.cycleId &&
+      currentWork.reviewSchedule.reviewScheduleRevision ===
+        incomingWork.reviewSchedule.reviewScheduleRevision &&
+      currentWork.reviewSchedule.reviewDate !==
+        incomingWork.reviewSchedule.reviewDate;
+    cacheGoal(cache, userId, goal, updatedAt);
+    const work = incomingWork;
+    if (goal.status !== "active_cycle" || work?.kind !== "active_cycle")
+      continue;
+    const cycleKey = userQueryKeys.cycle(userId, goal.id, work.cycleId);
+    if (scheduleInvariant) {
+      cache.removeQueries({
+        queryKey: userQueryKeys.goal(userId, goal.id),
+        exact: true,
+      });
+      cache.removeQueries({ queryKey: cycleKey, exact: true });
+      continue;
+    }
+    const currentCycle = cache.getQueryData<{ readonly cycle: Cycle }>(
+      cycleKey,
+    )?.cycle;
+    if (!currentCycle) continue;
+    const resolution = publishReviewSchedule(
+      cache,
+      userId,
+      goal.id,
+      work.cycleId,
+      {
+        ...currentCycle,
+        reviewDate: work.reviewSchedule.reviewDate,
+        reviewScheduleRevision: work.reviewSchedule.reviewScheduleRevision,
+      },
+    );
+    if (resolution.kind === "invariant") {
+      cache.removeQueries({
+        queryKey: userQueryKeys.goal(userId, goal.id),
+        exact: true,
+      });
+      cache.removeQueries({ queryKey: cycleKey, exact: true });
+    }
+  }
 }
 
 export function cacheCycle(
@@ -247,6 +358,158 @@ export function cacheCycleFrame(
       };
     },
   );
+}
+
+export type ReviewSchedulePublicationResolution =
+  | {
+      readonly kind: "accept" | "preserve-current";
+      readonly schedule: ReviewSchedule;
+    }
+  | { readonly kind: "workspace-moved" }
+  | { readonly kind: "invariant" };
+
+function scheduleFromCycle(cycle: Cycle): ReviewSchedule {
+  return {
+    reviewDate: cycle.reviewDate,
+    reviewScheduleRevision: cycle.reviewScheduleRevision,
+  };
+}
+
+function schedulesEqual(left: ReviewSchedule, right: ReviewSchedule): boolean {
+  return (
+    left.reviewScheduleRevision === right.reviewScheduleRevision &&
+    left.reviewDate === right.reviewDate
+  );
+}
+
+export function publishReviewSchedule(
+  cache: QueryClient,
+  userId: string,
+  goalId: string,
+  cycleId: string,
+  incomingCycle: Cycle,
+): ReviewSchedulePublicationResolution {
+  if (
+    incomingCycle.id !== cycleId ||
+    (incomingCycle.goalId !== undefined && incomingCycle.goalId !== goalId)
+  )
+    return { kind: "invariant" };
+  if (incomingCycle.status !== "active") return { kind: "workspace-moved" };
+
+  const cycleKey = userQueryKeys.cycle(userId, goalId, cycleId);
+  const goalKey = userQueryKeys.goal(userId, goalId);
+  const homeKey = userQueryKeys.home(userId);
+  const currentCycle = cache.getQueryData<{ readonly cycle: Cycle }>(cycleKey);
+  const currentGoal = cache.getQueryData<{ readonly goal: Goal }>(goalKey);
+  const currentHome = cache.getQueryData<Home>(homeKey);
+  const homeGoals = currentHome?.progressingGoals.filter(
+    (candidate) => candidate.id === goalId,
+  );
+  if ((homeGoals?.length ?? 0) > 1) return { kind: "invariant" };
+  const homeGoal = homeGoals?.[0];
+
+  if (
+    currentCycle &&
+    (currentCycle.cycle.id !== cycleId ||
+      (currentCycle.cycle.goalId !== undefined &&
+        currentCycle.cycle.goalId !== goalId))
+  )
+    return { kind: "invariant" };
+  if (currentCycle && currentCycle.cycle.status !== "active")
+    return { kind: "workspace-moved" };
+  if (currentGoal && currentGoal.goal.id !== goalId)
+    return { kind: "invariant" };
+
+  const matchingActiveWork = (goal: Goal | undefined) => {
+    if (!goal) return undefined;
+    if (
+      goal.status !== "active_cycle" ||
+      goal.currentWork?.kind !== "active_cycle" ||
+      goal.currentWork.cycleId !== cycleId
+    )
+      return null;
+    return goal.currentWork;
+  };
+  const goalWork = matchingActiveWork(currentGoal?.goal);
+  const homeWork = matchingActiveWork(homeGoal);
+  if (goalWork === null || homeWork === null)
+    return { kind: "workspace-moved" };
+
+  const incomingSchedule = scheduleFromCycle(incomingCycle);
+  const candidates = [
+    incomingSchedule,
+    ...(currentCycle ? [scheduleFromCycle(currentCycle.cycle)] : []),
+    ...(goalWork ? [goalWork.reviewSchedule] : []),
+    ...(homeWork ? [homeWork.reviewSchedule] : []),
+  ];
+  let selected = incomingSchedule;
+  for (const candidate of candidates) {
+    if (candidate.reviewScheduleRevision > selected.reviewScheduleRevision) {
+      selected = candidate;
+      continue;
+    }
+    if (
+      candidate.reviewScheduleRevision === selected.reviewScheduleRevision &&
+      candidate.reviewDate !== selected.reviewDate
+    )
+      return { kind: "invariant" };
+  }
+
+  if (
+    !currentCycle ||
+    !schedulesEqual(scheduleFromCycle(currentCycle.cycle), selected)
+  )
+    cache.setQueryData<{ readonly cycle: Cycle }>(cycleKey, (current) => ({
+      cycle: {
+        ...(current?.cycle ?? incomingCycle),
+        reviewDate: selected.reviewDate,
+        reviewScheduleRevision: selected.reviewScheduleRevision,
+      },
+    }));
+  if (goalWork && !schedulesEqual(goalWork.reviewSchedule, selected))
+    cache.setQueryData<{ readonly goal: Goal }>(goalKey, (current) =>
+      current?.goal.currentWork?.kind === "active_cycle" &&
+      current.goal.currentWork.cycleId === cycleId
+        ? {
+            goal: {
+              ...current.goal,
+              currentWork: {
+                ...current.goal.currentWork,
+                reviewSchedule: selected,
+              },
+            },
+          }
+        : current,
+    );
+  if (homeWork && !schedulesEqual(homeWork.reviewSchedule, selected))
+    cache.setQueryData<Home>(homeKey, (current) =>
+      current
+        ? {
+            ...current,
+            progressingGoals: current.progressingGoals.map((goal) =>
+              goal.id === goalId &&
+              goal.status === "active_cycle" &&
+              goal.currentWork?.kind === "active_cycle" &&
+              goal.currentWork.cycleId === cycleId
+                ? {
+                    ...goal,
+                    currentWork: {
+                      ...goal.currentWork,
+                      reviewSchedule: selected,
+                    },
+                  }
+                : goal,
+            ),
+          }
+        : current,
+    );
+
+  return {
+    kind: schedulesEqual(selected, incomingSchedule)
+      ? "accept"
+      : "preserve-current",
+    schedule: selected,
+  };
 }
 
 export function cacheReview(

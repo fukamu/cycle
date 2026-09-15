@@ -17,6 +17,7 @@ import {
   reviewSchema,
   saveFrameSchema,
   type Frame,
+  type ReviewDate,
 } from "./schemas";
 
 const draftEnvelope = z.object({ draft: draftSchema });
@@ -29,6 +30,21 @@ const adoptedReviewDraftEnvelope = reviewDraftEnvelope.extend({
 });
 const goalEnvelope = z.object({ goal: goalSchema });
 const cycleEnvelope = z.object({ cycle: cycleSchema });
+const goalEnvelopeFor = (goalId: string) =>
+  goalEnvelope.refine(({ goal }) => goal.id === goalId, {
+    message: "Goal response does not match the requested Goal",
+    path: ["goal", "id"],
+  });
+const cycleEnvelopeFor = (goalId: string, cycleId: string) =>
+  cycleEnvelope.refine(
+    ({ cycle }) =>
+      cycle.id === cycleId &&
+      (cycle.goalId === undefined || cycle.goalId === goalId),
+    {
+      message: "Cycle response does not match the requested Cycle",
+      path: ["cycle", "id"],
+    },
+  );
 const startEnvelope = z.object({
   goal: goalSchema,
   cycle: cycleSchema,
@@ -76,6 +92,17 @@ type CommandRequestOptions = {
   readonly operationId: string;
   readonly csrfToken: string;
 };
+
+export type ReviewScheduleChange =
+  | {
+      readonly action: "set";
+      readonly reviewDate: ReviewDate;
+      readonly expectedReviewScheduleRevision: number;
+    }
+  | {
+      readonly action: "clear";
+      readonly expectedReviewScheduleRevision: number;
+    };
 
 export const getHome = (
   lease: AuthenticatedRequestLease,
@@ -206,9 +233,12 @@ export const getGoal = (
   goalId: string,
   signal?: AbortSignal,
 ) =>
-  requestAuthenticatedJSON(lease, `/api/v1/goals/${goalId}`, goalEnvelope, {
-    signal,
-  });
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goals/${goalId}`,
+    goalEnvelopeFor(goalId),
+    { signal },
+  );
 export const getReview = (
   lease: AuthenticatedRequestLease,
   goalId: string,
@@ -370,9 +400,28 @@ export const getCycle = (
   requestAuthenticatedJSON(
     lease,
     `/api/v1/goals/${goalId}/cycles/${cycleId}`,
-    cycleEnvelope,
+    cycleEnvelopeFor(goalId, cycleId),
     {
       signal,
+    },
+  );
+export const changeReviewSchedule = (
+  lease: AuthenticatedRequestLease,
+  goalId: string,
+  cycleId: string,
+  change: ReviewScheduleChange,
+  csrfToken: string,
+  signal?: AbortSignal,
+) =>
+  requestAuthenticatedJSON(
+    lease,
+    `/api/v1/goals/${goalId}/cycles/${cycleId}/review-schedule`,
+    cycleEnvelopeFor(goalId, cycleId),
+    {
+      method: "PATCH",
+      csrfToken,
+      signal,
+      body: change,
     },
   );
 export const saveCycleFrame = (

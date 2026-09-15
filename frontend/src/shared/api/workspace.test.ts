@@ -17,6 +17,7 @@ import {
   refineAction,
   refineGoalDraft,
   refineReview,
+  changeReviewSchedule,
   saveGoalDraft,
   saveReview,
   saveCycleFrame,
@@ -93,6 +94,8 @@ const reviewResponse = (responseGoalId = goalId) => {
       status: "completed",
       goalVersion: { ...goalVersion },
       previousCompletedCycleAction: null,
+      reviewDate: null,
+      reviewScheduleRevision: 0,
       startedAt: "2026-08-19T00:00:00Z",
       completedAt: "2026-08-20T00:00:00Z",
       canceledAt: null,
@@ -106,6 +109,35 @@ const reviewResponse = (responseGoalId = goalId) => {
     },
   };
 };
+
+const reviewScheduleCycleResponse = (
+  overrides: Readonly<Record<string, unknown>> = {},
+) => ({
+  id: cycleId,
+  goalId,
+  sequenceNumber: 1,
+  status: "active",
+  goalVersion: {
+    id: "00000000-0000-7000-8000-000000000005",
+    versionNumber: 1,
+    body: "現在の目標",
+    createdAt: "2026-08-19T00:00:00Z",
+  },
+  previousCompletedCycleAction: null,
+  reviewDate: "2026-09-25",
+  reviewScheduleRevision: 1,
+  startedAt: "2026-08-20T00:00:00Z",
+  completedAt: null,
+  canceledAt: null,
+  cancellationReason: null,
+  plan: "計画",
+  do: "実行",
+  check: "評価",
+  action: "改善",
+  contentRevision: 4,
+  frameRevisions: { plan: 1, do: 1, check: 1, action: 1 },
+  ...overrides,
+});
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -157,6 +189,49 @@ describe("goal-scoped workspace API", () => {
     });
   });
 
+  it("rejects a Goal detail response for a different path Goal", async () => {
+    const otherGoalId = "10000000-0000-7000-8000-000000000001";
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          authenticatedJSON({ goal: reviewResponse(otherGoalId).goal }),
+        ),
+    );
+
+    await expect(getGoal(lease, goalId)).rejects.toMatchObject({
+      name: "ZodError",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: ["goal", "id"] }),
+      ]),
+    });
+  });
+
+  it.each([
+    ["Cycle", { id: "00000000-0000-7000-8000-000000000099" }],
+    ["Goal", { goalId: "00000000-0000-7000-8000-000000000099" }],
+  ] as const)(
+    "rejects a Cycle detail response for a different path %s",
+    async (_label, overrides) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          authenticatedJSON({
+            cycle: reviewScheduleCycleResponse(overrides),
+          }),
+        ),
+      );
+
+      await expect(getCycle(lease, goalId, cycleId)).rejects.toMatchObject({
+        name: "ZodError",
+        issues: expect.arrayContaining([
+          expect.objectContaining({ path: ["cycle", "id"] }),
+        ]),
+      });
+    },
+  );
+
   it.each([
     {
       label: "object",
@@ -195,6 +270,8 @@ describe("goal-scoped workspace API", () => {
             createdAt: "2026-08-19T00:00:00Z",
           },
           previousCompletedCycleAction,
+          reviewDate: null,
+          reviewScheduleRevision: 0,
           startedAt: "2026-08-20T00:00:00Z",
           completedAt: null,
           canceledAt: null,
@@ -539,6 +616,103 @@ describe("goal-scoped workspace API", () => {
     );
   });
 
+  it("sets and clears a review date through the nested Cycle route with exact bodies", async () => {
+    const cycle = reviewScheduleCycleResponse();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(authenticatedJSON({ cycle }))
+      .mockResolvedValueOnce(
+        authenticatedJSON({
+          cycle: {
+            ...cycle,
+            reviewDate: null,
+            reviewScheduleRevision: 2,
+          },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await changeReviewSchedule(
+      lease,
+      goalId,
+      cycleId,
+      {
+        action: "set",
+        reviewDate: "2026-09-25",
+        expectedReviewScheduleRevision: 0,
+      },
+      "csrf",
+    );
+    await changeReviewSchedule(
+      lease,
+      goalId,
+      cycleId,
+      { action: "clear", expectedReviewScheduleRevision: 1 },
+      "csrf",
+    );
+
+    for (const call of fetchMock.mock.calls) {
+      expect(call[0]).toBe(
+        `/api/v1/goals/${goalId}/cycles/${cycleId}/review-schedule`,
+      );
+      expect(call[1]?.method).toBe("PATCH");
+      expect(new Headers(call[1]?.headers).get("X-CSRF-Token")).toBe("csrf");
+    }
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        action: "set",
+        reviewDate: "2026-09-25",
+        expectedReviewScheduleRevision: 0,
+      }),
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(
+      JSON.stringify({
+        action: "clear",
+        expectedReviewScheduleRevision: 1,
+      }),
+    );
+  });
+
+  it.each([
+    ["Cycle", { id: "00000000-0000-7000-8000-000000000099" }, ["cycle", "id"]],
+    [
+      "Goal",
+      { goalId: "00000000-0000-7000-8000-000000000099" },
+      ["cycle", "id"],
+    ],
+  ] as const)(
+    "rejects a review schedule response for a different %s identity",
+    async (_label, overrides, expectedPath) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          authenticatedJSON({
+            cycle: reviewScheduleCycleResponse(overrides),
+          }),
+        ),
+      );
+
+      await expect(
+        changeReviewSchedule(
+          lease,
+          goalId,
+          cycleId,
+          {
+            action: "set",
+            reviewDate: "2026-09-25",
+            expectedReviewScheduleRevision: 0,
+          },
+          "csrf",
+        ),
+      ).rejects.toMatchObject({
+        name: "ZodError",
+        issues: expect.arrayContaining([
+          expect.objectContaining({ path: [...expectedPath] }),
+        ]),
+      });
+    },
+  );
+
   it("uses a signed cursor opaquely when listing a goal timeline", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -610,6 +784,10 @@ describe("goal-scoped workspace API", () => {
           kind: "active_cycle",
           cycleId: nextCycleId,
           cycleSequenceNumber: 2,
+          reviewSchedule: {
+            reviewDate: null,
+            reviewScheduleRevision: 0,
+          },
         },
       }),
     );

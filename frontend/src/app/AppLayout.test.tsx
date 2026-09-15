@@ -561,6 +561,14 @@ describe("AppLayout", () => {
     expect(
       await screen.findByRole("heading", { name: "はじめてガイド" }),
     ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    await user.click(screen.getByRole("button", { name: "メニューを開く" }));
+    expect(document.getElementById("main-content")).toHaveAttribute("inert");
+    expect(
+      screen.queryByText(
+        "目標作成、サイクル、目標の見直し画面を開くと、その場に合うガイドを表示します。",
+      ),
+    ).not.toBeInTheDocument();
     expect(window.localStorage).toHaveLength(0);
   });
 

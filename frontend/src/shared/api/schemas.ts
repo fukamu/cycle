@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { UUID_V7_PATTERN } from "../id/uuid";
+import { isValidLocalDate } from "../date/localDate";
 import { isValidCSRFToken } from "./csrfToken";
 import { stableAPIErrorCodeSchema } from "./errorCodes";
 import {
@@ -70,6 +71,24 @@ const frameRevisionsSchema = z.object({
   action: z.number().int().nonnegative(),
 });
 
+export const reviewDateSchema = z.string().refine(isValidLocalDate);
+export type ReviewDate = z.infer<typeof reviewDateSchema>;
+
+export const reviewScheduleSchema = z
+  .object({
+    reviewDate: reviewDateSchema.nullable(),
+    reviewScheduleRevision: z.number().int().nonnegative(),
+  })
+  .superRefine((schedule, context) => {
+    if (schedule.reviewDate !== null && schedule.reviewScheduleRevision === 0)
+      context.addIssue({
+        code: "custom",
+        message: "A configured review date requires a positive revision",
+        path: ["reviewScheduleRevision"],
+      });
+  });
+export type ReviewSchedule = z.infer<typeof reviewScheduleSchema>;
+
 const previousCompletedCycleActionSchema = z.object({
   cycleId: uuid,
   cycleSequenceNumber: z.number().int().positive(),
@@ -85,6 +104,8 @@ export const cycleSchema = z
     status: z.enum(["active", "completed", "canceled"]),
     goalVersion: goalVersionSchema,
     previousCompletedCycleAction: previousCompletedCycleActionSchema.nullable(),
+    reviewDate: reviewDateSchema.nullable(),
+    reviewScheduleRevision: z.number().int().nonnegative(),
     startedAt: instant,
     completedAt: instant.nullable(),
     canceledAt: instant.nullable(),
@@ -97,6 +118,14 @@ export const cycleSchema = z
     action: frameTextSchema,
     contentRevision: z.number().int().nonnegative(),
     frameRevisions: frameRevisionsSchema,
+  })
+  .superRefine((cycle, context) => {
+    if (cycle.reviewDate !== null && cycle.reviewScheduleRevision === 0)
+      context.addIssue({
+        code: "custom",
+        message: "A configured review date requires a positive revision",
+        path: ["reviewScheduleRevision"],
+      });
   })
   .superRefine((cycle, context) => {
     const previous = cycle.previousCompletedCycleAction;
@@ -136,12 +165,14 @@ export const currentWorkSchema = z.discriminatedUnion("kind", [
     kind: z.literal("active_cycle"),
     cycleId: uuid,
     cycleSequenceNumber: z.number().int().positive(),
+    reviewSchedule: reviewScheduleSchema,
   }),
   z.object({
     kind: z.literal("goal_review"),
     reviewDraftId: uuid,
     triggerCycleId: uuid,
     triggerCycleSequenceNumber: z.number().int().positive(),
+    reviewSchedule: z.never().optional(),
   }),
 ]);
 export type CurrentWork = z.infer<typeof currentWorkSchema>;

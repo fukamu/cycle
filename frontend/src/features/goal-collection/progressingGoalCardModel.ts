@@ -1,4 +1,9 @@
 import type { Goal } from "../../shared/api/schemas";
+import {
+  browserLocalDate,
+  classifyReviewDate,
+  type ReviewDateState,
+} from "../../shared/date/localDate";
 
 export type ProgressingGoalCardViewModel = {
   readonly goalId: string;
@@ -7,10 +12,15 @@ export type ProgressingGoalCardViewModel = {
   readonly helper: string;
   readonly target: string;
   readonly cta: string;
+  readonly reviewSchedule?: {
+    readonly reviewDate: string;
+    readonly state: ReviewDateState;
+  };
 };
 
 export function getProgressingGoalCardViewModel(
   goal: Goal,
+  today = browserLocalDate(new Date()),
 ): ProgressingGoalCardViewModel | null {
   const work = goal.currentWork;
   if (goal.status === "active_cycle" && work?.kind === "active_cycle")
@@ -21,6 +31,14 @@ export function getProgressingGoalCardViewModel(
       helper: "P/D/C/Aの記録を続けましょう。",
       target: `/goals/${goal.id}/cycles/${work.cycleId}`,
       cta: `Cycle ${work.cycleSequenceNumber}を続ける`,
+      ...(work.reviewSchedule.reviewDate
+        ? {
+            reviewSchedule: {
+              reviewDate: work.reviewSchedule.reviewDate,
+              state: classifyReviewDate(work.reviewSchedule.reviewDate, today),
+            },
+          }
+        : {}),
     };
   if (goal.status === "goal_review" && work?.kind === "goal_review")
     return {

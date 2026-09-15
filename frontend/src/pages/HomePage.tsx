@@ -17,6 +17,7 @@ import {
 import { getHome } from "../shared/api/workspace";
 import { PageError, PageLoading } from "../shared/components/AsyncState";
 import { homeCopy } from "../shared/copy/ja";
+import { useBrowserLocalDate } from "../shared/date/useBrowserLocalDate";
 import { reconcileSelectedCycleFrames } from "../shared/preferences/selectedFramePreference";
 import { hasNonWhitespace } from "../shared/text/semantics";
 
@@ -26,12 +27,15 @@ export function HomePage() {
   const userId = session.user.id;
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const today = useBrowserLocalDate();
   const query = useQuery({
     queryKey: userQueryKeys.home(userId),
     queryFn: ({ signal }) => getHome(sessionLease, signal),
   });
   const progressingGoalCards =
-    query.data?.progressingGoals.map(getProgressingGoalCardViewModel) ?? [];
+    query.data?.progressingGoals.map((goal) =>
+      getProgressingGoalCardViewModel(goal, today),
+    ) ?? [];
   const validProgressingGoalCards = progressingGoalCards.filter(
     (card): card is NonNullable<typeof card> => card !== null,
   );

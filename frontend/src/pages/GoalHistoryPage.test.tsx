@@ -239,6 +239,7 @@ function makeGoal(body: string, sequence: number): Goal {
       kind: "active_cycle",
       cycleId: `30000000-0000-7000-8000-${suffix}`,
       cycleSequenceNumber: 1,
+      reviewSchedule: { reviewDate: null, reviewScheduleRevision: 0 },
     },
     nextCycleSequenceNumber: 2,
     cycleCount: 1,
