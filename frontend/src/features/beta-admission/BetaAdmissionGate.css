@@ -48,7 +48,7 @@
   padding: 10px 12px;
   color: var(--ink);
   background: white;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--brand);
   border-radius: 10px;
 }
 
