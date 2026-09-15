@@ -490,7 +490,7 @@ summary:focus-visible {
 .secondary-button {
   color: var(--brand-dark);
   background: white;
-  border-color: var(--line-strong);
+  border-color: var(--brand);
 }
 
 .button--secondary:hover,
@@ -893,7 +893,7 @@ textarea {
   padding: 17px;
   color: var(--ink);
   background: #fff;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--brand);
   border-radius: 12px;
   font-family: var(--font-family-editor);
   font-size: var(--font-size-editor);
