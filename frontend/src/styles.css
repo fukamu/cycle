@@ -213,7 +213,10 @@ summary:focus-visible {
   right: max(0px, calc((100vw - 1080px) / 2));
   z-index: 30;
   width: min(336px, 90vw);
+  max-height: calc(100% - 72px);
+  overflow-y: auto;
   padding: 24px;
+  padding-block-end: max(24px, env(safe-area-inset-bottom));
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 0 0 0 12px;
@@ -1994,6 +1997,7 @@ textarea[readonly] {
 
   .drawer {
     top: 64px;
+    max-height: calc(100% - 64px);
   }
 
   .page {
@@ -2040,6 +2044,10 @@ textarea[readonly] {
 
   .editor-page {
     padding-bottom: 164px;
+  }
+
+  .editor-page :is(button, a, input, textarea, select, summary):focus-visible {
+    scroll-margin-bottom: calc(72px + max(9px, env(safe-area-inset-bottom)));
   }
 
   .cycle-check-comparison__grid {
