@@ -20,6 +20,11 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	replanCancellationDown, err := os.ReadFile(filepath.Join(directory, "000008_cycle_replan_cancellation_reason.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, replanCancellationDown)
 	reviewScheduleDown, err := os.ReadFile(filepath.Join(directory, "000007_cycle_review_schedule.down.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -61,18 +66,20 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 7 {
-		t.Fatalf("applied migrations = %v, want 7", result.Applied)
+	if len(result.Applied) != 8 {
+		t.Fatalf("applied migrations = %v, want 8", result.Applied)
 	}
 	baseline, retention, exposure := result.Applied[0], result.Applied[1], result.Applied[2]
 	hashSplit, cleanupIndex, guard, reviewSchedule := result.Applied[3], result.Applied[4], result.Applied[5], result.Applied[6]
+	replanCancellation := result.Applied[7]
 	if baseline.Version != 1 || baseline.Direction != "up" || baseline.File != "000001_fukamu_cycle_baseline.up.sql" ||
 		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" ||
 		exposure.Version != 3 || exposure.Direction != "up" || exposure.File != "000003_ai_usage_settlement_exposure.up.sql" ||
 		hashSplit.Version != 4 || hashSplit.Direction != "up" || hashSplit.File != "000004_ai_generation_hash_split.up.sql" ||
 		cleanupIndex.Version != 5 || cleanupIndex.Direction != "up" || cleanupIndex.File != "000005_retention_cleanup_index.up.sql" ||
 		guard.Version != 6 || guard.Direction != "up" || guard.File != "000006_anonymous_rate_limit_guard.up.sql" ||
-		reviewSchedule.Version != 7 || reviewSchedule.Direction != "up" || reviewSchedule.File != "000007_cycle_review_schedule.up.sql" {
+		reviewSchedule.Version != 7 || reviewSchedule.Direction != "up" || reviewSchedule.File != "000007_cycle_review_schedule.up.sql" ||
+		replanCancellation.Version != 8 || replanCancellation.Direction != "up" || replanCancellation.File != "000008_cycle_replan_cancellation_reason.up.sql" {
 		t.Fatalf("applied migrations = %+v", result.Applied)
 	}
 	result, err = Migrate(databaseURL, directory)
@@ -85,7 +92,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 7 || users != 0 {
+	if version != 8 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
@@ -101,6 +108,77 @@ VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000
 	if err == nil {
 		t.Fatal("oversize goal draft unexpectedly succeeded")
 	}
+}
+
+func TestCycleReplanCancellationReasonMigrationRefusesUnsafeDownAndSupportsReUp(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	directory := filepath.Join("..", "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(directory, "000008_cycle_replan_cancellation_reason.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile(filepath.Join(directory, "000008_cycle_replan_cancellation_reason.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := true
+	t.Cleanup(func() {
+		if !installed {
+			executeMigrationScript(t, pool, up)
+		}
+	})
+
+	now := integrationNow()
+	const userID = "10000000-0000-7000-8000-000000000001"
+	insertAIConcurrencyUser(t, pool, userID, now)
+	fixtures := progressingGoalFixtures()
+	first := fixtures[0]
+	startProgressingGoal(t, NewWorkspaceStore(pool), userID, first, 2, now)
+	_, unknownReasonErr := pool.Exec(t.Context(), `UPDATE public.pdca_cycles
+SET status='canceled', canceled_at=$2, cancellation_reason='manual_restart', updated_at=$2
+WHERE id=$1`, first.cycleID, now.Add(time.Minute))
+	assertPostgresSQLState(t, unknownReasonErr, "23514")
+	if _, err = pool.Exec(t.Context(), `UPDATE public.pdca_cycles
+SET status='canceled', canceled_at=$2, cancellation_reason='replanned', updated_at=$2
+WHERE id=$1`, first.cycleID, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	executeMigrationScriptExpectSQLState(t, pool, down, "23514")
+	var constraintDefinition, persistedReason string
+	if err = pool.QueryRow(t.Context(), `SELECT pg_get_constraintdef(c.oid)
+FROM pg_constraint AS c
+JOIN pg_class AS r ON r.oid=c.conrelid
+JOIN pg_namespace AS n ON n.oid=r.relnamespace
+WHERE n.nspname='public' AND r.relname='pdca_cycles'
+  AND c.conname='pdca_cycles_cancellation_reason_check'`).Scan(&constraintDefinition); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(t.Context(), `SELECT cancellation_reason
+FROM public.pdca_cycles WHERE id=$1`, first.cycleID).Scan(&persistedReason); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(constraintDefinition, "replanned") || persistedReason != "replanned" {
+		t.Fatalf("failed down constraint/reason = %q/%q, want expanded constraint and preserved replanned row",
+			constraintDefinition, persistedReason)
+	}
+
+	if _, err = pool.Exec(t.Context(), `DELETE FROM public.goals WHERE id=$1`, first.goalID); err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, down)
+	installed = false
+
+	second := fixtures[1]
+	startProgressingGoal(t, NewWorkspaceStore(pool), userID, second, 2, now.Add(2*time.Minute))
+	_, oldConstraintErr := pool.Exec(t.Context(), `UPDATE public.pdca_cycles
+SET status='canceled', canceled_at=$2, cancellation_reason='replanned', updated_at=$2
+WHERE id=$1`, second.cycleID, now.Add(3*time.Minute))
+	assertPostgresSQLState(t, oldConstraintErr, "23514")
+
+	executeMigrationScript(t, pool, up)
+	installed = true
 }
 
 func TestAnonymousRateLimitGuardMigrationSupportsDownAndReUp(t *testing.T) {
@@ -252,7 +330,7 @@ INSERT INTO migration_runner_shadow.schema_migrations(version, dirty) VALUES(999
 	); err != nil {
 		t.Fatal(err)
 	}
-	if publicVersion != 7 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
+	if publicVersion != 8 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
 		t.Fatalf("migration schemas = public:%d/%t shadow:%d/%t tables:%d",
 			publicVersion, publicDirty, shadowVersion, shadowDirty, shadowTables)
 	}

@@ -23,10 +23,14 @@ func TestCycleStableSQLMethodsUseGeneratedQueries(t *testing.T) {
 		},
 		"workspace_cycle_uow.go": {
 			"FindCompleteCycleReceipt":  {"FindCompleteCycleReceipt"},
+			"FindReplanCycleReceipt":    {"FindReplanCycleReceipt"},
 			"LockCycle":                 {"LockCycleForTransition"},
 			"HasRunningCycleGeneration": {"HasRunningCycleGenerationForTransition"},
 			"SaveCycleFrameCAS":         {"SaveCyclePlanCAS", "SaveCycleDoCAS", "SaveCycleCheckCAS", "SaveCycleActionCAS"},
 			"CompleteCycleCAS":          {"CompleteCycleCAS"},
+			"CancelCycleCAS":            {"CancelCycleCAS"},
+			"TryInsertCycleClaim":       {"TryInsertCycleClaim"},
+			"ReplanGoalCAS":             {"ReplanGoalCAS"},
 			"LoadCycleView":             {},
 		},
 		"workspace_action_ai_uow.go": {
@@ -166,7 +170,7 @@ func TestCycleSQLPreservesOwnerLockOrderingAndCASContracts(t *testing.T) {
 			"from goals", "id = sqlc.arg(goal_id)::uuid", "user_id = sqlc.arg(user_id)::uuid",
 		}},
 		"ListCycleSummaries": {string(readContents), []string{
-			"left join goal_versions", "(c.sequence_number, c.id) <", "order by c.sequence_number desc, c.id desc",
+			"c.cancellation_reason", "left join goal_versions", "(c.sequence_number, c.id) <", "order by c.sequence_number desc, c.id desc",
 			"limit sqlc.arg(fetch_limit)::integer",
 		}},
 		"GetCycleView": {string(readContents), []string{
@@ -174,11 +178,19 @@ func TestCycleSQLPreservesOwnerLockOrderingAndCASContracts(t *testing.T) {
 			"c.goal_id = sqlc.arg(goal_id)::uuid", "c.user_id = sqlc.arg(user_id)::uuid",
 			"left join pdca_cycles as previous_cycle", "previous_cycle.user_id = c.user_id",
 			"previous_cycle.goal_id = c.goal_id", "previous_cycle.sequence_number = c.sequence_number - 1",
+			"previous_cycle.cancellation_reason as previous_cycle_cancellation_reason",
 			"previous_goal_version.user_id = previous_cycle.user_id",
 			"previous_goal_version.goal_id = previous_cycle.goal_id",
 		}},
 		"FindCompleteCycleReceipt": {string(transitionContents), []string{
 			"completion_operation_id = sqlc.arg(operation_id)::uuid", "user_id = sqlc.arg(user_id)::uuid",
+		}},
+		"FindReplanCycleReceipt": {string(transitionContents), []string{
+			"current_cycle.user_id = sqlc.arg(user_id)::uuid",
+			"current_cycle.start_operation_id = sqlc.arg(operation_id)::uuid",
+			"previous_cycle.user_id = current_cycle.user_id", "previous_cycle.goal_id = current_cycle.goal_id",
+			"previous_cycle.sequence_number = current_cycle.sequence_number - 1",
+			"previous_cycle.cancellation_reason as replanned_cancellation_reason",
 		}},
 		"FindContinueReviewReceipt": {string(transitionContents), []string{
 			"gv.user_id = c.user_id", "gv.goal_id = c.goal_id", "gv.created_by_operation_id = c.start_operation_id",
@@ -209,6 +221,11 @@ func TestCycleSQLPreservesOwnerLockOrderingAndCASContracts(t *testing.T) {
 		}},
 		"CancelCycleCAS": {string(transitionContents), []string{
 			"status = 'active'", "content_revision = sqlc.arg(expected_content_revision)::bigint",
+		}},
+		"ReplanGoalCAS": {string(transitionContents), []string{
+			"status = 'active_cycle'", "current_version_number = sqlc.arg(current_version_number)::integer",
+			"next_cycle_sequence_number = sqlc.arg(expected_next_cycle_sequence_number)::integer",
+			"revision = sqlc.arg(expected_revision)::bigint",
 		}},
 		"ListAIContextCycles": {string(transitionContents), []string{
 			"c.user_id = sqlc.arg(user_id)::uuid", "c.goal_id = sqlc.arg(goal_id)::uuid",

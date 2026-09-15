@@ -86,6 +86,12 @@ type ContinueResult struct {
 	Cycle          cycle.PDCACycle
 }
 
+type ReplanResult struct {
+	Goal          Goal
+	CanceledCycle cycle.PDCACycle
+	Cycle         cycle.PDCACycle
+}
+
 func NormalizeText(value string, allowEmpty bool) (string, error) {
 	value = strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n")
 	for _, codePoint := range value {
@@ -198,6 +204,43 @@ func ContinueReview(current Goal, version Version, draft Draft, versionID, cycle
 		Goal: current, Version: selected, VersionCreated: changed,
 		Cycle: cycle.New(cycleID, current.UserID, current.ID, selected.ID, sequence, operationID, requestHash, now),
 	}, nil
+}
+
+func Replan(
+	current Goal,
+	currentVersion Version,
+	activeCycle cycle.PDCACycle,
+	newCycleID, operationID, requestHash string,
+	now time.Time,
+) (ReplanResult, error) {
+	if current.Status != StatusActiveCycle || current.UserID != currentVersion.UserID ||
+		current.ID != currentVersion.GoalID || current.CurrentVersionNumber != currentVersion.VersionNumber ||
+		activeCycle.Status != cycle.StatusActive || activeCycle.UserID != current.UserID ||
+		activeCycle.GoalID != current.ID || activeCycle.GoalVersionID != currentVersion.ID ||
+		activeCycle.SequenceNumber != current.NextCycleSequenceNumber-1 {
+		return ReplanResult{}, ErrStateConflict
+	}
+
+	now = now.UTC()
+	canceled, err := cycle.Cancel(activeCycle, cycle.CancellationReplanned, now)
+	if err != nil {
+		return ReplanResult{}, err
+	}
+	next := cycle.New(
+		newCycleID,
+		current.UserID,
+		current.ID,
+		currentVersion.ID,
+		current.NextCycleSequenceNumber,
+		operationID,
+		requestHash,
+		now,
+	)
+	current.NextCycleSequenceNumber++
+	current.Revision++
+	current.UpdatedAt = now
+
+	return ReplanResult{Goal: current, CanceledCycle: canceled, Cycle: next}, nil
 }
 
 // ReviewBodyChanged validates the Review aggregate references and returns the

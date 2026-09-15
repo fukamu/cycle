@@ -9,7 +9,11 @@
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
 - Baseline schema: `000001_fukamu_cycle_baseline.up.sql`。未リリース・空DB・既存環境互換不要という明示承認に基づき、初期Schemaの80/200文字制約とUUID v7制約を直接含む1 migrationへrebaseline済みであり、今後編集しません。
-- 現在のschema head: `000007_cycle_review_schedule.up.sql`。Cycleの任意の見直す日と独立revisionを1:0..1の`pdca_cycle_review_schedules`へ追加します。`000006_anonymous_rate_limit_guard.up.sql`はAnonymous createをIP-HMACごとに直列化する`anonymous_rate_limit_guards`と、期限cleanup用の`(expires_at, scope, key_hash)` indexを追加します。`000005_retention_cleanup_index.up.sql`は確定・content削除済みAI Usageとabuse rate bucketの順序付きbatch scan indexを所有します。保持条件や期限は変更しません。`000004_ai_generation_hash_split.up.sql`はAI request replay identityとcanonical provider input identityを別columnへ保存し、旧`input_hash`は直前Application rollback専用aliasとして一時保持します。`000003_ai_usage_settlement_exposure.up.sql`の未確定settlement metadataと、`000002_ai_usage_retention_margin.up.sql`の24時間15分物理保持期限・24時間Quota windowは変更しません。
+- 現在のschema head: `000008_cycle_replan_cancellation_reason.up.sql`。`pdca_cycles.cancellation_reason`の既存CHECKを`replanned`までwidenします。`000007_cycle_review_schedule.up.sql`はCycleの任意の見直す日と独立revisionを1:0..1の`pdca_cycle_review_schedules`へ追加します。`000006_anonymous_rate_limit_guard.up.sql`はAnonymous createをIP-HMACごとに直列化する`anonymous_rate_limit_guards`と、期限cleanup用の`(expires_at, scope, key_hash)` indexを追加します。`000005_retention_cleanup_index.up.sql`は確定・content削除済みAI Usageとabuse rate bucketの順序付きbatch scan indexを所有します。保持条件や期限は変更しません。`000004_ai_generation_hash_split.up.sql`はAI request replay identityとcanonical provider input identityを別columnへ保存し、旧`input_hash`は直前Application rollback専用aliasとして一時保持します。`000003_ai_usage_settlement_exposure.up.sql`の未確定settlement metadataと、`000002_ai_usage_retention_margin.up.sql`の24時間15分物理保持期限・24時間Quota windowは変更しません。
+
+`000008`はtable / column / indexを追加せず、`pdca_cycles_cancellation_reason_check`の許容値を`NULL|goal_achieved|goal_ended|replanned`へtransaction内でwidenするadditive migrationです。Backfillと既存rowの更新は行いません。Migration-first期間も旧Application writerが送る`NULL|goal_achieved|goal_ended`は同じ意味で受理され、旧Applicationは新しいReplan endpointを呼ばず、column shapeも変わりません。新ApplicationのReplanだけが`replanned`を書きます。Schema-compatibleなApplication rollbackではwiden済みCHECKを残し、Productionでdownを実行しません。
+
+`000008` downは破棄可能なlocal test DB専用です。`cancellation_reason='replanned'`のrowが1件でもあればSQLSTATE `23514`でMigration全体をfail-closedにし、rowの削除、別reasonへの変換、`NULL`への補正を行いません。該当rowがない場合だけCHECKを旧集合へ戻します。
 
 `000007`は既存`pdca_cycles`の列shapeを変えず、schedule用tableだけを追加するadditive migrationです。Row不在はlogical unset / revision 0、最初のsetでrowを作成し、clear後は`review_date=NULL`と増加済みrevisionを持つrowを維持します。Cycle削除ではFK cascadeします。Migration-first期間も旧Applicationの`LockCycleForTransition SELECT c.*`は従来どおり固定列数でScanでき、旧Applicationは新tableを無視できます。新ApplicationのreadはLEFT JOIN / logical defaultを使います。Schema-compatibleなApplication rollbackではtableを残し、Productionでdownを実行しません。
 
@@ -51,7 +55,7 @@ PostgreSQL 18以降の公式imageは`PGDATA=/var/lib/postgresql/18/docker`を使
 6. 空のtest DBと、可能ならproduction相当データ量のcopyではない匿名化fixtureでupを検証する。downはローカルの破棄可能DBでのみ検証する。
 7. backward incompatibleな変更は一度に行わず、expand → application切替 → contractを複数releaseに分ける。
 
-AI Usage settlement migration testは、exact backfill、復元不能rowの全体rollback、旧writer補完、旧finalizer clear、CHECK/immutability違反、旧Account Delete guard、新Account Delete後のUser削除を検証します。AI Generation hash split migration testは、legacy backfill、復元不能canonical hashの`NULL`維持、旧・新writerのrolling互換、hash不変性、形式不正なlegacy/new hashでのatomic failure、破棄可能DBだけでのdown/re-upを検証します。Retention cleanup migration testは既存2つのscan indexのpredicate・column順、Anonymous rate-limit guard migration testはtable / PK / expiry indexと、いずれも破棄可能DBだけでのdown/re-upを検証します。
+AI Usage settlement migration testは、exact backfill、復元不能rowの全体rollback、旧writer補完、旧finalizer clear、CHECK/immutability違反、旧Account Delete guard、新Account Delete後のUser削除を検証します。AI Generation hash split migration testは、legacy backfill、復元不能canonical hashの`NULL`維持、旧・新writerのrolling互換、hash不変性、形式不正なlegacy/new hashでのatomic failure、破棄可能DBだけでのdown/re-upを検証します。Retention cleanup migration testは既存2つのscan indexのpredicate・column順、Anonymous rate-limit guard migration testはtable / PK / expiry indexを検証します。Cycle Replan cancellation reason migration testは、up後の旧reason / `replanned` writer互換、unknown reason拒否、`replanned` row存在時のatomic down refusal、該当rowがない破棄可能DBだけでのdown / re-upを検証します。
 
 この完了済みrebaselineを再実行・再編集してはいけません。今後はMigration番号の変更、適用済みfileの書き換え、別branchで同じ番号を使うことを禁止し、適用済みmigrationの訂正は新しいmigrationで行います。
 
@@ -186,6 +190,8 @@ seed scriptと固定seedデータはありません。Migration後、匿名sessi
 4. `/healthz` と `/readyz` を確認
 
 Application runtimeはNeon pooled URL、migrationはdirect URLを使います。Migration URLはCloudflare Worker/Containerへ渡さず、runtime URLはmigrationへ流用しません。双方をGitHub `staging` Environment secretに置き、workflowは値を出力しません。
+
+Cycle Replanでは、`000008`適用後にBackend expandを先行deployし、旧writerが従来reasonを書けることと新Backendのread / write contractを確認します。Authoritativeなold Backend image drain証跡を得るまでFrontendのReplan actionを有効化しません。Drain後に別candidateでFrontendを有効化し、Application rollback時もwiden済みCHECKは残します。`replanned` rowの有無にかかわらずStaging / Productionでdownをrelease rollbackとして使いません。詳細なProduct / API contractとactivation checkpointは[`design.md`](design.md) §§14.9、18.10、24.8、44.4を参照してください。
 
 手動再実行が必要なincidentでは通常deployを止め、対象Neon project/branch、head SHA、現在のschema version、失敗原因を確認した個別runbookを作ります。URLをlocalへ取り出したり、確認なしにworkflowを繰り返したりしません。Production pipelineは確定済みの`cycle.fukamu.com`向けに、Production専用resourceと運用値が確定した後で別Environmentとして設計します。
 

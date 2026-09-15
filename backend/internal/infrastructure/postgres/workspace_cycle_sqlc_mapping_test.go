@@ -85,9 +85,22 @@ func TestCycleReadMappersDistinguishNullFromInfiniteTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mappedSummary.CompletedAt != nil || mappedSummary.CanceledAt != nil ||
+	if mappedSummary.CompletedAt != nil || mappedSummary.CanceledAt != nil || mappedSummary.CancellationReason != nil ||
 		mappedSummary.StartedAt.Location() != time.UTC || mappedSummary.GoalVersion.CreatedAt.Location() != time.UTC {
 		t.Fatalf("active summary timestamps = %#v", mappedSummary)
+	}
+	replannedReason := string(cycle.CancellationReplanned)
+	canceledSummary := summary
+	canceledSummary.Status = string(cycle.StatusCanceled)
+	canceledSummary.CanceledAt = timestamptz(now.Add(time.Hour))
+	canceledSummary.CancellationReason = &replannedReason
+	mappedCanceledSummary, err := cycleSummaryFromReadRow(&canceledSummary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mappedCanceledSummary.CancellationReason == nil ||
+		*mappedCanceledSummary.CancellationReason != cycle.CancellationReplanned {
+		t.Fatalf("canceled summary reason = %#v, want replanned", mappedCanceledSummary.CancellationReason)
 	}
 
 	for name, mutate := range map[string]func(*db.ListCycleSummariesRow){
@@ -99,6 +112,14 @@ func TestCycleReadMappersDistinguishNullFromInfiniteTimestamps(t *testing.T) {
 		},
 		"positive infinity optional completion": func(row *db.ListCycleSummariesRow) {
 			row.CompletedAt = pgtype.Timestamptz{Valid: true, InfinityModifier: pgtype.Infinity}
+		},
+		"active with cancellation reason": func(row *db.ListCycleSummariesRow) {
+			value := string(cycle.CancellationReplanned)
+			row.CancellationReason = &value
+		},
+		"canceled without cancellation reason": func(row *db.ListCycleSummariesRow) {
+			row.Status = string(cycle.StatusCanceled)
+			row.CanceledAt = timestamptz(now.Add(time.Hour))
 		},
 	} {
 		name, mutate := name, mutate
@@ -150,6 +171,12 @@ func TestCycleViewMapperBuildsExactPreviousCompletedActionAndFailsClosed(t *test
 	if view.PreviousCompletedCycleAction == nil || *view.PreviousCompletedCycleAction != want {
 		t.Fatalf("previous completed Action = %#v, want %#v", view.PreviousCompletedCycleAction, want)
 	}
+	if view.Predecessor == nil || view.Predecessor.CycleID != want.CycleID ||
+		view.Predecessor.CycleSequenceNumber != want.CycleSequenceNumber ||
+		view.Predecessor.Status != cycle.StatusCompleted || view.Predecessor.CancellationReason != nil ||
+		view.Predecessor.GoalVersionNumber != want.GoalVersionNumber {
+		t.Fatalf("completed predecessor = %#v, want exact completed Cycle provenance", view.Predecessor)
+	}
 	atLimit := valid
 	atLimitAction := strings.Repeat("🌱", cycle.MaxFrameCodePoints)
 	atLimit.PreviousCycleAction = &atLimitAction
@@ -162,6 +189,7 @@ func TestCycleViewMapperBuildsExactPreviousCompletedActionAndFailsClosed(t *test
 			row.PreviousCycleID = pgtype.UUID{}
 			row.PreviousCycleSequenceNumber = nil
 			row.PreviousCycleStatus = nil
+			row.PreviousCycleCancellationReason = nil
 			row.PreviousCycleAction = nil
 			row.PreviousGoalVersionNumber = nil
 		},
@@ -173,6 +201,20 @@ func TestCycleViewMapperBuildsExactPreviousCompletedActionAndFailsClosed(t *test
 		"canceled predecessor": func(row *db.GetCycleViewRow) {
 			value := string(cycle.StatusCanceled)
 			row.PreviousCycleStatus = &value
+		},
+		"non-replanned canceled predecessor": func(row *db.GetCycleViewRow) {
+			status := string(cycle.StatusCanceled)
+			reason := string(cycle.CancellationGoalEnded)
+			currentVersion := int32(1)
+			row.PreviousCycleStatus = &status
+			row.PreviousCycleCancellationReason = &reason
+			row.PreviousGoalVersionNumber = &currentVersion
+		},
+		"replanned predecessor with Version drift": func(row *db.GetCycleViewRow) {
+			status := string(cycle.StatusCanceled)
+			reason := string(cycle.CancellationReplanned)
+			row.PreviousCycleStatus = &status
+			row.PreviousCycleCancellationReason = &reason
 		},
 		"active predecessor": func(row *db.GetCycleViewRow) {
 			value := string(cycle.StatusActive)
@@ -212,6 +254,35 @@ func TestCycleViewMapperBuildsExactPreviousCompletedActionAndFailsClosed(t *test
 	}
 }
 
+func TestCycleViewMapperKeepsExactReplannedPredecessorPrivateAndOmitsPreviousAction(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 24, 12, 34, 56, 0, time.UTC)
+	row := validCycleViewSQLCRow(now)
+	status := string(cycle.StatusCanceled)
+	reason := string(cycle.CancellationReplanned)
+	currentVersion := int32(2)
+	blankAction := " \n\t"
+	row.PreviousCycleStatus = &status
+	row.PreviousCycleCancellationReason = &reason
+	row.PreviousGoalVersionNumber = &currentVersion
+	row.PreviousCycleAction = &blankAction
+
+	view, err := cycleViewFromReadRow(&row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.PreviousCompletedCycleAction != nil {
+		t.Fatalf("replanned predecessor previous Action = %#v, want nil", view.PreviousCompletedCycleAction)
+	}
+	if view.Predecessor == nil || view.Predecessor.CycleID != "14000000-0000-7000-8000-000000000001" ||
+		view.Predecessor.CycleSequenceNumber != 1 || view.Predecessor.Status != cycle.StatusCanceled ||
+		view.Predecessor.CancellationReason == nil || *view.Predecessor.CancellationReason != cycle.CancellationReplanned ||
+		view.Predecessor.GoalVersionNumber != currentVersion {
+		t.Fatalf("replanned predecessor = %#v, want exact same-Version provenance", view.Predecessor)
+	}
+}
+
 func TestCycleViewMapperReturnsNullPreviousActionForFirstAndTerminalCycles(t *testing.T) {
 	t.Parallel()
 
@@ -221,11 +292,13 @@ func TestCycleViewMapperReturnsNullPreviousActionForFirstAndTerminalCycles(t *te
 	first.PreviousCycleID = pgtype.UUID{}
 	first.PreviousCycleSequenceNumber = nil
 	first.PreviousCycleStatus = nil
+	first.PreviousCycleCancellationReason = nil
 	first.PreviousCycleAction = nil
 	first.PreviousGoalVersionNumber = nil
 	view, err := cycleViewFromReadRow(&first)
-	if err != nil || view.PreviousCompletedCycleAction != nil {
-		t.Fatalf("Cycle 1 previous Action = %#v, error = %v", view.PreviousCompletedCycleAction, err)
+	if err != nil || view.PreviousCompletedCycleAction != nil || view.Predecessor != nil {
+		t.Fatalf("Cycle 1 predecessor/previous Action = %#v/%#v, error = %v",
+			view.Predecessor, view.PreviousCompletedCycleAction, err)
 	}
 
 	first.PreviousCycleID = mustUUID("14000000-0000-7000-8000-000000000009")
@@ -237,8 +310,9 @@ func TestCycleViewMapperReturnsNullPreviousActionForFirstAndTerminalCycles(t *te
 	terminal.Status = string(cycle.StatusCompleted)
 	terminal.CompletedAt = timestamptz(now.Add(time.Hour))
 	view, err = cycleViewFromReadRow(&terminal)
-	if err != nil || view.PreviousCompletedCycleAction != nil {
-		t.Fatalf("terminal previous Action = %#v, error = %v", view.PreviousCompletedCycleAction, err)
+	if err != nil || view.PreviousCompletedCycleAction != nil || view.Predecessor != nil {
+		t.Fatalf("terminal predecessor/previous Action = %#v/%#v, error = %v",
+			view.Predecessor, view.PreviousCompletedCycleAction, err)
 	}
 }
 

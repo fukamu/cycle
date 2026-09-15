@@ -117,7 +117,7 @@ func cycleCancellationReasonFromSQLC(
 		return nil, cyclePersistenceError("canceled Cycle has no cancellation reason")
 	}
 	reason := cycle.CancellationReason(*value)
-	if reason != cycle.CancellationGoalAchieved && reason != cycle.CancellationGoalEnded {
+	if !cycle.IsValidCancellationReason(reason) {
 		return nil, cyclePersistenceError("Cycle cancellation reason is invalid")
 	}
 	return &reason, nil
@@ -152,6 +152,10 @@ func cycleSummaryFromReadRow(row *db.ListCycleSummariesRow) (workspace.CycleSumm
 	if err != nil {
 		return workspace.CycleSummary{}, err
 	}
+	cancellationReason, err := cycleCancellationReasonFromSQLC(status, row.CancellationReason)
+	if err != nil {
+		return workspace.CycleSummary{}, err
+	}
 	version, err := cycleGoalVersionViewFromSQLC(
 		row.GoalVersionID,
 		row.GoalVersionNumber,
@@ -165,14 +169,15 @@ func cycleSummaryFromReadRow(row *db.ListCycleSummariesRow) (workspace.CycleSumm
 		return workspace.CycleSummary{}, cyclePersistenceError("Cycle summary identity or start timestamp is invalid")
 	}
 	return workspace.CycleSummary{
-		ID:             cycleID,
-		SequenceNumber: row.SequenceNumber,
-		Status:         status,
-		StartedAt:      startedAt,
-		CompletedAt:    completedAt,
-		CanceledAt:     canceledAt,
-		GoalVersion:    version,
-		PlanPreview:    row.PlanPreview,
+		ID:                 cycleID,
+		SequenceNumber:     row.SequenceNumber,
+		Status:             status,
+		StartedAt:          startedAt,
+		CompletedAt:        completedAt,
+		CanceledAt:         canceledAt,
+		CancellationReason: cancellationReason,
+		GoalVersion:        version,
+		PlanPreview:        row.PlanPreview,
 	}, nil
 }
 
@@ -205,7 +210,7 @@ func cycleViewFromReadRow(row *db.GetCycleViewRow) (workspace.CycleView, error) 
 		row.CheckRevision < 0 || row.ActionRevision < 0 {
 		return workspace.CycleView{}, cyclePersistenceError("Cycle view identity, start timestamp, or revision is invalid")
 	}
-	previousAction, err := previousCompletedCycleActionFromSQLC(row, status)
+	previousAction, predecessor, err := previousCompletedCycleActionFromSQLC(row, status)
 	if err != nil {
 		return workspace.CycleView{}, err
 	}
@@ -223,6 +228,7 @@ func cycleViewFromReadRow(row *db.GetCycleViewRow) (workspace.CycleView, error) 
 		Status:                       status,
 		GoalVersion:                  version,
 		PreviousCompletedCycleAction: previousAction,
+		Predecessor:                  predecessor,
 		StartedAt:                    startedAt,
 		CompletedAt:                  completedAt,
 		CanceledAt:                   canceledAt,
@@ -246,43 +252,64 @@ func cycleViewFromReadRow(row *db.GetCycleViewRow) (workspace.CycleView, error) 
 func previousCompletedCycleActionFromSQLC(
 	row *db.GetCycleViewRow,
 	status cycle.Status,
-) (*workspace.PreviousCompletedCycleActionView, error) {
+) (*workspace.PreviousCompletedCycleActionView, *workspace.CyclePredecessorView, error) {
 	if status != cycle.StatusActive {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if row.SequenceNumber == 1 {
 		if row.PreviousCycleID.Valid || row.PreviousCycleSequenceNumber != nil || row.PreviousCycleStatus != nil ||
-			row.PreviousCycleAction != nil || row.PreviousGoalVersionNumber != nil {
-			return nil, cyclePersistenceError("first Cycle unexpectedly has a predecessor")
+			row.PreviousCycleCancellationReason != nil || row.PreviousCycleAction != nil || row.PreviousGoalVersionNumber != nil {
+			return nil, nil, cyclePersistenceError("first Cycle unexpectedly has a predecessor")
 		}
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	cycleID := uuidString(row.PreviousCycleID)
 	if cycleID == "" || cycleID == uuidString(row.CycleID) || row.PreviousCycleSequenceNumber == nil || row.PreviousCycleStatus == nil ||
-		row.PreviousCycleAction == nil || row.PreviousGoalVersionNumber == nil {
-		return nil, cyclePersistenceError("active Cycle predecessor is missing or incomplete")
+		row.PreviousGoalVersionNumber == nil {
+		return nil, nil, cyclePersistenceError("active Cycle predecessor is missing or incomplete")
 	}
 	if *row.PreviousCycleSequenceNumber != row.SequenceNumber-1 {
-		return nil, cyclePersistenceError("active Cycle predecessor sequence is inconsistent")
-	}
-	if cycle.Status(*row.PreviousCycleStatus) != cycle.StatusCompleted {
-		return nil, cyclePersistenceError("active Cycle predecessor is not completed")
+		return nil, nil, cyclePersistenceError("active Cycle predecessor sequence is inconsistent")
 	}
 	if *row.PreviousGoalVersionNumber <= 0 || row.GoalVersionNumber == nil ||
 		*row.PreviousGoalVersionNumber > *row.GoalVersionNumber ||
 		*row.PreviousGoalVersionNumber < *row.GoalVersionNumber-1 {
-		return nil, cyclePersistenceError("active Cycle predecessor Goal Version is invalid")
+		return nil, nil, cyclePersistenceError("active Cycle predecessor Goal Version is invalid")
 	}
-	if cycle.IsBlank(*row.PreviousCycleAction) || utf8.RuneCountInString(*row.PreviousCycleAction) > cycle.MaxFrameCodePoints {
-		return nil, cyclePersistenceError("active Cycle predecessor Action is blank")
+	previousStatus := cycle.Status(*row.PreviousCycleStatus)
+	previousReason, err := cycleCancellationReasonFromSQLC(previousStatus, row.PreviousCycleCancellationReason)
+	if err != nil {
+		return nil, nil, err
 	}
-	return &workspace.PreviousCompletedCycleActionView{
+	predecessor := &workspace.CyclePredecessorView{
 		CycleID:             cycleID,
 		CycleSequenceNumber: *row.PreviousCycleSequenceNumber,
+		Status:              previousStatus,
+		CancellationReason:  previousReason,
 		GoalVersionNumber:   *row.PreviousGoalVersionNumber,
-		Action:              *row.PreviousCycleAction,
-	}, nil
+	}
+	switch previousStatus {
+	case cycle.StatusCompleted:
+		if row.PreviousCycleAction == nil || cycle.IsBlank(*row.PreviousCycleAction) ||
+			utf8.RuneCountInString(*row.PreviousCycleAction) > cycle.MaxFrameCodePoints {
+			return nil, nil, cyclePersistenceError("active Cycle predecessor Action is blank")
+		}
+		return &workspace.PreviousCompletedCycleActionView{
+			CycleID:             cycleID,
+			CycleSequenceNumber: *row.PreviousCycleSequenceNumber,
+			GoalVersionNumber:   *row.PreviousGoalVersionNumber,
+			Action:              *row.PreviousCycleAction,
+		}, predecessor, nil
+	case cycle.StatusCanceled:
+		if previousReason == nil || *previousReason != cycle.CancellationReplanned ||
+			row.GoalVersionNumber == nil || *row.PreviousGoalVersionNumber != *row.GoalVersionNumber {
+			return nil, nil, cyclePersistenceError("active Cycle predecessor is not a valid replanned Cycle")
+		}
+		return nil, predecessor, nil
+	default:
+		return nil, nil, cyclePersistenceError("active Cycle predecessor status is invalid")
+	}
 }
 
 func cycleFromSQLC(row *db.PdcaCycle) (cycle.PDCACycle, error) {
@@ -381,6 +408,32 @@ func completeCycleReceiptFromSQLC(
 		GoalID:      goalID,
 		CycleID:     cycleID,
 		RequestHash: *row.RequestHash,
+	}, nil
+}
+
+func replanCycleReceiptFromSQLC(
+	row *db.FindReplanCycleReceiptRow,
+) (*workspace.ReplanCycleReceipt, error) {
+	if row == nil {
+		return nil, cyclePersistenceError("Replan Cycle receipt row is nil")
+	}
+	goalID := uuidString(row.GoalID)
+	cycleID := uuidString(row.CycleID)
+	if goalID == "" || cycleID == "" || row.RequestHash == "" {
+		return nil, cyclePersistenceError("Replan Cycle receipt identity is invalid")
+	}
+	replannedCycleID := uuidString(row.ReplannedCycleID)
+	var reason *cycle.CancellationReason
+	if row.ReplannedCancellationReason != nil {
+		value := cycle.CancellationReason(*row.ReplannedCancellationReason)
+		reason = &value
+	}
+	return &workspace.ReplanCycleReceipt{
+		GoalID:                      goalID,
+		CycleID:                     cycleID,
+		RequestHash:                 row.RequestHash,
+		ReplannedCycleID:            replannedCycleID,
+		ReplannedCancellationReason: reason,
 	}, nil
 }
 

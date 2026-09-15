@@ -92,6 +92,7 @@ type contractWorkspaceStub struct {
 	generateAction func(context.Context, workspace.ActionGenerateInput) (workspace.AIResponse, error)
 	refineAction   func(context.Context, workspace.ActionRefineInput) (workspace.AIResponse, error)
 	completeCycle  func(context.Context, workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error)
+	replanCycle    func(context.Context, workspace.ReplanCycleInput) (workspace.ReplanCycleResult, error)
 	terminate      func(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error)
 }
 
@@ -222,6 +223,13 @@ func (stub *contractWorkspaceStub) CompleteCycle(ctx context.Context, input work
 	return stub.completeCycle(ctx, input)
 }
 
+func (stub *contractWorkspaceStub) ReplanCycle(ctx context.Context, input workspace.ReplanCycleInput) (workspace.ReplanCycleResult, error) {
+	if stub.replanCycle == nil {
+		panic("unexpected ReplanCycle call")
+	}
+	return stub.replanCycle(ctx, input)
+}
+
 func (stub *contractWorkspaceStub) Terminate(ctx context.Context, input workspace.TerminateInput) (workspace.TerminateResult, error) {
 	if stub.terminate == nil {
 		panic("unexpected Terminate call")
@@ -324,6 +332,11 @@ func (probe *requiredMemberWorkspaceProbe) CompleteCycle(context.Context, worksp
 	return workspace.CompleteCycleResult{}, nil
 }
 
+func (probe *requiredMemberWorkspaceProbe) ReplanCycle(context.Context, workspace.ReplanCycleInput) (workspace.ReplanCycleResult, error) {
+	probe.calls++
+	return workspace.ReplanCycleResult{}, nil
+}
+
 func (probe *requiredMemberWorkspaceProbe) Terminate(context.Context, workspace.TerminateInput) (workspace.TerminateResult, error) {
 	probe.calls++
 	return workspace.TerminateResult{}, nil
@@ -379,6 +392,7 @@ var protectedContractRoutes = []contractRoute{
 	{"generate action", http.MethodPost, "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/actions/generate"},
 	{"refine action", http.MethodPost, "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/actions/refine"},
 	{"complete cycle", http.MethodPost, "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/complete"},
+	{"replan cycle", http.MethodPost, "/api/v1/goals/" + contractGoalID + "/cycles/" + contractCycleID + "/replan"},
 	{"upgrade Google", http.MethodPost, "/api/v1/auth/google/upgrade"},
 	{"login Google", http.MethodPost, "/api/v1/auth/google/login"},
 	{"delete account", http.MethodDelete, "/api/v1/account"},
@@ -866,8 +880,8 @@ func TestJSONBodyEndpointMatrixRejectsRootNullBeforeUseCase(t *testing.T) {
 			}
 		})
 	}
-	if tested != 18 {
-		t.Fatalf("JSON body endpoint coverage = %d, want 18", tested)
+	if tested != 19 {
+		t.Fatalf("JSON body endpoint coverage = %d, want 19", tested)
 	}
 }
 

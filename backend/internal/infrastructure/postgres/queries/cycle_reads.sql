@@ -14,6 +14,7 @@ SELECT
     c.started_at,
     c.completed_at,
     c.canceled_at,
+    c.cancellation_reason,
     gv.id AS goal_version_id,
     gv.version_number AS goal_version_number,
     gv.body AS goal_version_body,
@@ -66,6 +67,7 @@ SELECT
     previous_cycle.id AS previous_cycle_id,
     previous_cycle.sequence_number AS previous_cycle_sequence_number,
     previous_cycle.status AS previous_cycle_status,
+    previous_cycle.cancellation_reason AS previous_cycle_cancellation_reason,
     previous_cycle.action AS previous_cycle_action,
     previous_goal_version.version_number AS previous_goal_version_number
 FROM pdca_cycles AS c

@@ -16,6 +16,21 @@ FROM pdca_cycles
 WHERE user_id = sqlc.arg(user_id)::uuid
   AND start_operation_id = sqlc.arg(operation_id)::uuid;
 
+-- name: FindReplanCycleReceipt :one
+SELECT
+    current_cycle.goal_id,
+    current_cycle.id AS cycle_id,
+    current_cycle.start_request_hash AS request_hash,
+    previous_cycle.id AS replanned_cycle_id,
+    previous_cycle.cancellation_reason AS replanned_cancellation_reason
+FROM pdca_cycles AS current_cycle
+LEFT JOIN pdca_cycles AS previous_cycle
+  ON previous_cycle.user_id = current_cycle.user_id
+ AND previous_cycle.goal_id = current_cycle.goal_id
+ AND previous_cycle.sequence_number = current_cycle.sequence_number - 1
+WHERE current_cycle.user_id = sqlc.arg(user_id)::uuid
+  AND current_cycle.start_operation_id = sqlc.arg(operation_id)::uuid;
+
 -- name: FindContinueReviewReceipt :one
 SELECT
     c.goal_id,
@@ -182,6 +197,18 @@ WHERE id = sqlc.arg(cycle_id)::uuid
   AND content_revision = sqlc.arg(expected_content_revision)::bigint
   AND completion_operation_id IS NULL
   AND completion_request_hash IS NULL;
+
+-- name: ReplanGoalCAS :execrows
+UPDATE goals
+SET next_cycle_sequence_number = sqlc.arg(next_cycle_sequence_number)::integer,
+    revision = sqlc.arg(revision)::bigint,
+    updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE id = sqlc.arg(goal_id)::uuid
+  AND user_id = sqlc.arg(user_id)::uuid
+  AND status = 'active_cycle'
+  AND current_version_number = sqlc.arg(current_version_number)::integer
+  AND next_cycle_sequence_number = sqlc.arg(expected_next_cycle_sequence_number)::integer
+  AND revision = sqlc.arg(expected_revision)::bigint;
 
 -- name: ApplyActionAICAS :execrows
 UPDATE pdca_cycles

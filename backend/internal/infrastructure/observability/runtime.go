@@ -984,7 +984,7 @@ func sanitizeMetricAttributeValue(name, key, value string) string {
 			return value
 		}
 	case "reason":
-		if oneOf(value, "goal_achieved", "goal_ended") {
+		if oneOf(value, "goal_achieved", "goal_ended", "replanned") {
 			return value
 		}
 	case "path":
@@ -1050,7 +1050,8 @@ func isAllowedMetricErrorCode(value string) bool {
 		"AI_INVALID_RESPONSE", "AI_OPERATION_IN_PROGRESS", "AI_PROVIDER_TIMEOUT", "AI_PROVIDER_UNAVAILABLE",
 		"AI_RATE_LIMIT_EXCEEDED", "AI_SERVICE_BUDGET_EXCEEDED", "AI_SUGGESTION_NOT_FOUND", "AI_USER_ROLLING_LIMIT_EXCEEDED",
 		"ANONYMOUS_CREATION_BLOCKED", "ANTI_ABUSE_SERVICE_UNAVAILABLE", "CSRF_INVALID",
-		"CYCLE_COMPLETION_FAILED", "CYCLE_COMPLETION_INPUT_INCOMPLETE", "CYCLE_NOT_ACTIVE", "CYCLE_NOT_FOUND", "CYCLE_REVISION_CONFLICT",
+		"CYCLE_COMPLETION_FAILED", "CYCLE_COMPLETION_INPUT_INCOMPLETE", "CYCLE_NOT_ACTIVE", "CYCLE_NOT_FOUND",
+		"CYCLE_REPLAN_CONFIRMATION_REQUIRED", "CYCLE_REPLAN_FAILED", "CYCLE_REVISION_CONFLICT",
 		"FRAME_SAVE_FAILED", "FRAME_TEXT_TOO_LONG", "GOAL_ACTIVE_LIMIT_EXCEEDED", "GOAL_ALREADY_TERMINAL",
 		"GOAL_CREATION_DRAFT_ALREADY_EXISTS", "GOAL_DELETE_CONFIRMATION_REQUIRED", "GOAL_DELETE_CONFLICT", "GOAL_DELETE_FAILED",
 		"GOAL_DRAFT_DELETE_FAILED", "GOAL_DRAFT_NOT_FOUND", "GOAL_DRAFT_REVISION_CONFLICT", "GOAL_DRAFT_SAVE_FAILED", "GOAL_DRAFT_TYPE_MISMATCH",
@@ -1389,6 +1390,7 @@ func isAllowedHTTPRoute(route string) bool {
 		"/api/v1/goals/{goalId}/cycles/{cycleId}/actions/generate",
 		"/api/v1/goals/{goalId}/cycles/{cycleId}/actions/refine",
 		"/api/v1/goals/{goalId}/cycles/{cycleId}/complete",
+		"/api/v1/goals/{goalId}/cycles/{cycleId}/replan",
 		"/api/v1/auth/google/upgrade", "/api/v1/auth/google/login",
 		"/api/v1/account":
 		return true

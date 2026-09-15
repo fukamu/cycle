@@ -52,7 +52,7 @@ func TestMetricsExposeCompleteServerSideSoTContract(t *testing.T) {
 	metrics.ObserveWorkspace(ctx, workspace.WorkspaceObservation{Event: workspace.WorkspaceMetricCycleStarted})
 	metrics.ObserveWorkspace(ctx, workspace.WorkspaceObservation{Event: workspace.WorkspaceMetricCycleCompleted})
 	metrics.ObserveWorkspace(ctx, workspace.WorkspaceObservation{
-		Event: workspace.WorkspaceMetricCycleCanceled, CancellationReason: cycle.CancellationGoalEnded,
+		Event: workspace.WorkspaceMetricCycleCanceled, CancellationReason: cycle.CancellationReplanned,
 	})
 	metrics.ObserveWorkspace(ctx, workspace.WorkspaceObservation{
 		Event:     workspace.WorkspaceMetricAIProviderAttempt,
@@ -166,6 +166,7 @@ func TestMetricsExposeCompleteServerSideSoTContract(t *testing.T) {
 	assertMetricHasNoLabel(t, measurements["ai_generation_total"], "type")
 	assertMetricLabel(t, measurements["ai_suggestion_adopted_total"], "source_type", "creation")
 	assertMetricLabel(t, measurements["goal_review_continued_total"], "version_changed", "true")
+	assertMetricLabel(t, measurements["cycle_canceled_total"], "reason", "replanned")
 	assertMetricLabel(t, measurements["rate_limit_rejected_total"], "scope", "ai")
 	assertMetricLabel(t, measurements["rate_limit_rejected_total"], "scope", "goal_start")
 	assertMetricLabel(t, measurements["error_code_total"], "code", "RATE_LIMIT_EXCEEDED")

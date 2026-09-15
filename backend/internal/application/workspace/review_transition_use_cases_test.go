@@ -296,6 +296,12 @@ func (tx *reviewTransitionTestTx) LoadCycleView(context.Context, string, string,
 			GoalVersionNumber:   1,
 			Action:              "前回A",
 		}
+		view.Predecessor = &CyclePredecessorView{
+			CycleID:             *tx.draft.ReviewCycleID,
+			CycleSequenceNumber: tx.cycle.SequenceNumber - 1,
+			GoalVersionNumber:   1,
+			Status:              cycle.StatusCompleted,
+		}
 	}
 	if tx.cycleViewOverride != nil {
 		view = tx.cycleViewOverride(view)

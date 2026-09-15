@@ -339,17 +339,40 @@ describe("Cycle previous completed Action schema", () => {
     );
   });
 
+  it("accepts an explicit null predecessor for an Active Cycle after a replan", () => {
+    const candidate: Record<string, unknown> = activeCycle();
+    candidate.previousCompletedCycleAction = null;
+
+    expect(
+      cycleSchema.parse(candidate).previousCompletedCycleAction,
+    ).toBeNull();
+  });
+
+  it("accepts only the exact replanned cancellation reason", () => {
+    const candidate = {
+      ...activeCycle(),
+      status: "canceled",
+      canceledAt: "2026-08-21T00:00:00Z",
+      cancellationReason: "replanned",
+      previousCompletedCycleAction: null,
+    };
+
+    expect(cycleSchema.parse(candidate).cancellationReason).toBe("replanned");
+    for (const cancellationReason of ["manual_restart", "goal_deleted"]) {
+      expect(
+        cycleSchema.safeParse({
+          ...candidate,
+          cancellationReason,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   it.each([
     {
       label: "a missing required field",
       mutate: (candidate: Record<string, unknown>) => {
         delete candidate.previousCompletedCycleAction;
-      },
-    },
-    {
-      label: "a null predecessor on Cycle 2 or later",
-      mutate: (candidate: Record<string, unknown>) => {
-        candidate.previousCompletedCycleAction = null;
       },
     },
     {
@@ -446,6 +469,21 @@ describe("Cycle previous completed Action schema", () => {
         );
     },
   );
+
+  it("rejects a full Cycle missing the required cancellation reason field", () => {
+    const candidate: Record<string, unknown> = activeCycle();
+    delete candidate.cancellationReason;
+
+    const parsed = cycleSchema.safeParse(candidate);
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success)
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ["cancellationReason"] }),
+        ]),
+      );
+  });
 });
 
 describe("Review schedule schemas", () => {

@@ -89,6 +89,13 @@ type completeCycleRequest struct {
 	ExpectedGoalRevision    int64  `json:"expectedGoalRevision"`
 	ExpectedContentRevision int64  `json:"expectedContentRevision"`
 }
+type replanCycleRequest struct {
+	OperationID                    string `json:"operationId"`
+	ExpectedGoalRevision           int64  `json:"expectedGoalRevision"`
+	ExpectedContentRevision        int64  `json:"expectedContentRevision"`
+	ExpectedReviewScheduleRevision int64  `json:"expectedReviewScheduleRevision"`
+	Confirmed                      bool   `json:"confirmed"`
+}
 type optionalJSONField[T any] struct {
 	Value   T
 	Present bool
@@ -528,6 +535,26 @@ func (server *api) completeGoalCycle(writer http.ResponseWriter, request *http.R
 	}
 	if view.Replay != nil {
 		writeJSON(writer, http.StatusOK, view.Replay)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
+}
+
+func (server *api) replanGoalCycle(writer http.ResponseWriter, request *http.Request) {
+	var input replanCycleRequest
+	if err := server.decodeAndValidateJSON(writer, request, &input, defaultBodyLimit); err != nil {
+		server.writeError(writer, request, err, nil)
+		return
+	}
+	view, err := server.dependencies.Workspace.ReplanCycle(request.Context(), workspace.ReplanCycleInput{
+		UserID: currentUserID(request), GoalID: chi.URLParam(request, "goalId"), CycleID: chi.URLParam(request, "cycleId"),
+		OperationID: input.OperationID, ExpectedGoalRevision: input.ExpectedGoalRevision,
+		ExpectedContentRevision:        input.ExpectedContentRevision,
+		ExpectedReviewScheduleRevision: input.ExpectedReviewScheduleRevision,
+		Confirmed:                      input.Confirmed,
+	})
+	if err != nil {
+		server.writeError(writer, request, stableUseCaseError(err, errCycleReplanFailed), nil)
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
