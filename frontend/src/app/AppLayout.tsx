@@ -197,7 +197,7 @@ export function AppLayout() {
       </a>
       <header className="app-header">
         <Link
-          className="wordmark"
+          className="wordmark touch-target"
           to="/"
           inert={open || undefined}
           aria-label="FUKAMU Cycle ホーム"

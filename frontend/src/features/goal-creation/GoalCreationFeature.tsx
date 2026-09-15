@@ -460,6 +460,7 @@ function GoalDraftEditor({
             この下書きの作業場所は変わりました。入力内容はこの端末に保持されています。
             必要なら本文をコピーしてから、
             <Link
+              className="touch-target touch-target--inline"
               to={editor.scopeMovedHref}
               onClick={(event) => void openCanonicalHome(event)}
             >

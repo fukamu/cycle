@@ -250,7 +250,13 @@ function ReviewWorkspaceMoved({ goalId }: { readonly goalId: string }) {
       <section className="editor-card">
         <div className="draft-notice" role="alert">
           Reviewの作業場所は変わりました。
-          <Link to={`/goals/${goalId}`}>現在のGoalを開いてください</Link>。
+          <Link
+            className="touch-target touch-target--inline"
+            to={`/goals/${goalId}`}
+          >
+            現在のGoalを開いてください
+          </Link>
+          。
         </div>
       </section>
     </main>
@@ -879,7 +885,9 @@ function ReviewEditor({
           </article>
         </div>
         <details className="cycle-summary" open>
-          <summary>{goalReviewDecisionCopy.context.planAndDoSummary}</summary>
+          <summary className="touch-target">
+            {goalReviewDecisionCopy.context.planAndDoSummary}
+          </summary>
           {(["plan", "do"] as const).map((frame) => (
             <div key={frame}>
               <h3>
@@ -941,6 +949,7 @@ function ReviewEditor({
               <>
                 必要なら本文をコピーしてから、
                 <Link
+                  className="touch-target touch-target--inline"
                   to={workspaceMovedHref}
                   onClick={(event) => void openCanonicalGoal(event)}
                 >

@@ -60,9 +60,11 @@ describe("PostCommitCleanupBoundary", () => {
     expect(cleanup).toHaveBeenCalledOnce();
     expect(onSuccess).not.toHaveBeenCalled();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "ローカル処理を再試行" }),
-    );
+    const retry = screen.getByRole("button", {
+      name: "ローカル処理を再試行",
+    });
+    expect(retry).toHaveClass("touch-target");
+    await userEvent.click(retry);
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalledOnce());
     expect(cleanup).toHaveBeenCalledTimes(2);
