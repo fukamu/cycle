@@ -211,13 +211,30 @@ func TestCompleteDoesNotCreateNextCycleAndCompletedIsImmutable(t *testing.T) {
 }
 
 func TestCancelAllowsIncompleteContentAndIsImmutable(t *testing.T) {
-	current := New("cycle", "user", "goal", "version", 2, "operation", "hash", testNow)
-	canceled, err := Cancel(current, CancellationGoalEnded, testNow.Add(time.Minute))
-	if err != nil || canceled.Status != StatusCanceled || canceled.CanceledAt == nil {
-		t.Fatalf("cancel: %#v, %v", canceled, err)
+	for _, reason := range []CancellationReason{
+		CancellationGoalAchieved,
+		CancellationGoalEnded,
+		CancellationReplanned,
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			current := New("cycle", "user", "goal", "version", 2, "operation", "hash", testNow)
+			canceled, err := Cancel(current, reason, testNow.Add(time.Minute))
+			if err != nil || canceled.Status != StatusCanceled || canceled.CanceledAt == nil ||
+				canceled.CancellationReason == nil || *canceled.CancellationReason != reason {
+				t.Fatalf("cancel: %#v, %v", canceled, err)
+			}
+			if _, err := Complete(canceled, "complete", "hash", 0, false, testNow); !errors.Is(err, ErrCycleNotActive) {
+				t.Fatalf("canceled cycle completed: %v", err)
+			}
+			if _, err := Cancel(canceled, reason, testNow.Add(2*time.Minute)); !errors.Is(err, ErrCycleNotActive) {
+				t.Fatalf("canceled cycle canceled again: %v", err)
+			}
+		})
 	}
-	if _, err := Complete(canceled, "complete", "hash", 0, false, testNow); !errors.Is(err, ErrCycleNotActive) {
-		t.Fatalf("canceled cycle completed: %v", err)
+
+	current := New("cycle", "user", "goal", "version", 2, "operation", "hash", testNow)
+	if _, err := Cancel(current, CancellationReason("unknown"), testNow); !errors.Is(err, ErrCycleNotActive) {
+		t.Fatalf("unknown cancellation reason error = %v, want %v", err, ErrCycleNotActive)
 	}
 }
 

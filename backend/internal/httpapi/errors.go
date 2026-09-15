@@ -36,6 +36,7 @@ var (
 	errFrameSaveFailed            = errors.New("frame save failed")
 	errReviewScheduleUpdateFailed = errors.New("review schedule update failed")
 	errCycleCompletionFailed      = errors.New("cycle completion failed")
+	errCycleReplanFailed          = errors.New("cycle replan failed")
 	errGoalReviewDraftSaveFailed  = errors.New("goal review draft save failed")
 	errGoalReviewContinueFailed   = errors.New("goal review continue failed")
 	errGoalTerminationFailed      = errors.New("goal termination failed")
@@ -70,6 +71,8 @@ func classifyError(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, errRequestValidation), errors.Is(err, workspace.ErrInvalidTerminationRequest):
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
+	case errors.Is(err, workspace.ErrReplanConfirmation):
+		return 400, "CYCLE_REPLAN_CONFIRMATION_REQUIRED", "サイクルを中断して再計画する確認が必要です。"
 	case errors.Is(err, appsession.ErrSessionMissing):
 		return 401, "SESSION_MISSING", "セッションがありません。"
 	case errors.Is(err, errSessionIdentityChanged):
@@ -196,6 +199,8 @@ func classifyError(err error) (int, string, string) {
 		return 500, "REVIEW_SCHEDULE_UPDATE_FAILED", "見直す日を更新できませんでした。"
 	case errors.Is(err, errCycleCompletionFailed):
 		return 500, "CYCLE_COMPLETION_FAILED", "サイクルを完了できませんでした。"
+	case errors.Is(err, errCycleReplanFailed):
+		return 500, "CYCLE_REPLAN_FAILED", "サイクルを中断して再計画できませんでした。"
 	case errors.Is(err, errGoalReviewDraftSaveFailed):
 		return 500, "GOAL_REVIEW_DRAFT_SAVE_FAILED", "目標の見直し案を保存できませんでした。"
 	case errors.Is(err, errGoalReviewContinueFailed):

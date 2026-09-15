@@ -140,6 +140,100 @@ func TestReviewChangedBodyCreatesImmutableNextVersion(t *testing.T) {
 	}
 }
 
+func TestReplanCancelsCurrentCycleAndCreatesEmptyNextCycleOnSameVersion(t *testing.T) {
+	draft, err := NewDraft("draft", "user", "目標", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate, err := StartInitial(draft, "goal", "version-1", "cycle-1", "start", "start-hash", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := aggregate.Cycle
+	saved, err := cycle.SaveFrame(active, cycle.FramePlan, "old plan", 0, false, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active = saved.Cycle
+	reviewDate, err := cycle.ParseReviewDate("2026-09-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduled, err := cycle.ChangeReviewSchedule(active, &reviewDate, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active = scheduled.Cycle
+
+	transitionAt := now.Add(2*time.Hour + 123*time.Nanosecond)
+	result, err := Replan(
+		aggregate.Goal,
+		aggregate.Version,
+		active,
+		"cycle-2",
+		"replan-operation",
+		"replan-hash",
+		transitionAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CanceledCycle.Status != cycle.StatusCanceled || result.CanceledCycle.CancellationReason == nil ||
+		*result.CanceledCycle.CancellationReason != cycle.CancellationReplanned || result.CanceledCycle.CanceledAt == nil ||
+		!result.CanceledCycle.CanceledAt.Equal(transitionAt.UTC()) || result.CanceledCycle.Plan != active.Plan ||
+		result.CanceledCycle.ReviewDate == nil || *result.CanceledCycle.ReviewDate != reviewDate ||
+		result.CanceledCycle.ReviewScheduleRevision != active.ReviewScheduleRevision {
+		t.Fatalf("canceled Cycle = %#v", result.CanceledCycle)
+	}
+	if result.Cycle.ID != "cycle-2" || result.Cycle.Status != cycle.StatusActive ||
+		result.Cycle.GoalVersionID != aggregate.Version.ID || result.Cycle.SequenceNumber != 2 ||
+		result.Cycle.Plan != "" || result.Cycle.Do != "" || result.Cycle.Check != "" || result.Cycle.Action != "" ||
+		result.Cycle.Revisions != (cycle.Revisions{}) || result.Cycle.ReviewDate != nil ||
+		result.Cycle.ReviewScheduleRevision != 0 || result.Cycle.StartOperationID != "replan-operation" ||
+		result.Cycle.StartRequestHash != "replan-hash" || !result.Cycle.StartedAt.Equal(transitionAt.UTC()) {
+		t.Fatalf("successor Cycle = %#v", result.Cycle)
+	}
+	if result.Goal.Status != StatusActiveCycle || result.Goal.CurrentVersionNumber != 1 ||
+		result.Goal.NextCycleSequenceNumber != 3 || result.Goal.Revision != 1 ||
+		!result.Goal.UpdatedAt.Equal(transitionAt.UTC()) {
+		t.Fatalf("replanned Goal = %#v", result.Goal)
+	}
+	if aggregate.Goal.NextCycleSequenceNumber != 2 || aggregate.Cycle.Status != cycle.StatusActive {
+		t.Fatal("Replan mutated its input aggregate")
+	}
+}
+
+func TestReplanRejectsMismatchedAggregateReferencesAndState(t *testing.T) {
+	draft, err := NewDraft("draft", "user", "目標", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate, err := StartInitial(draft, "goal", "version-1", "cycle-1", "start", "hash", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Goal, *Version, *cycle.PDCACycle)
+	}{
+		{"Goal not active", func(goal *Goal, _ *Version, _ *cycle.PDCACycle) { goal.Status = StatusGoalReview }},
+		{"Version not current", func(goal *Goal, _ *Version, _ *cycle.PDCACycle) { goal.CurrentVersionNumber++ }},
+		{"Version owner mismatch", func(_ *Goal, version *Version, _ *cycle.PDCACycle) { version.UserID = "other" }},
+		{"Cycle not active", func(_ *Goal, _ *Version, active *cycle.PDCACycle) { active.Status = cycle.StatusCompleted }},
+		{"Cycle Version mismatch", func(_ *Goal, _ *Version, active *cycle.PDCACycle) { active.GoalVersionID = "other" }},
+		{"Cycle sequence mismatch", func(_ *Goal, _ *Version, active *cycle.PDCACycle) { active.SequenceNumber++ }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			current, version, active := aggregate.Goal, aggregate.Version, aggregate.Cycle
+			test.mutate(&current, &version, &active)
+			if _, replanErr := Replan(current, version, active, "cycle-2", "operation", "hash", now); !errors.Is(replanErr, ErrStateConflict) {
+				t.Fatalf("error = %v, want %v", replanErr, ErrStateConflict)
+			}
+		})
+	}
+}
+
 func TestTerminalGoalCannotReopen(t *testing.T) {
 	current, _, _ := reviewFixture(t, "目標")
 	terminal, err := Terminate(current, StatusAchieved, "terminal", "hash", now)

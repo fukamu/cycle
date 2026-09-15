@@ -43,6 +43,7 @@ type WorkspaceService interface {
 	SaveFrame(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
 	ChangeReviewSchedule(context.Context, workspace.ChangeReviewScheduleInput) (workspace.ChangeReviewScheduleResult, error)
 	CompleteCycle(context.Context, workspace.CompleteCycleInput) (workspace.CompleteCycleResult, error)
+	ReplanCycle(context.Context, workspace.ReplanCycleInput) (workspace.ReplanCycleResult, error)
 	RefineGoal(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
 	AdoptGoalSuggestion(context.Context, string, string, string, string, int64, *int64) (workspace.DraftView, error)
 	GenerateAction(context.Context, workspace.ActionGenerateInput) (workspace.AIResponse, error)
@@ -120,6 +121,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 					unsafe.Post("/goals/{goalId}/cycles/{cycleId}/actions/generate", server.validatedPath(server.generateAction, "goalId", "cycleId"))
 					unsafe.Post("/goals/{goalId}/cycles/{cycleId}/actions/refine", server.validatedPath(server.refineAction, "goalId", "cycleId"))
 					unsafe.Post("/goals/{goalId}/cycles/{cycleId}/complete", server.validatedPath(server.completeGoalCycle, "goalId", "cycleId"))
+					unsafe.Post("/goals/{goalId}/cycles/{cycleId}/replan", server.validatedPath(server.replanGoalCycle, "goalId", "cycleId"))
 					if dependencies.Account != nil {
 						unsafe.Post("/auth/google/upgrade", server.upgradeGoogle)
 						unsafe.Post("/auth/google/login", server.loginGoogle)

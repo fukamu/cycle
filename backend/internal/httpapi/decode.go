@@ -123,6 +123,10 @@ func requestJSONContractFor(destination any) (requestJSONContract, bool) {
 		return requestJSONContract{required: []string{"expectedContentRevision"}}, true
 	case *completeCycleRequest:
 		return requestJSONContract{required: []string{"operationId", "expectedGoalRevision", "expectedContentRevision"}}, true
+	case *replanCycleRequest:
+		return requestJSONContract{required: []string{
+			"operationId", "expectedGoalRevision", "expectedContentRevision", "expectedReviewScheduleRevision", "confirmed",
+		}}, true
 	case *terminateGoalRequest:
 		return requestJSONContract{
 			required:        []string{"operationId", "outcome", "expectedGoalRevision", "expectedState"},
@@ -179,6 +183,10 @@ func isValidRequestBody(destination any) bool {
 	case *completeCycleRequest:
 		return input != nil && identifier.IsCanonicalUUIDv7(input.OperationID) &&
 			input.ExpectedGoalRevision >= 0 && input.ExpectedContentRevision >= 0
+	case *replanCycleRequest:
+		return input != nil && identifier.IsCanonicalUUIDv7(input.OperationID) &&
+			input.ExpectedGoalRevision >= 0 && input.ExpectedContentRevision >= 0 &&
+			input.ExpectedReviewScheduleRevision >= 0
 	case *terminateGoalRequest:
 		return input != nil && identifier.IsCanonicalUUIDv7(input.OperationID) && input.Outcome != "" &&
 			input.ExpectedGoalRevision != nil && *input.ExpectedGoalRevision >= 0 && input.ExpectedState != ""

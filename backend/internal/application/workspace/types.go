@@ -29,6 +29,7 @@ var (
 	ErrGoalAlreadyTerminal           = errors.New("goal already terminal")
 	ErrInvalidGoalOutcome            = errors.New("invalid goal outcome")
 	ErrInvalidTerminationRequest     = errors.New("invalid goal termination request")
+	ErrReplanConfirmation            = errors.New("Cycle replan confirmation required")
 	ErrDeleteConfirmation            = errors.New("goal delete confirmation required")
 	ErrDeleteConflict                = errors.New("goal delete conflict")
 	ErrDiscardConfirmation           = errors.New("review discard confirmation required")
@@ -110,6 +111,15 @@ type CycleView struct {
 	FrameRevisions               FrameRevisions                    `json:"frameRevisions"`
 	ReviewDate                   *cycle.ReviewDate                 `json:"reviewDate"`
 	ReviewScheduleRevision       int64                             `json:"reviewScheduleRevision"`
+	Predecessor                  *CyclePredecessorView             `json:"-"`
+}
+
+type CyclePredecessorView struct {
+	CycleID             string
+	CycleSequenceNumber int32
+	Status              cycle.Status
+	CancellationReason  *cycle.CancellationReason
+	GoalVersionNumber   int32
 }
 
 type PreviousCompletedCycleActionView struct {
@@ -173,14 +183,15 @@ type GoalPage struct {
 }
 
 type CycleSummary struct {
-	ID             string          `json:"id"`
-	SequenceNumber int32           `json:"sequenceNumber"`
-	Status         cycle.Status    `json:"status"`
-	StartedAt      time.Time       `json:"startedAt"`
-	CompletedAt    *time.Time      `json:"completedAt"`
-	CanceledAt     *time.Time      `json:"canceledAt"`
-	GoalVersion    GoalVersionView `json:"goalVersion"`
-	PlanPreview    string          `json:"planPreview"`
+	ID                 string                    `json:"id"`
+	SequenceNumber     int32                     `json:"sequenceNumber"`
+	Status             cycle.Status              `json:"status"`
+	StartedAt          time.Time                 `json:"startedAt"`
+	CompletedAt        *time.Time                `json:"completedAt"`
+	CanceledAt         *time.Time                `json:"canceledAt"`
+	CancellationReason *cycle.CancellationReason `json:"cancellationReason"`
+	GoalVersion        GoalVersionView           `json:"goalVersion"`
+	PlanPreview        string                    `json:"planPreview"`
 }
 
 type CyclePage struct {
@@ -241,6 +252,24 @@ type CompleteCycleResult struct {
 	ReviewDraft    DraftView              `json:"reviewDraft"`
 	Replayed       bool                   `json:"replayed,omitempty"`
 	Replay         *CommandReplayResponse `json:"-"`
+}
+
+type ReplanCycleInput struct {
+	UserID                         string
+	GoalID                         string
+	CycleID                        string
+	OperationID                    string
+	ExpectedGoalRevision           int64
+	ExpectedContentRevision        int64
+	ExpectedReviewScheduleRevision int64
+	Confirmed                      bool
+}
+
+type ReplanCycleResult struct {
+	CanceledCycle CycleView `json:"canceledCycle"`
+	Goal          GoalView  `json:"goal"`
+	Cycle         CycleView `json:"cycle"`
+	Replayed      bool      `json:"replayed,omitempty"`
 }
 
 type TerminateInput struct {

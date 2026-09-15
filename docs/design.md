@@ -322,6 +322,8 @@ flowchart TD
     ActionAI --> CycleEditor
     CycleEditor --> Complete[Cycle完了]
     Complete --> Review
+    CycleEditor -->|現在のGoal Versionでやり直す| Replan[Cycleを中断して再計画]
+    Replan --> CycleEditor
 
     Review --> ReviewRefine[任意: Goal AI Refine]
     ReviewRefine --> Review
@@ -395,6 +397,12 @@ flowchart TD
 
 Eligibleな利用では、Goal Creation Draft、Active Cycle 1の現在選択中P / D / C / A、Cycle 1完了後のGoal Reviewへ進んだ時点で、§9.10の対応する段階を自動表示する。GuideはUser Flowの順序を説明するが、未入力Frameを飛ばす自由なTab移動、Route移動、AIを使わない経路を妨げず、前段階のGuideを見たことを後段階の表示条件にしない。
 
+## 6.6 Cycleの再計画
+
+Active Cycleは、経過日数、Cycle番号、P/D/C/Aの入力有無にかかわらず、同じGoal Versionのまま再計画できる。再計画では現在Cycleを`canceled(reason=replanned)`のRead-only履歴として確定し、Goalを`active_cycle`のまま維持して、空のActive Cycle `N + 1`を直ちに開始する。Goal Reviewまたは新しいGoal Versionは作成しない。
+
+通常は現在のBrowser Draft / Auto Save queueをflushして保存成功を確認してから最終確認を表示する。保存失敗またはBrowser Draft Recovery conflictでflushできない場合だけ、未保存内容を失うことを明示したdiscard経路を選べる。利用者がdiscardを明示しない限り再計画を送信しない。AI operation実行中は再計画を拒否する。
+
 ---
 
 # 7. Core Domain Invariants
@@ -430,7 +438,7 @@ Goal Creation、Start、query、history、termination、aggregate deleteは、§
 
 ## 8.2 Cycle Use Cases
 
-Cycleの取得、Frame保存、Action AI、completionは、§§13–14、18.4、24、28、32を正本とする。
+Cycleの取得、Frame保存、Action AI、completion、replanは、§§13–14、18.4、18.10、24、28、32を正本とする。
 
 ## 8.3 Goal Review Use Cases
 
@@ -551,6 +559,7 @@ Required behavior:
 
 - Version区間には`versionNumber`とGoal本文を表示し、対応するVersion開始eventには確定日時を表示する。
 - Cycle rowにはGoal単位のCycle番号、期間、`completed` / `canceled`、P previewを表示する。
+- Canceled Cycleのreasonが`replanned`の場合は、状態に加えて`再計画のため中断`と表示する。Goal達成 / 終了によるCanceledとの違いを色だけに依存せず、reasonを推測しない。
 - Cycle Detailには、そのCycleが参照したGoal Version本文とP/D/C/AをRead-onlyで表示する。
 - Version区間とVersion開始eventを別itemとして表示する。変更文言をVersion見出しやCycle群へ内包せず、最新順では新VersionのCycle群と旧Version区間の間に独立した変更eventを置く。
 - `goal.currentVersion`に一致する現在VersionだけをBlueの太いrailとBlueの塗りmarkerで強調する。過去VersionはVersion番号にかかわらず中立色のrailと白抜きmarkerへ戻し、Version固有色は増やさない。V1しかない場合はV1を現在Versionとして強調する。
@@ -607,9 +616,9 @@ Goal v2 · Cycle 3
 
 Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、文字数counter、Guide、Placeholder、Auto Save stateで構成する。Counterのvisible textは`{現在のcode point数} / {§14.5の上限}文字`、accessible nameは`{Frame label} — {Frame name}は上限{上限}文字中{現在数}文字です`とし、入力中の1文字ごとのlive announcementは行わない。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Completed / Canceledで選択中Frameが空文字またはUnicode whitespaceだけの場合は編集用Placeholderを表示せず、Textareaの近接textとaccessible descriptionで`未入力`と示す。Active Cycleの通常編集およびAI、Browser Draft Recovery、workspace移動、command処理による一時Read-onlyでは編集用Placeholderを維持し、`未入力`を表示しない。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 
-Active Cycle `N > 1`のP選択中は、P Guideの直後、既存のP templateとTextareaの前に、§14.5の`previousCompletedCycleAction`を常時展開した読み取り専用Panelとして表示する。見出しは`前回のA — Action`、metadataは`Cycle {N-1} · Goal v{V}`、badgeは`参照のみ`、補助文言は`前回決めた次のアクションです。今回も続けること・変えることを考える手がかりにしてください。`とする。前Cycleと現在CycleのGoal Version番号が異なる場合だけ、`前回のCycle後に目標が変更されています。現在の目標に合う内容を参考にしてください。`と文字で示す。A本文はplain textとして改行と全文を保持し、truncate、Panel内scroll、旧Goal本文、Pへの自動copy / append / overwrite、編集または反映操作を設けない。通常の文字選択とcopyは妨げない。
+Active Cycle `N > 1`のP選択中に§14.5の`previousCompletedCycleAction`がobjectである場合は、P Guideの直後、既存のP templateとTextareaの前に、読み取り専用Panelとして常時展開する。見出しは`前回のA — Action`、metadataは`Cycle {N-1} · Goal v{V}`、badgeは`参照のみ`、補助文言は`前回決めた次のアクションです。今回も続けること・変えることを考える手がかりにしてください。`とする。前Cycleと現在CycleのGoal Version番号が異なる場合だけ、`前回のCycle後に目標が変更されています。現在の目標に合う内容を参考にしてください。`と文字で示す。A本文はplain textとして改行と全文を保持し、truncate、Panel内scroll、旧Goal本文、Pへの自動copy / append / overwrite、編集または反映操作を設けない。通常の文字選択とcopyは妨げない。
 
-Cycle 1、D / C / A、Completed / Canceled Cycleでは前回A Panelを表示しない。Active PでもBrowser Draft Recoveryまたはrevision recoveryの確認中、workspace移動またはGoal削除のfence中は表示せず、staleな前回Aを現行入力と並べない。通常状態のreading orderはP Guide → 前回A Panel → P template → P Textareaとし、前回A Panelの表示はP本文、Auto Save、Frame revision、Browser Draft、Recovery、AI、選択Frameまたはfocusを変更しない。
+Cycle 1、直接の前Cycleが`canceled(reason=replanned)`で`previousCompletedCycleAction=null`のActive Cycle、D / C / A、Completed / Canceled Cycleでは前回A Panelを表示しない。Active PでもBrowser Draft Recoveryまたはrevision recoveryの確認中、workspace移動またはGoal削除のfence中は表示せず、staleな前回Aを現行入力と並べない。通常状態のreading orderはP Guide → 前回A Panel → P template → P Textareaとし、前回A Panelの表示はP本文、Auto Save、Frame revision、Browser Draft、Recovery、AI、選択Frameまたはfocusを変更しない。
 
 Active Cycleでは任意の`見直す日`を`YYYY-MM-DD`のcalendar dateとして表示し、未設定、設定/変更、明示Clearを区別する。設定/変更とClearはFrame Auto Saveへ混ぜず、各操作を明示確定してから送る。設定済み日はBrowser local calendar dateとの比較からToday / Upcoming / Overdueをtextで併記し、timezone/offsetを日付値へ保存しない。Completed / Canceledでは確定時点の値をRead-onlyで表示し、変更controlを出さない。
 
@@ -635,6 +644,10 @@ A Frameのcontrol順序:
 `サイクルを完了`では、完了処理を送信する前にApplication内Dialogを開く。titleは`サイクルを完了する前に確認`とし、`Goal v{V} · Cycle {N}`、Cycleが参照するImmutable Goal Version本文、P / D / C / Aのlabelと保存済み全文、`完了後はP/D/C/Aを編集できません。目標の見直しへ進みます。`という警告、`キャンセル`、最終確定Action `サイクルを完了`をこの順序で省略せず表示する。
 
 P / D / C / Aにはそれぞれ`編集`を表示する。選択するとDialogを閉じ、対象Frameを選択してTextareaへfocusする。CancelまたはEscapeでは本文、Browser Draft、Auto Save queue、revisionを変更せず、通常のCancelでは`サイクルを完了`へfocusを戻す。長文は改行を維持して省略せず、summary内にnested scrollを作らない。Dialog全体だけをviewport内でscroll可能にする。完了APIを呼ぶのは最終確定Actionだけとし、既存の二重送信防止、response loss時の同一operation replay、失敗時の入力保持を維持する。
+
+Active Cycleには`このCycleを中断して再計画`を表示する。この操作に経過日数やP/D/C/Aの入力数によるthresholdを設けない。通常は§28の保存queueをflushしてから、現在CycleをRead-only履歴として残し、同じGoal Versionで空の次Cycleを開始することをApplication内Dialogで確認する。最終確定までAPIを呼ばず、`confirmed:true`は最終確定Actionだけが送る。AI処理中は操作を無効にして理由を示す。
+
+保存失敗またはBrowser Draft Recovery conflictでflushできない場合は通常の確認へ進まず、未保存内容を破棄して再計画する明示Actionだけを別に提示する。破棄対象を説明し、暗黙discard、自動retry、保存成功の偽装を行わない。Cancel / Escapeは本文、Browser Draft、queue、revisionを変更しない。成功後はCanceledになった旧Cycleを編集不可にし、新しいActive CycleのPへ収束する。二重送信とresponse lossは§§18.10、20.4の同一logical Commandとして扱う。
 
 Goal action menu:
 
@@ -1026,6 +1039,7 @@ stateDiagram-v2
     [*] --> active_cycle: Goal + Version1 + Cycle1
     active_cycle --> goal_review: Cycle completed
     goal_review --> active_cycle: 維持/修正して次Cycle
+    active_cycle --> active_cycle: Cycleをreplannedで中断 + 同Versionの空Cycle N+1
     active_cycle --> achieved: Goal達成 / Active Cycle canceled
     active_cycle --> ended: Goal終了 / Active Cycle canceled
     goal_review --> achieved: Review Draft破棄
@@ -1052,6 +1066,7 @@ stateDiagram-v2
 | active_cycle | Complete Cycle | goal_review | Cycle completed + Review Draft |
 | goal_review | Continue unchanged | active_cycle | 現Version + Cycle N+1 |
 | goal_review | Continue changed | active_cycle | Version N+1 + Cycle N+1 |
+| active_cycle | Replan Cycle | active_cycle | Cycle canceled(reason=replanned) + 現Versionの空Cycle N+1 |
 | active_cycle | Achieve | achieved | Active Cycle canceled |
 | active_cycle | End | ended | Active Cycle canceled |
 | goal_review | Achieve | achieved | Draft破棄、Version不変 |
@@ -1070,6 +1085,7 @@ stateDiagram-v2
     active --> active: Auto Save / Action AI適用 / 見直す日の設定・変更・解除
     active --> completed: P/D/C/A入力済みでCycle完了
     active --> canceled: Goal達成または終了
+    active --> canceled: 再計画
     completed --> [*]
     canceled --> [*]
 
@@ -1085,7 +1101,7 @@ stateDiagram-v2
 ```
 
 - `completed`への遷移はGoalを`goal_review`へ変更し、Review Draftを作る。
-- `canceled`への遷移はGoalを`achieved`または`ended`へ変更する。
+- Goal達成 / 終了による`canceled`への遷移はGoalを`achieved`または`ended`へ変更する。再計画による`canceled(reason=replanned)`はGoalを`active_cycle`のまま維持し、同じTransactionで空のActive Cycle `N + 1`を作成する。
 - Completed / CanceledからActiveへ戻さない。
 
 ---
@@ -1149,11 +1165,11 @@ Frontend confirmationは、Draftに変更がある場合に次を明示する。
 
 P/D built-in templateは§9.7のplain textをActive Cycleの現在Frameへ入力するだけであり、Cycle、Frame、Browser Draft Cache、API、DB、telemetryへtemplate IDや選択情報を保持しない。挿入後の本文は手入力と区別せず、この節の文字semanticsと上限を適用する。
 
-Active Cycle `N > 1`のfull read modelは、同じUser・同じGoalの`sequenceNumber = N - 1`である直接の前CycleがCompletedである場合に限り、そのCycleのAを`previousCompletedCycleAction`として返す。Goal Versionが変わっていても直接の前後関係は変わらず、read modelは前CycleのGoal Version番号をAとともに保持するが、旧Goal本文は含めない。現在Cycleと前CycleのGoal Version番号の関係は§18.5の0 / +1遷移を正とする。
+Active Cycle `N > 1`のfull read modelは、同じUser・同じGoalの`sequenceNumber = N - 1`である直接の前CycleがCompletedである場合に限り、そのCycleのAを`previousCompletedCycleAction`として返す。直接の前Cycleが`canceled(reason=replanned)`なら`previousCompletedCycleAction=null`とし、さらに古いCompleted Cycleへskipしない。Goal Versionが変わっていても直接の前後関係は変わらず、read modelはCompleted predecessorのGoal Version番号をAとともに保持するが、旧Goal本文は含めない。現在Cycleと前CycleのGoal Version番号の関係は§§18.5、18.10の0 / +1遷移を正とする。
 
 Cycleの`reviewDate`は任意のGregorian calendar dateで、許容範囲は`0001-01-01`〜`9999-12-31`、wire/storage表現はexact `YYYY-MM-DD` / PostgreSQL `DATE`とする。Instant、timezone、offsetへ変換しない。`reviewScheduleRevision`はP/D/C/Aの`contentRevision`およびFrame revisionから独立した非負int64で、新Cycleと既存Cycleの初期値はunset / 0とする。Active Cycleの明示set/change/clearでtargetが変わる場合だけ+1し、同じtargetへのresponse-loss retryはstale expected revisionでもno-op success、stale revisionから異なるtargetへの変更はconflictとする。Completed / Canceledでは値とrevisionを凍結し、次Cycleへ継承しない。Date変更はFrame Auto Save、Browser Draft、AI context/invalidationを発生させない。
 
-Cycle 1およびCompleted / Canceled Cycleの`previousCompletedCycleAction`は`null`とする。Active Cycle `N > 1`で直接の前Cycleが存在しない、CanceledまたはCompleted以外である、sequenceが一致しない、Goal Versionを正しく解決できない、またはAが§14.5の文字semanticsに違反するかtrim後に空である場合はpersistence / domain invariant違反である。さらに古いCompleted Cycleへfallbackせず、欠落を`null`へ補正しない。このread projectionは現在CycleのP、Frame revision、Auto Save、Browser Draft、Recovery、AI Contextまたはstate transitionを変更しない。
+Cycle 1およびCompleted / Canceled Cycleの`previousCompletedCycleAction`は`null`とする。Active Cycle `N > 1`では、直接の前CycleがCompletedなら上記object、`canceled(reason=replanned)`なら明示的な`null`だけを許す。直接の前Cycleが存在しない、他reasonのCanceled、Completed / Canceled以外、sequence不一致、Goal Version解決不能、またはCompleted predecessorのAが§14.5の文字semanticsに違反するかtrim後に空である場合はpersistence / domain invariant違反である。さらに古いCompleted Cycleへfallbackせず、欠落を`null`へ補正しない。このread projectionは現在CycleのP、Frame revision、Auto Save、Browser Draft、Recovery、AI Contextまたはstate transitionを変更しない。
 
 ## 14.6 Goal termination
 
@@ -1188,6 +1204,16 @@ Cycle 1およびCompleted / Canceled Cycleの`previousCompletedCycleAction`は`n
 | Canceled Cycle | No | Goal Delete / Account Delete |
 | AI Generation content | No | Draft / Goal / Account delete |
 | AI Usage Event | User向けNo。内部lifecycle CASのみ | Account delete / retention cleanup |
+
+## 14.9 Cycle replan
+
+- SourceはGoalの唯一のActive Cycle、targetは同じGoal / 同じGoal VersionのActive Cycle `N + 1`とする。Goal Versionの作成・変更、Goal Review Draftの作成、P/D/C/Aのcopyを行わない。
+- Source Cycleは`canceledAt`をServer UTCで設定し、`cancellationReason=replanned`としてimmutableにする。保存済みP/D/C/Aとreview scheduleは履歴に保持する。
+- Target CycleはP/D/C/Aが空、`contentRevision=0`、全Frame revision `0`、`reviewDate=null`、`reviewScheduleRevision=0`で開始する。Sourceのreview dateを継承しない。
+- Goalは`active_cycle`を維持し、current Goal Versionを変えず、`nextCycleSequenceNumber`とGoal revisionをそれぞれ1増やす。
+- Sourceの直接の前CycleがCompletedであってもTargetの直接predecessorはSourceである。したがってTargetの`previousCompletedCycleAction`はSourceが`replanned` Canceledであることに基づく`null`であり、`N - 1`以前のCompleted Cycleへskipしない。
+- `confirmed=true`、Goal / content / review scheduleのexpected revision一致、Goal / Cycleのactive整合、current Goal Version一致、AI idleを必須とする。経過時間によるeligibility thresholdは設けない。
+- Replanのための新しいtracking telemetryは作らない。成功時は既存の`cycle_canceled_total{reason="replanned"}`と`cycle_started_total`だけを各1回記録し、idempotent replayでは増分しない。効果測定は別Issueのfollow-upであり、coding blockerではない。
 
 
 ---
@@ -1293,7 +1319,7 @@ Update / individual delete operationは定義しない。Goal Aggregate Delete�
 | startedAt | Instant | Yes | immutable |
 | completedAt | Instant | completedのみ | active/canceledはnone |
 | canceledAt | Instant | canceledのみ | active/completedはnone |
-| cancellationReason | `goal_achieved` / `goal_ended` | canceledのみ | Goal terminal outcomeと一致 |
+| cancellationReason | `goal_achieved` / `goal_ended` / `replanned` | canceledのみ | terminal reasonはGoal outcomeと一致、replannedは§14.9 |
 | plan | string | Yes | §14.5 |
 | do | string | Yes | §14.5 |
 | check | string | Yes | §14.5 |
@@ -1307,7 +1333,7 @@ Update / individual delete operationは定義しない。Goal Aggregate Delete�
 | reviewScheduleRevision | int64 | Yes | 初期0、見直す日のtarget変更ごと+1。content revisionと独立 |
 | actionLastAIAppliedContentRevision | int64 | No | AI適用直後revision |
 | actionUserModifiedAfterAI | bool | Yes | AI後にUserがA編集したか |
-| startOperationId | UUID | Yes | Initial / Review continue idempotency |
+| startOperationId | UUID | Yes | Initial / Review continue / Replanで作られたCycleのidempotency |
 | startRequestHash | SHA-256 hex | Yes | same key different payload防止 |
 | completionOperationId | UUID | completed時 | Complete idempotency |
 | completionRequestHash | SHA-256 hex | completed時 | request reuse検証 |
@@ -1532,7 +1558,7 @@ CREATE TABLE pdca_cycles (
     completed_at TIMESTAMPTZ NULL,
     canceled_at TIMESTAMPTZ NULL,
     cancellation_reason TEXT NULL CHECK (
-      cancellation_reason IS NULL OR cancellation_reason IN ('goal_achieved','goal_ended')
+      cancellation_reason IS NULL OR cancellation_reason IN ('goal_achieved','goal_ended','replanned')
     ),
     plan TEXT NOT NULL DEFAULT '',
     do_text TEXT NOT NULL DEFAULT '',
@@ -2300,6 +2326,7 @@ Concurrent operation:
 | Action AI vs P/D/C edit | P/D/C loss | Aだけupdate | current P/D/C保持 |
 | Action AI vs A edit | User A loss | UI read-only + Backend reject | A競合なし |
 | Cycle completion double tap | duplicate Review Draft | User→Goal→Cycle row locks + operationId + unique draft | one completion |
+| Cycle replan double tap / response loss | duplicate successor、stale source mutation | User→Goal→Cycle row locks + successor startOperationId + revision CAS | one canceled source + one empty successor |
 | Review continue double tap | duplicate Version/Cycle | Goal row lock + startOperationId | one next Cycle |
 | Goal terminate vs new start | active limit inconsistency | User row lock | serial outcome |
 | Goal delete retry | 404 after response loss | delete receipt | same key returns success |
@@ -2316,13 +2343,29 @@ Operation ID / Idempotency-Key replayでは、canonical requestからSHA-256 req
 
 | Operation | Canonical hash field |
 |---|---|
-| Initial Goal Start / Goal Review Continue | created Cycle `start_request_hash` |
+| Initial Goal Start / Goal Review Continue / Cycle Replan | created Cycle `start_request_hash` |
 | Cycle Complete | completed Cycle `completion_request_hash` |
 | Goal achieved / ended | Goal `terminal_request_hash` |
 | Goal Delete | `goal_delete_receipts.request_hash` |
 | AI logical operation | `ai_generations.idempotency_request_hash` |
 
 Request identityとcanonical provider inputを同じColumnへ保存しない。Provider input hashは§37.7だけが所有する。Field追加は§16へ先に反映し、既存値を別意味のhashとして推測変換しない。
+
+## 18.10 Active Cycle replan
+
+ReplanはSource Cycleの確定、Successor Cycleの作成、Goal counter / revision更新を1つの`READ COMMITTED` Transactionで行う。
+
+1. `confirmed=true`とrequest shapeをTransaction開始前に検証する。
+2. Userを`FOR UPDATE`し、同じ`operationId`で作成済みのSuccessor Cycle receiptをUser配下から検索する。同Key同hashならreplayへ進み、Goal / Source Cycleまたはrequest hashが異なれば`IDEMPOTENCY_KEY_REUSED`とする。
+3. Goalを`FOR UPDATE`する。Replayではこのlock後にSource / Successor / current Goalをmaterializeし、mutationを再実行しない。
+4. Fresh commandではSource Cycleを`FOR UPDATE`し、owner / path、Goal status=`active_cycle`、Cycle status=`active`、`expectedGoalRevision`、`expectedContentRevision`、`expectedReviewScheduleRevision`を検証する。
+5. Goalのcurrent Goal Versionを同じowner / Goalで解決し、Source CycleがそのVersionを参照することを検証する。Running Action AIがあれば`AI_OPERATION_IN_PROGRESS`で拒否する。
+6. 同じServer timestampでSource Cycleを`canceled(reason=replanned)`へCASし、同じGoal Versionを参照する§14.9の空のSuccessor Cycle `N + 1`をinsertする。Successorの`start_operation_id` / `start_request_hash`をreceiptとする。
+7. Goalを`active_cycle`のまま、`next_cycle_sequence_number + 1`、revision + 1へCASし、commitする。
+
+Source cancel、Successor insert、Goal update、Response materializationのいずれかが失敗した場合はTransaction全体をrollbackし、SourceをActive、Successorを不存在、Goal counter / revisionを元の値に保つ。Successorの`(user_id, start_operation_id)`および`(goal_id, sequence_number)`の一意性とUser lockにより、二重tapまたはresponse loss retryでもSuccessorを重複作成しない。
+
+Canonical request hashはpathの`goalId` / `cycleId`と、bodyの`expectedGoalRevision`、`expectedContentRevision`、`expectedReviewScheduleRevision`、`confirmed`を含む。同じKey / hashのreplayは、SourceがCanceled、SuccessorがActiveまたは後続stateへ進んでいても副作用を再実行せず、現在のSource Cycle、Goal、Successor Cycleを返してFrontendをauthoritative stateへ収束させる。Goal Aggregate Delete後は§20.4に従い`404`になり得る。
 
 ---
 
@@ -3409,7 +3452,7 @@ Errors:
 
 ## 24.0 Shared full CycleView read model
 
-Start Goalの`cycle`、Cycle detailの`cycle`、Goal Reviewの`triggerCycle`、Cycle Completeの`completedCycle`、Goal Review Continueの`cycle`、Goal Terminateの`canceledCycle`は同じfull `CycleView` contractを使用する。これらのobjectは次のrequired nullable fieldを省略せずに返す。
+Start Goalの`cycle`、Cycle detailの`cycle`、Goal Reviewの`triggerCycle`、Cycle Completeの`completedCycle`、Cycle Replanの`canceledCycle` / `cycle`、Goal Review Continueの`cycle`、Goal Terminateの`canceledCycle`は同じfull `CycleView` contractを使用する。これらのobjectは次のrequired nullable fieldを省略せずに返す。
 
 ```json
 {
@@ -3424,11 +3467,11 @@ Start Goalの`cycle`、Cycle detailの`cycle`、Goal Reviewの`triggerCycle`、C
 }
 ```
 
-`reviewDate`と`reviewScheduleRevision`の規則は§14.5を正とし、unset時も`null` / `0`を省略しない。Start、Cycle detail、Goal Review trigger、Cycle Complete、Goal Review Continue、Goal Terminate、およびReview schedule mutation responseの全full `CycleView` surfaceで同じrequired fieldとする。
+`reviewDate`と`reviewScheduleRevision`の規則は§14.5を正とし、unset時も`null` / `0`を省略しない。Start、Cycle detail、Goal Review trigger、Cycle Complete、Cycle Replan、Goal Review Continue、Goal Terminate、およびReview schedule mutation responseの全full `CycleView` surfaceで同じrequired fieldとする。
 
-`previousCompletedCycleAction`の値の規則も§14.5を正とする。Cycle 1とterminal Cycleではfieldを明示的な`null`、Active Cycle `N > 1`では直接の前Completed Cycleを表すobjectとする。`cycleId`はUUID v7、`cycleSequenceNumber`と`goalVersionNumber`は正整数、`action`は§14.5の上限内かつtrim後非空である。Cycle list / historyのsummaryとFrame PATCH responseはこのfull read modelを使用せず、review schedule fieldまたはpredecessor fieldを追加しない。
+`previousCompletedCycleAction`の値の規則も§14.5を正とする。Cycle 1とterminal Cycleではfieldを明示的な`null`、Active Cycle `N > 1`では直接の前Completed Cycleを表すobject、または直接の前Cycleが`canceled(reason=replanned)`の場合だけ明示的な`null`とする。`cycleId`はUUID v7、`cycleSequenceNumber`と`goalVersionNumber`は正整数、`action`は§14.5の上限内かつtrim後非空である。Cycle list / historyのsummaryとFrame PATCH responseはこのfull read modelを使用せず、review schedule fieldまたはpredecessor fieldを追加しない。
 
-Current Cycleと前Cycleは同じconsistent readで取得し、Current Cycleの`user_id + goal_id + cycle_id`と前Cycleの`user_id + goal_id + sequence_number`をすべてscopeする。Infrastructureはexact `N - 1`をLEFT JOINし、前Cycleのstatusを内部rowへ残してmapperでCompletedを検証する。CompletedをJOIN条件で除外してCanceledとmissingを同じNULLへ潰さず、さらに古いCycleへfallbackしない。Repository mapperとApplicationは§14.5のnull / object、sequence、status、A本文と§18.5のGoal Version遷移のinvariantを検証し、不可能なrowを公開可能な別状態へ補正しない。既存のowner非開示とGoal / Cycle mismatchの`404`正規化を維持し、前CycleのUser、Goalまたは旧Goal本文をResponseへ追加しない。
+Current Cycleと前Cycleは同じconsistent readで取得し、Current Cycleの`user_id + goal_id + cycle_id`と前Cycleの`user_id + goal_id + sequence_number`をすべてscopeする。Infrastructureはexact `N - 1`をLEFT JOINし、前Cycleのstatusとcancellation reasonを内部rowへ残してmapperでCompletedまたは`canceled(reason=replanned)`を検証する。CompletedだけをJOIN条件で残してReplanned / 他reasonのCanceled / missingを同じNULLへ潰さず、さらに古いCycleへfallbackしない。Repository mapperとApplicationは§14.5のnull / object、sequence、status、reason、A本文と§§18.5、18.10のGoal Version遷移のinvariantを検証し、不可能なrowを公開可能な別状態へ補正しない。既存のowner非開示とGoal / Cycle mismatchの`404`正規化を維持し、前CycleのUser、Goalまたは旧Goal本文をResponseへ追加しない。
 
 このprojectionは既存のCycle read / transaction pathを拡張する。専用endpoint、DB column、index、migration、追加lockまたは独立した前Cyclequeryを設けない。
 
@@ -3451,6 +3494,7 @@ Response:
       "startedAt": "2026-08-10T00:00:00Z",
       "completedAt": "2026-08-17T00:00:00Z",
       "canceledAt": null,
+      "cancellationReason": null,
       "goalVersion": {
         "id": "version-uuid",
         "versionNumber": 2,
@@ -3464,6 +3508,8 @@ Response:
 ```
 
 Goal Version本文を各itemに含め、FrontendがVersionごとにgroupして変更地点を表示できるようにする。本文は§14.1のbounded valueであり、page sizeと合わせたpayload budgetを満たす。
+
+`cancellationReason`は各summaryでrequired nullableとし、Canceledでは`goal_achieved|goal_ended|replanned`、Active / Completedでは`null`を返す。Backend expand前のResponseにこのfieldがない期間だけ、Frontend readerは欠落を旧Backend互換として受理する。Unknown valueは受理せず、Frontend activation後に新しい欠落Responseを正規化してcurrent contractとみなさない。
 
 Errors: `404 GOAL_NOT_FOUND`, `400 INVALID_CURSOR`。
 
@@ -3780,6 +3826,84 @@ Errors:
 - `CYCLE_REVISION_CONFLICT`
 - `REVIEW_SCHEDULE_UPDATE_FAILED`
 
+## 24.8 `POST /api/v1/goals/{goalId}/cycles/{cycleId}/replan`
+
+**Use Case:** ReplanCycle
+**Auth:** Session
+**Authorization:** Goal owner + Cycle same Goal + Goal `active_cycle` + Cycle `active`
+
+Request:
+
+```json
+{
+  "operationId": "uuid-v7",
+  "expectedGoalRevision": 5,
+  "expectedContentRevision": 18,
+  "expectedReviewScheduleRevision": 2,
+  "confirmed": true
+}
+```
+
+全fieldをrequiredとし、3 revisionは0以上とする。`confirmed`はboolean literal `true`だけがcommandを許可し、missing、`null`、stringまたは`false`は再計画しない。`expectedReviewScheduleRevision`はFrame saveと独立したschedule変更とのraceを拒否し、既存review dateを新Cycleへ継承するためには使わない。
+
+Response `200`:
+
+```json
+{
+  "canceledCycle": {
+    "id": "source-cycle-uuid",
+    "sequenceNumber": 3,
+    "status": "canceled",
+    "cancellationReason": "replanned",
+    "previousCompletedCycleAction": null
+  },
+  "goal": {
+    "id": "goal-uuid",
+    "status": "active_cycle",
+    "revision": 6,
+    "currentVersion": {
+      "id": "version-uuid",
+      "versionNumber": 2,
+      "body": "平日は主要業務を18時までに終える"
+    }
+  },
+  "cycle": {
+    "id": "successor-cycle-uuid",
+    "sequenceNumber": 4,
+    "status": "active",
+    "goalVersion": {
+      "id": "version-uuid",
+      "versionNumber": 2,
+      "body": "平日は主要業務を18時までに終える"
+    },
+    "reviewDate": null,
+    "reviewScheduleRevision": 0,
+    "plan": "",
+    "do": "",
+    "check": "",
+    "action": "",
+    "contentRevision": 0,
+    "frameRevisions": { "plan": 0, "do": 0, "check": 0, "action": 0 },
+    "previousCompletedCycleAction": null
+  }
+}
+```
+
+`canceledCycle`と`cycle`は§24.0のfull `CycleView`であり、例では関係するfieldだけを示す。Goal Version ID / number / bodyはSourceとSuccessorで同一である。SuccessorにSourceのP/D/C/A、review date、revisionをcopyしない。Response loss時は同じ`operationId`と同じrequestを再送し、`replayed:true`を付けたauthoritative resultへ収束する。
+
+Errors:
+
+- `CYCLE_REPLAN_CONFIRMATION_REQUIRED`
+- `GOAL_NOT_FOUND`
+- `CYCLE_NOT_FOUND`
+- `GOAL_STATE_CONFLICT`
+- `GOAL_VERSION_CONFLICT`
+- `CYCLE_NOT_ACTIVE`
+- `CYCLE_REVISION_CONFLICT`
+- `AI_OPERATION_IN_PROGRESS`
+- `IDEMPOTENCY_KEY_REUSED`
+- `CYCLE_REPLAN_FAILED`
+
 ---
 
 # 25. Authentication / Account API
@@ -3962,6 +4086,7 @@ Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除す�
 | 400 | `GOAL_REVIEW_DISCARD_CONFIRMATION_REQUIRED` | Review Draft変更破棄のconfirmへ戻す |
 | 400 | `GOAL_DELETE_CONFIRMATION_REQUIRED` | confirmへ戻す |
 | 400 | `ACCOUNT_DELETE_CONFIRMATION_REQUIRED` | confirmへ戻す |
+| 400 | `CYCLE_REPLAN_CONFIRMATION_REQUIRED` | Replan確認へ戻す |
 | 401 | `SESSION_MISSING` | bootstrap/auth restore |
 | 401 | `SESSION_EXPIRED` | draft保持して再認証 |
 | 403 | `CSRF_INVALID` | session refresh |
@@ -4008,6 +4133,7 @@ Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除す�
 | 500 | `FRAME_SAVE_FAILED` | Frame維持 |
 | 500 | `REVIEW_SCHEDULE_UPDATE_FAILED` | 現在の見直す日を再取得して再試行 |
 | 500 | `CYCLE_COMPLETION_FAILED` | Cycle active維持 |
+| 500 | `CYCLE_REPLAN_FAILED` | Source Cycle active、Successor不存在を再取得 |
 | 500 | `GOAL_REVIEW_INVARIANT_BROKEN` | 一般Error +運用alert |
 | 500 | `GOAL_REVIEW_DRAFT_SAVE_FAILED` | Review Draft維持 |
 | 500 | `GOAL_REVIEW_CONTINUE_FAILED` | Review open維持 |
@@ -4261,6 +4387,7 @@ Server resource取得後:
 | Goal Review Continue | `saved` |
 | Action Generate / Refine | `saved` |
 | Cycle Complete | `saved` |
+| Cycle Replan | 通常は全Frame `saved`。Save failure / Recovery conflictでは明示discard確認後だけ送信可 |
 | Active Cycle中のGoal achieve/end | Cycle save `saved`。最新入力をCanceled履歴へ残すため |
 | Review Goal achieve/end | Draft save不要。Draft変更を破棄するため |
 | Goal Delete | save不要。確認後queueをcancelしcontentごと削除 |
@@ -4322,7 +4449,7 @@ Redux / Zustand等のGlobal StoreはMVPでは導入しない。Server stateはTa
 | Goal Creation editor | Creation Draft、Auto Save state、Goal Refine、Start eligibility、Draft recoveryを統合する |
 | Goal Refine comparison | User draftとAI suggestionを同時表示し、明示Adoptだけを反映する |
 | Goal Review editor | Current Goal Version、Review Draft、Continue、Achieve、Endを扱い、terminal時のDraft破棄を説明する |
-| Cycle editor | P/D/C/A Tab、Textarea、Active Pの直前A参照、P/Dの任意built-in template、Frame別revision、Save state、Action AI、Cycle completionを扱う |
+| Cycle editor | P/D/C/A Tab、Textarea、Active Pの直前A参照、P/Dの任意built-in template、Frame別revision、Save state、Action AI、Cycle completion、Replanを扱う |
 | Action eligibility | Generate / Refine / Completeのpredicateをpure logicとして算出し、UI文言で判定しない |
 | Goal history timeline | Cycleの`goalVersionId`変化からVersion change markerを生成し、Completed / Canceled detailをread-only表示する |
 | Session / account UI | Anonymous state、Google connection、identity collision、Account Deleteを扱う。Anonymous bootstrapの`429 RATE_LIMIT_EXCEEDED`は自動再送せず、待ってからの手動Retryを案内する |
@@ -4617,7 +4744,7 @@ SQLを1巨大Repository methodへ隠しすぎず、Transaction object内のtyped
 | Concern | Canonical owner |
 |---|---|
 | Global lock order、same-kind ordering、CAS failure | §18.1 |
-| Use Case別Transaction / replay | §§18.2–18.7 |
+| Use Case別Transaction / replay | §§18.2–18.7、18.10 |
 | Race、mechanism、guarantee matrix | §18.8 |
 | Request identity hash | §18.9 |
 | API replay response / Frontend convergence | §20.4 |
@@ -5447,7 +5574,7 @@ Database constraints
 - DomainはGoal/Cycle status、blank、length、transition、Review dateのexact Gregorian date範囲等を検証する。
 - DBはFK、Unique、CHECK、partial uniqueで最後の防波堤を提供する。
 
-Shared full `CycleView`の`previousCompletedCycleAction`は、Repository mapperがSQL nullable tupleと前Cycle statusを失わずに解釈し、Applicationが§14.5のcurrent / predecessor関係と§18.5のGoal Version遷移を再検証する。Required fieldの欠落、Active Cycle `N > 1`の`null`、Cycle 1またはterminal Cycleのobject、direct sequence以外、non-Completed predecessor、解決不能なGoal Version、Goal Version遷移違反、invalid / blank Aはinvariant errorとし、別のCycleまたは空値で補完しない。
+Shared full `CycleView`の`previousCompletedCycleAction`は、Repository mapperがSQL nullable tupleと前Cycle status / cancellation reasonを失わずに解釈し、Applicationが§14.5のcurrent / predecessor関係と§§18.5、18.10のGoal Version遷移を再検証する。Required fieldの欠落、根拠となる`replanned` predecessorがないActive Cycle `N > 1`の`null`、Cycle 1またはterminal Cycleのobject、direct sequence以外、Completedまたは`canceled(reason=replanned)`以外のpredecessor、解決不能なGoal Version、Goal Version遷移違反、Completed predecessorのinvalid / blank Aはinvariant errorとし、別のCycleまたは空値で補完しない。
 
 ## 40.2 Character definition
 
@@ -5849,6 +5976,8 @@ cycle_completed_total
 cycle_canceled_total{reason}
 ```
 
+Cycle Replanのfresh successは既存の`cycle_canceled_total{reason="replanned"}`と`cycle_started_total`へ各1回だけ投影し、idempotent replayは増分しない。Replan専用Browser event、tracking telemetry、durable event ledger、User識別labelは追加しない。Replanの効果測定は別のProduct analysis follow-upであり、このDomain / API実装のrelease blockerではない。
+
 ### AI
 
 ```text
@@ -6227,6 +6356,8 @@ Backward-incompatible変更はExpand / Contractを使い、同一Deployで直前
 
 Worker、Static Assets、Containerを同じDeployで更新しても、旧Containerのauthoritative drainが完了するまでは新Frontendと旧Backendが混在し得る。新Frontendが欠落を拒否するrequired response fieldを追加し、旧Frontendがunknown fieldを安全に無視できる場合は、Backend response contractのexpandとFrontend consumer activationを別candidateへ分ける。`previousCompletedCycleAction`のBackend expandでは、旧Frontendはこのunknown fieldを無視し、既存の表示と操作を維持する。先にBackend expandだけをdeployし、old-image drainと新fieldの全適用surfaceを検証したcheckpointの後でのみFrontendのrequired schema / UIを有効化する。Backend expand candidateだけではFrontend behaviorを有効化せず、新Frontendはfield欠落を`null`へ正規化して互換性問題を隠さない。Drainまたは全surfaceのcontractを証明できない場合はFrontend activation candidateのmerge / deployを停止する。
 
+Cycle ReplanもBackend-firstの2 candidateで有効化する。Expand candidateは`000008`、Backendの`replanned` read/write・endpoint、Cycle summaryのrequired nullable `cancellationReason`、およびFrontend readerの旧 / 新Backend dual-readだけを含み、`このCycleを中断して再計画`のUI actionを公開しない。Migration後も旧Backend writerが従来の`NULL|goal_achieved|goal_ended`を書けること、expand Backendの全full-Cycle / summary surfaceが新enumを安全に表現できることを検証してdeployする。Authoritative metadataで旧Backend imageのdrainを証明した後にだけ、別Frontend activation candidateでReplan actionを公開する。Drainが証明できない、旧BackendへReplan requestが到達し得る、またはreader互換性を証明できない場合はactivationを停止する。Activation rollbackでは`replanned` rowを読めるFrontend / Backendを維持し、Productionで`000008` downを実行しない。
+
 ## 44.5 Health endpoints
 
 - `GET /healthz`: process到達確認。DB external call不要。
@@ -6392,7 +6523,7 @@ Governance / Policyの大規模negative fixture suiteは、gate / CI control-pla
 | Bootstrap、Session、Google、Account Delete | §§18.2、21、25、27、41.10 | Domain/Application、HTTP matrix、実DB concurrency、Frontend identity fence、E2E |
 | 初回Guide / Browser-local state | §§2.2–2.3、6.5、9.10、11.6、27.4–27.5、28.8、29.12、40.7、41.13、42.3、43.9 | Frontend predicate/storage/identity unit、component/A11y/responsive、two-tab race、AI-free E2E、privacy/telemetry negative assertion |
 | Goal Draft、Start、limit、Version | §§12、14、18.3、22 | Domain boundary、HTTP、real-DB rollback/concurrency、Frontend editor、E2E |
-| Cycle save、P/D template、review schedule、complete、Review、termination、full Cycle predecessor read | §§9.6–9.7、13–14、18.4–18.6、23–24、28 | template preview / blank・non-blank・terminal・IME・recovery・UndoのFrontend、content / schedule revision・transition・read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
+| Cycle save、P/D template、review schedule、complete、replan、Review、termination、full Cycle predecessor read | §§9.6–9.7、13–14、18.4–18.6、18.10、23–24、28 | template preview / blank・non-blank・terminal・IME・recovery・UndoのFrontend、content / schedule revision・transition・read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model unit、authz/API、real-DB cascade/CAS/cleanup、E2E |
 | AI prompt、schema、context、result | §§32–37 | typed fake、mock transport、semantic boundary、context-isolation query/application、Frontend adoption |
 | AI quota、cost、abuse | §§38–39 | real-DB quota/rate/budget/settlement/cleanup concurrency、failure and replay |
@@ -6438,9 +6569,11 @@ Stable CSRFでは、固定key / Session IDのbyte-level golden vectorによりsc
 
 Read operationはcursor tamper、scope mismatch、ordering、pagination境界、cross-user非開示を適用可能な範囲で検証する。
 
-Shared full `CycleView`の`previousCompletedCycleAction`は、Cycle 1の`null`、Active Cycleのexact predecessor、§18.5に従う同一 / `current - 1`のGoal Version、terminalの`null`、missing / Canceled / non-Completed / sequence mismatch / futureまたは2以上gapのGoal Version / 解決不能なGoal Version / blank Aのinvariant error、cross-user / cross-Goal非開示をApplication、Repository mapper、実PostgreSQL、actual HTTPで検証する。Start、Cycle detail、Review trigger、Complete、Continue、Terminateの全full-Cycle surfaceでrequired nullable fieldを検証し、Cycle list / history summaryとFrame PATCH responseが変わらないことも固定する。Continueはfresh、同一operation replay、作成Cycleがterminalへ進んだ後のresponse-loss replay、materialization不整合時のrollback、lock済みReview Draftの`reviewCycleId`との一致を含める。
+Shared full `CycleView`の`previousCompletedCycleAction`は、Cycle 1の`null`、Active Cycleのexact predecessor、Completed predecessorでは§18.5に従う同一 / `current - 1`のGoal VersionとA object、`replanned` Canceled predecessorでは同一Goal Versionと`null`、terminalの`null`を検証する。Missing / 他reasonのCanceled / non-Completed・non-Canceled / sequence mismatch / futureまたは2以上gapのGoal Version / 解決不能なGoal Version / Completedのblank Aはinvariant errorとし、cross-user / cross-Goalを非開示にする。Start、Cycle detail、Review trigger、Complete、Continue、Replan、Terminateの全full-Cycle surfaceでrequired nullable fieldを検証し、Cycle list / history summaryではrequired nullable cancellation reason、Frame PATCH responseでは従来shapeを固定する。ContinueとReplanはfresh、同一operation replay、作成Cycleが後続stateへ進んだ後のresponse-loss replay、materialization不整合時のrollbackを含め、Continueはlock済みReview Draftの`reviewCycleId`との一致も含める。
 
-Frontendは同じrequired nullable fieldを欠落時に拒否し、Cycle 1 / terminalの`null`、Active Cycle `N > 1`のobject、current Cycle IDとの差、exact `N - 1`、同一または直前のGoal Version、非空かつ§14.5上限内のAをschema境界で検証する。Active Pだけの表示、同一 / 異なるGoal Version、改行・長文、static semantics、GuideからTextareaまでのreading order、Cycle 1 / D / C / A / terminal / recovery・workspace fenceでの非表示、320px幅・200% zoom・横overflowなし、P Auto Save・Browser Draft・Frame tab keyboard操作の不変をFrontend testで固定する。
+Frontendはfull `CycleView`のfield欠落を拒否し、Cycle 1 / terminalの`null`、Active Cycle `N > 1`のCompleted predecessor objectまたはReplan後の明示`null`、current Cycle IDとの差、exact `N - 1`、同一または直前のGoal Version、非空かつ§14.5上限内のAをschema境界で検証する。Cycle summaryの`cancellationReason`だけはBackend expand中の旧Response欠落と新Responseのrequired nullable値をdual-readし、unknown reasonを拒否する。Active Pだけの表示、同一 / 異なるGoal Version、改行・長文、static semantics、GuideからTextareaまでのreading order、Cycle 1 / D / C / A / terminal / recovery・workspace fenceでの非表示、320px幅・200% zoom・横overflowなし、P Auto Save・Browser Draft・Frame tab keyboard操作の不変をFrontend testで固定する。
+
+ReplanはDomain / Application / HTTP / real PostgreSQLで、任意のCycle ageとP/D/C/A shape、exact `replanned` reason、同一Goal Version、空のSuccessorと全revision 0、review date非継承、Goal counter / revision、`confirmed:true`、3 revision conflict、AI running拒否、owner / path scope、同Key replay / different hash、二重tap、各write / materialization失敗のrollbackを検証する。Direct predecessorはCompleted→Activeでは既存A object、replanned Canceled→Activeでは`null`となり、N-2へskipしないことを固定する。Frontend activationでは通常のsave / flush後confirm、save failure / Recovery conflict時だけの明示discard、Cancel / Escape、pending相互排他、response-loss収束、Historyの`再計画のため中断`、320px / 200% zoom / KeyboardをcomponentとE2Eで検証する。
 
 ## 48.5 Critical E2E projection
 
@@ -6450,6 +6583,7 @@ E2Eは§6のuser flowと§§20–25のpublic contractを投影し、内部module
 - Fresh anonymous bootstrapから初回Guideを通り、AIを使わずGoal開始、Cycle 1のP→D→C→A、Cycle完了、Goal Reviewへ進む。自由なFrame移動、Stage close、全体skip、Hamburgerからのreplay、reload、same-user upgrade / different-user login / Account Delete、320px幅とKeyboard操作をjourney family内で検証する。
 - Goal Refineの比較・明示採用とmanual path。
 - P/D/C/A autosave、reload recovery、Action AI、Cycle completion。
+- Active Cycleのsave / flushからReplan確認、同じGoal Versionの空Cycle開始、旧Cycleの`再計画のため中断`履歴、response-loss replay。
 - Goal維持/変更、Cycle 1完了後のReview ContinueとCycle 2 Active Pでの直前A参照、terminal、History/Timeline。
 - 複数Progressing Goalのpolicy境界とDraft保全。
 - Goal Delete、Google upgrade/login collision、Account Delete。

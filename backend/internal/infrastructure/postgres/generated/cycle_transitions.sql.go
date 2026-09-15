@@ -214,6 +214,48 @@ func (q *Queries) FindContinueReviewReceipt(ctx context.Context, arg FindContinu
 	return &i, err
 }
 
+const findReplanCycleReceipt = `-- name: FindReplanCycleReceipt :one
+SELECT
+    current_cycle.goal_id,
+    current_cycle.id AS cycle_id,
+    current_cycle.start_request_hash AS request_hash,
+    previous_cycle.id AS replanned_cycle_id,
+    previous_cycle.cancellation_reason AS replanned_cancellation_reason
+FROM pdca_cycles AS current_cycle
+LEFT JOIN pdca_cycles AS previous_cycle
+  ON previous_cycle.user_id = current_cycle.user_id
+ AND previous_cycle.goal_id = current_cycle.goal_id
+ AND previous_cycle.sequence_number = current_cycle.sequence_number - 1
+WHERE current_cycle.user_id = $1::uuid
+  AND current_cycle.start_operation_id = $2::uuid
+`
+
+type FindReplanCycleReceiptParams struct {
+	UserID      pgtype.UUID
+	OperationID pgtype.UUID
+}
+
+type FindReplanCycleReceiptRow struct {
+	GoalID                      pgtype.UUID
+	CycleID                     pgtype.UUID
+	RequestHash                 string
+	ReplannedCycleID            pgtype.UUID
+	ReplannedCancellationReason *string
+}
+
+func (q *Queries) FindReplanCycleReceipt(ctx context.Context, arg FindReplanCycleReceiptParams) (*FindReplanCycleReceiptRow, error) {
+	row := q.db.QueryRow(ctx, findReplanCycleReceipt, arg.UserID, arg.OperationID)
+	var i FindReplanCycleReceiptRow
+	err := row.Scan(
+		&i.GoalID,
+		&i.CycleID,
+		&i.RequestHash,
+		&i.ReplannedCycleID,
+		&i.ReplannedCancellationReason,
+	)
+	return &i, err
+}
+
 const findStartReplay = `-- name: FindStartReplay :one
 SELECT
     goal_id,
@@ -498,6 +540,47 @@ func (q *Queries) LockGoalCycleIDs(ctx context.Context, arg LockGoalCycleIDsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const replanGoalCAS = `-- name: ReplanGoalCAS :execrows
+UPDATE goals
+SET next_cycle_sequence_number = $1::integer,
+    revision = $2::bigint,
+    updated_at = $3::timestamptz
+WHERE id = $4::uuid
+  AND user_id = $5::uuid
+  AND status = 'active_cycle'
+  AND current_version_number = $6::integer
+  AND next_cycle_sequence_number = $7::integer
+  AND revision = $8::bigint
+`
+
+type ReplanGoalCASParams struct {
+	NextCycleSequenceNumber         int32
+	Revision                        int64
+	UpdatedAt                       pgtype.Timestamptz
+	GoalID                          pgtype.UUID
+	UserID                          pgtype.UUID
+	CurrentVersionNumber            int32
+	ExpectedNextCycleSequenceNumber int32
+	ExpectedRevision                int64
+}
+
+func (q *Queries) ReplanGoalCAS(ctx context.Context, arg ReplanGoalCASParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replanGoalCAS,
+		arg.NextCycleSequenceNumber,
+		arg.Revision,
+		arg.UpdatedAt,
+		arg.GoalID,
+		arg.UserID,
+		arg.CurrentVersionNumber,
+		arg.ExpectedNextCycleSequenceNumber,
+		arg.ExpectedRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const saveCycleActionCAS = `-- name: SaveCycleActionCAS :execrows

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-var cycleHighLevelOperations = []string{"ListCycles", "GetCycle", "SaveFrame", "CompleteCycle"}
+var cycleHighLevelOperations = []string{"ListCycles", "GetCycle", "SaveFrame", "CompleteCycle", "ReplanCycle"}
 
 func TestCycleBoundaryIsOwnedByApplication(t *testing.T) {
 	t.Parallel()
@@ -25,10 +25,10 @@ func TestCycleBoundaryIsOwnedByApplication(t *testing.T) {
 		interfaceType := findInterfaceType(t, application, "Store")
 		assertInterfaceFieldsExcludeCycleOperations(t, application, "Store", interfaceType, make(map[*ast.InterfaceType]bool))
 	})
-	t.Run("Save and Complete each enter one Cycle Unit of Work", func(t *testing.T) {
+	t.Run("Cycle commands each enter one Cycle Unit of Work", func(t *testing.T) {
 		functions := indexApplicationFunctions(application)
 		fields := indexApplicationStructFields(application)
-		for _, operation := range []string{"SaveFrame", "CompleteCycle"} {
+		for _, operation := range []string{"SaveFrame", "CompleteCycle", "ReplanCycle"} {
 			key := applicationFunctionKey{receiver: "Service", name: operation}
 			if functions[key] == nil {
 				t.Fatalf("Application entrypoint (*Service).%s is missing", operation)
@@ -61,6 +61,7 @@ func assertCycleTargetPrecedesGoalConflicts(t *testing.T, application parsedGoPa
 	}{
 		{method: "SaveFrame", conflicts: []string{"ErrGoalStateConflict"}},
 		{method: "CompleteCycle", conflicts: []string{"ErrGoalStateConflict", "ErrGoalRevisionConflict"}},
+		{method: "ReplanCycle", conflicts: []string{"ErrGoalStateConflict", "ErrGoalRevisionConflict"}},
 	}
 	for _, test := range tests {
 		function := functions[applicationFunctionKey{receiver: "CycleUseCases", name: test.method}]

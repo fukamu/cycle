@@ -345,6 +345,280 @@ func (useCases *CycleUseCases) CompleteCycle(ctx context.Context, input Complete
 	return result, err
 }
 
+func (useCases *CycleUseCases) ReplanCycle(ctx context.Context, input ReplanCycleInput) (result ReplanCycleResult, err error) {
+	if !input.Confirmed {
+		return result, ErrReplanConfirmation
+	}
+	requestHash := replanCycleRequestHash(input)
+	err = useCases.uow.WithinCycleTransaction(ctx, func(tx CycleTx) error {
+		if lockErr := tx.LockUser(ctx, input.UserID); lockErr != nil {
+			return lockErr
+		}
+		receipt, findErr := tx.FindReplanCycleReceipt(ctx, input.UserID, input.OperationID)
+		if findErr != nil {
+			return findErr
+		}
+		if findErr = validateReplanCycleReceipt(receipt, input, requestHash); findErr != nil {
+			return findErr
+		}
+		lockedGoal, lockErr := tx.LockGoal(ctx, input.UserID, input.GoalID)
+		if lockErr != nil {
+			return lockErr
+		}
+		if lockedGoal.UserID != input.UserID || lockedGoal.ID != input.GoalID {
+			return cycleInvariantError("locked Goal target does not match Replan Cycle")
+		}
+		if receipt != nil {
+			result, lockErr = buildReplanCycleReplay(ctx, tx, input, *receipt)
+			return lockErr
+		}
+		current, lockErr := tx.LockCycle(ctx, input.UserID, input.GoalID, input.CycleID)
+		if lockErr != nil {
+			return lockErr
+		}
+		if current.UserID != input.UserID || current.GoalID != input.GoalID || current.ID != input.CycleID {
+			return cycleInvariantError("locked Cycle target does not match Replan Cycle")
+		}
+		if lockedGoal.Status != goal.StatusActiveCycle {
+			return ErrGoalStateConflict
+		}
+		if lockedGoal.Revision != input.ExpectedGoalRevision {
+			return ErrGoalRevisionConflict
+		}
+		if current.Status != cycle.StatusActive {
+			return cycle.ErrCycleNotActive
+		}
+		if lockedGoal.NextCycleSequenceNumber <= 1 ||
+			current.SequenceNumber != lockedGoal.NextCycleSequenceNumber-1 {
+			return cycleInvariantError("active Cycle sequence does not match its Goal during Replan")
+		}
+		if current.Revisions.Content != input.ExpectedContentRevision ||
+			current.ReviewScheduleRevision != input.ExpectedReviewScheduleRevision {
+			return cycle.ErrRevisionConflict
+		}
+		currentVersion, loadErr := tx.LoadCurrentGoalVersion(
+			ctx,
+			input.UserID,
+			input.GoalID,
+			lockedGoal.CurrentVersionNumber,
+		)
+		if loadErr != nil {
+			if errors.Is(loadErr, ErrNotFound) || errors.Is(loadErr, ErrGoalVersionConflict) {
+				return ErrGoalVersionConflict
+			}
+			return loadErr
+		}
+		if currentVersion.UserID != input.UserID || currentVersion.GoalID != input.GoalID ||
+			currentVersion.VersionNumber != lockedGoal.CurrentVersionNumber || currentVersion.ID != current.GoalVersionID {
+			return ErrGoalVersionConflict
+		}
+		aiRunning, loadErr := tx.HasRunningCycleGeneration(ctx, input.UserID, input.GoalID, input.CycleID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if aiRunning {
+			return ErrAIInProgress
+		}
+		newCycleID, idErr := useCases.ids.NewID()
+		if idErr != nil {
+			return idErr
+		}
+		if !identifier.IsCanonicalUUIDv7(newCycleID) {
+			return cycleInvariantError("ID generator returned a non-canonical Replan Cycle UUIDv7")
+		}
+		now := useCases.clock.Now().UTC().Truncate(time.Microsecond)
+		replanned, transitionErr := goal.Replan(
+			lockedGoal,
+			currentVersion,
+			current,
+			newCycleID,
+			input.OperationID,
+			requestHash,
+			now,
+		)
+		if transitionErr != nil {
+			if errors.Is(transitionErr, goal.ErrStateConflict) {
+				return cycleInvariantError("validated Replan aggregate was rejected by Domain")
+			}
+			return transitionErr
+		}
+
+		rows, writeErr := tx.CancelCycleCAS(ctx, replanned.CanceledCycle, input.ExpectedContentRevision)
+		if writeErr != nil {
+			return writeErr
+		}
+		if writeErr = requireCycleRows("cancel replanned Cycle", rows, 1); writeErr != nil {
+			return writeErr
+		}
+		rows, writeErr = tx.TryInsertCycleClaim(ctx, replanned.Cycle)
+		if writeErr != nil {
+			return writeErr
+		}
+		if rows == 0 {
+			return classifyLostReplanCycleClaim(ctx, tx, input, requestHash)
+		}
+		if writeErr = requireCycleRows("insert replanned successor Cycle", rows, 1); writeErr != nil {
+			return writeErr
+		}
+		rows, writeErr = tx.ReplanGoalCAS(ctx, replanned.Goal, input.ExpectedGoalRevision)
+		if writeErr != nil {
+			return writeErr
+		}
+		if writeErr = requireCycleRows("advance replanned Goal", rows, 1); writeErr != nil {
+			return writeErr
+		}
+
+		result.CanceledCycle, writeErr = tx.LoadCycleView(ctx, input.UserID, input.GoalID, input.CycleID)
+		if writeErr != nil {
+			return replanCycleMaterializationError("canceled Cycle", writeErr)
+		}
+		result.Goal, writeErr = tx.LoadGoalView(ctx, input.UserID, input.GoalID)
+		if writeErr != nil {
+			return replanCycleMaterializationError("Goal", writeErr)
+		}
+		result.Cycle, writeErr = tx.LoadCycleView(ctx, input.UserID, input.GoalID, newCycleID)
+		if writeErr != nil {
+			return replanCycleMaterializationError("successor Cycle", writeErr)
+		}
+		return validateFreshReplanCycleResult(result, replanned, input)
+	})
+	return result, err
+}
+
+func replanCycleRequestHash(input ReplanCycleInput) string {
+	return hashRequest(struct {
+		GoalID                 string `json:"goalId"`
+		CycleID                string `json:"cycleId"`
+		GoalRevision           int64  `json:"goalRevision"`
+		ContentRevision        int64  `json:"contentRevision"`
+		ReviewScheduleRevision int64  `json:"reviewScheduleRevision"`
+		Confirmed              bool   `json:"confirmed"`
+	}{
+		input.GoalID,
+		input.CycleID,
+		input.ExpectedGoalRevision,
+		input.ExpectedContentRevision,
+		input.ExpectedReviewScheduleRevision,
+		input.Confirmed,
+	})
+}
+
+func validateReplanCycleReceipt(receipt *ReplanCycleReceipt, input ReplanCycleInput, requestHash string) error {
+	if receipt == nil {
+		return nil
+	}
+	if receipt.GoalID != input.GoalID || receipt.RequestHash != requestHash ||
+		receipt.ReplannedCycleID != input.CycleID || receipt.CycleID == "" ||
+		receipt.ReplannedCancellationReason == nil ||
+		*receipt.ReplannedCancellationReason != cycle.CancellationReplanned {
+		return ErrIdempotencyKeyReused
+	}
+	return nil
+}
+
+func classifyLostReplanCycleClaim(
+	ctx context.Context,
+	tx CycleTx,
+	input ReplanCycleInput,
+	requestHash string,
+) error {
+	receipt, err := tx.FindReplanCycleReceipt(ctx, input.UserID, input.OperationID)
+	if err != nil {
+		return err
+	}
+	if err = validateReplanCycleReceipt(receipt, input, requestHash); err != nil {
+		return err
+	}
+	if receipt == nil {
+		return cycleInvariantError("Replan Cycle claim affected no row without a competing receipt")
+	}
+	return cycleInvariantError("matching Replan Cycle receipt appeared while its User lock was held")
+}
+
+func buildReplanCycleReplay(
+	ctx context.Context,
+	tx CycleTx,
+	input ReplanCycleInput,
+	receipt ReplanCycleReceipt,
+) (result ReplanCycleResult, err error) {
+	result.CanceledCycle, err = tx.LoadCycleView(ctx, input.UserID, receipt.GoalID, receipt.ReplannedCycleID)
+	if err != nil {
+		return result, replanCycleMaterializationError("replay canceled Cycle", err)
+	}
+	result.Goal, err = tx.LoadGoalView(ctx, input.UserID, receipt.GoalID)
+	if err != nil {
+		return result, replanCycleMaterializationError("replay Goal", err)
+	}
+	result.Cycle, err = tx.LoadCycleView(ctx, input.UserID, receipt.GoalID, receipt.CycleID)
+	if err != nil {
+		return result, replanCycleMaterializationError("replay successor Cycle", err)
+	}
+	result.Replayed = true
+	return result, validateReplanCycleReplay(result, receipt)
+}
+
+func replanCycleMaterializationError(resource string, err error) error {
+	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrGoalNotFound) || errors.Is(err, ErrCycleNotFound) {
+		return cycleInvariantError("Replan Cycle " + resource + " disappeared after its parent lock")
+	}
+	return err
+}
+
+func validateFreshReplanCycleResult(result ReplanCycleResult, replanned goal.ReplanResult, input ReplanCycleInput) error {
+	if err := validateReplanCyclePair(result.CanceledCycle, result.Cycle, input.GoalID, input.CycleID); err != nil {
+		return err
+	}
+	if result.Cycle.ID != replanned.Cycle.ID || result.Cycle.Status != cycle.StatusActive ||
+		result.Cycle.ContentRevision != 0 || result.Cycle.FrameRevisions != (FrameRevisions{}) ||
+		result.Cycle.Plan != "" || result.Cycle.Do != "" || result.Cycle.Check != "" || result.Cycle.Action != "" ||
+		result.Cycle.ReviewDate != nil || result.Cycle.ReviewScheduleRevision != 0 ||
+		result.Cycle.PreviousCompletedCycleAction != nil ||
+		result.CanceledCycle.ReviewScheduleRevision != replanned.CanceledCycle.ReviewScheduleRevision ||
+		!reviewDatesEqual(result.CanceledCycle.ReviewDate, replanned.CanceledCycle.ReviewDate) ||
+		result.Goal.ID != input.GoalID || result.Goal.Status != goal.StatusActiveCycle ||
+		result.Goal.Revision != input.ExpectedGoalRevision+1 || result.Goal.CurrentVersion.ID != result.Cycle.GoalVersion.ID ||
+		result.Goal.NextCycleSequenceNumber != result.Cycle.SequenceNumber+1 || validateGoalCurrentWork(result.Goal) != nil ||
+		result.Goal.CurrentWork == nil || result.Goal.CurrentWork.Kind != "active_cycle" ||
+		result.Goal.CurrentWork.CycleID != result.Cycle.ID ||
+		result.Goal.CurrentWork.CycleSequenceNumber != result.Cycle.SequenceNumber {
+		return cycleInvariantError("fresh Replan Cycle response is inconsistent")
+	}
+	return nil
+}
+
+func validateReplanCycleReplay(result ReplanCycleResult, receipt ReplanCycleReceipt) error {
+	if !result.Replayed || result.Goal.ID != receipt.GoalID || result.Cycle.ID != receipt.CycleID ||
+		validateGoalCurrentWork(result.Goal) != nil {
+		return cycleInvariantError("Replan Cycle replay Goal is inconsistent")
+	}
+	if result.Cycle.Status == cycle.StatusActive &&
+		(result.Goal.Status != goal.StatusActiveCycle || result.Goal.CurrentWork == nil ||
+			result.Goal.CurrentWork.CycleID != result.Cycle.ID ||
+			result.Goal.CurrentWork.CycleSequenceNumber != result.Cycle.SequenceNumber) {
+		return cycleInvariantError("active Replan Cycle replay is not the current Goal work")
+	}
+	return validateReplanCyclePair(result.CanceledCycle, result.Cycle, receipt.GoalID, receipt.ReplannedCycleID)
+}
+
+func validateReplanCyclePair(canceled, next CycleView, goalID, canceledCycleID string) error {
+	if validateCycleView(canceled, goalID, canceledCycleID) != nil ||
+		validateCycleView(next, goalID, next.ID) != nil ||
+		canceled.Status != cycle.StatusCanceled || canceled.CancellationReason == nil ||
+		*canceled.CancellationReason != cycle.CancellationReplanned || canceled.CanceledAt == nil ||
+		next.SequenceNumber != canceled.SequenceNumber+1 || next.GoalVersion.ID != canceled.GoalVersion.ID ||
+		next.GoalVersion.VersionNumber != canceled.GoalVersion.VersionNumber {
+		return cycleInvariantError("Replan Cycle pair is inconsistent")
+	}
+	return nil
+}
+
+func reviewDatesEqual(left, right *cycle.ReviewDate) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func completeCycleRequestHash(input CompleteCycleInput) string {
 	return hashRequest(struct {
 		GoalID          string `json:"goalId"`
@@ -509,7 +783,7 @@ func validateCycleSummaries(rows []CycleSummary) error {
 		if !identifier.IsCanonicalUUIDv7(row.ID) || row.SequenceNumber <= 0 || row.StartedAt.IsZero() {
 			return cycleInvariantError("Cycle query row metadata is incomplete")
 		}
-		if err := validateCycleSummaryStatusTimes(row.Status, row.CompletedAt, row.CanceledAt); err != nil {
+		if err := validateCycleSummaryStatusTimes(row.Status, row.CompletedAt, row.CanceledAt, row.CancellationReason); err != nil {
 			return err
 		}
 		if err := validateCycleGoalVersion(row.GoalVersion); err != nil {
@@ -558,34 +832,54 @@ func validateCycleView(view CycleView, goalID, cycleID string) error {
 
 func validatePreviousCompletedCycleAction(view CycleView) error {
 	if view.Status != cycle.StatusActive || view.SequenceNumber == 1 {
-		if view.PreviousCompletedCycleAction != nil {
+		if view.PreviousCompletedCycleAction != nil || view.Predecessor != nil {
 			return cycleInvariantError("Cycle must not expose a previous completed Action")
 		}
 		return nil
 	}
+	predecessor := view.Predecessor
+	if predecessor == nil || !identifier.IsCanonicalUUIDv7(predecessor.CycleID) || predecessor.CycleID == view.ID ||
+		predecessor.CycleSequenceNumber != view.SequenceNumber-1 || predecessor.GoalVersionNumber <= 0 ||
+		predecessor.GoalVersionNumber > view.GoalVersion.VersionNumber ||
+		predecessor.GoalVersionNumber < view.GoalVersion.VersionNumber-1 {
+		return cycleInvariantError("active Cycle predecessor is inconsistent")
+	}
 	previous := view.PreviousCompletedCycleAction
-	if previous == nil || !identifier.IsCanonicalUUIDv7(previous.CycleID) || previous.CycleID == view.ID ||
-		previous.CycleSequenceNumber != view.SequenceNumber-1 || previous.GoalVersionNumber <= 0 ||
-		previous.GoalVersionNumber > view.GoalVersion.VersionNumber ||
-		previous.GoalVersionNumber < view.GoalVersion.VersionNumber-1 || cycle.IsBlank(previous.Action) ||
-		utf8.RuneCountInString(previous.Action) > cycle.MaxFrameCodePoints {
-		return cycleInvariantError("active Cycle previous completed Action is inconsistent")
+	switch predecessor.Status {
+	case cycle.StatusCompleted:
+		if predecessor.CancellationReason != nil || previous == nil || previous.CycleID != predecessor.CycleID ||
+			previous.CycleSequenceNumber != predecessor.CycleSequenceNumber ||
+			previous.GoalVersionNumber != predecessor.GoalVersionNumber || cycle.IsBlank(previous.Action) ||
+			utf8.RuneCountInString(previous.Action) > cycle.MaxFrameCodePoints {
+			return cycleInvariantError("active Cycle previous completed Action is inconsistent")
+		}
+	case cycle.StatusCanceled:
+		if predecessor.CancellationReason == nil || *predecessor.CancellationReason != cycle.CancellationReplanned ||
+			predecessor.GoalVersionNumber != view.GoalVersion.VersionNumber || previous != nil {
+			return cycleInvariantError("active Cycle replanned predecessor is inconsistent")
+		}
+	default:
+		return cycleInvariantError("active Cycle predecessor status is invalid")
 	}
 	return nil
 }
 
-func validateCycleSummaryStatusTimes(status cycle.Status, completedAt, canceledAt *time.Time) error {
+func validateCycleSummaryStatusTimes(
+	status cycle.Status,
+	completedAt, canceledAt *time.Time,
+	reason *cycle.CancellationReason,
+) error {
 	switch status {
 	case cycle.StatusActive:
-		if completedAt != nil || canceledAt != nil {
+		if completedAt != nil || canceledAt != nil || reason != nil {
 			return cycleInvariantError("active Cycle summary has terminal metadata")
 		}
 	case cycle.StatusCompleted:
-		if completedAt == nil || canceledAt != nil {
+		if completedAt == nil || canceledAt != nil || reason != nil {
 			return cycleInvariantError("completed Cycle summary terminal metadata is invalid")
 		}
 	case cycle.StatusCanceled:
-		if completedAt != nil || canceledAt == nil {
+		if completedAt != nil || canceledAt == nil || reason == nil || !cycle.IsValidCancellationReason(*reason) {
 			return cycleInvariantError("canceled Cycle summary terminal metadata is invalid")
 		}
 	default:
@@ -610,7 +904,7 @@ func validateCycleStatusTimes(
 		}
 	case cycle.StatusCanceled:
 		if completedAt != nil || canceledAt == nil || reason == nil ||
-			(*reason != cycle.CancellationGoalAchieved && *reason != cycle.CancellationGoalEnded) {
+			!cycle.IsValidCancellationReason(*reason) {
 			return cycleInvariantError("canceled Cycle terminal metadata is invalid")
 		}
 	default:

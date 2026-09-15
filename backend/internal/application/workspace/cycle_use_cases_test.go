@@ -183,21 +183,27 @@ func (uow *cycleTestUOW) WithinCycleTransaction(ctx context.Context, operation f
 type cycleTestTx struct {
 	trace []string
 
-	receipts    []*CompleteCycleReceipt
-	receiptCall int
-	receiptErr  error
-	goal        goal.Goal
-	goalErr     error
-	current     cycle.PDCACycle
-	cycleErr    error
-	version     goal.Version
-	versionErr  error
-	aiRunning   bool
-	aiErr       error
+	receipts          []*CompleteCycleReceipt
+	receiptCall       int
+	receiptErr        error
+	replanReceipts    []*ReplanCycleReceipt
+	replanReceiptCall int
+	replanReceiptErr  error
+	goal              goal.Goal
+	goalErr           error
+	current           cycle.PDCACycle
+	cycleErr          error
+	version           goal.Version
+	versionErr        error
+	aiRunning         bool
+	aiErr             error
 
 	saveRows     int64
 	scheduleRows int64
 	completeRows int64
+	cancelRows   int64
+	cycleRows    int64
+	replanRows   int64
 	draftRows    int64
 	goalRows     int64
 	writeErr     error
@@ -209,12 +215,17 @@ type cycleTestTx struct {
 	scheduleExpected       int64
 	completedCycle         cycle.PDCACycle
 	completeExpected       int64
+	canceledCycle          cycle.PDCACycle
+	insertedCycle          cycle.PDCACycle
+	replannedGoal          goal.Goal
 	insertedDraft          goal.Draft
 	reviewingGoal          goal.Goal
 	goalExpectedRevision   int64
 	loadedVersionNumber    int32
 	goalView               GoalView
 	cycleView              CycleView
+	cycleViews             map[string]CycleView
+	cycleViewIDs           []string
 	draftView              *DraftView
 	materializationLoadErr error
 }
@@ -230,6 +241,19 @@ func (tx *cycleTestTx) FindCompleteCycleReceipt(context.Context, string, string)
 		return nil, nil
 	}
 	return tx.receipts[index], nil
+}
+
+func (tx *cycleTestTx) FindReplanCycleReceipt(context.Context, string, string) (*ReplanCycleReceipt, error) {
+	tx.trace = append(tx.trace, "replan-receipt")
+	if tx.replanReceiptErr != nil {
+		return nil, tx.replanReceiptErr
+	}
+	index := tx.replanReceiptCall
+	tx.replanReceiptCall++
+	if index >= len(tx.replanReceipts) {
+		return nil, nil
+	}
+	return tx.replanReceipts[index], nil
 }
 
 func (tx *cycleTestTx) LockUser(context.Context, string) error {
@@ -280,6 +304,24 @@ func (tx *cycleTestTx) CompleteCycleCAS(_ context.Context, completed cycle.PDCAC
 	return tx.completeRows, tx.writeErr
 }
 
+func (tx *cycleTestTx) CancelCycleCAS(_ context.Context, canceled cycle.PDCACycle, expected int64) (int64, error) {
+	tx.trace = append(tx.trace, "cancel")
+	tx.canceledCycle, tx.completeExpected = canceled, expected
+	return tx.cancelRows, tx.writeErr
+}
+
+func (tx *cycleTestTx) TryInsertCycleClaim(_ context.Context, created cycle.PDCACycle) (int64, error) {
+	tx.trace = append(tx.trace, "insert-cycle")
+	tx.insertedCycle = created
+	return tx.cycleRows, tx.writeErr
+}
+
+func (tx *cycleTestTx) ReplanGoalCAS(_ context.Context, replanned goal.Goal, expected int64) (int64, error) {
+	tx.trace = append(tx.trace, "replan-goal")
+	tx.replannedGoal, tx.goalExpectedRevision = replanned, expected
+	return tx.replanRows, tx.writeErr
+}
+
 func (tx *cycleTestTx) InsertReviewDraft(_ context.Context, draft goal.Draft) (int64, error) {
 	tx.trace = append(tx.trace, "draft")
 	tx.insertedDraft = draft
@@ -297,8 +339,19 @@ func (tx *cycleTestTx) LoadGoalView(context.Context, string, string) (GoalView, 
 	return tx.goalView, tx.materializationLoadErr
 }
 
-func (tx *cycleTestTx) LoadCycleView(context.Context, string, string, string) (CycleView, error) {
+func (tx *cycleTestTx) LoadCycleView(_ context.Context, _, _ string, cycleID string) (CycleView, error) {
 	tx.trace = append(tx.trace, "load-cycle")
+	tx.cycleViewIDs = append(tx.cycleViewIDs, cycleID)
+	if tx.materializationLoadErr != nil {
+		return CycleView{}, tx.materializationLoadErr
+	}
+	if tx.cycleViews != nil {
+		view, ok := tx.cycleViews[cycleID]
+		if !ok {
+			return CycleView{}, ErrCycleNotFound
+		}
+		return view, nil
+	}
 	return tx.cycleView, tx.materializationLoadErr
 }
 
@@ -334,7 +387,8 @@ func cycleCommandFixture() (*cycleTestTx, *cycleUseCaseTestClock, *cycleUseCaseT
 			ID: versionID, UserID: cycleTestUserID, GoalID: goalID, VersionNumber: 2,
 			Body: "goal body", CreatedAt: versionView.CreatedAt,
 		},
-		saveRows: 1, scheduleRows: 1, completeRows: 1, draftRows: 1, goalRows: 1,
+		saveRows: 1, scheduleRows: 1, completeRows: 1, cancelRows: 1, cycleRows: 1, replanRows: 1,
+		draftRows: 1, goalRows: 1,
 		cycleView: CycleView{
 			ID: cycleID, GoalID: goalID, SequenceNumber: 3, Status: cycle.StatusCompleted,
 			GoalVersion: versionView, StartedAt: startedAt, CompletedAt: &completedAt,
@@ -360,6 +414,61 @@ func cycleCommandFixture() (*cycleTestTx, *cycleUseCaseTestClock, *cycleUseCaseT
 	input := CompleteCycleInput{
 		UserID: cycleTestUserID, GoalID: cycleTestGoalID, CycleID: cycleTestCycleID1,
 		OperationID: cycleTestOperation, ExpectedGoalRevision: 5, ExpectedContentRevision: 4,
+	}
+	return tx, clock, ids, input
+}
+
+func replanCycleFixture(t *testing.T) (*cycleTestTx, *cycleUseCaseTestClock, *cycleUseCaseTestIDs, ReplanCycleInput) {
+	t.Helper()
+	tx, clock, ids, _ := cycleCommandFixture()
+	ids.id = cycleTestCycleID2
+	reviewDate, err := cycle.ParseReviewDate("2026-09-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.current.ReviewDate = &reviewDate
+	tx.current.ReviewScheduleRevision = 2
+	canceledAt := cycleTestNow.UTC()
+	reason := cycle.CancellationReplanned
+	versionView := GoalVersionView{
+		ID: tx.version.ID, VersionNumber: tx.version.VersionNumber, Body: tx.version.Body, CreatedAt: tx.version.CreatedAt,
+	}
+	canceled := CycleView{
+		ID: tx.current.ID, GoalID: tx.current.GoalID, SequenceNumber: tx.current.SequenceNumber,
+		Status: cycle.StatusCanceled, GoalVersion: versionView, StartedAt: tx.current.StartedAt,
+		CanceledAt: &canceledAt, CancellationReason: &reason,
+		Plan: tx.current.Plan, Do: tx.current.Do, Check: tx.current.Check, Action: tx.current.Action,
+		ContentRevision: tx.current.Revisions.Content,
+		FrameRevisions: FrameRevisions{
+			Plan: tx.current.Revisions.Plan, Do: tx.current.Revisions.Do,
+			Check: tx.current.Revisions.Check, Action: tx.current.Revisions.Action,
+		},
+		ReviewDate: &reviewDate, ReviewScheduleRevision: 2,
+	}
+	next := CycleView{
+		ID: cycleTestCycleID2, GoalID: tx.current.GoalID, SequenceNumber: tx.current.SequenceNumber + 1,
+		Status: cycle.StatusActive, GoalVersion: versionView, StartedAt: canceledAt,
+		Predecessor: &CyclePredecessorView{
+			CycleID: tx.current.ID, CycleSequenceNumber: tx.current.SequenceNumber,
+			Status: cycle.StatusCanceled, CancellationReason: &reason, GoalVersionNumber: tx.version.VersionNumber,
+		},
+	}
+	tx.cycleViews = map[string]CycleView{tx.current.ID: canceled, cycleTestCycleID2: next}
+	tx.goalView = GoalView{
+		ID: tx.goal.ID, Status: goal.StatusActiveCycle, Revision: tx.goal.Revision + 1,
+		CurrentVersion: versionView,
+		CurrentWork: &CurrentWorkView{
+			Kind: "active_cycle", CycleID: cycleTestCycleID2, CycleSequenceNumber: next.SequenceNumber,
+			ReviewSchedule: &ReviewScheduleView{},
+		},
+		NextCycleSequenceNumber: next.SequenceNumber + 1,
+		CreatedAt:               tx.goal.CreatedAt,
+	}
+	input := ReplanCycleInput{
+		UserID: cycleTestUserID, GoalID: cycleTestGoalID, CycleID: cycleTestCycleID1,
+		OperationID: cycleTestOperation, ExpectedGoalRevision: tx.goal.Revision,
+		ExpectedContentRevision: tx.current.Revisions.Content, ExpectedReviewScheduleRevision: 2,
+		Confirmed: true,
 	}
 	return tx, clock, ids, input
 }
@@ -866,6 +975,265 @@ func TestCompleteCycleRequiresExactRowsForEveryWriteAndPostWriteMaterialization(
 	}
 }
 
+func TestReplanCycleCanonicalHashGolden(t *testing.T) {
+	_, _, _, input := replanCycleFixture(t)
+	const want = "161165d507467811a24b69f7627bfb320f654b33c7b323ea0d3e3b0578373e29"
+	if got := replanCycleRequestHash(input); got != want {
+		t.Fatalf("Replan Cycle request hash changed: got %s want %s", got, want)
+	}
+	input.ExpectedReviewScheduleRevision++
+	if replanCycleRequestHash(input) == want {
+		t.Fatal("review schedule revision was omitted from Replan Cycle hash")
+	}
+}
+
+func TestReplanCycleOwnsLocksDomainWritesMaterializationAndMetrics(t *testing.T) {
+	tx, clock, ids, input := replanCycleFixture(t)
+	uow := &cycleTestUOW{tx: tx}
+	useCases := NewCycleUseCases(nil, uow, clock, ids, CycleUseCaseSettings{})
+	observer := &workspaceObserverRecorder{}
+	service := &Service{cycles: useCases, settings: Settings{EventObserver: observer}}
+
+	result, err := service.ReplanCycle(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTrace := []string{
+		"user", "replan-receipt", "goal", "cycle", "version", "ai", "cancel", "insert-cycle", "replan-goal",
+		"load-cycle", "load-goal", "load-cycle",
+	}
+	if !reflect.DeepEqual(tx.trace, wantTrace) || uow.committed != 1 || uow.rolledBack != 0 ||
+		clock.calls != 1 || ids.calls != 1 {
+		t.Fatalf("trace/uow/clock/ids = %#v / %#v / %d / %d", tx.trace, uow, clock.calls, ids.calls)
+	}
+	if tx.canceledCycle.Status != cycle.StatusCanceled || tx.canceledCycle.CancellationReason == nil ||
+		*tx.canceledCycle.CancellationReason != cycle.CancellationReplanned || tx.completeExpected != input.ExpectedContentRevision ||
+		tx.insertedCycle.ID != cycleTestCycleID2 || tx.insertedCycle.SequenceNumber != tx.current.SequenceNumber+1 ||
+		tx.insertedCycle.GoalVersionID != tx.current.GoalVersionID || tx.insertedCycle.ReviewDate != nil ||
+		tx.insertedCycle.ReviewScheduleRevision != 0 || tx.insertedCycle.Revisions != (cycle.Revisions{}) ||
+		tx.replannedGoal.Status != goal.StatusActiveCycle || tx.replannedGoal.Revision != input.ExpectedGoalRevision+1 ||
+		tx.replannedGoal.NextCycleSequenceNumber != tx.goal.NextCycleSequenceNumber+1 ||
+		tx.goalExpectedRevision != input.ExpectedGoalRevision {
+		t.Fatalf("writes = canceled %#v / inserted %#v / Goal %#v", tx.canceledCycle, tx.insertedCycle, tx.replannedGoal)
+	}
+	if result.Replayed || result.CanceledCycle.ID != input.CycleID || result.Cycle.ID != cycleTestCycleID2 ||
+		result.Goal.CurrentWork == nil || result.Goal.CurrentWork.CycleID != cycleTestCycleID2 {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(observer.events) != 2 || observer.events[0].Event != WorkspaceMetricCycleCanceled ||
+		observer.events[0].CancellationReason != cycle.CancellationReplanned ||
+		observer.events[1].Event != WorkspaceMetricCycleStarted {
+		t.Fatalf("events = %#v", observer.events)
+	}
+}
+
+func TestReplanCycleReplayReturnsOriginalPairWithoutIDClockOrMetrics(t *testing.T) {
+	tx, _, _, input := replanCycleFixture(t)
+	receipt := &ReplanCycleReceipt{
+		GoalID: input.GoalID, CycleID: cycleTestCycleID2, RequestHash: replanCycleRequestHash(input),
+		ReplannedCycleID: input.CycleID, ReplannedCancellationReason: tx.cycleViews[input.CycleID].CancellationReason,
+	}
+	tx.replanReceipts = []*ReplanCycleReceipt{receipt}
+	completedAt := cycleTestNow.UTC().Add(time.Hour)
+	next := tx.cycleViews[cycleTestCycleID2]
+	next.Status = cycle.StatusCompleted
+	next.CompletedAt = &completedAt
+	next.Predecessor = nil
+	tx.cycleViews[cycleTestCycleID2] = next
+	tx.goalView.Status = goal.StatusGoalReview
+	tx.goalView.CurrentWork = &CurrentWorkView{
+		Kind: "goal_review", ReviewDraftID: cycleTestDraftID,
+		TriggerCycleID: cycleTestCycleID2, TriggerCycleSequenceNumber: next.SequenceNumber,
+	}
+	uow := &cycleTestUOW{tx: tx}
+	useCases := NewCycleUseCases(nil, uow, nil, nil, CycleUseCaseSettings{})
+	observer := &workspaceObserverRecorder{}
+	service := &Service{cycles: useCases, settings: Settings{EventObserver: observer}}
+
+	result, err := service.ReplanCycle(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTrace := []string{"user", "replan-receipt", "goal", "load-cycle", "load-goal", "load-cycle"}
+	if !result.Replayed || result.Cycle.Status != cycle.StatusCompleted || result.CanceledCycle.ID != input.CycleID ||
+		!reflect.DeepEqual(tx.trace, wantTrace) || uow.committed != 1 || len(observer.events) != 0 {
+		t.Fatalf("result/trace/uow/events = %#v / %#v / %#v / %#v", result, tx.trace, uow, observer.events)
+	}
+}
+
+func TestReplanCycleReplayAllowsEditedAndScheduledActiveSuccessor(t *testing.T) {
+	tx, _, _, input := replanCycleFixture(t)
+	receipt := &ReplanCycleReceipt{
+		GoalID: input.GoalID, CycleID: cycleTestCycleID2, RequestHash: replanCycleRequestHash(input),
+		ReplannedCycleID: input.CycleID, ReplannedCancellationReason: tx.cycleViews[input.CycleID].CancellationReason,
+	}
+	tx.replanReceipts = []*ReplanCycleReceipt{receipt}
+	reviewDate, err := cycle.ParseReviewDate("2026-10-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := tx.cycleViews[cycleTestCycleID2]
+	next.Plan = "response loss後に保存したPlan"
+	next.ContentRevision = 1
+	next.FrameRevisions.Plan = 1
+	next.ReviewDate = &reviewDate
+	next.ReviewScheduleRevision = 1
+	tx.cycleViews[cycleTestCycleID2] = next
+	tx.goalView.CurrentWork.ReviewSchedule = &ReviewScheduleView{
+		ReviewDate: &reviewDate, ReviewScheduleRevision: 1,
+	}
+	uow := &cycleTestUOW{tx: tx}
+	useCases := NewCycleUseCases(nil, uow, nil, nil, CycleUseCaseSettings{})
+
+	result, err := useCases.ReplanCycle(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Replayed || result.Cycle.Plan != next.Plan || result.Cycle.ContentRevision != 1 ||
+		result.Cycle.ReviewDate == nil || *result.Cycle.ReviewDate != reviewDate ||
+		result.Cycle.ReviewScheduleRevision != 1 || uow.committed != 1 {
+		t.Fatalf("edited active replay = %#v, uow = %#v", result, uow)
+	}
+}
+
+func TestReplanCycleRequiresConfirmationAndClassifiesReceiptReuse(t *testing.T) {
+	t.Run("confirmation", func(t *testing.T) {
+		_, _, _, input := replanCycleFixture(t)
+		input.Confirmed = false
+		useCases := NewCycleUseCases(nil, nil, nil, nil, CycleUseCaseSettings{})
+		if _, err := useCases.ReplanCycle(context.Background(), input); !errors.Is(err, ErrReplanConfirmation) {
+			t.Fatalf("error = %v, want %v", err, ErrReplanConfirmation)
+		}
+	})
+
+	t.Run("same key different request", func(t *testing.T) {
+		tx, _, _, input := replanCycleFixture(t)
+		tx.replanReceipts = []*ReplanCycleReceipt{{
+			GoalID: input.GoalID, CycleID: cycleTestCycleID2, RequestHash: "different",
+			ReplannedCycleID: input.CycleID, ReplannedCancellationReason: tx.cycleViews[input.CycleID].CancellationReason,
+		}}
+		uow := &cycleTestUOW{tx: tx}
+		useCases := NewCycleUseCases(nil, uow, nil, nil, CycleUseCaseSettings{})
+		if _, err := useCases.ReplanCycle(context.Background(), input); !errors.Is(err, ErrIdempotencyKeyReused) ||
+			!reflect.DeepEqual(tx.trace, []string{"user", "replan-receipt"}) || uow.rolledBack != 1 {
+			t.Fatalf("error/trace/uow = %v / %#v / %#v", err, tx.trace, uow)
+		}
+	})
+}
+
+func TestReplanCycleResolvesTargetBeforeGoalConflictsAndRejectsStaleCycleOrAI(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*cycleTestTx, *ReplanCycleInput)
+		want      error
+		wantTrace []string
+	}{
+		{
+			name: "missing Cycle wins over Goal state",
+			configure: func(tx *cycleTestTx, _ *ReplanCycleInput) {
+				tx.goal.Status = goal.StatusGoalReview
+				tx.cycleErr = ErrCycleNotFound
+			},
+			want: ErrCycleNotFound, wantTrace: []string{"user", "replan-receipt", "goal", "cycle"},
+		},
+		{
+			name: "stale Goal revision",
+			configure: func(_ *cycleTestTx, input *ReplanCycleInput) {
+				input.ExpectedGoalRevision--
+			},
+			want: ErrGoalRevisionConflict, wantTrace: []string{"user", "replan-receipt", "goal", "cycle"},
+		},
+		{
+			name: "stale content revision",
+			configure: func(_ *cycleTestTx, input *ReplanCycleInput) {
+				input.ExpectedContentRevision--
+			},
+			want: cycle.ErrRevisionConflict, wantTrace: []string{"user", "replan-receipt", "goal", "cycle"},
+		},
+		{
+			name: "Goal sequence invariant",
+			configure: func(tx *cycleTestTx, _ *ReplanCycleInput) {
+				tx.goal.NextCycleSequenceNumber++
+			},
+			want: ErrCyclePersistenceInvariant, wantTrace: []string{"user", "replan-receipt", "goal", "cycle"},
+		},
+		{
+			name: "stale review schedule revision",
+			configure: func(_ *cycleTestTx, input *ReplanCycleInput) {
+				input.ExpectedReviewScheduleRevision--
+			},
+			want: cycle.ErrRevisionConflict, wantTrace: []string{"user", "replan-receipt", "goal", "cycle"},
+		},
+		{
+			name: "AI running",
+			configure: func(tx *cycleTestTx, _ *ReplanCycleInput) {
+				tx.aiRunning = true
+			},
+			want:      ErrAIInProgress,
+			wantTrace: []string{"user", "replan-receipt", "goal", "cycle", "version", "ai"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tx, clock, ids, input := replanCycleFixture(t)
+			test.configure(tx, &input)
+			uow := &cycleTestUOW{tx: tx}
+			useCases := NewCycleUseCases(nil, uow, clock, ids, CycleUseCaseSettings{})
+			_, err := useCases.ReplanCycle(context.Background(), input)
+			if !errors.Is(err, test.want) || !reflect.DeepEqual(tx.trace, test.wantTrace) ||
+				uow.rolledBack != 1 || ids.calls != 0 || clock.calls != 0 {
+				t.Fatalf("error/trace/uow/ids/clock = %v / %#v / %#v / %d / %d", err, tx.trace, uow, ids.calls, clock.calls)
+			}
+		})
+	}
+}
+
+func TestReplanCycleRollsBackOnEveryWriteAndMaterializationFailure(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*cycleTestTx)
+		want      error
+		lastTrace string
+	}{
+		{"cancel CAS", func(tx *cycleTestTx) { tx.cancelRows = 0 }, ErrCyclePersistenceInvariant, "cancel"},
+		{"successor insert", func(tx *cycleTestTx) { tx.cycleRows = 2 }, ErrCyclePersistenceInvariant, "insert-cycle"},
+		{"Goal CAS", func(tx *cycleTestTx) { tx.replanRows = 0 }, ErrCyclePersistenceInvariant, "replan-goal"},
+		{"materialization", func(tx *cycleTestTx) { tx.materializationLoadErr = ErrCycleNotFound }, ErrCyclePersistenceInvariant, "load-cycle"},
+		{"wrong successor identity", func(tx *cycleTestTx) {
+			next := tx.cycleViews[cycleTestCycleID2]
+			next.ID = cycleTestCycleID3
+			tx.cycleViews[cycleTestCycleID2] = next
+			tx.goalView.CurrentWork.CycleID = cycleTestCycleID3
+		}, ErrCyclePersistenceInvariant, "load-cycle"},
+		{"terminal fresh successor", func(tx *cycleTestTx) {
+			next := tx.cycleViews[cycleTestCycleID2]
+			completedAt := cycleTestNow.UTC().Add(time.Minute)
+			next.Status = cycle.StatusCompleted
+			next.CompletedAt = &completedAt
+			next.Predecessor = nil
+			tx.cycleViews[cycleTestCycleID2] = next
+			tx.goalView.Status = goal.StatusGoalReview
+			tx.goalView.CurrentWork = &CurrentWorkView{
+				Kind: "goal_review", ReviewDraftID: cycleTestDraftID,
+				TriggerCycleID: cycleTestCycleID2, TriggerCycleSequenceNumber: next.SequenceNumber,
+			}
+		}, ErrCyclePersistenceInvariant, "load-cycle"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tx, clock, ids, input := replanCycleFixture(t)
+			test.configure(tx)
+			uow := &cycleTestUOW{tx: tx}
+			useCases := NewCycleUseCases(nil, uow, clock, ids, CycleUseCaseSettings{})
+			_, err := useCases.ReplanCycle(context.Background(), input)
+			if !errors.Is(err, test.want) || uow.rolledBack != 1 || uow.committed != 0 ||
+				tx.trace[len(tx.trace)-1] != test.lastTrace {
+				t.Fatalf("error/uow/trace = %v / %#v / %#v", err, uow, tx.trace)
+			}
+		})
+	}
+}
+
 func TestGetCycleRejectsCanceledDetailWithoutCancellationReason(t *testing.T) {
 	tx, _, _, _ := cycleCommandFixture()
 	view := tx.cycleView
@@ -891,6 +1259,9 @@ func TestValidateCycleViewPreviousCompletedActionContract(t *testing.T) {
 		},
 		PreviousCompletedCycleAction: &PreviousCompletedCycleActionView{
 			CycleID: cycleTestCycleID2, CycleSequenceNumber: 2, GoalVersionNumber: 1, Action: "前回A",
+		},
+		Predecessor: &CyclePredecessorView{
+			CycleID: cycleTestCycleID2, CycleSequenceNumber: 2, GoalVersionNumber: 1, Status: cycle.StatusCompleted,
 		},
 		StartedAt: now,
 	}
@@ -966,5 +1337,47 @@ func TestValidateCycleViewPreviousCompletedActionIsNullForCycleOneAndTerminal(t 
 	}
 	if err := validateCycleView(base, cycleTestGoalID, cycleTestCycleID1); !errors.Is(err, ErrCyclePersistenceInvariant) {
 		t.Fatalf("terminal populated previous Action error = %v", err)
+	}
+}
+
+func TestValidateCycleViewAcceptsOnlyExactReplannedPredecessorForActiveNullAction(t *testing.T) {
+	now := cycleTestNow.UTC()
+	reason := cycle.CancellationReplanned
+	view := CycleView{
+		ID: cycleTestCycleID3, GoalID: cycleTestGoalID, SequenceNumber: 3, Status: cycle.StatusActive,
+		GoalVersion: GoalVersionView{
+			ID: cycleTestVersionID, VersionNumber: 2, Body: "goal", CreatedAt: now.Add(-time.Hour),
+		},
+		Predecessor: &CyclePredecessorView{
+			CycleID: cycleTestCycleID2, CycleSequenceNumber: 2, GoalVersionNumber: 2,
+			Status: cycle.StatusCanceled, CancellationReason: &reason,
+		},
+		StartedAt: now,
+	}
+	if err := validateCycleView(view, cycleTestGoalID, cycleTestCycleID3); err != nil {
+		t.Fatalf("valid replanned predecessor: %v", err)
+	}
+
+	goalEnded := cycle.CancellationGoalEnded
+	tests := []struct {
+		name   string
+		mutate func(*CycleView)
+	}{
+		{"missing provenance", func(candidate *CycleView) { candidate.Predecessor = nil }},
+		{"terminal cancellation", func(candidate *CycleView) { candidate.Predecessor.CancellationReason = &goalEnded }},
+		{"missing reason", func(candidate *CycleView) { candidate.Predecessor.CancellationReason = nil }},
+		{"different Goal Version", func(candidate *CycleView) { candidate.Predecessor.GoalVersionNumber-- }},
+		{"skipped sequence", func(candidate *CycleView) { candidate.Predecessor.CycleSequenceNumber-- }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := view
+			predecessor := *view.Predecessor
+			candidate.Predecessor = &predecessor
+			test.mutate(&candidate)
+			if err := validateCycleView(candidate, cycleTestGoalID, cycleTestCycleID3); !errors.Is(err, ErrCyclePersistenceInvariant) {
+				t.Fatalf("error = %v, want %v", err, ErrCyclePersistenceInvariant)
+			}
+		})
 	}
 }

@@ -39,6 +39,7 @@ SELECT
     previous_cycle.id AS previous_cycle_id,
     previous_cycle.sequence_number AS previous_cycle_sequence_number,
     previous_cycle.status AS previous_cycle_status,
+    previous_cycle.cancellation_reason AS previous_cycle_cancellation_reason,
     previous_cycle.action AS previous_cycle_action,
     previous_goal_version.version_number AS previous_goal_version_number
 FROM pdca_cycles AS c
@@ -70,34 +71,35 @@ type GetCycleViewParams struct {
 }
 
 type GetCycleViewRow struct {
-	CycleID                     pgtype.UUID
-	GoalID                      pgtype.UUID
-	SequenceNumber              int32
-	Status                      string
-	StartedAt                   pgtype.Timestamptz
-	CompletedAt                 pgtype.Timestamptz
-	CanceledAt                  pgtype.Timestamptz
-	CancellationReason          *string
-	Plan                        string
-	DoText                      string
-	CheckText                   string
-	Action                      string
-	ContentRevision             int64
-	PlanRevision                int64
-	DoRevision                  int64
-	CheckRevision               int64
-	ActionRevision              int64
-	ReviewDate                  pgtype.Date
-	ReviewScheduleRevision      int64
-	GoalVersionID               pgtype.UUID
-	GoalVersionNumber           *int32
-	GoalVersionBody             *string
-	GoalVersionCreatedAt        pgtype.Timestamptz
-	PreviousCycleID             pgtype.UUID
-	PreviousCycleSequenceNumber *int32
-	PreviousCycleStatus         *string
-	PreviousCycleAction         *string
-	PreviousGoalVersionNumber   *int32
+	CycleID                         pgtype.UUID
+	GoalID                          pgtype.UUID
+	SequenceNumber                  int32
+	Status                          string
+	StartedAt                       pgtype.Timestamptz
+	CompletedAt                     pgtype.Timestamptz
+	CanceledAt                      pgtype.Timestamptz
+	CancellationReason              *string
+	Plan                            string
+	DoText                          string
+	CheckText                       string
+	Action                          string
+	ContentRevision                 int64
+	PlanRevision                    int64
+	DoRevision                      int64
+	CheckRevision                   int64
+	ActionRevision                  int64
+	ReviewDate                      pgtype.Date
+	ReviewScheduleRevision          int64
+	GoalVersionID                   pgtype.UUID
+	GoalVersionNumber               *int32
+	GoalVersionBody                 *string
+	GoalVersionCreatedAt            pgtype.Timestamptz
+	PreviousCycleID                 pgtype.UUID
+	PreviousCycleSequenceNumber     *int32
+	PreviousCycleStatus             *string
+	PreviousCycleCancellationReason *string
+	PreviousCycleAction             *string
+	PreviousGoalVersionNumber       *int32
 }
 
 func (q *Queries) GetCycleView(ctx context.Context, arg GetCycleViewParams) (*GetCycleViewRow, error) {
@@ -130,6 +132,7 @@ func (q *Queries) GetCycleView(ctx context.Context, arg GetCycleViewParams) (*Ge
 		&i.PreviousCycleID,
 		&i.PreviousCycleSequenceNumber,
 		&i.PreviousCycleStatus,
+		&i.PreviousCycleCancellationReason,
 		&i.PreviousCycleAction,
 		&i.PreviousGoalVersionNumber,
 	)
@@ -144,6 +147,7 @@ SELECT
     c.started_at,
     c.completed_at,
     c.canceled_at,
+    c.cancellation_reason,
     gv.id AS goal_version_id,
     gv.version_number AS goal_version_number,
     gv.body AS goal_version_body,
@@ -184,6 +188,7 @@ type ListCycleSummariesRow struct {
 	StartedAt            pgtype.Timestamptz
 	CompletedAt          pgtype.Timestamptz
 	CanceledAt           pgtype.Timestamptz
+	CancellationReason   *string
 	GoalVersionID        pgtype.UUID
 	GoalVersionNumber    *int32
 	GoalVersionBody      *string
@@ -213,6 +218,7 @@ func (q *Queries) ListCycleSummaries(ctx context.Context, arg ListCycleSummaries
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.CanceledAt,
+			&i.CancellationReason,
 			&i.GoalVersionID,
 			&i.GoalVersionNumber,
 			&i.GoalVersionBody,

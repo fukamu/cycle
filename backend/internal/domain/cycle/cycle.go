@@ -33,6 +33,7 @@ type CancellationReason string
 const (
 	CancellationGoalAchieved CancellationReason = "goal_achieved"
 	CancellationGoalEnded    CancellationReason = "goal_ended"
+	CancellationReplanned    CancellationReason = "replanned"
 )
 
 type Frame string
@@ -284,7 +285,7 @@ func Cancel(current PDCACycle, reason CancellationReason, now time.Time) (PDCACy
 	if current.Status != StatusActive {
 		return PDCACycle{}, ErrCycleNotActive
 	}
-	if reason != CancellationGoalAchieved && reason != CancellationGoalEnded {
+	if !IsValidCancellationReason(reason) {
 		return PDCACycle{}, ErrCycleNotActive
 	}
 	now = now.UTC()
@@ -293,6 +294,10 @@ func Cancel(current PDCACycle, reason CancellationReason, now time.Time) (PDCACy
 	current.CancellationReason = &reason
 	current.UpdatedAt = now
 	return current, nil
+}
+
+func IsValidCancellationReason(reason CancellationReason) bool {
+	return reason == CancellationGoalAchieved || reason == CancellationGoalEnded || reason == CancellationReplanned
 }
 
 func (current PDCACycle) FrameRevision(frame Frame) int64 {

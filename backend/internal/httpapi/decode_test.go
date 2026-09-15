@@ -120,6 +120,10 @@ func TestDecodeAndValidateJSONEnforcesTypedMemberContracts(t *testing.T) {
 			required: []string{"operationId", "expectedGoalRevision", "expectedContentRevision"}, destination: func() any { return &completeCycleRequest{} },
 		},
 		{
+			name: "cycle replan", body: `{"operationId":"` + validID + `","expectedGoalRevision":0,"expectedContentRevision":0,"expectedReviewScheduleRevision":0,"confirmed":true}`,
+			required: []string{"operationId", "expectedGoalRevision", "expectedContentRevision", "expectedReviewScheduleRevision", "confirmed"}, destination: func() any { return &replanCycleRequest{} },
+		},
+		{
 			name: "goal terminate", body: `{"operationId":"` + validID + `","outcome":"ended","expectedGoalRevision":0,"expectedState":"goal_review","confirmDiscardReviewDraft":false}`,
 			required: []string{"operationId", "outcome", "expectedGoalRevision", "expectedState"}, destination: func() any { return &terminateGoalRequest{} },
 		},
@@ -320,6 +324,11 @@ func TestRequestBodyValidationIsExplicitAndFailClosed(t *testing.T) {
 		{"cycle complete UUID v4", &completeCycleRequest{OperationID: invalidID}, false},
 		{"cycle complete negative Goal revision", &completeCycleRequest{OperationID: validID, ExpectedGoalRevision: -1}, false},
 		{"cycle complete negative content revision", &completeCycleRequest{OperationID: validID, ExpectedContentRevision: -1}, false},
+		{"cycle replan", &replanCycleRequest{OperationID: validID}, true},
+		{"cycle replan UUID v4", &replanCycleRequest{OperationID: invalidID}, false},
+		{"cycle replan negative Goal revision", &replanCycleRequest{OperationID: validID, ExpectedGoalRevision: -1}, false},
+		{"cycle replan negative content revision", &replanCycleRequest{OperationID: validID, ExpectedContentRevision: -1}, false},
+		{"cycle replan negative review schedule revision", &replanCycleRequest{OperationID: validID, ExpectedReviewScheduleRevision: -1}, false},
 		{"goal terminate", &terminateGoalRequest{OperationID: validID, Outcome: goal.StatusAchieved, ExpectedGoalRevision: &zero, ExpectedState: goal.StatusGoalReview}, true},
 		{"goal terminate UUID v4", &terminateGoalRequest{OperationID: invalidID, Outcome: goal.StatusAchieved, ExpectedGoalRevision: &zero, ExpectedState: goal.StatusGoalReview}, false},
 		{"goal terminate missing outcome", &terminateGoalRequest{OperationID: validID, ExpectedGoalRevision: &zero, ExpectedState: goal.StatusGoalReview}, false},

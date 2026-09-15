@@ -41,6 +41,7 @@ type CycleUnitOfWork interface {
 // affected-row invariants.
 type CycleTx interface {
 	FindCompleteCycleReceipt(context.Context, string, string) (*CompleteCycleReceipt, error)
+	FindReplanCycleReceipt(context.Context, string, string) (*ReplanCycleReceipt, error)
 	LockUser(context.Context, string) error
 	LockGoal(context.Context, string, string) (goal.Goal, error)
 	LockCycle(context.Context, string, string, string) (cycle.PDCACycle, error)
@@ -49,6 +50,9 @@ type CycleTx interface {
 	SaveCycleFrameCAS(context.Context, cycle.PDCACycle, cycle.Frame, int64) (int64, error)
 	SaveCycleReviewScheduleCAS(context.Context, cycle.PDCACycle, int64) (int64, error)
 	CompleteCycleCAS(context.Context, cycle.PDCACycle, int64) (int64, error)
+	CancelCycleCAS(context.Context, cycle.PDCACycle, int64) (int64, error)
+	TryInsertCycleClaim(context.Context, cycle.PDCACycle) (int64, error)
+	ReplanGoalCAS(context.Context, goal.Goal, int64) (int64, error)
 	InsertReviewDraft(context.Context, goal.Draft) (int64, error)
 	EnterGoalReviewCAS(context.Context, goal.Goal, int64) (int64, error)
 	LoadGoalView(context.Context, string, string) (GoalView, error)
@@ -60,4 +64,12 @@ type CompleteCycleReceipt struct {
 	GoalID      string
 	CycleID     string
 	RequestHash string
+}
+
+type ReplanCycleReceipt struct {
+	GoalID                      string
+	CycleID                     string
+	RequestHash                 string
+	ReplannedCycleID            string
+	ReplannedCancellationReason *cycle.CancellationReason
 }

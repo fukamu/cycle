@@ -268,6 +268,21 @@ func TestMetricSanitizerPreservesGoalStartRateLimitScopeAndErrorCode(t *testing.
 	}
 }
 
+func TestReplanObservabilityValuesAreAllowlisted(t *testing.T) {
+	t.Parallel()
+	if got := sanitizeMetricAttributeValue("cycle_canceled_total", "reason", "replanned"); got != "replanned" {
+		t.Fatalf("replanned cancellation reason sanitized to %q", got)
+	}
+	if route := "/api/v1/goals/{goalId}/cycles/{cycleId}/replan"; !isAllowedHTTPRoute(route) {
+		t.Fatalf("Replan route %q is not allowlisted", route)
+	}
+	for _, code := range []string{"CYCLE_REPLAN_CONFIRMATION_REQUIRED", "CYCLE_REPLAN_FAILED"} {
+		if got := sanitizeMetricAttributeValue("error_code_total", "code", code); got != code {
+			t.Fatalf("Replan error code %q sanitized to %q", code, got)
+		}
+	}
+}
+
 func TestSetupDevelopmentUsesBoundedCountOnlyExporters(t *testing.T) {
 	previousTraceProvider := otel.GetTracerProvider()
 	previousMeterProvider := otel.GetMeterProvider()

@@ -724,6 +724,93 @@ describe("goal-scoped workspace API", () => {
     );
   });
 
+  it("dual-reads old and expanded Cycle summary cancellation reasons", async () => {
+    const goalVersion = {
+      id: "00000000-0000-7000-8000-000000000005",
+      versionNumber: 1,
+      body: "現在の目標",
+      createdAt: "2026-08-19T00:00:00Z",
+    };
+    const oldBackendSummary = {
+      id: "00000000-0000-7000-8000-000000000006",
+      sequenceNumber: 1,
+      status: "completed",
+      startedAt: "2026-08-19T00:00:00Z",
+      completedAt: "2026-08-20T00:00:00Z",
+      canceledAt: null,
+      goalVersion,
+      planPreview: "最初の計画",
+    };
+    const expandedCompletedSummary = {
+      ...oldBackendSummary,
+      id: "00000000-0000-7000-8000-000000000007",
+      sequenceNumber: 2,
+      cancellationReason: null,
+    };
+    const expandedReplannedSummary = {
+      ...oldBackendSummary,
+      id: "00000000-0000-7000-8000-000000000008",
+      sequenceNumber: 3,
+      status: "canceled",
+      completedAt: null,
+      canceledAt: "2026-08-21T00:00:00Z",
+      cancellationReason: "replanned",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        authenticatedJSON({
+          items: [
+            oldBackendSummary,
+            expandedCompletedSummary,
+            expandedReplannedSummary,
+          ],
+          nextCursor: null,
+        }),
+      ),
+    );
+
+    const page = await listCycles(lease, goalId);
+
+    expect(page.items[0]).not.toHaveProperty("cancellationReason");
+    expect(page.items[1]?.cancellationReason).toBeNull();
+    expect(page.items[2]?.cancellationReason).toBe("replanned");
+  });
+
+  it.each(["manual_restart", "goal_deleted"])(
+    "rejects the out-of-contract Cycle summary cancellation reason %s",
+    async (cancellationReason) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          authenticatedJSON({
+            items: [
+              {
+                id: cycleId,
+                sequenceNumber: 1,
+                status: "canceled",
+                startedAt: "2026-08-19T00:00:00Z",
+                completedAt: null,
+                canceledAt: "2026-08-20T00:00:00Z",
+                cancellationReason,
+                goalVersion: {
+                  id: "00000000-0000-7000-8000-000000000005",
+                  versionNumber: 1,
+                  body: "現在の目標",
+                  createdAt: "2026-08-19T00:00:00Z",
+                },
+                planPreview: "最初の計画",
+              },
+            ],
+            nextCursor: null,
+          }),
+        ),
+      );
+
+      await expect(listCycles(lease, goalId)).rejects.toBeInstanceOf(ZodError);
+    },
+  );
+
   it("leases a review save to the expected draft generation", async () => {
     const response = {
       reviewDraft: {

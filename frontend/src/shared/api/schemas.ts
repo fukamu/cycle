@@ -96,6 +96,18 @@ const previousCompletedCycleActionSchema = z.object({
   action: frameTextSchema.refine(hasNonWhitespace),
 });
 
+const cancellationReasonSchema = z.enum([
+  "goal_achieved",
+  "goal_ended",
+  "replanned",
+]);
+
+const cycleSummaryCancellationReasonSchema = z.enum([
+  "goal_achieved",
+  "goal_ended",
+  "replanned",
+]);
+
 export const cycleSchema = z
   .object({
     id: uuid,
@@ -109,9 +121,7 @@ export const cycleSchema = z
     startedAt: instant,
     completedAt: instant.nullable(),
     canceledAt: instant.nullable(),
-    cancellationReason: z
-      .enum(["goal_achieved", "goal_ended", "goal_deleted"])
-      .nullable(),
+    cancellationReason: cancellationReasonSchema.nullable(),
     plan: frameTextSchema,
     do: frameTextSchema,
     check: frameTextSchema,
@@ -141,10 +151,7 @@ export const cycleSchema = z
         addInvariantIssue(["previousCompletedCycleAction"]);
       return;
     }
-    if (previous === null) {
-      addInvariantIssue(["previousCompletedCycleAction"]);
-      return;
-    }
+    if (previous === null) return;
     if (previous.cycleId === cycle.id)
       addInvariantIssue(["previousCompletedCycleAction", "cycleId"]);
     if (previous.cycleSequenceNumber !== cycle.sequenceNumber - 1)
@@ -271,6 +278,9 @@ export const cycleSummarySchema = z.object({
   startedAt: instant,
   completedAt: instant.nullable(),
   canceledAt: instant.nullable(),
+  cancellationReason: cycleSummaryCancellationReasonSchema
+    .nullable()
+    .optional(),
   goalVersion: goalVersionSchema,
   planPreview: frameTextSchema,
 });

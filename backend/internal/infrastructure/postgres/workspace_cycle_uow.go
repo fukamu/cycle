@@ -55,6 +55,23 @@ func (transaction *workspaceCycleTx) FindCompleteCycleReceipt(
 	return completeCycleReceiptFromSQLC(row)
 }
 
+func (transaction *workspaceCycleTx) FindReplanCycleReceipt(
+	ctx context.Context,
+	userID, operationID string,
+) (*workspace.ReplanCycleReceipt, error) {
+	row, err := transaction.queries.FindReplanCycleReceipt(ctx, db.FindReplanCycleReceiptParams{
+		UserID:      mustUUID(userID),
+		OperationID: mustUUID(operationID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return replanCycleReceiptFromSQLC(row)
+}
+
 func (transaction *workspaceCycleTx) LockUser(ctx context.Context, userID string) error {
 	if err := lockUser(ctx, transaction.tx, user.ID(userID)); errors.Is(err, pgx.ErrNoRows) {
 		return workspace.ErrNotFound
@@ -288,6 +305,66 @@ func (transaction *workspaceCycleTx) CompleteCycleCAS(
 		UserID:                  mustUUID(completed.UserID),
 		GoalID:                  mustUUID(completed.GoalID),
 		ExpectedContentRevision: expectedContentRevision,
+	})
+}
+
+func (transaction *workspaceCycleTx) CancelCycleCAS(
+	ctx context.Context,
+	canceled cycle.PDCACycle,
+	expectedContentRevision int64,
+) (int64, error) {
+	if canceled.Status != cycle.StatusCanceled || canceled.CanceledAt == nil || canceled.CancellationReason == nil {
+		return 0, fmt.Errorf("%w: canceled Cycle state is incomplete", workspace.ErrCyclePersistenceInvariant)
+	}
+	return transaction.queries.CancelCycleCAS(ctx, db.CancelCycleCASParams{
+		Status:                  string(canceled.Status),
+		CanceledAt:              timestamptz(*canceled.CanceledAt),
+		CancellationReason:      string(*canceled.CancellationReason),
+		UpdatedAt:               timestamptz(canceled.UpdatedAt),
+		CycleID:                 mustUUID(canceled.ID),
+		UserID:                  mustUUID(canceled.UserID),
+		GoalID:                  mustUUID(canceled.GoalID),
+		ExpectedContentRevision: expectedContentRevision,
+	})
+}
+
+func (transaction *workspaceCycleTx) TryInsertCycleClaim(
+	ctx context.Context,
+	current cycle.PDCACycle,
+) (int64, error) {
+	return transaction.queries.TryInsertCycleClaim(ctx, db.TryInsertCycleClaimParams{
+		CycleID:          mustUUID(current.ID),
+		UserID:           mustUUID(current.UserID),
+		GoalID:           mustUUID(current.GoalID),
+		GoalVersionID:    mustUUID(current.GoalVersionID),
+		SequenceNumber:   current.SequenceNumber,
+		Status:           string(current.Status),
+		StartedAt:        timestamptz(current.StartedAt),
+		StartOperationID: mustUUID(current.StartOperationID),
+		StartRequestHash: current.StartRequestHash,
+		CreatedAt:        timestamptz(current.CreatedAt),
+		UpdatedAt:        timestamptz(current.UpdatedAt),
+	})
+}
+
+func (transaction *workspaceCycleTx) ReplanGoalCAS(
+	ctx context.Context,
+	replanned goal.Goal,
+	expectedRevision int64,
+) (int64, error) {
+	if replanned.Status != goal.StatusActiveCycle || replanned.Revision != expectedRevision+1 ||
+		replanned.NextCycleSequenceNumber < 3 {
+		return 0, fmt.Errorf("%w: replanned Goal state is inconsistent", workspace.ErrCyclePersistenceInvariant)
+	}
+	return transaction.queries.ReplanGoalCAS(ctx, db.ReplanGoalCASParams{
+		NextCycleSequenceNumber:         replanned.NextCycleSequenceNumber,
+		Revision:                        replanned.Revision,
+		UpdatedAt:                       timestamptz(replanned.UpdatedAt),
+		GoalID:                          mustUUID(replanned.ID),
+		UserID:                          mustUUID(replanned.UserID),
+		CurrentVersionNumber:            replanned.CurrentVersionNumber,
+		ExpectedNextCycleSequenceNumber: replanned.NextCycleSequenceNumber - 1,
+		ExpectedRevision:                expectedRevision,
 	})
 }
 

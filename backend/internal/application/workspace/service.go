@@ -10,6 +10,7 @@ import (
 
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	domainai "github.com/fukamu/cycle/backend/internal/domain/ai"
+	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
@@ -264,6 +265,17 @@ func (service *Service) CompleteCycle(ctx context.Context, input CompleteCycleIn
 	if err == nil && !result.Replayed && result.Replay == nil {
 		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricCycleCompleted})
 		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricGoalReviewOpened})
+	}
+	return result, resourceNotFound(err, ErrCycleNotFound)
+}
+
+func (service *Service) ReplanCycle(ctx context.Context, input ReplanCycleInput) (ReplanCycleResult, error) {
+	result, err := service.cycles.ReplanCycle(ctx, input)
+	if err == nil && !result.Replayed {
+		service.observeWorkspace(ctx, WorkspaceObservation{
+			Event: WorkspaceMetricCycleCanceled, CancellationReason: cycle.CancellationReplanned,
+		})
+		service.observeWorkspace(ctx, WorkspaceObservation{Event: WorkspaceMetricCycleStarted})
 	}
 	return result, resourceNotFound(err, ErrCycleNotFound)
 }
