@@ -67,4 +67,19 @@ describe("control boundary styles", () => {
       "border: 1px solid var(--brand);",
     );
   });
+
+  it("keeps compact Core Loop text actions at a minimum 44px touch target", () => {
+    expect(ruleBody(applicationStyles, [".history-link"])).toContain(
+      "min-height: 44px;",
+    );
+    expect(
+      ruleBody(applicationStyles, [".danger-link", ".text-button"]),
+    ).toContain("min-height: 44px;");
+    expect(ruleBody(applicationStyles, [".touch-target"])).toContain(
+      "min-height: 44px;",
+    );
+    const inlineTarget = ruleBody(applicationStyles, [".touch-target--inline"]);
+    expect(inlineTarget).toContain("display: inline-flex;");
+    expect(inlineTarget).toContain("align-items: center;");
+  });
 });

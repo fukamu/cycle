@@ -1966,6 +1966,7 @@ describe("GoalReviewPage", () => {
     });
     const movedNotice = resolver.closest<HTMLElement>('[role="alert"]');
     expect(resolver).toHaveAttribute("href", "/goals/" + goal.id);
+    expect(resolver).toHaveClass("touch-target", "touch-target--inline");
     expect(movedNotice).not.toBeNull();
     for (const actionName of [
       "AIで目標を整える",

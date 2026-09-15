@@ -259,6 +259,7 @@ export function PostCommitCleanupBoundary({
                 {cleanupState.entry.task.failureMessage}
               </p>
               <button
+                className="touch-target"
                 type="button"
                 onClick={() => startOwnershipRef.current(cleanupState.entry)}
               >

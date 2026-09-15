@@ -305,6 +305,9 @@ async function expectReviewSuggestionAtNarrowWidths(
       name: "目標を達成として終了",
     });
     const end = terminalSection.getByRole("button", { name: "目標を終了" });
+    const remove = terminalSection.getByRole("button", {
+      name: "目標を削除",
+    });
 
     for (const element of [
       currentGoal,
@@ -319,6 +322,7 @@ async function expectReviewSuggestionAtNarrowWidths(
       terminalHeading,
       achieve,
       end,
+      remove,
     ])
       await expect(element).toBeVisible();
     for (const [element, expectedText] of [
@@ -336,6 +340,9 @@ async function expectReviewSuggestionAtNarrowWidths(
     }
     if ((await planAndDo.getAttribute("open")) === null)
       await planAndDoSummary.press("Enter");
+    expect(
+      (await planAndDoSummary.boundingBox())?.height,
+    ).toBeGreaterThanOrEqual(44);
     await expect(planBody).toHaveText(content.plan);
     await expect(doBody).toHaveText(content.do);
     for (const [element, expectedText] of [
@@ -364,6 +371,7 @@ async function expectReviewSuggestionAtNarrowWidths(
     await expect(end).toHaveAccessibleDescription(
       /目標を達成したとはせず、ここで取り組みを終えます/,
     );
+    expect((await remove.boundingBox())?.height).toBeGreaterThanOrEqual(44);
 
     const layout = await page.locator("main.review-page").evaluate((main) => {
       const buttons = Array.from(main.querySelectorAll("button"));
@@ -482,6 +490,7 @@ test("header drawer contains focus and deactivates the background", async ({
 
   await page.setViewportSize({ width: 320, height: 844 });
   expect((await menuButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  expect((await wordmark.boundingBox())?.height).toBeGreaterThanOrEqual(44);
 
   await menuButton.click();
   await expect(menuButton).toHaveAccessibleName("メニューを閉じる");
@@ -1356,10 +1365,46 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await page.getByRole("link", { name: /Cycle 2/ }).click();
   await page.getByText("目標の操作").click();
   await page.getByRole("button", { name: "目標を削除" }).click();
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.evaluate(() => {
+    const testWindow = window as typeof window & {
+      restoreIndexedDBOpenAfterCleanupFailure?: () => void;
+    };
+    const originalOpen = indexedDB.open.bind(indexedDB);
+    testWindow.restoreIndexedDBOpenAfterCleanupFailure = () => {
+      Object.defineProperty(indexedDB, "open", {
+        configurable: true,
+        value: originalOpen,
+      });
+    };
+    Object.defineProperty(indexedDB, "open", {
+      configurable: true,
+      value: () => {
+        throw new DOMException("forced cleanup failure", "InvalidStateError");
+      },
+    });
+  });
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "目標を削除" })
     .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "削除済みGoalのブラウザ下書きを削除できませんでした。",
+  );
+  const retryCleanup = page.getByRole("button", {
+    name: "ブラウザデータの削除を再試行",
+  });
+  expect((await retryCleanup.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await page.evaluate(() => {
+    const testWindow = window as typeof window & {
+      restoreIndexedDBOpenAfterCleanupFailure?: () => void;
+    };
+    const restore = testWindow.restoreIndexedDBOpenAfterCleanupFailure;
+    if (!restore) throw new Error("IndexedDB restore callback is missing");
+    restore();
+    delete testWindow.restoreIndexedDBOpenAfterCleanupFailure;
+  });
+  await retryCleanup.click();
   await expect(page.getByText("まだ進行中の目標はありません。")).toBeVisible();
 });
 
@@ -1810,9 +1855,14 @@ test("two stale tabs converge from Cycle Complete and Review Continue without re
     ).toHaveAttribute("readonly", "");
     expect(staleContinueRequests).toBe(1);
 
-    await stale
-      .getByRole("link", { name: "現在のGoalを開いてください" })
-      .click();
+    await stale.setViewportSize({ width: 320, height: 844 });
+    const currentGoalLink = stale.getByRole("link", {
+      name: "現在のGoalを開いてください",
+    });
+    expect(
+      (await currentGoalLink.boundingBox())?.height,
+    ).toBeGreaterThanOrEqual(44);
+    await currentGoalLink.click();
     await expect(stale.getByText("Goal v1 · Cycle 2")).toBeVisible();
     expect(staleCompleteRequests).toBe(1);
     expect(staleContinueRequests).toBe(1);
@@ -1896,8 +1946,12 @@ test("a stale Home tab converges to the existing creation draft without repeatin
 test("a failed autosave keeps the browser draft and retry persists it", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
   await page.goto("/");
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
+  const discard = page.getByRole("button", { name: "下書きを破棄" });
+  await expect(discard).toBeVisible();
+  expect((await discard.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   let fail = true;
   await page.route("**/api/v1/goal-drafts/*", async (route) => {
     if (route.request().method() === "PATCH" && fail) {
@@ -1914,7 +1968,9 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   const browserDraftBodies = await readBrowserDraftBodies(page);
   expect(browserDraftBodies).toContain("失敗しても保持する目標");
   fail = false;
-  await page.getByRole("button", { name: "再試行" }).click();
+  const retry = page.getByRole("button", { name: "再試行" });
+  expect((await retry.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await retry.click();
   await expect(page.getByText("保存済み")).toBeVisible();
   await page.reload();
   await expect(editor).toHaveValue("失敗しても保持する目標");
@@ -2298,6 +2354,11 @@ test("Home presents one clear next action for an active Cycle without horizontal
 
   await page.goto("/");
 
+  const historyLink = page.getByRole("link", {
+    name: /すべての目標と履歴を見る/,
+  });
+  expect((await historyLink.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+
   const card = page.getByRole("article", { name: goalText });
   await expect(card).toBeVisible();
   await expect(
@@ -2440,6 +2501,8 @@ test("Active Cycle Goal guidance stays nearby and usable at narrow widths", asyn
     await expect(end).toHaveAttribute("aria-describedby", guidanceId ?? "");
     await expect(remove).toBeEnabled();
     await expect(remove).not.toHaveAttribute("aria-describedby");
+    for (const action of [goalActions.locator("summary"), achieve, end, remove])
+      expect((await action.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     expect(
       await page.evaluate(
         () =>
@@ -2883,6 +2946,22 @@ test("mobile long content stays in bounds and frame tabs support keyboard naviga
   await expect(frameTabs).toBeVisible();
   await expect(recoveryTab).toHaveAttribute("aria-selected", "false");
   await expect(recoveryTab.getByText("要確認", { exact: true })).toBeVisible();
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  const recoveryReview = comparison.getByRole("button", {
+    name: "Dの入力を確認",
+  });
+  expect((await recoveryReview.boundingBox())?.height).toBeGreaterThanOrEqual(
+    44,
+  );
+
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
 
   const actionTab = page.getByRole("tab", { name: "A Action" });
   const nextAction = page.getByRole("button", { name: "A — Actionへ進む" });

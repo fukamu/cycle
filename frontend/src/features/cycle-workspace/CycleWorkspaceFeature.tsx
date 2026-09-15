@@ -2644,7 +2644,7 @@ function CycleWorkspace({
       </section>
       {editable && !workspaceMoved && (
         <details className="goal-actions">
-          <summary>目標の操作</summary>
+          <summary className="touch-target">目標の操作</summary>
           <p
             className="goal-actions__guidance"
             id={goalActionGuidanceId}
@@ -2656,6 +2656,7 @@ function CycleWorkspace({
           </p>
           <div className="button-row">
             <button
+              className="touch-target"
               type="button"
               aria-describedby={goalActionDescribedBy("achieve")}
               disabled={
@@ -2668,6 +2669,7 @@ function CycleWorkspace({
               目標を達成として終了
             </button>
             <button
+              className="touch-target"
               type="button"
               aria-describedby={goalActionDescribedBy("end")}
               disabled={
