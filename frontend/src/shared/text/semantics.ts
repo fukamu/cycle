@@ -1,5 +1,6 @@
 export const GOAL_TEXT_MAX_CODE_POINTS = 80;
 export const FRAME_TEXT_MAX_CODE_POINTS = 200;
+export const CYCLE_SUMMARY_PREVIEW_MAX_CODE_POINTS = 120;
 
 const nonUnicodeWhiteSpace = /[^\p{White_Space}]/u;
 

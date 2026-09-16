@@ -558,7 +558,10 @@ Goal status: ended
 Required behavior:
 
 - Version区間には`versionNumber`とGoal本文を表示し、対応するVersion開始eventには確定日時を表示する。
-- Cycle rowにはGoal単位のCycle番号、期間、`completed` / `canceled`、P previewを表示する。
+- Cycle rowにはGoal単位のCycle番号、期間、status、P previewを表示する。Active CycleはP previewだけを表示し、C/A previewを表示または取得する追加操作を設けない。
+- Completed / Canceled Cycleには、初期状態を閉じたnative disclosure `C/Aの学びを見る`をrowごとに独立して表示する。展開状態は永続化せず、別のCycleの展開状態へ影響させない。展開内容は`Cycle {N} · Goal v{V}`、`C — Check`、`A — Action`の順とし、CycleとそのCycleが参照したGoal Versionを常に識別できるようにする。
+- C/A previewは§24.1の保存値を改行を保ったplain textとして表示する。空またはUnicode whitespaceだけの場合は本文の代わりに`記録なし`と表示し、`truncated=true`のFrameには`一部を表示しています。`を併記する。Frontendで再切断、ellipsis追加、line clampを行わない。
+- 各Cycle rowにはdisclosureと別の`全文を見る`linkを常に表示し、そのCycle DetailをcanonicalなP/D/C/A全文として開く。Disclosureの開閉でlink、pagination、groupingまたはrow順を変更しない。
 - Canceled Cycleのreasonが`replanned`の場合は、状態に加えて`再計画のため中断`と表示する。Goal達成 / 終了によるCanceledとの違いを色だけに依存せず、reasonを推測しない。
 - Cycle Detailには、そのCycleが参照したGoal Version本文とP/D/C/AをRead-onlyで表示する。
 - Version区間とVersion開始eventを別itemとして表示する。変更文言をVersion見出しやCycle群へ内包せず、最新順では新VersionのCycle群と旧Version区間の間に独立した変更eventを置く。
@@ -4566,6 +4569,7 @@ Actions:
 - content max widthは例`720px`。
 - Cycle Frame tabsはmobile bottom固定、desktopでも同じ情報構造。
 - Active Pの前回A Panelは320px幅と200% zoom相当でもmetadata、badge、補助文言、version変更警告、A全文を同じ縦のreading orderで表示し、横scroll、truncate、nested scrollを作らない。
+- Goal TimelineのC/A disclosureは320px幅と200% zoom相当でもprovenance、C、A、truncation案内、全文linkを縦にreflowし、横scroll、line clamp、nested scrollを作らない。
 - CのP/D比較はdesktopで2列、狭幅とzoom時はP→Dの縦配置とし、内部scrollを作らない。
 - P/D templateは320px幅と200% zoom相当で名称、用途、全文preview、操作、disabled理由を切らずに縦のreading orderで表示し、横scrollやnested scrollを作らない。
 - Goal card collectionは1列からresponsiveに拡張可能だが、MVPでdesktop専用layoutを作らない。
@@ -4582,6 +4586,7 @@ Actions:
 - AI中Aは`readOnly` + `aria-readonly=true`。disabledにせずcopy/scroll可能。
 - ColorだけでGoal status / save state / version markerを表現しない。
 - Active Pの前回Aはvisible headingを持つstaticな補助領域とし、Guide → 前回A → P Textareaの順で取得できるようにする。追加Textarea、button、link、`aria-live`を設けず、Goal Version変更を色だけで表現しない。
+- Goal TimelineのC/A previewはnative `details` / `summary`を使い、初期closed、rowごとに独立し、Keyboardと支援技術から開閉状態を取得可能にする。DisclosureとCycle Detail linkを入れ子にせず、summaryおよび全文linkのaccessible nameにはCycle番号とGoal Version番号を含める。展開後のreading orderはprovenance、C、Aとする。
 - CのP/D比較はvisible headingとP→D→Cのreading orderを持ち、Recovery待ちは色だけでなく文字とfocus可能な確認操作で示す。
 - P/D templateの各挿入操作は固有のtemplate名をaccessible nameに含め、用途、全文preview、適用中のdisabled理由を`aria-describedby`で取得できるようにする。
 - Button disabled理由を近接textで示す。
@@ -6372,6 +6377,8 @@ Backward-incompatible変更はExpand / Contractを使い、同一Deployで直前
 
 Worker、Static Assets、Containerを同じDeployで更新しても、旧Containerのauthoritative drainが完了するまでは新Frontendと旧Backendが混在し得る。新Frontendが欠落を拒否するrequired response fieldを追加し、旧Frontendがunknown fieldを安全に無視できる場合は、Backend response contractのexpandとFrontend consumer activationを別candidateへ分ける。`previousCompletedCycleAction`のBackend expandでは、旧Frontendはこのunknown fieldを無視し、既存の表示と操作を維持する。先にBackend expandだけをdeployし、old-image drainと新fieldの全適用surfaceを検証したcheckpointの後でのみFrontendのrequired schema / UIを有効化する。Backend expand candidateだけではFrontend behaviorを有効化せず、新Frontendはfield欠落を`null`へ正規化して互換性問題を隠さない。Drainまたは全surfaceのcontractを証明できない場合はFrontend activation candidateのmerge / deployを停止する。
 
+Cycle summaryのrequired nullable `learningPreview`もBackend-firstの2 candidateで有効化する。Backend expand candidateで旧Frontendがunknown fieldを無視すること、Activeが`null`、Completed / Canceledがbounded C/A preview objectを全list surfaceで返すことを検証し、authoritative old-image drain後の別Frontend candidateでだけrequired schemaとC/A disclosureを有効化する。Activation後はfield欠落、Activeのobject、terminalの`null`を互換Responseとして受理しない。
+
 Cycle ReplanもBackend-firstの2 candidateで有効化する。Expand candidateは`000008`、Backendの`replanned` read/write・endpoint、Cycle summaryのrequired nullable `cancellationReason`、およびFrontend readerの旧 / 新Backend dual-readだけを含み、`このCycleを中断して再計画`のUI actionを公開しない。Migration後も旧Backend writerが従来の`NULL|goal_achieved|goal_ended`を書けること、expand Backendの全full-Cycle / summary surfaceが新enumを安全に表現できることを検証してdeployする。Authoritative metadataで旧Backend imageのdrainを証明した後にだけ、別Frontend activation candidateでReplan actionを公開する。Drainが証明できない、旧BackendへReplan requestが到達し得る、またはreader互換性を証明できない場合はactivationを停止する。Activation rollbackでは`replanned` rowを読めるFrontend / Backendを維持し、Productionで`000008` downを実行しない。
 
 ## 44.5 Health endpoints
@@ -6587,6 +6594,8 @@ Read operationはcursor tamper、scope mismatch、ordering、pagination境界、
 
 Shared full `CycleView`の`previousCompletedCycleAction`は、Cycle 1の`null`、Active Cycleのexact predecessor、Completed predecessorでは§18.5に従う同一 / `current - 1`のGoal VersionとA object、`replanned` Canceled predecessorでは同一Goal Versionと`null`、terminalの`null`を検証する。Missing / 他reasonのCanceled / non-Completed・non-Canceled / sequence mismatch / futureまたは2以上gapのGoal Version / 解決不能なGoal Version / Completedのblank Aはinvariant errorとし、cross-user / cross-Goalを非開示にする。Start、Cycle detail、Review trigger、Complete、Continue、Replan、Terminateの全full-Cycle surfaceでrequired nullable fieldを検証し、Cycle list / history summaryではrequired nullable cancellation reason、Activeのrequired `learningPreview=null`、terminalのbounded C/A previewとtruncation metadata、Frame PATCH responseでは従来shapeを固定する。120 / 121 Unicode code-point境界、空、Unicode whitespace、改行、pagination境界、stable ordering、同一queryによる取得、cross-user / cross-Goal非開示を実DBで検証する。ContinueとReplanはfresh、同一operation replay、作成Cycleが後続stateへ進んだ後のresponse-loss replay、materialization不整合時のrollbackを含め、Continueはlock済みReview Draftの`reviewCycleId`との一致も含める。
 
+Frontend Cycle summary schemaは`learningPreview`の欠落、Activeのobject、Completed / Canceledの`null`、120 code points超過、`truncated=true`で120 code points未満のtextを拒否する。Goal TimelineはActiveのP-only、terminal disclosureの初期closedとrow間独立、C→A順、Cycle / Goal Version provenance、`記録なし`、改行、明示truncation、canonical全文link、pagination後のgroup / ordering不変、Goal deletion fence後のpreview非再公開をcomponent testで固定する。Keyboard、native disclosure semantics、320px幅、200% zoom、44px以上の操作領域、長い連続文字列、横overflow / nested scrollなし、Detailの全文をE2Eで検証する。新しいdetail fetch、本文telemetry、Browser storageを追加しないことも確認する。
+
 Frontendはfull `CycleView`のfield欠落を拒否し、Cycle 1 / terminalの`null`、Active Cycle `N > 1`のCompleted predecessor objectまたはReplan後の明示`null`、current Cycle IDとの差、exact `N - 1`、同一または直前のGoal Version、非空かつ§14.5上限内のAをschema境界で検証する。Cycle summaryの`cancellationReason`だけはBackend expand中の旧Response欠落と新Responseのrequired nullable値をdual-readし、unknown reasonを拒否する。Active Pだけの表示、同一 / 異なるGoal Version、改行・長文、static semantics、GuideからTextareaまでのreading order、Cycle 1 / D / C / A / terminal / recovery・workspace fenceでの非表示、320px幅・200% zoom・横overflowなし、P Auto Save・Browser Draft・Frame tab keyboard操作の不変をFrontend testで固定する。
 
 ReplanはDomain / Application / HTTP / real PostgreSQLで、任意のCycle ageとP/D/C/A shape、exact `replanned` reason、同一Goal Version、空のSuccessorと全revision 0、review date非継承、Goal counter / revision、`confirmed:true`、3 revision conflict、AI running拒否、owner / path scope、同Key replay / different hash、二重tap、各write / materialization失敗のrollbackを検証する。Direct predecessorはCompleted→Activeでは既存A object、replanned Canceled→Activeでは`null`となり、N-2へskipしないことを固定する。Frontend activationでは通常のsave / flush後confirm、save failure / Recovery conflict時だけの明示discard、Cancel / Escape、pending相互排他、response-loss収束、Historyの`再計画のため中断`、320px / 200% zoom / KeyboardをcomponentとE2Eで検証する。
@@ -6600,7 +6609,7 @@ E2Eは§6のuser flowと§§20–25のpublic contractを投影し、内部module
 - Goal Refineの比較・明示採用とmanual path。
 - P/D/C/A autosave、reload recovery、Action AI、Cycle completion。
 - Active Cycleのsave / flushからReplan確認、同じGoal Versionの空Cycle開始、旧Cycleの`再計画のため中断`履歴、response-loss replay。
-- Goal維持/変更、Cycle 1完了後のReview ContinueとCycle 2 Active Pでの直前A参照、terminal、History/Timeline。
+- Goal維持/変更、Cycle 1完了後のReview ContinueとCycle 2 Active Pでの直前A参照、terminal、History/TimelineのC/A disclosureとcanonical全文導線。
 - 複数Progressing Goalのpolicy境界とDraft保全。
 - Goal Delete、Google upgrade/login collision、Account Delete。
 - 同一Browser Contextの二tabによる同時Session discovery、片方のreload、その後の両tabのcommand / autosave。Advisory欠落、Google Session切替、Account Deleteでもidentity fence / revoke contractへ収束する。

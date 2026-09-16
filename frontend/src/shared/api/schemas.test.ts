@@ -503,6 +503,10 @@ describe("Cycle summary schema", () => {
       createdAt: "2026-08-19T00:00:00Z",
     },
     planPreview: "最初の計画",
+    learningPreview: {
+      check: { text: "分かったこと", truncated: false },
+      action: { text: "次に変えること", truncated: false },
+    },
   });
 
   it("requires the nullable cancellation reason on every summary", () => {
@@ -535,6 +539,89 @@ describe("Cycle summary schema", () => {
       cycleSummarySchema.safeParse({
         ...summary(),
         cancellationReason: "manual_restart",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a null learning preview for Active summaries and a bounded object for terminal summaries", () => {
+    expect(
+      cycleSummarySchema.safeParse({
+        ...summary(),
+        status: "active",
+        completedAt: null,
+        learningPreview: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      cycleSummarySchema.safeParse({
+        ...summary(),
+        status: "active",
+        completedAt: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      cycleSummarySchema.safeParse({
+        ...summary(),
+        learningPreview: null,
+      }).success,
+    ).toBe(false);
+
+    const missing: Record<string, unknown> = summary();
+    delete missing.learningPreview;
+    const parsed = cycleSummarySchema.safeParse(missing);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success)
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ["learningPreview"] }),
+        ]),
+      );
+  });
+
+  it("validates Unicode code-point and truncation boundaries without changing preserved newlines", () => {
+    const exactBoundary = `一行目\n${"😀".repeat(116)}`;
+    const parsed = cycleSummarySchema.parse({
+      ...summary(),
+      planPreview: "😀".repeat(120),
+      learningPreview: {
+        check: { text: exactBoundary, truncated: true },
+        action: { text: " \n\u3000", truncated: false },
+      },
+    });
+    expect(parsed.learningPreview?.check.text).toBe(exactBoundary);
+    expect(parsed.learningPreview?.action.text).toBe(" \n\u3000");
+
+    expect(
+      cycleSummarySchema.safeParse({
+        ...summary(),
+        planPreview: "😀".repeat(121),
+      }).success,
+    ).toBe(false);
+    expect(
+      cycleSummarySchema.safeParse({
+        ...summary(),
+        learningPreview: {
+          check: { text: "😀".repeat(121), truncated: false },
+          action: { text: "次に変えること", truncated: false },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      cycleSummarySchema.safeParse({
+        ...summary(),
+        learningPreview: {
+          check: { text: "😀".repeat(119), truncated: true },
+          action: { text: "次に変えること", truncated: false },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      cycleSummarySchema.safeParse({
+        ...summary(),
+        learningPreview: {
+          check: { text: "NUL\0", truncated: false },
+          action: { text: "次に変えること", truncated: false },
+        },
       }).success,
     ).toBe(false);
   });

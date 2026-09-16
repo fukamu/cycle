@@ -5,8 +5,10 @@ import { isValidLocalDate } from "../date/localDate";
 import { isValidCSRFToken } from "./csrfToken";
 import { stableAPIErrorCodeSchema } from "./errorCodes";
 import {
+  CYCLE_SUMMARY_PREVIEW_MAX_CODE_POINTS,
   FRAME_TEXT_MAX_CODE_POINTS,
   GOAL_TEXT_MAX_CODE_POINTS,
+  codePointCount,
   hasNoNUL,
   hasNonWhitespace,
   isWithinCodePointLimit,
@@ -23,6 +25,29 @@ const boundedTextSchema = (maximumCodePoints: number) =>
     .refine((value) => isWithinCodePointLimit(value, maximumCodePoints));
 const goalTextSchema = boundedTextSchema(GOAL_TEXT_MAX_CODE_POINTS);
 const frameTextSchema = boundedTextSchema(FRAME_TEXT_MAX_CODE_POINTS);
+const cycleSummaryPreviewTextSchema = boundedTextSchema(
+  CYCLE_SUMMARY_PREVIEW_MAX_CODE_POINTS,
+);
+const cycleFramePreviewSchema = z
+  .object({
+    text: cycleSummaryPreviewTextSchema,
+    truncated: z.boolean(),
+  })
+  .superRefine((preview, context) => {
+    if (
+      preview.truncated &&
+      codePointCount(preview.text) !== CYCLE_SUMMARY_PREVIEW_MAX_CODE_POINTS
+    )
+      context.addIssue({
+        code: "custom",
+        message: "A truncated Cycle preview must fill the bounded summary",
+        path: ["text"],
+      });
+  });
+const cycleLearningPreviewSchema = z.object({
+  check: cycleFramePreviewSchema,
+  action: cycleFramePreviewSchema,
+});
 
 export const frameSchema = z.enum(["plan", "do", "check", "action"]);
 export type Frame = z.infer<typeof frameSchema>;
@@ -281,7 +306,8 @@ export const cycleSummarySchema = z
     canceledAt: instant.nullable(),
     cancellationReason: cycleSummaryCancellationReasonSchema.nullable(),
     goalVersion: goalVersionSchema,
-    planPreview: frameTextSchema,
+    planPreview: cycleSummaryPreviewTextSchema,
+    learningPreview: cycleLearningPreviewSchema.nullable(),
   })
   .superRefine((cycle, context) => {
     const consistent =
@@ -301,6 +327,16 @@ export const cycleSummarySchema = z
         code: "custom",
         message: "Cycle summary status is inconsistent",
         path: ["status"],
+      });
+    const learningPreviewConsistent =
+      cycle.status === "active"
+        ? cycle.learningPreview === null
+        : cycle.learningPreview !== null;
+    if (!learningPreviewConsistent)
+      context.addIssue({
+        code: "custom",
+        message: "Cycle summary learning preview is inconsistent",
+        path: ["learningPreview"],
       });
   });
 export type CycleSummary = z.infer<typeof cycleSummarySchema>;

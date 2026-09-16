@@ -15,16 +15,22 @@ import {
   useRunGoalDeletionFencedRequest,
 } from "../goal-deletion";
 import { getGoal, listCycles } from "../../shared/api/workspace";
+import { type CycleSummary } from "../../shared/api/schemas";
 import {
   LoadMoreError,
   PageError,
   PageLoading,
 } from "../../shared/components/AsyncState";
-import { cycleCancellationReasonCopy, statusLabel } from "../../shared/copy/ja";
+import {
+  cycleCancellationReasonCopy,
+  cycleTimelineLearningCopy,
+  statusLabel,
+} from "../../shared/copy/ja";
 import {
   formatActivePeriod,
   formatCompletedPeriod,
 } from "../../shared/date/format";
+import { hasNonWhitespace } from "../../shared/text/semantics";
 import { buildTimelineGroups } from "./goalTimelineModel";
 import { useInfiniteScrollTrigger } from "./useInfiniteScrollTrigger";
 
@@ -175,30 +181,13 @@ function GoalTimelineQueries({
                     className="timeline-cycles"
                     aria-label={`Goal V${group.version.versionNumber}のサイクル`}
                   >
-                    {group.cycles.map((cycle) => {
-                      const end = cycle.completedAt ?? cycle.canceledAt;
-                      return (
-                        <li key={cycle.id}>
-                          <Link to={`/goals/${goalId}/cycles/${cycle.id}`}>
-                            <span>Cycle {cycle.sequenceNumber}</span>
-                            <span className="timeline-cycles__status">
-                              <strong>{statusLabel[cycle.status]}</strong>
-                              {cycle.cancellationReason === "replanned" && (
-                                <span>
-                                  {cycleCancellationReasonCopy.replanned}
-                                </span>
-                              )}
-                            </span>
-                            <time>
-                              {end
-                                ? formatCompletedPeriod(cycle.startedAt, end)
-                                : formatActivePeriod(cycle.startedAt)}
-                            </time>
-                            <p>{cycle.planPreview || "Pは未入力です"}</p>
-                          </Link>
-                        </li>
-                      );
-                    })}
+                    {group.cycles.map((cycle) => (
+                      <TimelineCycleRow
+                        key={cycle.id}
+                        cycle={cycle}
+                        goalId={goalId}
+                      />
+                    ))}
                   </ol>
                 </div>
               </li>
@@ -245,5 +234,108 @@ function GoalTimelineQueries({
       )}
       {cycles.isFetchNextPageError && <LoadMoreError retry={requestNextPage} />}
     </main>
+  );
+}
+
+function TimelineCycleRow({
+  cycle,
+  goalId,
+}: {
+  readonly cycle: CycleSummary;
+  readonly goalId: string;
+}) {
+  const end = cycle.completedAt ?? cycle.canceledAt;
+  const provenance = cycleTimelineLearningCopy.metadata(
+    cycle.sequenceNumber,
+    cycle.goalVersion.versionNumber,
+  );
+  return (
+    <li>
+      <article className="timeline-cycle">
+        <div className="timeline-cycle__meta">
+          <strong>Cycle {cycle.sequenceNumber}</strong>
+          <span className="timeline-cycles__status">
+            <strong>{statusLabel[cycle.status]}</strong>
+            {cycle.cancellationReason === "replanned" && (
+              <span>{cycleCancellationReasonCopy.replanned}</span>
+            )}
+          </span>
+          <time>
+            {end
+              ? formatCompletedPeriod(cycle.startedAt, end)
+              : formatActivePeriod(cycle.startedAt)}
+          </time>
+        </div>
+        <p className="timeline-cycle__plan">
+          {cycle.planPreview || "Pは未入力です"}
+        </p>
+        {cycle.learningPreview !== null && (
+          <details className="timeline-learning-preview">
+            <summary
+              aria-label={cycleTimelineLearningCopy.toggleLabel(
+                cycle.sequenceNumber,
+                cycle.goalVersion.versionNumber,
+              )}
+            >
+              {cycleTimelineLearningCopy.toggle}
+            </summary>
+            <div
+              className="timeline-learning-preview__content"
+              role="region"
+              aria-label={cycleTimelineLearningCopy.regionLabel(
+                cycle.sequenceNumber,
+                cycle.goalVersion.versionNumber,
+              )}
+            >
+              <p className="timeline-learning-preview__metadata">
+                {provenance}
+              </p>
+              <LearningPreviewFrame
+                heading={cycleTimelineLearningCopy.checkHeading}
+                preview={cycle.learningPreview.check}
+              />
+              <LearningPreviewFrame
+                heading={cycleTimelineLearningCopy.actionHeading}
+                preview={cycle.learningPreview.action}
+              />
+            </div>
+          </details>
+        )}
+        <Link
+          className="timeline-cycle__detail touch-target touch-target--inline"
+          to={`/goals/${goalId}/cycles/${cycle.id}`}
+          aria-label={cycleTimelineLearningCopy.detailLabel(
+            cycle.sequenceNumber,
+            cycle.goalVersion.versionNumber,
+          )}
+        >
+          {cycleTimelineLearningCopy.detail}
+        </Link>
+      </article>
+    </li>
+  );
+}
+
+function LearningPreviewFrame({
+  heading,
+  preview,
+}: {
+  readonly heading: string;
+  readonly preview: { readonly text: string; readonly truncated: boolean };
+}) {
+  return (
+    <section className="timeline-learning-preview__frame">
+      <h3>{heading}</h3>
+      <p>
+        {hasNonWhitespace(preview.text)
+          ? preview.text
+          : cycleTimelineLearningCopy.empty}
+      </p>
+      {preview.truncated && (
+        <p className="timeline-learning-preview__truncation">
+          {cycleTimelineLearningCopy.truncated}
+        </p>
+      )}
+    </section>
   );
 }
