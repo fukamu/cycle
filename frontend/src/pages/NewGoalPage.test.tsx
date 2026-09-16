@@ -75,6 +75,7 @@ const draft: GoalDraft = {
   id: "20000000-0000-7000-8000-000000000001",
   draftType: "creation",
   body: "元の目標",
+  successSignal: null,
   revision: 0,
   updatedAt: "2026-08-20T00:00:00.000Z",
 };
@@ -107,6 +108,7 @@ const startedCycle: Cycle = {
     id: "30000000-0000-7000-8000-000000000002",
     versionNumber: 1,
     body: draft.body,
+    successSignal: null,
     createdAt: "2026-08-20T00:02:00.000Z",
   },
   previousCompletedCycleAction: null,
@@ -642,6 +644,57 @@ describe("NewGoalPage", () => {
     expect(feedback).not.toBeInTheDocument();
   });
 
+  it("edits the optional success signal as part of the same autosave tuple", async () => {
+    vi.mocked(saveGoalDraft).mockImplementation(
+      async (_lease, _draftId, content, expectedRevision) => ({
+        draft: {
+          ...draft,
+          ...content,
+          revision: expectedRevision + 1,
+          updatedAt: "2026-08-20T00:01:00.000Z",
+        },
+      }),
+    );
+    renderPage();
+    const signal = await screen.findByRole("textbox", {
+      name: "良くなったと分かるサイン（任意）",
+    });
+    const guide = screen.getByText(
+      "何ができたら、この目標に近づけたと言えるかを書きます。空欄でも進められます。",
+    );
+    expect(signal.getAttribute("aria-describedby")).toContain(guide.id);
+    expect(signal).not.toHaveAttribute("maxlength");
+
+    const maximum = "😀".repeat(120);
+    fireEvent.change(signal, { target: { value: maximum } });
+    expect(signal).toHaveValue(maximum);
+    expect(
+      screen.getByRole("status", {
+        name: "良くなったと分かるサイン（任意）は上限120文字中120文字です",
+      }),
+    ).toHaveTextContent("120 / 120文字");
+
+    fireEvent.change(signal, { target: { value: `${maximum}😀` } });
+    expect(signal).toHaveValue(maximum);
+    expect(
+      screen.getByText(
+        "入力後は121文字になるため反映できませんでした。上限120文字まで、入力内容をあと1文字減らしてください。",
+      ),
+    ).toHaveAttribute("role", "status");
+
+    fireEvent.blur(signal);
+    await waitFor(() =>
+      expect(saveGoalDraft).toHaveBeenCalledWith(
+        sessionLease,
+        draft.id,
+        { body: draft.body, successSignal: maximum },
+        draft.revision,
+        session.csrfToken,
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
   it("explains disabled Goal actions and associates the guidance", async () => {
     const emptyDraft = { ...draft, body: " \n\u3000" };
     vi.mocked(getHome).mockResolvedValue({
@@ -1067,7 +1120,7 @@ describe("NewGoalPage", () => {
       expect(saveGoalDraft).toHaveBeenLastCalledWith(
         sessionLease,
         draft.id,
-        localBody,
+        { body: localBody, successSignal: null },
         latestDraft.revision,
         session.csrfToken,
         expect.any(AbortSignal),
@@ -1087,7 +1140,7 @@ describe("NewGoalPage", () => {
       expect(saveGoalDraft).toHaveBeenLastCalledWith(
         sessionLease,
         draft.id,
-        nextLocalBody,
+        { body: nextLocalBody, successSignal: null },
         2,
         session.csrfToken,
         expect.any(AbortSignal),
@@ -1443,7 +1496,7 @@ describe("NewGoalPage", () => {
       expect(saveGoalDraft).toHaveBeenCalledWith(
         sessionLease,
         draft.id,
-        draftABody,
+        { body: draftABody, successSignal: null },
         draft.revision,
         session.csrfToken,
         expect.any(AbortSignal),
@@ -1477,7 +1530,7 @@ describe("NewGoalPage", () => {
     expect(saveGoalDraft).not.toHaveBeenCalledWith(
       sessionLease,
       draftB.id,
-      draftABody,
+      { body: draftABody, successSignal: null },
       expect.any(Number),
       session.csrfToken,
       expect.any(AbortSignal),
@@ -1489,7 +1542,7 @@ describe("NewGoalPage", () => {
       expect(saveGoalDraft).toHaveBeenLastCalledWith(
         sessionLease,
         draftB.id,
-        draftBBody,
+        { body: draftBBody, successSignal: null },
         draftB.revision,
         session.csrfToken,
         expect.any(AbortSignal),

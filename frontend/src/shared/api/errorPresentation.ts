@@ -45,6 +45,7 @@ const messageByCode = {
   VALIDATION_ERROR: inputMessage,
   GOAL_TEXT_REQUIRED: inputMessage,
   GOAL_TEXT_TOO_LONG: inputMessage,
+  GOAL_SUCCESS_SIGNAL_TOO_LONG: inputMessage,
   FRAME_TEXT_TOO_LONG: inputMessage,
   GOAL_REFINE_INPUT_EMPTY: inputMessage,
   ACTION_GENERATE_INPUT_INCOMPLETE: inputMessage,

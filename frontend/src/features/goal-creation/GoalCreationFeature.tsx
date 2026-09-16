@@ -35,7 +35,11 @@ import {
 } from "../../shared/components/AsyncState";
 import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
 import { TextCounter } from "../../shared/components/TextCounter";
-import { goalActionCopy, goalCopy } from "../../shared/copy/ja";
+import {
+  goalActionCopy,
+  goalCopy,
+  goalSuccessSignalCopy,
+} from "../../shared/copy/ja";
 import { useBoundedTextInput } from "../../shared/hooks/useBoundedTextInput";
 import {
   commandFingerprint,
@@ -43,6 +47,7 @@ import {
 } from "../../shared/hooks/useCommandOperation";
 import {
   type DraftLatestResolution,
+  type GoalDraftEditorContent,
   useDraftAutoSave,
 } from "../../shared/hooks/useDraftAutoSave";
 import {
@@ -54,6 +59,8 @@ import {
   codePointCount,
   GOAL_TEXT_MAX_CODE_POINTS,
   hasNonWhitespace,
+  normalizeSuccessSignal,
+  SUCCESS_SIGNAL_MAX_CODE_POINTS,
 } from "../../shared/text/semantics";
 import { useGoalCreationDraftCommand } from "./useGoalCreationDraftCommand";
 import {
@@ -138,6 +145,8 @@ function GoalDraftEditor({
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const actionGuidanceBaseId = useId();
   const textLimitFeedbackId = useId();
+  const successSignalGuideId = useId();
+  const successSignalFeedbackId = useId();
   const mountedGenerationRef = useRef(true);
   useLayoutEffect(() => {
     mountedGenerationRef.current = true;
@@ -152,12 +161,19 @@ function GoalDraftEditor({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [error, setError] = useState<string>();
   const save = useCallback(
-    async (body: string, revision: number, signal: AbortSignal) => {
+    async (
+      content: GoalDraftEditorContent,
+      revision: number,
+      signal: AbortSignal,
+    ) => {
       const saved = (
         await saveGoalDraft(
           sessionLease,
           draft.id,
-          body,
+          {
+            body: content.body,
+            successSignal: normalizeSuccessSignal(content.successSignal),
+          },
           revision,
           session.csrfToken,
           signal,
@@ -206,6 +222,7 @@ function GoalDraftEditor({
     goalId: null,
     subjectKey,
     initialBody: draft.body,
+    initialSuccessSignal: draft.successSignal,
     initialRevision: draft.revision,
     save,
     revisionConflictCode: "GOAL_DRAFT_REVISION_CONFLICT",
@@ -221,6 +238,13 @@ function GoalDraftEditor({
     scopeKey: subjectKey,
     readOnly: editorReadOnly,
     onAccept: editor.setBody,
+  });
+  const boundedSuccessSignalInput = useBoundedTextInput({
+    value: editor.successSignal,
+    maximumCodePoints: SUCCESS_SIGNAL_MAX_CODE_POINTS,
+    scopeKey: `${subjectKey}:success-signal`,
+    readOnly: editorReadOnly,
+    onAccept: editor.setSuccessSignal,
   });
   const count = codePointCount(editor.body);
   const valid =
@@ -266,7 +290,13 @@ function GoalDraftEditor({
         session.csrfToken,
       );
       if (!isCurrentDraftGeneration() || result.draft.id !== draft.id) return;
-      editor.synchronize(result.draft.body, result.draft.revision);
+      editor.synchronize(
+        {
+          body: result.draft.body,
+          successSignal: result.draft.successSignal ?? "",
+        },
+        result.draft.revision,
+      );
       cacheCreationDraft(cache, userId, result.draft);
       refinement.dismiss();
     } catch {
@@ -498,15 +528,58 @@ function GoalDraftEditor({
           </p>
         )}
         <div className="editor-meta">
-          <SaveBadge
-            state={editor.state}
-            retry={conflictRetryBlocked ? undefined : editor.retry}
-          />
           <TextCounter
             subject="あなたの目標"
             count={boundedInput.count}
             limit={GOAL_TEXT_MAX_CODE_POINTS}
             invalid={boundedInput.count > GOAL_TEXT_MAX_CODE_POINTS}
+          />
+        </div>
+        <label htmlFor="goal-success-signal">
+          {goalSuccessSignalCopy.label}
+        </label>
+        <p className="field-guide" id={successSignalGuideId}>
+          {goalSuccessSignalCopy.guide}
+        </p>
+        <textarea
+          className="success-signal-editor"
+          id="goal-success-signal"
+          aria-describedby={
+            boundedSuccessSignalInput.feedback
+              ? `${successSignalGuideId} ${successSignalFeedbackId}`
+              : successSignalGuideId
+          }
+          value={boundedSuccessSignalInput.value}
+          placeholder={goalSuccessSignalCopy.placeholder}
+          readOnly={editorReadOnly}
+          onChange={boundedSuccessSignalInput.onChange}
+          onCompositionStart={boundedSuccessSignalInput.onCompositionStart}
+          onCompositionEnd={boundedSuccessSignalInput.onCompositionEnd}
+          onBlur={editor.flush}
+        />
+        {boundedSuccessSignalInput.feedback && (
+          <p
+            className="text-limit-feedback"
+            id={successSignalFeedbackId}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {boundedSuccessSignalInput.feedback}
+          </p>
+        )}
+        <div className="editor-meta">
+          <SaveBadge
+            state={editor.state}
+            retry={conflictRetryBlocked ? undefined : editor.retry}
+          />
+          <TextCounter
+            subject={goalSuccessSignalCopy.label}
+            count={boundedSuccessSignalInput.count}
+            limit={SUCCESS_SIGNAL_MAX_CODE_POINTS}
+            invalid={
+              boundedSuccessSignalInput.count > SUCCESS_SIGNAL_MAX_CODE_POINTS
+            }
           />
         </div>
         <div className="button-row">

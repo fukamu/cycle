@@ -22,6 +22,7 @@ const version = {
   id: "30000000-0000-7000-8000-000000000001",
   versionNumber: 1,
   body: "現在の目標",
+  successSignal: null,
   createdAt: "2026-08-20T00:00:00.000Z",
 } as const;
 
@@ -61,6 +62,7 @@ function reviewGeneration({
     baseGoalVersionId: version.id,
     reviewCycleId: cycleId,
     body: `Review ${draftId}`,
+    successSignal: null,
     revision: draftRevision,
     updatedAt: "2026-08-20T01:00:00.000Z",
   };

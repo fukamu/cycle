@@ -77,6 +77,7 @@ import {
   cycleNextFrameCopy,
   cycleReplanCopy,
   frameCopy,
+  goalSuccessSignalCopy,
   reviewScheduleCopy,
   type CycleFrameTemplate,
 } from "../../shared/copy/ja";
@@ -514,6 +515,7 @@ function CycleWorkspace({
   const today = useBrowserLocalDate();
   const actionGuidanceId = useId();
   const goalActionGuidanceId = useId();
+  const successSignalHeadingId = useId();
   const reviewSchedulePendingGuidanceId = useId();
   const replanGuidanceId = useId();
   const textLimitFeedbackId = useId();
@@ -2684,6 +2686,17 @@ function CycleWorkspace({
       <header className="goal-context">
         <span className="eyebrow">目標</span>
         <h1>{cycle.goalVersion.body}</h1>
+        <section
+          className="goal-success-signal-readonly"
+          aria-labelledby={successSignalHeadingId}
+        >
+          <h2 id={successSignalHeadingId}>
+            {goalSuccessSignalCopy.readOnlyHeading}
+          </h2>
+          <p>
+            {cycle.goalVersion.successSignal ?? goalSuccessSignalCopy.unset}
+          </p>
+        </section>
         <p>
           Goal v{cycle.goalVersion.versionNumber} · Cycle {cycle.sequenceNumber}
         </p>

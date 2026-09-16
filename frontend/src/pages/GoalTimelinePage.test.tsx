@@ -616,6 +616,7 @@ describe("GoalTimelinePage", () => {
     expect(event.querySelector(".timeline-event__marker")).toBeInTheDocument();
     expect(version.querySelector(".timeline-period__rail")).toBeInTheDocument();
     expect(screen.queryByText("GOAL V1")).not.toBeInTheDocument();
+    expect(within(version).getByText("未設定")).toBeVisible();
     expect(getGoal).toHaveBeenCalledWith(
       sessionLease,
       goalId,
@@ -627,6 +628,42 @@ describe("GoalTimelinePage", () => {
       undefined,
       expect.any(AbortSignal),
     );
+  });
+
+  it("shows each pinned success signal once per Goal Version, not per Cycle", async () => {
+    const versionOne = {
+      ...makeVersion(1),
+      successSignal: "V1のサイン\n改行あり",
+    };
+    const versionTwo = { ...makeVersion(2), successSignal: "V2のサイン" };
+    vi.mocked(getGoal).mockResolvedValue({
+      goal: { ...makeGoal(2), currentVersion: versionTwo },
+    });
+    vi.mocked(listCycles).mockResolvedValue({
+      items: [
+        { ...makeCycle(4, 2), goalVersion: versionTwo },
+        { ...makeCycle(3, 2), goalVersion: versionTwo },
+        { ...makeCycle(2, 1), goalVersion: versionOne },
+        { ...makeCycle(1, 1), goalVersion: versionOne },
+      ],
+      nextCursor: null,
+    });
+
+    renderTimeline();
+
+    expect(await screen.findAllByText("良くなったと分かるサイン")).toHaveLength(
+      2,
+    );
+    const signalRegions = screen.getAllByRole("region", {
+      name: "良くなったと分かるサイン",
+    });
+    expect(
+      signalRegions.filter(
+        (region) =>
+          region.querySelector("p")?.textContent === versionOne.successSignal,
+      ),
+    ).toHaveLength(1);
+    expect(screen.getAllByText(versionTwo.successSignal)).toHaveLength(1);
   });
 
   it("retries only the failed initial cycles query", async () => {
@@ -1314,6 +1351,7 @@ function makeVersion(versionNumber: number): GoalVersion {
     id: versionId(versionNumber),
     versionNumber,
     body: `Version ${versionNumber}の目標`,
+    successSignal: null,
     createdAt: `2026-08-${String(versionNumber).padStart(2, "0")}T00:00:00.000Z`,
   };
 }

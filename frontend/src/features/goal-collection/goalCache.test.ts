@@ -37,6 +37,7 @@ const goal: Goal = {
     id: "30000000-0000-7000-8000-000000000001",
     versionNumber: 1,
     body: "目標",
+    successSignal: null,
     createdAt: "2026-08-20T00:00:00.000Z",
   },
   currentWork: {
@@ -76,6 +77,7 @@ const draft: GoalDraft = {
   id: "10000000-0000-7000-8000-000000000001",
   draftType: "creation",
   body: "",
+  successSignal: null,
   revision: 0,
   updatedAt: "2026-08-20T00:00:00.000Z",
 };

@@ -5,6 +5,7 @@ import {
   firstUseGuideCopy,
   goalCopy,
   goalReviewDecisionCopy,
+  goalSuccessSignalCopy,
   textLimitCopy,
 } from "./ja";
 
@@ -122,6 +123,18 @@ describe("goal limit copy", () => {
     [3, "上限の3件"],
   ])("uses the configured limit %i", (limit, expected) => {
     expect(goalCopy.limit(limit)).toContain(expected);
+  });
+});
+
+describe("goal success signal copy", () => {
+  it("keeps the approved optional editor and unset copy", () => {
+    expect(goalSuccessSignalCopy.label).toBe(
+      "良くなったと分かるサイン（任意）",
+    );
+    expect(goalSuccessSignalCopy.guide).toBe(
+      "何ができたら、この目標に近づけたと言えるかを書きます。空欄でも進められます。",
+    );
+    expect(goalSuccessSignalCopy.unset).toBe("未設定");
   });
 });
 

@@ -986,6 +986,13 @@ button:disabled {
   font-weight: var(--font-weight-bold);
 }
 
+.field-guide {
+  margin: -10px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-small);
+  overflow-wrap: anywhere;
+}
+
 textarea {
   width: 100%;
   min-height: 210px;
@@ -1015,6 +1022,33 @@ textarea:focus-visible {
 textarea[readonly] {
   color: #405675;
   background: var(--brand-soft);
+}
+
+.success-signal-editor {
+  min-height: 132px;
+}
+
+.goal-success-signal-readonly {
+  min-width: 0;
+  margin: 14px 0;
+  padding: 12px 14px;
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-light);
+  border-radius: 10px;
+}
+
+.goal-success-signal-readonly h2,
+.goal-success-signal-readonly h3 {
+  margin: 0 0 6px;
+  color: var(--brand-deep);
+  font-size: var(--font-size-small);
+  line-height: 1.5;
+}
+
+.goal-success-signal-readonly p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .terminal-frame-empty {

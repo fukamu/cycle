@@ -41,6 +41,7 @@ function makeVersion(versionNumber: number): GoalVersion {
     id: `20000000-0000-7000-8000-${String(versionNumber).padStart(12, "0")}`,
     versionNumber,
     body: `Version ${versionNumber}の目標`,
+    successSignal: null,
     createdAt: `2026-08-${String(versionNumber).padStart(2, "0")}T00:00:00.000Z`,
   };
 }

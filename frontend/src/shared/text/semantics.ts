@@ -1,4 +1,5 @@
 export const GOAL_TEXT_MAX_CODE_POINTS = 80;
+export const SUCCESS_SIGNAL_MAX_CODE_POINTS = 120;
 export const FRAME_TEXT_MAX_CODE_POINTS = 200;
 export const CYCLE_SUMMARY_PREVIEW_MAX_CODE_POINTS = 120;
 
@@ -25,6 +26,15 @@ export function hasNonWhitespace(value: string): boolean {
 
 export function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/g, "\n");
+}
+
+export function normalizeSuccessSignal(value: string): string | null {
+  const normalized = normalizeLineEndings(value);
+  return hasNonWhitespace(normalized) ? normalized : null;
+}
+
+export function successSignalInputValue(value: string | null): string {
+  return value ?? "";
 }
 
 export type BoundedTextInputEvaluation =

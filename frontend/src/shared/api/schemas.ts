@@ -8,6 +8,7 @@ import {
   CYCLE_SUMMARY_PREVIEW_MAX_CODE_POINTS,
   FRAME_TEXT_MAX_CODE_POINTS,
   GOAL_TEXT_MAX_CODE_POINTS,
+  SUCCESS_SIGNAL_MAX_CODE_POINTS,
   codePointCount,
   hasNoNUL,
   hasNonWhitespace,
@@ -24,6 +25,9 @@ const boundedTextSchema = (maximumCodePoints: number) =>
     .refine(hasNoNUL)
     .refine((value) => isWithinCodePointLimit(value, maximumCodePoints));
 const goalTextSchema = boundedTextSchema(GOAL_TEXT_MAX_CODE_POINTS);
+const successSignalTextSchema = boundedTextSchema(
+  SUCCESS_SIGNAL_MAX_CODE_POINTS,
+).refine(hasNonWhitespace);
 const frameTextSchema = boundedTextSchema(FRAME_TEXT_MAX_CODE_POINTS);
 const cycleSummaryPreviewTextSchema = boundedTextSchema(
   CYCLE_SUMMARY_PREVIEW_MAX_CODE_POINTS,
@@ -73,6 +77,7 @@ export const goalVersionSchema = z.object({
   id: uuid,
   versionNumber: z.number().int().positive(),
   body: goalTextSchema,
+  successSignal: successSignalTextSchema.nullable(),
   createdAt: instant.optional(),
 });
 export type GoalVersion = z.infer<typeof goalVersionSchema>;
@@ -84,6 +89,7 @@ export const draftSchema = z.object({
   baseGoalVersionId: uuid.optional(),
   reviewCycleId: uuid.optional(),
   body: goalTextSchema,
+  successSignal: successSignalTextSchema.nullable(),
   revision: z.number().int().nonnegative(),
   updatedAt: instant,
 });

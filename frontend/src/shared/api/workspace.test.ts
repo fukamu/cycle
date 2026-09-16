@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 import type { AuthenticatedRequestLease } from "./client";
 import { reviewSchema } from "./schemas";
 import {
+  adoptReview,
   completeCycle,
   continueReview,
   deleteGoal,
@@ -59,6 +60,7 @@ const reviewResponse = (responseGoalId = goalId) => {
     id: "00000000-0000-7000-8000-000000000005",
     versionNumber: 2,
     body: "現在の目標",
+    successSignal: null,
     createdAt: "2026-08-19T00:00:00Z",
   };
   return {
@@ -85,6 +87,7 @@ const reviewResponse = (responseGoalId = goalId) => {
       baseGoalVersionId: goalVersion.id,
       reviewCycleId: cycleId,
       body: "次のCycleで試す目標",
+      successSignal: null,
       revision: 2,
       updatedAt: "2026-08-20T00:02:00Z",
     },
@@ -122,6 +125,7 @@ const reviewScheduleCycleResponse = (
     id: "00000000-0000-7000-8000-000000000005",
     versionNumber: 1,
     body: "現在の目標",
+    successSignal: null,
     createdAt: "2026-08-19T00:00:00Z",
   },
   previousCompletedCycleAction: null,
@@ -146,6 +150,7 @@ const replanResponse = () => {
     id: "00000000-0000-7000-8000-000000000005",
     versionNumber: 1,
     body: "現在の目標",
+    successSignal: null,
     createdAt: "2026-08-19T00:00:00Z",
   };
   return {
@@ -336,6 +341,7 @@ describe("goal-scoped workspace API", () => {
             id: "00000000-0000-7000-8000-000000000005",
             versionNumber: goalVersionNumber,
             body: "現在の目標",
+            successSignal: null,
             createdAt: "2026-08-19T00:00:00Z",
           },
           previousCompletedCycleAction,
@@ -474,7 +480,14 @@ describe("goal-scoped workspace API", () => {
     {
       name: "goal draft save",
       invoke: (signal: AbortSignal) =>
-        saveGoalDraft(lease, goalId, "目標", 0, "csrf", signal),
+        saveGoalDraft(
+          lease,
+          goalId,
+          { body: "目標", successSignal: null },
+          0,
+          "csrf",
+          signal,
+        ),
     },
     {
       name: "goal load",
@@ -487,7 +500,15 @@ describe("goal-scoped workspace API", () => {
     {
       name: "review save",
       invoke: (signal: AbortSignal) =>
-        saveReview(lease, goalId, reviewDraftId, "見直し", 0, "csrf", signal),
+        saveReview(
+          lease,
+          goalId,
+          reviewDraftId,
+          { body: "見直し", successSignal: null },
+          0,
+          "csrf",
+          signal,
+        ),
     },
     {
       name: "cycle load",
@@ -1046,6 +1067,7 @@ describe("goal-scoped workspace API", () => {
       id: "00000000-0000-7000-8000-000000000005",
       versionNumber: 1,
       body: "現在の目標",
+      successSignal: null,
       createdAt: "2026-08-19T00:00:00Z",
     };
     const completedSummary = {
@@ -1105,6 +1127,7 @@ describe("goal-scoped workspace API", () => {
                 id: "00000000-0000-7000-8000-000000000005",
                 versionNumber: 1,
                 body: "現在の目標",
+                successSignal: null,
                 createdAt: "2026-08-19T00:00:00Z",
               },
               planPreview: "最初の計画",
@@ -1142,6 +1165,7 @@ describe("goal-scoped workspace API", () => {
                   id: "00000000-0000-7000-8000-000000000005",
                   versionNumber: 1,
                   body: "現在の目標",
+                  successSignal: null,
                   createdAt: "2026-08-19T00:00:00Z",
                 },
                 planPreview: "最初の計画",
@@ -1178,6 +1202,7 @@ describe("goal-scoped workspace API", () => {
                 id: "00000000-0000-7000-8000-000000000005",
                 versionNumber: 1,
                 body: "現在の目標",
+                successSignal: null,
                 createdAt: "2026-08-19T00:00:00Z",
               },
               planPreview: "最初の計画",
@@ -1198,6 +1223,7 @@ describe("goal-scoped workspace API", () => {
         goalId,
         draftType: "review",
         body: "見直した目標",
+        successSignal: "週3回できる",
         revision: 1,
         updatedAt: "2026-08-19T00:00:00Z",
       },
@@ -1207,16 +1233,126 @@ describe("goal-scoped workspace API", () => {
       .mockResolvedValue(authenticatedJSON(response));
     vi.stubGlobal("fetch", fetchMock);
 
-    await saveReview(lease, goalId, reviewDraftId, "見直した目標", 0, "csrf");
+    await saveReview(
+      lease,
+      goalId,
+      reviewDraftId,
+      { body: "見直した目標", successSignal: "週3回できる" },
+      0,
+      "csrf",
+    );
 
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
       JSON.stringify({
         body: "見直した目標",
+        successSignal: "週3回できる",
         expectedReviewDraftId: reviewDraftId,
         expectedRevision: 0,
       }),
     );
   });
+
+  it("preserves a non-null success signal in a strict Review adoption response", async () => {
+    const generationId = "00000000-0000-7000-8000-000000000007";
+    const response = {
+      reviewDraft: {
+        id: reviewDraftId,
+        goalId,
+        draftType: "review",
+        baseGoalVersionId: "00000000-0000-7000-8000-000000000005",
+        reviewCycleId: cycleId,
+        body: "整理されたレビュー目標",
+        successSignal: "週3回できる\n夕方に余裕がある",
+        revision: 3,
+        updatedAt: "2026-08-20T00:03:00Z",
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(authenticatedJSON(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adopted = await adoptReview(
+      lease,
+      goalId,
+      generationId,
+      2,
+      4,
+      "csrf",
+    );
+
+    expect(adopted.reviewDraft.successSignal).toBe(
+      response.reviewDraft.successSignal,
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ expectedDraftRevision: 2, expectedGoalRevision: 4 }),
+    );
+  });
+
+  it("rejects a Review adoption response missing the required success signal", async () => {
+    const response = {
+      reviewDraft: {
+        id: reviewDraftId,
+        goalId,
+        draftType: "review",
+        baseGoalVersionId: "00000000-0000-7000-8000-000000000005",
+        reviewCycleId: cycleId,
+        body: "整理されたレビュー目標",
+        revision: 3,
+        updatedAt: "2026-08-20T00:03:00Z",
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(authenticatedJSON(response)),
+    );
+
+    await expect(
+      adoptReview(
+        lease,
+        goalId,
+        "00000000-0000-7000-8000-000000000007",
+        2,
+        4,
+        "csrf",
+      ),
+    ).rejects.toBeInstanceOf(ZodError);
+  });
+
+  it.each([
+    { label: "sets", successSignal: "週3回\nできる" },
+    { label: "clears", successSignal: null },
+  ])(
+    "$label a Goal Draft success signal explicitly",
+    async ({ successSignal }) => {
+      const response = {
+        draft: {
+          id: goalId,
+          draftType: "creation",
+          body: "目標",
+          successSignal,
+          revision: 1,
+          updatedAt: "2026-08-19T00:00:00Z",
+        },
+      };
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(authenticatedJSON(response));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await saveGoalDraft(
+        lease,
+        goalId,
+        { body: "目標", successSignal },
+        0,
+        "csrf",
+      );
+
+      expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+        JSON.stringify({ body: "目標", successSignal, expectedRevision: 0 }),
+      );
+    },
+  );
 
   it("sends goal and cycle revisions when completing without creating a next cycle client-side", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(

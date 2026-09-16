@@ -16,6 +16,7 @@ export type BrowserDraft = {
   readonly goalId: string | null;
   readonly subjectKey: string;
   readonly body: string;
+  readonly successSignal?: string | null;
   readonly baseRevision: number;
   readonly updatedAt: string;
 };
@@ -59,6 +60,9 @@ export async function getBrowserDraft(
       goalId: stored.goalId,
       subjectKey: stored.subjectKey,
       body: stored.body,
+      ...(Object.hasOwn(stored, "successSignal")
+        ? { successSignal: stored.successSignal }
+        : {}),
       baseRevision: stored.baseRevision,
       updatedAt: stored.updatedAt,
     };
@@ -79,6 +83,7 @@ export async function deleteBrowserDraftIfUnchanged(
   subjectKey: string,
   expectedBody: string,
   expectedBaseRevision: number,
+  expectedSuccessSignal?: string | null,
 ): Promise<void> {
   await withDatabase((db) =>
     deleteStoredIf(
@@ -88,7 +93,9 @@ export async function deleteBrowserDraftIfUnchanged(
         stored.userId === userId &&
         stored.subjectKey === subjectKey &&
         stored.body === expectedBody &&
-        stored.baseRevision === expectedBaseRevision,
+        stored.baseRevision === expectedBaseRevision &&
+        (expectedSuccessSignal === undefined ||
+          (stored.successSignal ?? null) === expectedSuccessSignal),
     ),
   );
 }

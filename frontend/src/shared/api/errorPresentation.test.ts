@@ -56,6 +56,24 @@ describe("toErrorPresentation", () => {
     );
   });
 
+  it("presents an overlong success signal as an input error", () => {
+    expect(
+      toErrorPresentation(
+        new APIError(
+          400,
+          "GOAL_SUCCESS_SIGNAL_TOO_LONG",
+          "private input",
+          requestId,
+        ),
+      ),
+    ).toEqual({
+      kind: "api",
+      code: "GOAL_SUCCESS_SIGNAL_TOO_LONG",
+      message: "入力内容を確認してください。",
+      requestId,
+    });
+  });
+
   it.each([
     [
       "CYCLE_REPLAN_CONFIRMATION_REQUIRED" as const,
