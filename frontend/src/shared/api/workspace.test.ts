@@ -1058,6 +1058,10 @@ describe("goal-scoped workspace API", () => {
       cancellationReason: null,
       goalVersion,
       planPreview: "最初の計画",
+      learningPreview: {
+        check: { text: "分かったこと", truncated: false },
+        action: { text: "次に変えること", truncated: false },
+      },
     };
     const replannedSummary = {
       ...completedSummary,
@@ -1104,6 +1108,10 @@ describe("goal-scoped workspace API", () => {
                 createdAt: "2026-08-19T00:00:00Z",
               },
               planPreview: "最初の計画",
+              learningPreview: {
+                check: { text: "分かったこと", truncated: false },
+                action: { text: "次に変えること", truncated: false },
+              },
             },
           ],
           nextCursor: null,
@@ -1137,6 +1145,10 @@ describe("goal-scoped workspace API", () => {
                   createdAt: "2026-08-19T00:00:00Z",
                 },
                 planPreview: "最初の計画",
+                learningPreview: {
+                  check: { text: "分かったこと", truncated: false },
+                  action: { text: "次に変えること", truncated: false },
+                },
               },
             ],
             nextCursor: null,
@@ -1147,6 +1159,37 @@ describe("goal-scoped workspace API", () => {
       await expect(listCycles(lease, goalId)).rejects.toBeInstanceOf(ZodError);
     },
   );
+
+  it("rejects a Cycle summary missing its required learning preview", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        authenticatedJSON({
+          items: [
+            {
+              id: cycleId,
+              sequenceNumber: 1,
+              status: "active",
+              startedAt: "2026-08-19T00:00:00Z",
+              completedAt: null,
+              canceledAt: null,
+              cancellationReason: null,
+              goalVersion: {
+                id: "00000000-0000-7000-8000-000000000005",
+                versionNumber: 1,
+                body: "現在の目標",
+                createdAt: "2026-08-19T00:00:00Z",
+              },
+              planPreview: "最初の計画",
+            },
+          ],
+          nextCursor: null,
+        }),
+      ),
+    );
+
+    await expect(listCycles(lease, goalId)).rejects.toBeInstanceOf(ZodError);
+  });
 
   it("leases a review save to the expected draft generation", async () => {
     const response = {

@@ -11,6 +11,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { GoalDeletionAdvisoryContext } from "../features/goal-deletion";
@@ -27,6 +28,7 @@ import { useRunPostCommitSessionOperation } from "../features/auth/sessionContex
 import { AuthenticatedSessionTestProvider } from "../test/AuthenticatedSessionTestProvider";
 import { createCurrentAuthenticatedRequestLease } from "../test/authenticatedRequestLease";
 import { APIError } from "../shared/api/client";
+import { cycleTimelineLearningCopy } from "../shared/copy/ja";
 import type {
   CycleSummary,
   Goal,
@@ -347,6 +349,8 @@ describe("GoalTimelinePage", () => {
   });
 
   it("synchronously hides and cancels Timeline work for an exact advisory without touching another tuple", async () => {
+    const privateCheck = "表示中のprivate C preview";
+    const lateCheck = "late private C preview";
     const goalRefetch = deferred<Awaited<ReturnType<typeof getGoal>>>();
     const nextPage = deferred<Awaited<ReturnType<typeof listCycles>>>();
     const cleanup = deferred<void>();
@@ -360,7 +364,12 @@ describe("GoalTimelinePage", () => {
       });
     vi.mocked(listCycles)
       .mockResolvedValueOnce({
-        items: [makeCycle(4, 2)],
+        items: [
+          makeCycleWithLearning(4, 2, {
+            check: { text: privateCheck, truncated: false },
+            action: { text: "表示中のprivate A preview", truncated: false },
+          }),
+        ],
         nextCursor: "older",
       })
       .mockImplementationOnce((_lease, _goalId, _cursor, signal) => {
@@ -372,6 +381,12 @@ describe("GoalTimelinePage", () => {
     );
     const { advisory, cache } = renderTimeline();
     await screen.findByText("GOAL V2");
+    fireEvent.click(
+      screen.getByText(cycleTimelineLearningCopy.toggle, {
+        selector: "summary",
+      }),
+    );
+    expect(screen.getByText(privateCheck)).toBeVisible();
 
     void cache.refetchQueries({
       queryKey: userQueryKeys.goal(session.user.id, goalId),
@@ -397,6 +412,7 @@ describe("GoalTimelinePage", () => {
     act(() => {
       advisory.dispatch(session.user.id, goalId);
       expect(screen.queryAllByText("GOAL V2")).toHaveLength(0);
+      expect(screen.queryByText(privateCheck)).not.toBeInTheDocument();
       expect(goalRefetchSignal?.aborted).toBe(true);
       expect(nextPageSignal?.aborted).toBe(true);
     });
@@ -419,7 +435,17 @@ describe("GoalTimelinePage", () => {
     await act(async () => {
       goalRefetch.resolve({ goal: makeGoalWithBody(2, "late Goal secret") });
       nextPage.resolve({
-        items: [makeCycleWithPreview(2, 1, "late Cycle secret")],
+        items: [
+          makeCycleWithLearning(
+            2,
+            1,
+            {
+              check: { text: lateCheck, truncated: false },
+              action: { text: "late private A preview", truncated: false },
+            },
+            "late Cycle secret",
+          ),
+        ],
         nextCursor: null,
       });
       await Promise.all([goalRefetch.promise, nextPage.promise]);
@@ -434,6 +460,11 @@ describe("GoalTimelinePage", () => {
         cache.getQueryData(userQueryKeys.goalCycles(session.user.id, goalId)),
       ),
     ).not.toContain("late Cycle secret");
+    expect(
+      JSON.stringify(
+        cache.getQueryData(userQueryKeys.goalCycles(session.user.id, goalId)),
+      ),
+    ).not.toContain(lateCheck);
 
     await act(async () => cleanup.resolve());
 
@@ -655,6 +686,101 @@ describe("GoalTimelinePage", () => {
     );
   });
 
+  it("keeps terminal C/A disclosures native, independently collapsed, and separate from the canonical detail link", async () => {
+    const user = userEvent.setup();
+    const multilineCheck = `一行目\n${"😀".repeat(116)}`;
+    vi.mocked(getGoal).mockResolvedValue({ goal: makeGoal(1) });
+    vi.mocked(listCycles).mockResolvedValue({
+      items: [
+        makeActiveCycle(3, 1),
+        makeCycleWithLearning(2, 1, {
+          check: { text: multilineCheck, truncated: true },
+          action: { text: " \n\u3000", truncated: false },
+        }),
+        makeCanceledCycle(1, "goal_ended"),
+      ],
+      nextCursor: null,
+    });
+
+    const view = renderTimeline();
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Version 1の目標",
+    });
+
+    const activeLink = screen.getByRole("link", {
+      name: cycleTimelineLearningCopy.detailLabel(3, 1),
+    });
+    const activeCard = activeLink.closest("article");
+    expect(activeCard).not.toBeNull();
+    expect(activeCard?.querySelector("details")).toBeNull();
+
+    const summaries = screen.getAllByText(cycleTimelineLearningCopy.toggle, {
+      selector: "summary",
+    });
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0]).toHaveAccessibleName(
+      cycleTimelineLearningCopy.toggleLabel(2, 1),
+    );
+    expect(summaries[1]).toHaveAccessibleName(
+      cycleTimelineLearningCopy.toggleLabel(1, 1),
+    );
+    for (const summary of summaries) {
+      const details = summary.closest("details");
+      expect(details).not.toHaveAttribute("open");
+    }
+    const multilinePreview = screen.getByText(
+      (_, element) =>
+        element?.tagName === "P" && element.textContent === multilineCheck,
+    );
+    expect(multilinePreview).not.toBeVisible();
+    expect(getGoal).toHaveBeenCalledOnce();
+    expect(listCycles).toHaveBeenCalledOnce();
+
+    await user.click(summaries[0]!);
+
+    expect(getGoal).toHaveBeenCalledOnce();
+    expect(listCycles).toHaveBeenCalledOnce();
+    expect(summaries[0]?.closest("details")).toHaveAttribute("open");
+    expect(summaries[1]?.closest("details")).not.toHaveAttribute("open");
+    const region = screen.getByRole("region", {
+      name: cycleTimelineLearningCopy.regionLabel(2, 1),
+    });
+    expect(within(region).getByText("Cycle 2 · Goal v1")).toBeVisible();
+    expect(multilinePreview).toBeVisible();
+    expect(
+      within(region).getByText(cycleTimelineLearningCopy.empty),
+    ).toBeVisible();
+    expect(
+      within(region).getByText(cycleTimelineLearningCopy.truncated),
+    ).toBeVisible();
+    const headings = within(region).getAllByRole("heading", { level: 3 });
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      cycleTimelineLearningCopy.checkHeading,
+      cycleTimelineLearningCopy.actionHeading,
+    ]);
+    expect(headings[0]?.compareDocumentPosition(headings[1]!) ?? 0).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    const detail = screen.getByRole("link", {
+      name: cycleTimelineLearningCopy.detailLabel(2, 1),
+    });
+    expect(detail).toHaveAttribute(
+      "href",
+      `/goals/${goalId}/cycles/${cycleId(2)}`,
+    );
+    expect(detail.closest("details")).toBeNull();
+
+    view.unmount();
+    renderTimeline();
+    const remounted = await screen.findAllByText(
+      cycleTimelineLearningCopy.toggle,
+      { selector: "summary" },
+    );
+    for (const summary of remounted)
+      expect(summary.closest("details")).not.toHaveAttribute("open");
+  });
+
   it("labels only a replanned cancellation without changing terminal cancellations", async () => {
     vi.mocked(getGoal).mockResolvedValue({ goal: makeGoal(1) });
     vi.mocked(listCycles).mockResolvedValue({
@@ -668,19 +794,24 @@ describe("GoalTimelinePage", () => {
 
     renderTimeline();
 
-    const replanned = await screen.findByRole("link", {
+    const replannedLink = await screen.findByRole("link", {
       name: /Cycle 3/,
     });
-    expect(within(replanned).getByText("Canceled")).toBeVisible();
-    expect(within(replanned).getByText("再計画のため中断")).toBeVisible();
+    const replanned = replannedLink.closest("article");
+    expect(replanned).not.toBeNull();
+    expect(within(replanned!).getByText("Canceled")).toBeVisible();
+    expect(within(replanned!).getByText("再計画のため中断")).toBeVisible();
 
     for (const sequenceNumber of [1, 2]) {
-      const terminal = screen.getByRole("link", {
-        name: new RegExp(`Cycle ${sequenceNumber}`),
-      });
-      expect(within(terminal).getByText("Canceled")).toBeVisible();
+      const terminal = screen
+        .getByRole("link", {
+          name: new RegExp(`Cycle ${sequenceNumber}`),
+        })
+        .closest("article");
+      expect(terminal).not.toBeNull();
+      expect(within(terminal!).getByText("Canceled")).toBeVisible();
       expect(
-        within(terminal).queryByText("再計画のため中断"),
+        within(terminal!).queryByText("再計画のため中断"),
       ).not.toBeInTheDocument();
     }
     expect(screen.getAllByText("再計画のため中断")).toHaveLength(1);
@@ -793,12 +924,27 @@ describe("GoalTimelinePage", () => {
       container.querySelectorAll('[data-version-number="3"]'),
     ).toHaveLength(1);
     const v3 = getVersion(container, 3);
+    const cycleSixSummary = within(v3).getAllByText(
+      cycleTimelineLearningCopy.toggle,
+      { selector: "summary" },
+    )[0]!;
+    fireEvent.click(cycleSixSummary);
+    expect(cycleSixSummary.closest("details")).toHaveAttribute("open");
     expect(within(v3).getByRole("link", { name: /Cycle 5/ })).toBeVisible();
     expect(within(v3).getByRole("link", { name: /Cycle 6/ })).toBeVisible();
 
     triggerIntersection();
     await screen.findByRole("heading", { name: "Version 1の目標" });
     await waitFor(() => expect(listCycles).toHaveBeenCalledTimes(3));
+    expect(cycleSixSummary.closest("details")).toHaveAttribute("open");
+    const cycleOneLink = within(getVersion(container, 1)).getByRole("link", {
+      name: /Cycle 1/,
+    });
+    const cycleOneDetails = cycleOneLink
+      .closest("article")
+      ?.querySelector("details");
+    expect(cycleOneDetails).not.toBeNull();
+    expect(cycleOneDetails!).not.toHaveAttribute("open");
     expect(listCycles).toHaveBeenNthCalledWith(
       3,
       sessionLease,
@@ -1174,6 +1320,28 @@ function makeCycle(
     cancellationReason: null,
     goalVersion: makeVersion(versionNumber),
     planPreview: `Cycle ${sequenceNumber}の計画`,
+    learningPreview: {
+      check: {
+        text: `Cycle ${sequenceNumber}で分かったこと`,
+        truncated: false,
+      },
+      action: {
+        text: `Cycle ${sequenceNumber}で次に変えること`,
+        truncated: false,
+      },
+    },
+  };
+}
+
+function makeActiveCycle(
+  sequenceNumber: number,
+  versionNumber: number,
+): CycleSummary {
+  return {
+    ...makeCycle(sequenceNumber, versionNumber),
+    status: "active",
+    completedAt: null,
+    learningPreview: null,
   };
 }
 
@@ -1196,6 +1364,19 @@ function makeCycleWithPreview(
   planPreview: string,
 ): CycleSummary {
   return { ...makeCycle(sequenceNumber, versionNumber), planPreview };
+}
+
+function makeCycleWithLearning(
+  sequenceNumber: number,
+  versionNumber: number,
+  learningPreview: NonNullable<CycleSummary["learningPreview"]>,
+  planPreview = `Cycle ${sequenceNumber}の計画`,
+): CycleSummary {
+  return {
+    ...makeCycle(sequenceNumber, versionNumber),
+    planPreview,
+    learningPreview,
+  };
 }
 
 function deletedGoalError(requestId: string) {

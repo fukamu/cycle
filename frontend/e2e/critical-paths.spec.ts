@@ -5,6 +5,7 @@ import {
   cycleFrameCopy,
   cycleFrameTemplateCopy,
   cyclePreviousActionReferenceCopy,
+  cycleTimelineLearningCopy,
   frameCopy,
   homeCopy,
   reviewScheduleCopy,
@@ -1346,12 +1347,106 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     .getByRole("link", { name: new RegExp(goalText.replace("\n", "\\s+")) })
     .click();
   await expect(
-    page.locator('[data-version-number="1"]').getByText("GOAL V1"),
+    page
+      .locator('[data-version-number="1"]')
+      .getByText("GOAL V1", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: /Cycle 1/ })).toBeVisible();
-  await expect(page.getByRole("link", { name: /Cycle 2/ })).toBeVisible();
+  const cycleOneDetail = page.getByRole("link", {
+    name: cycleTimelineLearningCopy.detailLabel(1, 1),
+  });
+  const cycleTwoDetail = page.getByRole("link", {
+    name: cycleTimelineLearningCopy.detailLabel(2, 1),
+  });
+  await expect(cycleOneDetail).toBeVisible();
+  await expect(cycleTwoDetail).toBeVisible();
+  const cycleOneCard = cycleOneDetail.locator("xpath=..");
+  const cycleTwoCard = cycleTwoDetail.locator("xpath=..");
+  const learningDisclosure = cycleOneCard.locator("details");
+  const learningSummary = learningDisclosure.locator("summary");
+  await expect(learningDisclosure).not.toHaveAttribute("open");
+  await expect(learningSummary).toHaveAccessibleName(
+    cycleTimelineLearningCopy.toggleLabel(1, 1),
+  );
+  await expect(learningSummary).toHaveCSS("display", "list-item");
+  await expect(cycleTwoCard.locator("details")).toHaveCount(0);
 
-  await page.getByRole("link", { name: /Cycle 1/ }).click();
+  await learningSummary.focus();
+  await learningSummary.press("Enter");
+  await expect(learningDisclosure).toHaveAttribute("open", "");
+  const learningRegion = cycleOneCard.getByRole("region", {
+    name: cycleTimelineLearningCopy.regionLabel(1, 1),
+  });
+  await expect(learningRegion.getByText("Cycle 1 · Goal v1")).toBeVisible();
+  const checkPreview = Array.from(reviewNarrowContent.check)
+    .slice(0, 120)
+    .join("");
+  const actionPreview = Array.from(reviewNarrowContent.action)
+    .slice(0, 120)
+    .join("");
+  const learningFrames = learningRegion.locator(
+    ".timeline-learning-preview__frame",
+  );
+  await expect(learningFrames.nth(0).getByText(checkPreview)).toBeVisible();
+  await expect(learningFrames.nth(1).getByText(actionPreview)).toBeVisible();
+  await expect(
+    learningRegion.getByText(cycleTimelineLearningCopy.truncated),
+  ).toHaveCount(2);
+  expect(
+    await learningRegion.evaluate((region) => {
+      const check = region.querySelector("section:nth-of-type(1)");
+      const action = region.querySelector("section:nth-of-type(2)");
+      return Boolean(
+        check &&
+        action &&
+        check.compareDocumentPosition(action) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    }),
+  ).toBe(true);
+  for (const preview of [
+    learningFrames.nth(0).locator("p").first(),
+    learningFrames.nth(1).locator("p").first(),
+  ])
+    await expect(preview).toHaveCSS("white-space", "pre-wrap");
+
+  const assertTimelineLearningLayout = async () => {
+    await learningSummary.scrollIntoViewIfNeeded();
+    expect(
+      (await learningSummary.boundingBox())?.height,
+    ).toBeGreaterThanOrEqual(44);
+    expect((await cycleOneDetail.boundingBox())?.height).toBeGreaterThanOrEqual(
+      44,
+    );
+    expect(
+      await learningRegion.evaluate((region) => {
+        const style = getComputedStyle(region);
+        return {
+          overflowX: style.overflowX,
+          overflowY: style.overflowY,
+          horizontalOverflow:
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        };
+      }),
+    ).toEqual({
+      overflowX: "visible",
+      overflowY: "visible",
+      horizontalOverflow: false,
+    });
+  };
+  await page.setViewportSize({ width: 320, height: 844 });
+  await assertTimelineLearningLayout();
+  await page.setViewportSize({ width: 640, height: 844 });
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("zoom", "2"),
+  );
+  await assertTimelineLearningLayout();
+  await page.evaluate(() =>
+    document.documentElement.style.removeProperty("zoom"),
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await cycleOneDetail.click();
   const terminalSchedule = page.getByRole("region", {
     name: reviewScheduleCopy.heading,
   });
@@ -1362,8 +1457,20 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(
     terminalSchedule.getByLabel(reviewScheduleCopy.inputLabel),
   ).toHaveCount(0);
+  await page.getByRole("tab", { name: "C Check" }).click();
+  await expect(page.getByRole("textbox", { name: "C — Check" })).toHaveValue(
+    reviewNarrowContent.check,
+  );
+  await page.getByRole("tab", { name: "A Action" }).click();
+  await expect(page.getByRole("textbox", { name: "A — Action" })).toHaveValue(
+    reviewNarrowContent.action,
+  );
   await page.goBack();
-  await page.getByRole("link", { name: /Cycle 2/ }).click();
+  await page
+    .getByRole("link", {
+      name: cycleTimelineLearningCopy.detailLabel(2, 1),
+    })
+    .click();
   await page.getByText("目標の操作").click();
   await page.getByRole("button", { name: "目標を削除" }).click();
   await page.setViewportSize({ width: 320, height: 844 });
@@ -2321,6 +2428,23 @@ test("timeline distinguishes V1, V2, and V3 goal segments", async ({
   await expect(v1.getByRole("link", { name: /Cycle 1/ })).toBeVisible();
   await expect(v2.getByRole("link", { name: /Cycle 2/ })).toBeVisible();
   await expect(v3.getByRole("link", { name: /Cycle 3/ })).toBeVisible();
+  const v1Disclosure = v1.locator("details");
+  const v2Disclosure = v2.locator("details");
+  await expect(v1Disclosure).not.toHaveAttribute("open");
+  await expect(v2Disclosure).not.toHaveAttribute("open");
+  await expect(v1Disclosure.locator("summary")).toHaveAccessibleName(
+    cycleTimelineLearningCopy.toggleLabel(1, 1),
+  );
+  await expect(v2Disclosure.locator("summary")).toHaveAccessibleName(
+    cycleTimelineLearningCopy.toggleLabel(2, 2),
+  );
+  await expect(v3.locator("details")).toHaveCount(0);
+  await v2Disclosure.locator("summary").press("Enter");
+  await expect(v2Disclosure).toHaveAttribute("open", "");
+  await expect(v1Disclosure).not.toHaveAttribute("open");
+  await v1Disclosure.locator("summary").press("Enter");
+  await expect(v1Disclosure).toHaveAttribute("open", "");
+  await expect(v2Disclosure).toHaveAttribute("open", "");
 });
 
 test("free users can progress two goals while a third start is rejected without losing its draft", async ({
@@ -2681,7 +2805,25 @@ test("an empty Cycle canceled with its Goal shows every terminal frame as unente
   await page.getByRole("button", { name: "メニューを開く" }).click();
   await page.getByRole("link", { name: "目標の履歴" }).click();
   await page.getByRole("link", { name: new RegExp(goalText) }).click();
-  await page.getByRole("link", { name: /Cycle 1/ }).click();
+  const emptyCycleDetail = page.getByRole("link", {
+    name: cycleTimelineLearningCopy.detailLabel(1, 1),
+  });
+  const emptyCycleCard = emptyCycleDetail.locator("xpath=..");
+  const emptyCycleSummary = emptyCycleCard.locator("summary");
+  await expect(emptyCycleSummary).toHaveAccessibleName(
+    cycleTimelineLearningCopy.toggleLabel(1, 1),
+  );
+  await emptyCycleSummary.press("Enter");
+  const emptyLearning = emptyCycleCard.getByRole("region", {
+    name: cycleTimelineLearningCopy.regionLabel(1, 1),
+  });
+  await expect(
+    emptyLearning.getByText(cycleTimelineLearningCopy.empty),
+  ).toHaveCount(2);
+  await expect(
+    emptyLearning.getByText(cycleTimelineLearningCopy.truncated),
+  ).toHaveCount(0);
+  await emptyCycleDetail.click();
   await expect(page.getByText("読み取り専用")).toBeVisible();
 
   const frames = [

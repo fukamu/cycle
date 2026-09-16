@@ -85,6 +85,23 @@ export const cycleFrameCopy = {
   terminalEmpty: "未入力",
 } as const;
 
+export const cycleTimelineLearningCopy = {
+  toggle: "C/Aの学びを見る",
+  toggleLabel: (cycleSequenceNumber: number, goalVersionNumber: number) =>
+    `Cycle ${cycleSequenceNumber} · Goal v${goalVersionNumber}のC/Aの学びを見る`,
+  checkHeading: "C — Check",
+  actionHeading: "A — Action",
+  empty: "記録なし",
+  truncated: "一部を表示しています。",
+  detail: "全文を見る",
+  metadata: (cycleSequenceNumber: number, goalVersionNumber: number) =>
+    `Cycle ${cycleSequenceNumber} · Goal v${goalVersionNumber}`,
+  regionLabel: (cycleSequenceNumber: number, goalVersionNumber: number) =>
+    `Cycle ${cycleSequenceNumber} · Goal v${goalVersionNumber}のC/Aの学び`,
+  detailLabel: (cycleSequenceNumber: number, goalVersionNumber: number) =>
+    `Cycle ${cycleSequenceNumber} · Goal v${goalVersionNumber}の全文を見る`,
+} as const;
+
 export const cyclePreviousActionReferenceCopy = {
   heading: "前回のA — Action",
   referenceOnly: "参照のみ",

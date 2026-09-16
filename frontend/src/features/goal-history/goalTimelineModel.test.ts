@@ -59,5 +59,15 @@ function makeCycle(
     cancellationReason: null,
     goalVersion: makeVersion(versionNumber),
     planPreview: `Cycle ${sequenceNumber}の計画`,
+    learningPreview: {
+      check: {
+        text: `Cycle ${sequenceNumber}で分かったこと`,
+        truncated: false,
+      },
+      action: {
+        text: `Cycle ${sequenceNumber}で次に変えること`,
+        truncated: false,
+      },
+    },
   };
 }

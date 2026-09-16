@@ -1711,22 +1711,25 @@ textarea[readonly] {
   margin-bottom: 10px;
 }
 
-.timeline-cycles a {
+.timeline-cycle {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
-  gap: 8px 14px;
+  gap: 14px;
+  min-width: 0;
   padding: 16px;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 12px;
-  text-decoration: none;
 }
 
-.timeline-cycles a:hover {
-  border-color: var(--brand);
+.timeline-cycle__meta {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px 14px;
+  align-items: start;
+  min-width: 0;
 }
 
-.timeline-cycles strong,
+.timeline-cycle__meta > strong,
 .timeline-cycles time {
   color: var(--muted);
   font-size: var(--font-size-small);
@@ -1760,11 +1763,67 @@ textarea[readonly] {
   text-align: right;
 }
 
-.timeline-cycles p {
-  grid-column: 1 / -1;
+.timeline-cycle__plan,
+.timeline-learning-preview p {
   margin: 0;
   color: var(--muted);
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.timeline-learning-preview {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.timeline-learning-preview summary {
+  display: list-item;
+  min-height: 44px;
+  padding: 8px 0;
+  color: var(--brand-deep);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium);
+}
+
+.timeline-learning-preview__content {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 2px 0 16px;
+}
+
+.timeline-learning-preview__metadata {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+}
+
+.timeline-learning-preview__frame {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  background: var(--canvas);
+  border-radius: 8px;
+}
+
+.timeline-learning-preview__frame h3 {
+  margin: 0;
+  color: var(--brand-dark);
+  font-size: var(--font-size-small);
+}
+
+.timeline-learning-preview__truncation {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+}
+
+.timeline-cycle__detail {
+  width: fit-content;
+  max-width: 100%;
+  color: var(--brand-dark);
+  font-weight: var(--font-weight-medium);
+  text-underline-offset: 4px;
 }
 
 .load-sentinel {
@@ -2117,13 +2176,18 @@ textarea[readonly] {
     display: none;
   }
 
-  .timeline-cycles a {
+  .timeline-cycle__meta {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
   .timeline-cycles time {
     grid-column: 1 / -1;
     text-align: left;
+  }
+
+  .timeline-cycle__detail {
+    width: 100%;
+    justify-content: center;
   }
 
   .confirmation-dialog__actions > .button {
