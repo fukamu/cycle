@@ -1919,13 +1919,16 @@ test("Replan flushes partial work, starts an empty next Cycle, and labels the ol
     document.documentElement.style.setProperty("zoom", "2"),
   );
   await page.getByRole("link", { name: new RegExp(goalText) }).click();
-  const sourceCycle = page.getByRole("link", { name: /Cycle 1/ });
+  const sourceCycleDetail = page.getByRole("link", {
+    name: cycleTimelineLearningCopy.detailLabel(1, 1),
+  });
+  const sourceCycle = sourceCycleDetail.locator("xpath=..");
   await expect(sourceCycle).toContainText("Canceled");
   await expect(sourceCycle).toContainText(
     cycleCancellationReasonCopy.replanned,
   );
   await expectNoHorizontalOverflow();
-  await sourceCycle.click();
+  await sourceCycleDetail.click();
   await expect(
     page.getByText(cycleCancellationReasonCopy.replanned),
   ).toBeVisible();
@@ -2425,9 +2428,21 @@ test("timeline distinguishes V1, V2, and V3 goal segments", async ({
   await expect(page.locator('[data-event-version="2"]')).toContainText(
     "Cycle 1の終了後",
   );
-  await expect(v1.getByRole("link", { name: /Cycle 1/ })).toBeVisible();
-  await expect(v2.getByRole("link", { name: /Cycle 2/ })).toBeVisible();
-  await expect(v3.getByRole("link", { name: /Cycle 3/ })).toBeVisible();
+  await expect(
+    v1.getByRole("link", {
+      name: cycleTimelineLearningCopy.detailLabel(1, 1),
+    }),
+  ).toBeVisible();
+  await expect(
+    v2.getByRole("link", {
+      name: cycleTimelineLearningCopy.detailLabel(2, 2),
+    }),
+  ).toBeVisible();
+  await expect(
+    v3.getByRole("link", {
+      name: cycleTimelineLearningCopy.detailLabel(3, 3),
+    }),
+  ).toBeVisible();
   const v1Disclosure = v1.locator("details");
   const v2Disclosure = v2.locator("details");
   await expect(v1Disclosure).not.toHaveAttribute("open");

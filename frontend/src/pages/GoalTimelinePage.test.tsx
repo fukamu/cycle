@@ -795,7 +795,7 @@ describe("GoalTimelinePage", () => {
     renderTimeline();
 
     const replannedLink = await screen.findByRole("link", {
-      name: /Cycle 3/,
+      name: cycleTimelineLearningCopy.detailLabel(3, 1),
     });
     const replanned = replannedLink.closest("article");
     expect(replanned).not.toBeNull();
@@ -805,7 +805,7 @@ describe("GoalTimelinePage", () => {
     for (const sequenceNumber of [1, 2]) {
       const terminal = screen
         .getByRole("link", {
-          name: new RegExp(`Cycle ${sequenceNumber}`),
+          name: cycleTimelineLearningCopy.detailLabel(sequenceNumber, 1),
         })
         .closest("article");
       expect(terminal).not.toBeNull();
@@ -930,15 +930,23 @@ describe("GoalTimelinePage", () => {
     )[0]!;
     fireEvent.click(cycleSixSummary);
     expect(cycleSixSummary.closest("details")).toHaveAttribute("open");
-    expect(within(v3).getByRole("link", { name: /Cycle 5/ })).toBeVisible();
-    expect(within(v3).getByRole("link", { name: /Cycle 6/ })).toBeVisible();
+    expect(
+      within(v3).getByRole("link", {
+        name: cycleTimelineLearningCopy.detailLabel(5, 3),
+      }),
+    ).toBeVisible();
+    expect(
+      within(v3).getByRole("link", {
+        name: cycleTimelineLearningCopy.detailLabel(6, 3),
+      }),
+    ).toBeVisible();
 
     triggerIntersection();
     await screen.findByRole("heading", { name: "Version 1の目標" });
     await waitFor(() => expect(listCycles).toHaveBeenCalledTimes(3));
     expect(cycleSixSummary.closest("details")).toHaveAttribute("open");
     const cycleOneLink = within(getVersion(container, 1)).getByRole("link", {
-      name: /Cycle 1/,
+      name: cycleTimelineLearningCopy.detailLabel(1, 1),
     });
     const cycleOneDetails = cycleOneLink
       .closest("article")
@@ -1014,10 +1022,14 @@ describe("GoalTimelinePage", () => {
         within(version).queryByText("目標を変更しました"),
       ).not.toBeInTheDocument();
     expect(
-      within(getVersion(container, 2)).getByRole("link", { name: /Cycle 3/ }),
+      within(getVersion(container, 2)).getByRole("link", {
+        name: cycleTimelineLearningCopy.detailLabel(3, 2),
+      }),
     ).toBeVisible();
     expect(
-      within(getVersion(container, 2)).getByRole("link", { name: /Cycle 4/ }),
+      within(getVersion(container, 2)).getByRole("link", {
+        name: cycleTimelineLearningCopy.detailLabel(4, 2),
+      }),
     ).toBeVisible();
   });
 });

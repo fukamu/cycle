@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Request } from "@playwright/test";
 
+import { cycleTimelineLearningCopy } from "../src/shared/copy/ja";
 import { newUUIDv7 } from "../src/shared/id/uuid";
 import {
   createAnonymousSession,
@@ -721,9 +722,12 @@ test("active termination leaves a canceled read-only cycle and a new Goal starts
   await expect(
     page.getByRole("heading", { level: 1, name: endedGoal }),
   ).toBeVisible();
-  const canceledCycle = page.getByRole("link", { name: /Cycle 1/ });
+  const canceledCycleDetail = page.getByRole("link", {
+    name: cycleTimelineLearningCopy.detailLabel(1, 1),
+  });
+  const canceledCycle = canceledCycleDetail.locator("xpath=..");
   await expect(canceledCycle).toContainText("Canceled");
-  await canceledCycle.click();
+  await canceledCycleDetail.click();
   const plan = page.getByRole("textbox", { name: "P — Plan" });
   await expect(plan).toHaveValue(partialPlan);
   await expect(plan).not.toBeEditable();
