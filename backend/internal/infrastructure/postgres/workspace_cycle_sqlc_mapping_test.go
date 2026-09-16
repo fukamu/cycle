@@ -94,6 +94,9 @@ func TestCycleReadMappersDistinguishNullFromInfiniteTimestamps(t *testing.T) {
 	canceledSummary.Status = string(cycle.StatusCanceled)
 	canceledSummary.CanceledAt = timestamptz(now.Add(time.Hour))
 	canceledSummary.CancellationReason = &replannedReason
+	canceledSummary.CheckPreview = "1行目\n2行目"
+	canceledSummary.ActionPreview = strings.Repeat("動", workspace.CycleSummaryPreviewMaxCodePoints)
+	canceledSummary.ActionPreviewTruncated = true
 	mappedCanceledSummary, err := cycleSummaryFromReadRow(&canceledSummary)
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +104,12 @@ func TestCycleReadMappersDistinguishNullFromInfiniteTimestamps(t *testing.T) {
 	if mappedCanceledSummary.CancellationReason == nil ||
 		*mappedCanceledSummary.CancellationReason != cycle.CancellationReplanned {
 		t.Fatalf("canceled summary reason = %#v, want replanned", mappedCanceledSummary.CancellationReason)
+	}
+	if mappedCanceledSummary.LearningPreview == nil ||
+		mappedCanceledSummary.LearningPreview.Check.Text != "1行目\n2行目" ||
+		mappedCanceledSummary.LearningPreview.Check.Truncated ||
+		!mappedCanceledSummary.LearningPreview.Action.Truncated {
+		t.Fatalf("canceled summary learning preview = %#v", mappedCanceledSummary.LearningPreview)
 	}
 
 	for name, mutate := range map[string]func(*db.ListCycleSummariesRow){
@@ -116,6 +125,9 @@ func TestCycleReadMappersDistinguishNullFromInfiniteTimestamps(t *testing.T) {
 		"active with cancellation reason": func(row *db.ListCycleSummariesRow) {
 			value := string(cycle.CancellationReplanned)
 			row.CancellationReason = &value
+		},
+		"active with learning preview": func(row *db.ListCycleSummariesRow) {
+			row.CheckPreview = "private learning"
 		},
 		"canceled without cancellation reason": func(row *db.ListCycleSummariesRow) {
 			row.Status = string(cycle.StatusCanceled)

@@ -82,6 +82,8 @@ func TestCycleQueryApplicationOwnsPaginationNullableRowsAndOwnerErrors(t *testin
 	_ = startProgressingGoal(t, store, outsiderID, fixtures[2], 3, now.Add(-time.Hour))
 
 	longPlan := strings.Repeat("計", 130)
+	longCheck := strings.Repeat("確", 121)
+	boundedAction := "次\n" + strings.Repeat("動", 118)
 	statements := []struct {
 		sql  string
 		args []any
@@ -95,17 +97,17 @@ func TestCycleQueryApplicationOwnsPaginationNullableRowsAndOwnerErrors(t *testin
 (id,user_id,goal_id,goal_version_id,sequence_number,status,started_at,completed_at,
  plan,do_text,check_text,action,content_revision,plan_revision,do_revision,check_revision,action_revision,
  start_operation_id,start_request_hash,completion_operation_id,completion_request_hash,created_at,updated_at)
-VALUES($1,$2,$3,$4,2,'completed',$5,$6,'P','D','C','A',4,1,1,1,1,$7,'start-2',$8,'complete-2',$5,$6)`,
+VALUES($1,$2,$3,$4,2,'completed',$5,$6,'P','D',$9,$10,4,1,1,1,1,$7,'start-2',$8,'complete-2',$5,$6)`,
 			[]any{completed, ownerID, fixtures[0].goalID, fixtures[0].versionID, now.Add(-2 * time.Hour), now.Add(-90 * time.Minute),
-				"52000000-0000-7000-8000-000000000002", "62000000-0000-7000-8000-000000000002"},
+				"52000000-0000-7000-8000-000000000002", "62000000-0000-7000-8000-000000000002", longCheck, boundedAction},
 		},
 		{
 			`INSERT INTO pdca_cycles
 (id,user_id,goal_id,goal_version_id,sequence_number,status,started_at,canceled_at,cancellation_reason,
- start_operation_id,start_request_hash,created_at,updated_at)
-VALUES($1,$2,$3,$4,3,'canceled',$5,$6,'goal_ended',$7,'start-3',$5,$6)`,
+ check_text,start_operation_id,start_request_hash,created_at,updated_at)
+VALUES($1,$2,$3,$4,3,'canceled',$5,$6,'goal_ended',$8,$7,'start-3',$5,$6)`,
 			[]any{canceled, ownerID, fixtures[0].goalID, fixtures[0].versionID, now.Add(-time.Hour), now.Add(-30 * time.Minute),
-				"52000000-0000-7000-8000-000000000003"},
+				"52000000-0000-7000-8000-000000000003", "\u2003\n"},
 		},
 	}
 	for _, statement := range statements {
@@ -126,12 +128,26 @@ VALUES($1,$2,$3,$4,3,'canceled',$5,$6,'goal_ended',$7,'start-3',$5,$6)`,
 		page.Items[1].CompletedAt == nil || page.Items[1].CanceledAt != nil {
 		t.Fatalf("terminal nullable fields = %#v / %#v", page.Items[0], page.Items[1])
 	}
+	if page.Items[0].LearningPreview == nil || page.Items[0].LearningPreview.Check.Text != "\u2003\n" ||
+		page.Items[0].LearningPreview.Check.Truncated || page.Items[0].LearningPreview.Action.Text != "" ||
+		page.Items[0].LearningPreview.Action.Truncated {
+		t.Fatalf("empty canceled learning preview = %#v", page.Items[0].LearningPreview)
+	}
+	if page.Items[1].LearningPreview == nil ||
+		len([]rune(page.Items[1].LearningPreview.Check.Text)) != workspace.CycleSummaryPreviewMaxCodePoints ||
+		!page.Items[1].LearningPreview.Check.Truncated ||
+		page.Items[1].LearningPreview.Action.Text != boundedAction ||
+		page.Items[1].LearningPreview.Action.Truncated {
+		t.Fatalf("completed learning preview = %#v", page.Items[1].LearningPreview)
+	}
 	last, err := useCases.ListCycles(context.Background(), ownerID, fixtures[0].goalID, *page.NextCursor, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(last.Items) != 1 || last.Items[0].ID != fixtures[0].cycleID || last.NextCursor != nil ||
-		last.Items[0].CompletedAt != nil || last.Items[0].CanceledAt != nil || len([]rune(last.Items[0].PlanPreview)) != 121 {
+		last.Items[0].CompletedAt != nil || last.Items[0].CanceledAt != nil ||
+		last.Items[0].LearningPreview != nil || len([]rune(last.Items[0].PlanPreview)) != 120 ||
+		!strings.HasSuffix(last.Items[0].PlanPreview, "…") {
 		t.Fatalf("last Cycle page = %#v", last)
 	}
 

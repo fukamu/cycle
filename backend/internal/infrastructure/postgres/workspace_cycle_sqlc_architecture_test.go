@@ -171,7 +171,8 @@ func TestCycleSQLPreservesOwnerLockOrderingAndCASContracts(t *testing.T) {
 		}},
 		"ListCycleSummaries": {string(readContents), []string{
 			"c.cancellation_reason", "left join goal_versions", "(c.sequence_number, c.id) <", "order by c.sequence_number desc, c.id desc",
-			"limit sqlc.arg(fetch_limit)::integer",
+			"left(c.check_text, 120)", "left(c.action, 120)", "char_length(c.check_text) > 120",
+			"char_length(c.action) > 120", "limit sqlc.arg(fetch_limit)::integer",
 		}},
 		"GetCycleView": {string(readContents), []string{
 			"join goals as g", "g.user_id = c.user_id", "left join goal_versions", "c.id = sqlc.arg(cycle_id)::uuid",

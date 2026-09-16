@@ -153,9 +153,25 @@ SELECT
     gv.body AS goal_version_body,
     gv.created_at AS goal_version_created_at,
     CASE
-        WHEN char_length(c.plan) > 120 THEN left(c.plan, 120) || '…'
+        WHEN char_length(c.plan) > 120 THEN left(c.plan, 119) || '…'
         ELSE c.plan
-    END::text AS plan_preview
+    END::text AS plan_preview,
+    CASE
+        WHEN c.status IN ('completed', 'canceled') THEN left(c.check_text, 120)
+        ELSE ''
+    END::text AS check_preview,
+    CASE
+        WHEN c.status IN ('completed', 'canceled') THEN char_length(c.check_text) > 120
+        ELSE false
+    END::boolean AS check_preview_truncated,
+    CASE
+        WHEN c.status IN ('completed', 'canceled') THEN left(c.action, 120)
+        ELSE ''
+    END::text AS action_preview,
+    CASE
+        WHEN c.status IN ('completed', 'canceled') THEN char_length(c.action) > 120
+        ELSE false
+    END::boolean AS action_preview_truncated
 FROM pdca_cycles AS c
 LEFT JOIN goal_versions AS gv
   ON gv.id = c.goal_version_id
@@ -182,18 +198,22 @@ type ListCycleSummariesParams struct {
 }
 
 type ListCycleSummariesRow struct {
-	CycleID              pgtype.UUID
-	SequenceNumber       int32
-	Status               string
-	StartedAt            pgtype.Timestamptz
-	CompletedAt          pgtype.Timestamptz
-	CanceledAt           pgtype.Timestamptz
-	CancellationReason   *string
-	GoalVersionID        pgtype.UUID
-	GoalVersionNumber    *int32
-	GoalVersionBody      *string
-	GoalVersionCreatedAt pgtype.Timestamptz
-	PlanPreview          string
+	CycleID                pgtype.UUID
+	SequenceNumber         int32
+	Status                 string
+	StartedAt              pgtype.Timestamptz
+	CompletedAt            pgtype.Timestamptz
+	CanceledAt             pgtype.Timestamptz
+	CancellationReason     *string
+	GoalVersionID          pgtype.UUID
+	GoalVersionNumber      *int32
+	GoalVersionBody        *string
+	GoalVersionCreatedAt   pgtype.Timestamptz
+	PlanPreview            string
+	CheckPreview           string
+	CheckPreviewTruncated  bool
+	ActionPreview          string
+	ActionPreviewTruncated bool
 }
 
 func (q *Queries) ListCycleSummaries(ctx context.Context, arg ListCycleSummariesParams) ([]*ListCycleSummariesRow, error) {
@@ -224,6 +244,10 @@ func (q *Queries) ListCycleSummaries(ctx context.Context, arg ListCycleSummaries
 			&i.GoalVersionBody,
 			&i.GoalVersionCreatedAt,
 			&i.PlanPreview,
+			&i.CheckPreview,
+			&i.CheckPreviewTruncated,
+			&i.ActionPreview,
+			&i.ActionPreviewTruncated,
 		); err != nil {
 			return nil, err
 		}

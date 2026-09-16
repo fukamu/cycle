@@ -786,6 +786,9 @@ func validateCycleSummaries(rows []CycleSummary) error {
 		if err := validateCycleSummaryStatusTimes(row.Status, row.CompletedAt, row.CanceledAt, row.CancellationReason); err != nil {
 			return err
 		}
+		if err := validateCycleSummaryPreviews(row); err != nil {
+			return err
+		}
 		if err := validateCycleGoalVersion(row.GoalVersion); err != nil {
 			return err
 		}
@@ -794,6 +797,31 @@ func validateCycleSummaries(rows []CycleSummary) error {
 		}
 	}
 	return nil
+}
+
+func validateCycleSummaryPreviews(row CycleSummary) error {
+	if utf8.RuneCountInString(row.PlanPreview) > CycleSummaryPreviewMaxCodePoints {
+		return cycleInvariantError("Cycle Plan preview exceeds the bounded summary limit")
+	}
+	if row.Status == cycle.StatusActive {
+		if row.LearningPreview != nil {
+			return cycleInvariantError("active Cycle summary exposes a learning preview")
+		}
+		return nil
+	}
+	if row.LearningPreview == nil {
+		return cycleInvariantError("terminal Cycle summary is missing its learning preview")
+	}
+	if !validCycleFramePreview(row.LearningPreview.Check) || !validCycleFramePreview(row.LearningPreview.Action) {
+		return cycleInvariantError("terminal Cycle summary learning preview is invalid")
+	}
+	return nil
+}
+
+func validCycleFramePreview(preview CycleFramePreview) bool {
+	length := utf8.RuneCountInString(preview.Text)
+	return length <= CycleSummaryPreviewMaxCodePoints &&
+		(!preview.Truncated || length == CycleSummaryPreviewMaxCodePoints)
 }
 
 func cycleSummaryFollows(previous, current CycleSummary) bool {
