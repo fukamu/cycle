@@ -91,6 +91,7 @@ const goal: Goal = {
     id: "30000000-0000-7000-8000-000000000001",
     versionNumber: 1,
     body: "現在の目標",
+    successSignal: null,
     createdAt: "2026-08-20T00:00:00.000Z",
   },
   currentWork: {
@@ -112,6 +113,7 @@ const reviewDraft: GoalDraft = {
   baseGoalVersionId: goal.currentVersion.id,
   reviewCycleId: "40000000-0000-7000-8000-000000000001",
   body: goal.currentVersion.body,
+  successSignal: null,
   revision: 0,
   updatedAt: "2026-08-20T00:01:00.000Z",
 };
@@ -641,10 +643,37 @@ describe("GoalReviewPage", () => {
   });
 
   it("keeps Review refinement separate until the user explicitly adopts it", async () => {
+    const preservedSignal = "週3回できる\n夕方に余裕がある";
+    const signaledVersion = {
+      ...goal.currentVersion,
+      successSignal: preservedSignal,
+    };
+    const signaledDraft = {
+      ...reviewDraft,
+      successSignal: preservedSignal,
+    };
+    vi.mocked(getReview).mockResolvedValue({
+      ...review,
+      goal: { ...goal, currentVersion: signaledVersion },
+      reviewDraft: signaledDraft,
+      triggerCycle: { ...triggerCycle, goalVersion: signaledVersion },
+    });
+    vi.mocked(adoptReview).mockResolvedValue({
+      reviewDraft: {
+        ...signaledDraft,
+        body: "整理されたレビュー目標",
+        revision: 1,
+        updatedAt: "2026-08-20T00:02:00.000Z",
+      },
+    });
     renderPage();
     const editor = await screen.findByRole("textbox", {
       name: "次のサイクルで目指す目標",
     });
+    const signal = screen.getByRole("textbox", {
+      name: "良くなったと分かるサイン（任意）",
+    });
+    expect(signal).toHaveValue(preservedSignal);
 
     fireEvent.click(screen.getByRole("button", { name: "AIで目標を整える" }));
 
@@ -693,6 +722,7 @@ describe("GoalReviewPage", () => {
       ),
     );
     await waitFor(() => expect(editor).toHaveValue("整理されたレビュー目標"));
+    expect(signal).toHaveValue(preservedSignal);
   });
 
   it("clears a prior adoption error when retry succeeds", async () => {
@@ -955,7 +985,7 @@ describe("GoalReviewPage", () => {
         sessionLease,
         goal.id,
         reviewDraft.id,
-        normalizedBody,
+        { body: normalizedBody, successSignal: null },
         reviewDraft.revision,
         session.csrfToken,
         expect.any(AbortSignal),
@@ -969,6 +999,43 @@ describe("GoalReviewPage", () => {
         }),
       ),
     );
+  });
+
+  it("treats a success-signal-only edit as the next Goal Version tuple", async () => {
+    vi.mocked(saveReview).mockImplementation(
+      async (_lease, _goalId, _reviewDraftId, content, expectedRevision) => ({
+        reviewDraft: {
+          ...reviewDraft,
+          ...content,
+          revision: expectedRevision + 1,
+          updatedAt: "2026-08-20T00:03:00.000Z",
+        },
+      }),
+    );
+    renderPage();
+    const signal = await screen.findByRole("textbox", {
+      name: "良くなったと分かるサイン（任意）",
+    });
+
+    fireEvent.change(signal, { target: { value: "週3回\r\nできる" } });
+    fireEvent.blur(signal);
+
+    await waitFor(() =>
+      expect(saveReview).toHaveBeenCalledWith(
+        sessionLease,
+        goal.id,
+        reviewDraft.id,
+        { body: reviewDraft.body, successSignal: "週3回\nできる" },
+        reviewDraft.revision,
+        session.csrfToken,
+        expect.any(AbortSignal),
+      ),
+    );
+    const comparison = screen.getByText(
+      "変更案です。次のサイクルへ進む場合だけGoal v2として保存します。",
+    );
+    expect(comparison).toBeVisible();
+    expect(signal.getAttribute("aria-describedby")).toContain(comparison.id);
   });
 
   it("keeps autosave revision 2 when a captured revision 1 GET resolves late", async () => {
@@ -1029,7 +1096,7 @@ describe("GoalReviewPage", () => {
         sessionLease,
         goal.id,
         revisionOneDraft.id,
-        revisionTwoDraft.body,
+        { body: revisionTwoDraft.body, successSignal: null },
         revisionOneDraft.revision,
         session.csrfToken,
         expect.any(AbortSignal),
@@ -1068,7 +1135,7 @@ describe("GoalReviewPage", () => {
         sessionLease,
         goal.id,
         revisionTwoDraft.id,
-        revisionThreeDraft.body,
+        { body: revisionThreeDraft.body, successSignal: null },
         revisionTwoDraft.revision,
         session.csrfToken,
         expect.any(AbortSignal),
@@ -1436,7 +1503,7 @@ describe("GoalReviewPage", () => {
         sessionLease,
         goal.id,
         reviewDraft.id,
-        nextBody,
+        { body: nextBody, successSignal: null },
         latestDraft.revision,
         session.csrfToken,
         expect.any(AbortSignal),
@@ -1476,7 +1543,7 @@ describe("GoalReviewPage", () => {
         sessionLease,
         goal.id,
         reviewDraft.id,
-        reviewABody,
+        { body: reviewABody, successSignal: null },
         reviewDraft.revision,
         session.csrfToken,
         expect.any(AbortSignal),

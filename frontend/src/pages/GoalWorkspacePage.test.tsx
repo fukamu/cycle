@@ -101,6 +101,7 @@ const goal: Goal = {
     id: "30000000-0000-7000-8000-000000000001",
     versionNumber: 1,
     body: "目標",
+    successSignal: null,
     createdAt: "2026-08-20T00:00:00.000Z",
   },
   currentWork: {
@@ -281,6 +282,29 @@ describe("GoalWorkspacePage", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("shows the pinned Cycle success signal as static multiline context", async () => {
+    const pinnedSignal = "週3回できる\n夕方に余裕がある";
+    vi.mocked(getCycle).mockResolvedValue({
+      cycle: {
+        ...cycle,
+        goalVersion: { ...cycle.goalVersion, successSignal: pinnedSignal },
+      },
+    });
+    renderPage(
+      new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      }),
+    );
+
+    const region = await screen.findByRole("region", {
+      name: "良くなったと分かるサイン",
+    });
+    expect(region.querySelector("p")).toHaveTextContent(pinnedSignal, {
+      normalizeWhitespace: false,
+    });
+    expect(within(region).queryByRole("textbox")).not.toBeInTheDocument();
   });
 
   it("labels the text count for every P/D/C/A Frame without announcing each keystroke", async () => {

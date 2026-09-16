@@ -24,6 +24,7 @@ import {
 import {
   cycleCancellationReasonCopy,
   cycleTimelineLearningCopy,
+  goalSuccessSignalCopy,
   statusLabel,
 } from "../../shared/copy/ja";
 import {
@@ -176,6 +177,18 @@ function GoalTimelineQueries({
                       GOAL V{group.version.versionNumber}
                     </p>
                     <h2>{group.version.body}</h2>
+                    <section
+                      className="goal-success-signal-readonly"
+                      aria-labelledby={`goal-success-signal-${group.version.id}`}
+                    >
+                      <h3 id={`goal-success-signal-${group.version.id}`}>
+                        {goalSuccessSignalCopy.readOnlyHeading}
+                      </h3>
+                      <p>
+                        {group.version.successSignal ??
+                          goalSuccessSignalCopy.unset}
+                      </p>
+                    </section>
                   </div>
                   <ol
                     className="timeline-cycles"

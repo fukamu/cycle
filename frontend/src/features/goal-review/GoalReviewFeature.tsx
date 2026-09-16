@@ -50,6 +50,7 @@ import {
   frameCopy,
   goalActionCopy,
   goalReviewDecisionCopy,
+  goalSuccessSignalCopy,
 } from "../../shared/copy/ja";
 import {
   type PostCommitRouteOwnershipToken,
@@ -65,12 +66,15 @@ import {
 import { useBoundedTextInput } from "../../shared/hooks/useBoundedTextInput";
 import {
   type DraftLatestResolution,
+  type GoalDraftEditorContent,
   useDraftAutoSave,
 } from "../../shared/hooks/useDraftAutoSave";
 import {
   codePointCount,
   GOAL_TEXT_MAX_CODE_POINTS,
   hasNonWhitespace,
+  normalizeSuccessSignal,
+  SUCCESS_SIGNAL_MAX_CODE_POINTS,
   textDiffersAfterLineEndingNormalization,
 } from "../../shared/text/semantics";
 import { goalReviewQueryOptions } from "./goalReviewQueryOptions";
@@ -282,6 +286,8 @@ function ReviewEditor({
   const captureRouteOwnership = useCapturePostCommitRouteOwnership();
   const actionGuidanceBaseId = useId();
   const textLimitFeedbackId = useId();
+  const successSignalGuideId = useId();
+  const successSignalFeedbackId = useId();
   const reviewDraftComparisonId = useId();
   const nextCycleResultId = useId();
   const terminalResultId = useId();
@@ -324,7 +330,11 @@ function ReviewEditor({
     [markDeletedGoal],
   );
   const save = useCallback(
-    async (body: string, revision: number, signal: AbortSignal) => {
+    async (
+      content: GoalDraftEditorContent,
+      revision: number,
+      signal: AbortSignal,
+    ) => {
       const routeOwnership = captureRouteOwnership();
       try {
         const saved = (
@@ -332,7 +342,10 @@ function ReviewEditor({
             sessionLease,
             goal.id,
             reviewDraft.id,
-            body,
+            {
+              body: content.body,
+              successSignal: normalizeSuccessSignal(content.successSignal),
+            },
             revision,
             session.csrfToken,
             signal,
@@ -407,6 +420,7 @@ function ReviewEditor({
     goalId: goal.id,
     subjectKey,
     initialBody: reviewDraft.body,
+    initialSuccessSignal: reviewDraft.successSignal,
     initialRevision: reviewDraft.revision,
     save,
     revisionConflictCode: "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
@@ -429,6 +443,13 @@ function ReviewEditor({
     readOnly: editorReadOnly,
     onAccept: editor.setBody,
   });
+  const boundedSuccessSignalInput = useBoundedTextInput({
+    value: editor.successSignal,
+    maximumCodePoints: SUCCESS_SIGNAL_MAX_CODE_POINTS,
+    scopeKey: `${subjectKey}:success-signal`,
+    readOnly: editorReadOnly,
+    onAccept: editor.setSuccessSignal,
+  });
   useLayoutEffect(() => {
     if (!workspaceMoved || editorHydrating || editorScopeMovedHref) return;
     setConfirmation(undefined);
@@ -442,10 +463,13 @@ function ReviewEditor({
     workspaceMoved,
   ]);
   const count = codePointCount(editor.body);
-  const changed = textDiffersAfterLineEndingNormalization(
-    editor.body,
-    goal.currentVersion.body,
-  );
+  const changed =
+    textDiffersAfterLineEndingNormalization(
+      editor.body,
+      goal.currentVersion.body,
+    ) ||
+    normalizeSuccessSignal(editor.successSignal) !==
+      goal.currentVersion.successSignal;
   const currentVersionNumber = goal.currentVersion.versionNumber;
   const nextVersionNumber = currentVersionNumber + 1;
   const nextCycleSequenceNumber = goal.nextCycleSequenceNumber;
@@ -621,7 +645,13 @@ function ReviewEditor({
       );
       if (!completionIsCurrent() || result.reviewDraft.id !== reviewDraft.id)
         return;
-      editor.synchronize(result.reviewDraft.body, result.reviewDraft.revision);
+      editor.synchronize(
+        {
+          body: result.reviewDraft.body,
+          successSignal: result.reviewDraft.successSignal ?? "",
+        },
+        result.reviewDraft.revision,
+      );
       cacheReviewDraft(cache, userId, goal.id, result.reviewDraft);
       refinement.dismiss();
     } catch (cause) {
@@ -975,15 +1005,6 @@ function ReviewEditor({
           onCompositionEnd={boundedInput.onCompositionEnd}
           onBlur={editor.flush}
         />
-        <p
-          className="review-draft-comparison"
-          data-review-draft={changed ? "changed" : "same"}
-          id={reviewDraftComparisonId}
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          {draftComparison}
-        </p>
         {boundedInput.feedback && (
           <p
             className="text-limit-feedback"
@@ -996,6 +1017,56 @@ function ReviewEditor({
           </p>
         )}
         <div className="editor-meta">
+          <TextCounter
+            subject="次のサイクルで目指す目標"
+            count={boundedInput.count}
+            limit={GOAL_TEXT_MAX_CODE_POINTS}
+            invalid={boundedInput.count > GOAL_TEXT_MAX_CODE_POINTS}
+          />
+        </div>
+        <p
+          className="review-draft-comparison"
+          data-review-draft={changed ? "changed" : "same"}
+          id={reviewDraftComparisonId}
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {draftComparison}
+        </p>
+        <label htmlFor="review-success-signal">
+          {goalSuccessSignalCopy.label}
+        </label>
+        <p className="field-guide" id={successSignalGuideId}>
+          {goalSuccessSignalCopy.guide}
+        </p>
+        <textarea
+          className="success-signal-editor"
+          id="review-success-signal"
+          aria-describedby={
+            boundedSuccessSignalInput.feedback
+              ? `${successSignalGuideId} ${successSignalFeedbackId} ${reviewDraftComparisonId}`
+              : `${successSignalGuideId} ${reviewDraftComparisonId}`
+          }
+          value={boundedSuccessSignalInput.value}
+          placeholder={goalSuccessSignalCopy.placeholder}
+          readOnly={editorReadOnly}
+          onChange={boundedSuccessSignalInput.onChange}
+          onCompositionStart={boundedSuccessSignalInput.onCompositionStart}
+          onCompositionEnd={boundedSuccessSignalInput.onCompositionEnd}
+          onBlur={editor.flush}
+        />
+        {boundedSuccessSignalInput.feedback && (
+          <p
+            className="text-limit-feedback"
+            id={successSignalFeedbackId}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {boundedSuccessSignalInput.feedback}
+          </p>
+        )}
+        <div className="editor-meta">
           {workspaceMovedHref && commandRecovery ? (
             <span className="read-only-badge">読み取り専用</span>
           ) : (
@@ -1005,10 +1076,12 @@ function ReviewEditor({
             />
           )}
           <TextCounter
-            subject="次のサイクルで目指す目標"
-            count={boundedInput.count}
-            limit={GOAL_TEXT_MAX_CODE_POINTS}
-            invalid={boundedInput.count > GOAL_TEXT_MAX_CODE_POINTS}
+            subject={goalSuccessSignalCopy.label}
+            count={boundedSuccessSignalInput.count}
+            limit={SUCCESS_SIGNAL_MAX_CODE_POINTS}
+            invalid={
+              boundedSuccessSignalInput.count > SUCCESS_SIGNAL_MAX_CODE_POINTS
+            }
           />
         </div>
         <div className="button-row">

@@ -27,6 +27,7 @@ type StoredBrowserDraft = {
   readonly goalId: string | null;
   readonly subjectKey: string;
   readonly body: string;
+  readonly successSignal?: string | null;
   readonly baseRevision: number;
   readonly updatedAt: string;
 };
@@ -381,6 +382,7 @@ async function expectReviewSuggestionAtNarrowWidths(
         buttons.find((candidate) => candidate.textContent?.trim() === label) ??
         null;
       const elements = [
+        main.querySelector("#review-success-signal"),
         button("AIで目標を整える"),
         main.querySelector(".suggestion-panel"),
         button("提案を採用"),
@@ -440,6 +442,12 @@ async function expectReviewSuggestionAtNarrowWidths(
     name: "次のサイクルで目指す目標",
   });
   await editor.focus();
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("textbox", {
+      name: "良くなったと分かるサイン（任意）",
+    }),
+  ).toBeFocused();
   for (const action of [
     "AIで目標を整える",
     "元の目標を維持",
@@ -797,6 +805,7 @@ test("History loads another page explicitly from the keyboard at narrow widths",
       id: `20000000-0000-7000-8000-${suffix}`,
       versionNumber: 1,
       body,
+      successSignal: null,
       createdAt: "2026-08-01T00:00:00.000Z",
     },
     currentWork: null,
@@ -899,6 +908,8 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     action: `改善-${"ACTIONWITHOUTBREAK".repeat(9)}\n改行後の次の一歩`,
   } as const;
   const goalText = reviewNarrowContent.currentGoal;
+  const successSignalV1 = "週3回できる\n夕方に余裕がある";
+  const successSignalV2 = "週4回できる\n予定外の残業が減る";
   await page.goto("/");
   await page.getByRole("button", { name: "新しい目標を設定" }).click();
   const goal = page.getByRole("textbox", { name: "あなたの目標" });
@@ -920,12 +931,22 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     ),
   ).toBeVisible();
   await saveText(page, goal, goalText, "/api/v1/goal-drafts/");
+  const creationSuccessSignal = page.getByRole("textbox", {
+    name: "良くなったと分かるサイン（任意）",
+  });
+  await saveText(
+    page,
+    creationSuccessSignal,
+    successSignalV1,
+    "/api/v1/goal-drafts/",
+  );
   await expect(page.getByText(/反映できませんでした/)).toHaveCount(0);
   await page.getByRole("button", { name: "AIで目標を整える" }).click();
   await expect(
     page.getByRole("heading", { name: "AIからの提案" }),
   ).toBeVisible();
   await expect(goal).toHaveValue(goalText);
+  await expect(creationSuccessSignal).toHaveValue(successSignalV1);
   const adoptResponse = page.waitForResponse(
     (candidate) =>
       candidate.request().method() === "POST" &&
@@ -945,6 +966,10 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     page.getByRole("heading", { level: 1, name: goalText }),
   ).toBeFocused();
   await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
+  const cycleOneSuccessSignal = page.getByRole("region", {
+    name: "良くなったと分かるサイン",
+  });
+  await expect(cycleOneSuccessSignal.locator("p")).toHaveText(successSignalV1);
   const cycleOnePath = new URL(page.url()).pathname;
   const initialReviewDate = "2099-12-31";
   const changedReviewDate = "2099-12-30";
@@ -1197,6 +1222,10 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   const reviewGoal = page.getByRole("textbox", {
     name: "次のサイクルで目指す目標",
   });
+  const reviewSuccessSignal = page.getByRole("textbox", {
+    name: "良くなったと分かるサイン（任意）",
+  });
+  await expect(reviewSuccessSignal).toHaveValue(successSignalV1);
   await reviewGoal.fill(`${maximumGoal}😀`);
   await expect(reviewGoal).toHaveValue(goalText);
   await expect(
@@ -1233,11 +1262,22 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   ).toBeVisible();
   await page.getByRole("button", { name: "元の目標を維持" }).click();
 
+  await saveText(page, reviewSuccessSignal, successSignalV2, "/review");
+  await expect(reviewGoal).toHaveValue(goalText);
+  await expect(
+    page.getByText(
+      "変更案です。次のサイクルへ進む場合だけGoal v2として保存します。",
+    ),
+  ).toBeVisible();
+
   await page.getByRole("button", { name: "この目標で次のサイクルへ" }).click();
   await expect(
     page.getByRole("heading", { level: 1, name: goalText }),
   ).toBeFocused();
-  await expect(page.getByText("Goal v1 · Cycle 2")).toBeVisible();
+  await expect(page.getByText("Goal v2 · Cycle 2")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "良くなったと分かるサイン" }).locator("p"),
+  ).toHaveText(successSignalV2);
   const cycleTwoSchedule = page.getByRole("region", {
     name: reviewScheduleCopy.heading,
   });
@@ -1268,8 +1308,10 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     previousActionReference.getByText(cyclePreviousActionReferenceCopy.guide),
   ).toBeVisible();
   await expect(
-    page.getByText(cyclePreviousActionReferenceCopy.goalVersionChanged),
-  ).toHaveCount(0);
+    previousActionReference.getByText(
+      cyclePreviousActionReferenceCopy.goalVersionChanged,
+    ),
+  ).toBeVisible();
   await expect(previousActionReference.getByRole("textbox")).toHaveCount(0);
   await expect(previousActionReference.getByRole("button")).toHaveCount(0);
   await expect(previousActionReference.getByRole("link")).toHaveCount(0);
@@ -1348,6 +1390,11 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     .click();
   await expect(
     page
+      .locator('[data-version-number="2"]')
+      .getByText("GOAL V2", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
       .locator('[data-version-number="1"]')
       .getByText("GOAL V1", { exact: true }),
   ).toBeVisible();
@@ -1355,7 +1402,7 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     name: cycleTimelineLearningCopy.detailLabel(1, 1),
   });
   const cycleTwoDetail = page.getByRole("link", {
-    name: cycleTimelineLearningCopy.detailLabel(2, 1),
+    name: cycleTimelineLearningCopy.detailLabel(2, 2),
   });
   await expect(cycleOneDetail).toBeVisible();
   await expect(cycleTwoDetail).toBeVisible();
@@ -1369,6 +1416,18 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   );
   await expect(learningSummary).toHaveCSS("display", "list-item");
   await expect(cycleTwoCard.locator("details")).toHaveCount(0);
+  await expect(
+    page
+      .locator('[data-version-number="1"]')
+      .getByRole("region", { name: "良くなったと分かるサイン" })
+      .locator("p"),
+  ).toHaveText(successSignalV1);
+  await expect(
+    page
+      .locator('[data-version-number="2"]')
+      .getByRole("region", { name: "良くなったと分かるサイン" })
+      .locator("p"),
+  ).toHaveText(successSignalV2);
 
   await learningSummary.focus();
   await learningSummary.press("Enter");
@@ -1447,6 +1506,11 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await page.setViewportSize({ width: 1280, height: 720 });
 
   await cycleOneDetail.click();
+  await expect(page).toHaveURL(/\/goals\/[^/]+\/cycles\/[^/]+$/u);
+  await expect(page.getByText("Goal v1 · Cycle 1")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "良くなったと分かるサイン" }).locator("p"),
+  ).toHaveText(successSignalV1);
   const terminalSchedule = page.getByRole("region", {
     name: reviewScheduleCopy.heading,
   });
@@ -1468,9 +1532,14 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await page.goBack();
   await page
     .getByRole("link", {
-      name: cycleTimelineLearningCopy.detailLabel(2, 1),
+      name: cycleTimelineLearningCopy.detailLabel(2, 2),
     })
     .click();
+  await expect(page).toHaveURL(/\/goals\/[^/]+\/cycles\/[^/]+$/u);
+  await expect(page.getByText("Goal v2 · Cycle 2")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "良くなったと分かるサイン" }).locator("p"),
+  ).toHaveText(successSignalV2);
   await page.getByText("目標の操作").click();
   await page.getByRole("button", { name: "目標を削除" }).click();
   await page.setViewportSize({ width: 320, height: 844 });
@@ -2235,6 +2304,7 @@ test("a hidden lifecycle checkpoint preserves an edit before either debounce", a
       goalId: null,
       subjectKey,
       body,
+      successSignal: "",
       baseRevision: created.draft.revision,
       updatedAt: new Date(clockStart + 60_000).toISOString(),
     });
@@ -2313,6 +2383,7 @@ test("a hidden lifecycle checkpoint preserves an edit before either debounce", a
   const saved = await recoveredSave;
   expect(saved.request().postDataJSON()).toEqual({
     body,
+    successSignal: null,
     expectedRevision: created.draft.revision,
   });
   expect(saved.status()).toBe(200);

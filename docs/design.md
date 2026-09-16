@@ -557,13 +557,13 @@ Goal status: ended
 
 Required behavior:
 
-- Version区間には`versionNumber`とGoal本文を表示し、対応するVersion開始eventには確定日時を表示する。
+- Version区間には`versionNumber`、Goal本文、同じimmutable Versionの`successSignal`を表示し、対応するVersion開始eventには確定日時を表示する。`successSignal`はVersion区間ごとに1回だけ表示し、Cycle rowやHistory Listへ重複させない。改行を保ったplain textとし、`null`は`未設定`と表示する。
 - Cycle rowにはGoal単位のCycle番号、期間、status、P previewを表示する。Active CycleはP previewだけを表示し、C/A previewを表示または取得する追加操作を設けない。
 - Completed / Canceled Cycleには、初期状態を閉じたnative disclosure `C/Aの学びを見る`をrowごとに独立して表示する。展開状態は永続化せず、別のCycleの展開状態へ影響させない。展開内容は`Cycle {N} · Goal v{V}`、`C — Check`、`A — Action`の順とし、CycleとそのCycleが参照したGoal Versionを常に識別できるようにする。
 - C/A previewは§24.1の保存値を改行を保ったplain textとして表示する。空またはUnicode whitespaceだけの場合は本文の代わりに`記録なし`と表示し、`truncated=true`のFrameには`一部を表示しています。`を併記する。Frontendで再切断、ellipsis追加、line clampを行わない。
 - 各Cycle rowにはdisclosureと別の`全文を見る`linkを常に表示し、そのCycle DetailをcanonicalなP/D/C/A全文として開く。Disclosureの開閉でlink、pagination、groupingまたはrow順を変更しない。
 - Canceled Cycleのreasonが`replanned`の場合は、状態に加えて`再計画のため中断`と表示する。Goal達成 / 終了によるCanceledとの違いを色だけに依存せず、reasonを推測しない。
-- Cycle Detailには、そのCycleが参照したGoal Version本文とP/D/C/AをRead-onlyで表示する。
+- Cycle Detailには、そのCycleが参照したGoal Version本文、`successSignal`、P/D/C/AをRead-onlyで表示する。`successSignal`はCycle開始時にpinされた値を使い、後続Versionの変更で置換せず、`null`は`未設定`と表示する。
 - Version区間とVersion開始eventを別itemとして表示する。変更文言をVersion見出しやCycle群へ内包せず、最新順では新VersionのCycle群と旧Version区間の間に独立した変更eventを置く。
 - `goal.currentVersion`に一致する現在VersionだけをBlueの太いrailとBlueの塗りmarkerで強調する。過去VersionはVersion番号にかかわらず中立色のrailと白抜きmarkerへ戻し、Version固有色は増やさない。V1しかない場合はV1を現在Versionとして強調する。
 - Version変更eventは色だけでなく、`Goal Vn → Vn+1`、`目標を変更しました`、確定日時を表示する。直前Versionの最新Cycleを取得済みなら`Cycle Nの終了後`も表示し、変更を範囲ではなく時点として識別可能にする。
@@ -578,11 +578,13 @@ History Listは`/history`でGoalを新しい順にCursor Paginationし、進行�
 
 Route: `/goals/new`
 
-- 単一Textarea。Label: `あなたの目標`。
+- Goal本文Textarea。Label: `あなたの目標`。
 - Guide: `これから良くしたいことや、目指したい状態を書いてみましょう。最初から完璧である必要はありません。`
 - Placeholder: `例：仕事の優先順位を整理し、平日に余裕を持てるようになりたい。`
 - Character counter: visible textは`{現在のcode point数} / {§14.1の上限}文字`、accessible nameは`あなたの目標は上限{上限}文字中{現在数}文字です`とする。入力中の1文字ごとの読み上げを避けるためlive announcementは行わない。
 - Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
+- Goal本文の直後に任意の`successSignal` Textareaを置く。Labelは`良くなったと分かるサイン（任意）`、Guideは`何ができたら、この目標に近づけたと言えるかを書きます。空欄でも進められます。`とし、visible counterは`{現在のcode point数} / 120文字`、accessible nameは`良くなったと分かるサイン（任意）は上限120文字中{現在数}文字です`とする。意味と正規化は§14.2を正とし、空欄はGoal開始を妨げない。
+- Goal本文と`successSignal`は同じDraft revision、Auto Save queue、Save state、Browser Draft Recoveryで扱う単一tupleである。一方だけの変更もtuple全体を保存し、409 recovery、restore / discard、late response、scope移動、conditional cache deleteで片方だけを上書きしない。
 - Save state: `保存中` / `保存済み` / `保存失敗`。
 - Controls: `AIで目標を整える` / `この目標で始める` / `下書きを破棄`。
 
@@ -613,11 +615,13 @@ HeaderはCycleが参照するImmutable Goal Versionから表示する。
 ```text
 目標
 平日は主要業務を18時までに終えたい
+良くなったと分かるサイン
+主要業務を18時までに終えた日が週4日ある
 Goal v2 · Cycle 3
 2026/08/18 〜
 ```
 
-Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、文字数counter、Guide、Placeholder、Auto Save stateで構成する。Counterのvisible textは`{現在のcode point数} / {§14.5の上限}文字`、accessible nameは`{Frame label} — {Frame name}は上限{上限}文字中{現在数}文字です`とし、入力中の1文字ごとのlive announcementは行わない。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Completed / Canceledで選択中Frameが空文字またはUnicode whitespaceだけの場合は編集用Placeholderを表示せず、Textareaの近接textとaccessible descriptionで`未入力`と示す。Active Cycleの通常編集およびAI、Browser Draft Recovery、workspace移動、command処理による一時Read-onlyでは編集用Placeholderを維持し、`未入力`を表示しない。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
+Headerの`successSignal`はstaticなread-only領域で改行を保持し、`null`は`未設定`と表示する。Textarea、button、linkまたはfocus targetにしない。Mainは`P | D | C | A`のTabと、選択中Frameの単一Textarea、文字数counter、Guide、Placeholder、Auto Save stateで構成する。Counterのvisible textは`{現在のcode point数} / {§14.5の上限}文字`、accessible nameは`{Frame label} — {Frame name}は上限{上限}文字中{現在数}文字です`とし、入力中の1文字ごとのlive announcementは行わない。Active Cycleでは編集可能、Completed / Canceledでは同じ情報構造をRead-only表示する。Completed / Canceledで選択中Frameが空文字またはUnicode whitespaceだけの場合は編集用Placeholderを表示せず、Textareaの近接textとaccessible descriptionで`未入力`と示す。Active Cycleの通常編集およびAI、Browser Draft Recovery、workspace移動、command処理による一時Read-onlyでは編集用Placeholderを維持し、`未入力`を表示しない。Textareaの文字数超過時は§40.2の共通入力feedbackに従う。
 
 Active Cycle `N > 1`のP選択中に§14.5の`previousCompletedCycleAction`がobjectである場合は、P Guideの直後、既存のP templateとTextareaの前に、読み取り専用Panelとして常時展開する。見出しは`前回のA — Action`、metadataは`Cycle {N-1} · Goal v{V}`、badgeは`参照のみ`、補助文言は`前回決めた次のアクションです。今回も続けること・変えることを考える手がかりにしてください。`とする。前Cycleと現在CycleのGoal Version番号が異なる場合だけ、`前回のCycle後に目標が変更されています。現在の目標に合う内容を参考にしてください。`と文字で示す。A本文はplain textとして改行と全文を保持し、truncate、Panel内scroll、旧Goal本文、Pへの自動copy / append / overwrite、編集または反映操作を設けない。通常の文字選択とcopyは妨げない。
 
@@ -775,10 +779,11 @@ Route: `/goals/:goalId/review`
 
 1. `現在の目標`とCurrent Goal Version番号。
 2. `判断の材料`として、直前Completed CycleのCを`分かったこと`、Aを`次に続ける・変えること`として常時表示する。P/Dも同じ場所から折りたたみ表示で確認でき、decisionのために別tabやrouteへの往復を要求しない。
-3. Goal Review Draft Textarea。文字数counterのvisible textは`{現在のcode point数} / {§14.1の上限}文字`、accessible nameは`次のサイクルで目指す目標は上限{上限}文字中{現在数}文字です`とし、入力中の1文字ごとのlive announcementは行わない。文字数超過時は§40.2の共通入力feedbackに従う。
-4. Review DraftがCurrent Versionと同一か変更案かを示す説明とSave state。この説明はTextareaへ関連付け、同一の場合は現在のVersionを維持すること、変更案は次Cycleを開始する場合だけ次のVersionとして保存されることを示す。
-5. Goal Refine controls / suggestion comparison。
-6. Outcome controls。
+3. Goal Review DraftのGoal本文Textarea。文字数counterのvisible textは`{現在のcode point数} / {§14.1の上限}文字`、accessible nameは`次のサイクルで目指す目標は上限{上限}文字中{現在数}文字です`とし、入力中の1文字ごとのlive announcementは行わない。文字数超過時は§40.2の共通入力feedbackに従う。
+4. Creationと同じlabel、Guide、120 code point counterを持つ任意の`successSignal` Textarea。本文と`successSignal`は同じReview Draft revision、Auto Save queue、Save state、Recoveryを使う単一tupleとし、どちらか一方だけがCurrent Versionと異なる場合も変更案とする。
+5. Review Draft tupleがCurrent Versionと同一か変更案かを示す説明とSave state。この説明はGoal本文Textareaへ関連付け、同一の場合は現在のVersionを維持すること、変更案は次Cycleを開始する場合だけ次のVersionとして保存されることを示す。
+6. Goal Refine controls / suggestion comparison。Refine / Adoptは§14.2どおり`successSignal`を変更しない。
+7. Outcome controls。
 
 Outcome controlsは次の2つの見出し付きsectionを、この順で表示する。
 
@@ -806,7 +811,7 @@ Terminal sectionは実行前に、Review Draftを破棄して新しいGoal Versi
 現在の目標のまま達成として終了します。
 ```
 
-`ended`では末尾を`現在の目標のまま終了します。`へ変更する。Draft保存に失敗していてもterminal actionは実行できるが、Userが変更案の破棄を理解して明示確認した場合に限る。
+`ended`では末尾を`現在の目標のまま終了します。`へ変更する。ここでいうReview Draftまたは変更案の破棄はGoal本文と`successSignal`のtuple全体を対象とし、一方だけをVersion化または保持しない。Draft保存に失敗していてもterminal actionは実行できるが、Userが変更案の破棄を理解して明示確認した場合に限る。
 
 ## 9.9 Settings
 
@@ -4399,6 +4404,7 @@ type DraftCacheRecord =
       readonly userId: string;
       readonly draftId: string;
       readonly content: string;
+      readonly successSignal?: string | null;
       readonly baseRevision: number;
       readonly updatedAt: string;
     }
@@ -4408,6 +4414,7 @@ type DraftCacheRecord =
       readonly goalId: string;
       readonly reviewDraftId: string;
       readonly content: string;
+      readonly successSignal?: string | null;
       readonly baseRevision: number;
       readonly updatedAt: string;
     }
@@ -4434,14 +4441,16 @@ Rules:
 - User切替時に切替前UserのDraftを切替後Userへ自動送信しない。
 - TTL 24h。起動時cleanup。
 - `localStorage`へGoal/P/D/C/A本文を保存しない。
+- Goal Creation / Reviewの新規recordはGoal本文と`successSignal`を同じrecordへ保存する。旧recordの`successSignal` field欠落はlegacy unknownであり、現在Server Draftの値を維持して明示field付きrecordへ移行する。欠落を`null`とみなしてServer値をclearしない。明示`null`はclear済み値として扱う。
+- Goal Creation / Reviewのconditional deleteは本文、`successSignal`、base revisionが同じ場合だけrecordを削除し、同じ本文で`successSignal`だけが新しいrecovery recordを消さない。
 - IndexedDBはXSSに対する暗号化境界ではない。CSPと短期保持でriskを抑える。
 
 ## 28.6 Recovery
 
 Server resource取得後:
 
-- `baseRevision == serverRevision`: local draftを復元しdirtyとしてsave。
-- mismatch: 自動送信しない。local contentを保持し、競合案内を表示する。
+- `baseRevision == serverRevision`: Goal Creation / Reviewは本文と`successSignal`のlocal tupleを復元しdirtyとしてsaveする。Cycle Frameは従来どおり単一本文を復元する。
+- mismatch: 自動送信しない。Goal Creation / Reviewはlocal tuple全体を保持し、競合案内を表示する。restore / discardはtuple全体へ適用し、片方だけをmergeしない。
 - 高度なmergeは行わない。
 
 ## 28.7 Operation gating
@@ -4617,6 +4626,7 @@ Actions:
 - Cycle Frame tabsはmobile bottom固定、desktopでも同じ情報構造。
 - Active Pの前回A Panelは320px幅と200% zoom相当でもmetadata、badge、補助文言、version変更警告、A全文を同じ縦のreading orderで表示し、横scroll、truncate、nested scrollを作らない。
 - Goal TimelineのC/A disclosureは320px幅と200% zoom相当でもprovenance、C、A、truncation案内、全文linkを縦にreflowし、横scroll、line clamp、nested scrollを作らない。
+- Goal Creation / Reviewの`successSignal` editorとCycle Detail / Timelineのread-only表示は320px幅と200% zoom相当で縦にreflowし、改行を保持して横scrollやnested scrollを作らない。
 - CのP/D比較はdesktopで2列、狭幅とzoom時はP→Dの縦配置とし、内部scrollを作らない。
 - P/D templateは320px幅と200% zoom相当で名称、用途、全文preview、操作、disabled理由を切らずに縦のreading orderで表示し、横scrollやnested scrollを作らない。
 - Goal card collectionは1列からresponsiveに拡張可能だが、MVPでdesktop専用layoutを作らない。
@@ -4626,6 +4636,7 @@ Actions:
 
 - Textareaにvisible labelを付ける。Placeholderをlabel代わりにしない。
 - Guideを`aria-describedby`で関連付ける。
+- Goal Creation / Reviewの`successSignal` Textareaはvisible labelを持ち、専用Guideを`aria-describedby`で関連付ける。Cycle Detail / Timelineの値はvisible headingを持つstaticな領域とし、追加focus targetを作らない。
 - P/D/C/AはWAI-ARIA tabs pattern。
 - Save / AI / Errorは`aria-live`。
 - Dialogはfocus trap、close時triggerへ戻す。

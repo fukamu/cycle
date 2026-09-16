@@ -36,6 +36,7 @@ const reviewFixture = (): GoalReview => ({
       id: reviewVersionId,
       versionNumber: 2,
       body: "現在の目標",
+      successSignal: null,
       createdAt: "2026-08-19T00:00:00Z",
     },
     currentWork: {
@@ -56,6 +57,7 @@ const reviewFixture = (): GoalReview => ({
     baseGoalVersionId: reviewVersionId,
     reviewCycleId,
     body: "次のCycleで試す目標",
+    successSignal: null,
     revision: 2,
     updatedAt: "2026-08-20T00:02:00Z",
   },
@@ -68,6 +70,7 @@ const reviewFixture = (): GoalReview => ({
       id: reviewVersionId,
       versionNumber: 2,
       body: "現在の目標",
+      successSignal: null,
       createdAt: "2026-08-19T00:00:00Z",
     },
     previousCompletedCycleAction: null,
@@ -277,6 +280,37 @@ describe("text response schemas", () => {
     }
   });
 
+  it("requires nullable success signals and enforces their 120-code-point contract", () => {
+    for (const schema of [
+      draftSchema.shape.successSignal,
+      goalVersionSchema.shape.successSignal,
+    ]) {
+      expect(schema.safeParse(null).success).toBe(true);
+      expect(schema.safeParse("😀".repeat(120)).success).toBe(true);
+      expect(schema.safeParse("😀".repeat(121)).success).toBe(false);
+      expect(schema.safeParse(" \t\n").success).toBe(false);
+      expect(schema.safeParse("signal\0text").success).toBe(false);
+      expect(schema.parse(" 一行目\r\n二行目 ")).toBe(" 一行目\n二行目 ");
+    }
+
+    const versionWithoutSignal = {
+      id: reviewVersionId,
+      versionNumber: 1,
+      body: "現在の目標",
+    };
+    const draftWithoutSignal = {
+      id: reviewDraftId,
+      draftType: "creation",
+      body: "現在の目標",
+      revision: 0,
+      updatedAt: "2026-08-19T00:00:00Z",
+    };
+    expect(goalVersionSchema.safeParse(versionWithoutSignal).success).toBe(
+      false,
+    );
+    expect(draftSchema.safeParse(draftWithoutSignal).success).toBe(false);
+  });
+
   it("accepts 200 Frame code points, rejects 201/NUL, and normalizes line endings", () => {
     for (const schema of [
       cycleSchema.shape.plan,
@@ -303,6 +337,7 @@ describe("Cycle previous completed Action schema", () => {
       id: reviewVersionId,
       versionNumber: 2,
       body: "現在の目標",
+      successSignal: null,
       createdAt: "2026-08-20T00:00:00Z",
     },
     previousCompletedCycleAction: {
@@ -500,6 +535,7 @@ describe("Cycle summary schema", () => {
       id: reviewVersionId,
       versionNumber: 1,
       body: "現在の目標",
+      successSignal: null,
       createdAt: "2026-08-19T00:00:00Z",
     },
     planPreview: "最初の計画",

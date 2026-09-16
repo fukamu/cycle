@@ -357,6 +357,15 @@ export const goalCopy = {
     `取り組んでいる目標が上限の${progressingGoalLimit}件に達しています。この目標を始めるには、いずれかの目標を達成・終了・削除してください。`,
 } as const;
 
+export const goalSuccessSignalCopy = {
+  label: "良くなったと分かるサイン（任意）",
+  guide:
+    "何ができたら、この目標に近づけたと言えるかを書きます。空欄でも進められます。",
+  placeholder: "例：週3日は、優先順位を決めて主要業務を終えられる",
+  readOnlyHeading: "良くなったと分かるサイン",
+  unset: "未設定",
+} as const;
+
 export const goalActionCopy = {
   disabled: {
     commandPending: "目標の操作を処理しています。完了するまでお待ちください。",

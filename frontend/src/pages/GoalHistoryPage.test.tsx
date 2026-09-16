@@ -57,7 +57,15 @@ describe("GoalHistoryPage pagination recovery", () => {
     const retryPage = deferred<Awaited<ReturnType<typeof listGoals>>>();
     vi.mocked(listGoals)
       .mockResolvedValueOnce({
-        items: [makeGoal("最初の目標", 1)],
+        items: [
+          {
+            ...makeGoal("最初の目標", 1),
+            currentVersion: {
+              ...makeGoal("最初の目標", 1).currentVersion,
+              successSignal: "履歴一覧には重複表示しないサイン",
+            },
+          },
+        ],
         nextCursor: "next",
       })
       .mockRejectedValueOnce(new TypeError("network"))
@@ -70,6 +78,9 @@ describe("GoalHistoryPage pagination recovery", () => {
     renderHistory();
 
     expect(await screen.findByText("最初の目標")).toBeVisible();
+    expect(
+      screen.queryByText("履歴一覧には重複表示しないサイン"),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "目標を設定する" }),
     ).not.toBeInTheDocument();
@@ -233,6 +244,7 @@ function makeGoal(body: string, sequence: number): Goal {
       id: `20000000-0000-7000-8000-${suffix}`,
       versionNumber: 1,
       body,
+      successSignal: null,
       createdAt: "2026-08-20T00:00:00.000Z",
     },
     currentWork: {

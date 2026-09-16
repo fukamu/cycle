@@ -18,6 +18,7 @@ const activeGoal: ActiveGoal = {
     id: "20000000-0000-7000-8000-000000000001",
     versionNumber: 1,
     body: "平日は主要業務を18時までに終えたい",
+    successSignal: null,
     createdAt: "2026-08-20T00:00:00.000Z",
   },
   currentWork: {

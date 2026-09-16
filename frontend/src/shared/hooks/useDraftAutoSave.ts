@@ -24,7 +24,11 @@ import {
   getBrowserDraft,
   putBrowserDraft,
 } from "../drafts/browserDraftCache";
-import { normalizeLineEndings } from "../text/semantics";
+import {
+  normalizeLineEndings,
+  normalizeSuccessSignal,
+  successSignalInputValue,
+} from "../text/semantics";
 
 export type DraftSaveState = AutoSaveState;
 
@@ -34,7 +38,13 @@ export type SimpleDraftRevisionConflictCode =
 
 type DraftSnapshot = {
   readonly body: string;
+  readonly successSignal: string | null;
   readonly revision: number;
+};
+
+export type GoalDraftEditorContent = {
+  readonly body: string;
+  readonly successSignal: string;
 };
 
 export type DraftLatestResolution<TSnapshot extends DraftSnapshot> =
@@ -46,12 +56,13 @@ type Input<TSnapshot extends DraftSnapshot> = {
   readonly goalId: string | null;
   readonly subjectKey: string;
   readonly initialBody: string;
+  readonly initialSuccessSignal: string | null;
   readonly initialRevision: number;
   readonly save: (
-    body: string,
+    content: GoalDraftEditorContent,
     revision: number,
     signal: AbortSignal,
-  ) => Promise<{ readonly body: string; readonly revision: number }>;
+  ) => Promise<DraftSnapshot>;
   readonly revisionConflictCode: SimpleDraftRevisionConflictCode;
   readonly loadLatest: (signal: AbortSignal) => Promise<TSnapshot>;
   readonly acceptLatest?: (
@@ -61,7 +72,7 @@ type Input<TSnapshot extends DraftSnapshot> = {
 };
 
 type ConflictSnapshot = {
-  readonly body: string;
+  readonly content: GoalDraftEditorContent;
   readonly baseRevision: number;
 };
 
@@ -69,7 +80,37 @@ export type DraftScopeMovedOptions = {
   readonly preserveUnsaved?: boolean;
 };
 
-const bodyKey = "body";
+const contentKey = "content";
+
+const editorContent = (
+  snapshot: Pick<DraftSnapshot, "body" | "successSignal">,
+): GoalDraftEditorContent => ({
+  body: snapshot.body,
+  successSignal: successSignalInputValue(snapshot.successSignal),
+});
+
+const contentEqual = (
+  left: GoalDraftEditorContent,
+  right: GoalDraftEditorContent,
+) => left.body === right.body && left.successSignal === right.successSignal;
+
+const canonicalContentEqual = (
+  left: GoalDraftEditorContent,
+  right: GoalDraftEditorContent,
+) =>
+  left.body === right.body &&
+  normalizeSuccessSignal(left.successSignal) ===
+    normalizeSuccessSignal(right.successSignal);
+
+const browserDraftContent = (
+  draft: BrowserDraft,
+  fallbackSuccessSignal: string,
+): GoalDraftEditorContent => ({
+  body: normalizeLineEndings(draft.body),
+  successSignal: Object.hasOwn(draft, "successSignal")
+    ? normalizeLineEndings(successSignalInputValue(draft.successSignal ?? null))
+    : fallbackSuccessSignal,
+});
 
 export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
   input: Input<TSnapshot>,
@@ -82,6 +123,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     readonly goalId: string | null;
     readonly subjectKey: string;
     readonly initialBody: string;
+    readonly initialSuccessSignal: string | null;
     readonly initialRevision: number;
     readonly revisionConflictCode: SimpleDraftRevisionConflictCode;
     save: Input<TSnapshot>["save"];
@@ -96,6 +138,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
       goalId: input.goalId,
       subjectKey: input.subjectKey,
       initialBody: input.initialBody,
+      initialSuccessSignal: input.initialSuccessSignal,
       initialRevision: input.initialRevision,
       revisionConflictCode: input.revisionConflictCode,
       save: input.save,
@@ -110,9 +153,17 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     runtimeRef.current.scopeMovedOnError = input.scopeMovedOnError;
   }
   const runtime = runtimeRef.current;
+  const initialContent = useMemo(
+    () =>
+      editorContent({
+        body: runtime.initialBody,
+        successSignal: runtime.initialSuccessSignal,
+      }),
+    [runtime],
+  );
 
   const lease = useMemo(() => registry.prepare(scopeKey), [registry, scopeKey]);
-  const [body, setBodyValue] = useState(runtime.initialBody);
+  const [content, setContent] = useState(initialContent);
   const [revision, setRevision] = useState(runtime.initialRevision);
   const [recoveryConflict, setRecoveryConflict] = useState<BrowserDraft | null>(
     null,
@@ -166,18 +217,18 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     const own = {
       current: undefined as
         | AutoSaveCoordinator<
-            typeof bodyKey,
-            string,
-            { readonly body: string; readonly revision: number }
+            typeof contentKey,
+            GoalDraftEditorContent,
+            DraftSnapshot
           >
         | undefined,
     };
     const created = new AutoSaveCoordinator<
-      typeof bodyKey,
-      string,
-      { readonly body: string; readonly revision: number }
+      typeof contentKey,
+      GoalDraftEditorContent,
+      DraftSnapshot
     >({
-      initialValues: new Map([[bodyKey, runtime.initialBody]]),
+      initialValues: new Map([[contentKey, initialContent]]),
       initiallyHydrating: true,
       signal: lease.signal,
       isCurrent: lease.isCurrent,
@@ -186,14 +237,19 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
         attemptBaseRevisionRef.current = baseRevision;
         return runtime.save(entry.value, baseRevision, signal);
       },
-      savedValue: (result) => result.body,
+      savedValue: editorContent,
       onSaved: (_entry, result) => {
         if (!lease.isCurrent()) return;
         revisionRef.current = result.revision;
         if (mountedRef.current) setRevision(result.revision);
-        const current = own.current?.getCurrentValue(bodyKey);
-        if (current === result.body && mountedRef.current)
-          setBodyValue(result.body);
+        const savedContent = editorContent(result);
+        const current = own.current?.getCurrentValue(contentKey);
+        if (
+          current !== undefined &&
+          contentEqual(current, savedContent) &&
+          mountedRef.current
+        )
+          setContent(savedContent);
       },
       onError: async (error, entry, signal) => {
         const movedHref = runtime.scopeMovedOnError?.(error);
@@ -209,12 +265,12 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
           return "unhandled";
 
         const conflict = {
-          body: entry.value,
+          content: entry.value,
           baseRevision: attemptBaseRevisionRef.current,
         };
         conflictSnapshotRef.current = conflict;
-        const current = own.current?.getCurrentValue(bodyKey) ?? entry.value;
-        own.current?.block(bodyKey, current, runtime.revisionConflictCode);
+        const current = own.current?.getCurrentValue(contentKey) ?? entry.value;
+        own.current?.block(contentKey, current, runtime.revisionConflictCode);
         if (mountedRef.current && lease.isCurrent()) {
           setRevisionConflictActive(true);
           setRecoveryConflict(null);
@@ -227,7 +283,8 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
           userId: runtime.userId,
           goalId: runtime.goalId,
           subjectKey: runtime.subjectKey,
-          body: value,
+          body: value.body,
+          successSignal: value.successSignal,
           baseRevision:
             conflictSnapshotRef.current?.baseRevision ?? revisionRef.current,
           updatedAt: new Date().toISOString(),
@@ -248,6 +305,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
             expected.subjectKey,
             expected.body,
             expected.baseRevision,
+            expected.successSignal,
           );
           if (lastCachedDraftRef.current === expected)
             lastCachedDraftRef.current = undefined;
@@ -260,10 +318,11 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
         if (mountedRef.current && lease.isCurrent())
           setBrowserCacheFailed(!available);
       },
+      equals: contentEqual,
     });
     own.current = created;
     return created;
-  }, [lease, queueBrowserOperation, runtime]);
+  }, [initialContent, lease, queueBrowserOperation, runtime]);
 
   const state = useSyncExternalStore(
     coordinator.subscribe,
@@ -284,20 +343,20 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
       const preserveUnsaved = options.preserveUnsaved ?? true;
       const conflict = conflictSnapshotRef.current;
       conflictSnapshotRef.current = undefined;
-      const current = coordinator.getCurrentValue(bodyKey);
-      const saved = coordinator.getSavedValue(bodyKey) ?? runtime.initialBody;
+      const current = coordinator.getCurrentValue(contentKey);
+      const saved = coordinator.getSavedValue(contentKey) ?? initialContent;
       const shouldPreserve =
         preserveUnsaved &&
         current !== undefined &&
-        (current !== saved ||
+        (!contentEqual(current, saved) ||
           conflict !== undefined ||
-          coordinator.needsDraftPreservation(bodyKey));
+          coordinator.needsDraftPreservation(contentKey));
       scopeMovedHrefRef.current = href;
       coordinator.pause(true);
       coordinator.fail("AUTOSAVE_SCOPE_MOVED");
       coordinator.setPersistenceEnabled(false);
       if (current !== undefined)
-        coordinator.block(bodyKey, current, "AUTOSAVE_SCOPE_MOVED");
+        coordinator.block(contentKey, current, "AUTOSAVE_SCOPE_MOVED");
       if (mountedRef.current) {
         setScopeMovedHref(href);
         setRevisionConflictActive(false);
@@ -310,7 +369,8 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
             userId: runtime.userId,
             goalId: runtime.goalId,
             subjectKey: runtime.subjectKey,
-            body: current,
+            body: current.body,
+            successSignal: current.successSignal,
             baseRevision: conflict?.baseRevision ?? revisionRef.current,
             updatedAt: new Date().toISOString(),
           };
@@ -337,7 +397,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
           setBrowserCacheFailed(true);
       }
     },
-    [coordinator, lease, queueBrowserOperation, runtime],
+    [coordinator, initialContent, lease, queueBrowserOperation, runtime],
   );
   markScopeMovedRef.current = (href) => {
     void markScopeMoved(href);
@@ -370,16 +430,21 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
 
         revisionRef.current = latest.revision;
         if (mountedRef.current) setRevision(latest.revision);
-        coordinator.rebase(bodyKey, latest.body);
-        const current = coordinator.getCurrentValue(bodyKey) ?? conflict.body;
+        const latestContent = editorContent(latest);
+        coordinator.rebase(contentKey, latestContent);
+        const current =
+          coordinator.getCurrentValue(contentKey) ?? conflict.content;
 
-        if (conflict.body === latest.body) {
+        if (canonicalContentEqual(conflict.content, latestContent)) {
           conflictSnapshotRef.current = undefined;
           setRevisionConflictActive(false);
           setRecoveryConflict(null);
-          coordinator.unblock(bodyKey);
-          if (current === latest.body && mountedRef.current)
-            setBodyValue(latest.body);
+          coordinator.unblock(contentKey);
+          if (
+            canonicalContentEqual(current, latestContent) &&
+            mountedRef.current
+          )
+            setContent(latestContent);
           return;
         }
 
@@ -387,12 +452,13 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
           userId: runtime.userId,
           goalId: runtime.goalId,
           subjectKey: runtime.subjectKey,
-          body: current,
+          body: current.body,
+          successSignal: current.successSignal,
           baseRevision: conflict.baseRevision,
           updatedAt: new Date().toISOString(),
         };
         lastCachedDraftRef.current = localDraft;
-        coordinator.block(bodyKey, current, runtime.revisionConflictCode);
+        coordinator.block(contentKey, current, runtime.revisionConflictCode);
         if (mountedRef.current) setRecoveryConflict(localDraft);
       } catch (error) {
         const movedHref = runtime.scopeMovedOnError?.(error);
@@ -466,13 +532,21 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
         )
           return;
 
-        const canonicalBody = normalizeLineEndings(draft.body);
-        const canonicalDraft =
-          canonicalBody === draft.body
-            ? draft
-            : { ...draft, body: canonicalBody };
+        const hydratedContent = browserDraftContent(
+          draft,
+          initialContent.successSignal,
+        );
+        const canonicalDraft: BrowserDraft = {
+          ...draft,
+          body: hydratedContent.body,
+          successSignal: hydratedContent.successSignal,
+        };
         lastCachedDraftRef.current = draft;
-        if (canonicalDraft !== draft) {
+        if (
+          canonicalDraft.body !== draft.body ||
+          !Object.hasOwn(draft, "successSignal") ||
+          canonicalDraft.successSignal !== draft.successSignal
+        ) {
           const stored = await lease.queueBrowserOperation(async () => {
             await putBrowserDraft(canonicalDraft);
             return true;
@@ -491,25 +565,26 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
 
         if (canonicalDraft.baseRevision !== revisionRef.current) {
           conflictSnapshotRef.current = {
-            body: canonicalBody,
+            content: hydratedContent,
             baseRevision: canonicalDraft.baseRevision,
           };
           coordinator.block(
-            bodyKey,
-            canonicalBody,
+            contentKey,
+            hydratedContent,
             runtime.revisionConflictCode,
           );
-          setBodyValue(canonicalBody);
+          setContent(hydratedContent);
           setRecoveryConflict(canonicalDraft);
           setRevisionConflictActive(true);
           return;
         }
-        if (canonicalBody === coordinator.getSavedValue(bodyKey)) {
-          coordinator.flush(bodyKey);
+        const saved = coordinator.getSavedValue(contentKey);
+        if (saved !== undefined && contentEqual(hydratedContent, saved)) {
+          coordinator.flush(contentKey);
           return;
         }
-        coordinator.edit(bodyKey, canonicalBody);
-        setBodyValue(canonicalBody);
+        coordinator.edit(contentKey, hydratedContent);
+        setContent(hydratedContent);
       } catch {
         if (!canceled && lease.isCurrent()) setBrowserCacheFailed(true);
       } finally {
@@ -521,7 +596,7 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     return () => {
       canceled = true;
     };
-  }, [coordinator, lease, runtime]);
+  }, [coordinator, initialContent.successSignal, lease, runtime]);
 
   useEffect(() => {
     const handleOnline = () => {
@@ -546,16 +621,28 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     (value: string) => {
       if (revisionConflictActive || scopeMovedHref) return;
       hasEditedRef.current = true;
-      coordinator.edit(bodyKey, value);
-      setBodyValue(value);
+      const next = { ...content, body: value };
+      coordinator.edit(contentKey, next);
+      setContent(next);
     },
-    [coordinator, revisionConflictActive, scopeMovedHref],
+    [content, coordinator, revisionConflictActive, scopeMovedHref],
   );
 
-  const flush = useCallback(() => coordinator.flush(bodyKey), [coordinator]);
+  const setSuccessSignal = useCallback(
+    (value: string) => {
+      if (revisionConflictActive || scopeMovedHref) return;
+      hasEditedRef.current = true;
+      const next = { ...content, successSignal: value };
+      coordinator.edit(contentKey, next);
+      setContent(next);
+    },
+    [content, coordinator, revisionConflictActive, scopeMovedHref],
+  );
+
+  const flush = useCallback(() => coordinator.flush(contentKey), [coordinator]);
 
   const synchronize = useCallback(
-    (nextBody: string, nextRevision: number) => {
+    (nextContent: GoalDraftEditorContent, nextRevision: number) => {
       conflictSnapshotRef.current = undefined;
       setRevisionConflictActive(false);
       setRecoveryConflict(null);
@@ -564,8 +651,8 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
       scopeMovedHrefRef.current = null;
       revisionRef.current = nextRevision;
       coordinator.setPersistenceEnabled(true);
-      coordinator.synchronize(bodyKey, nextBody);
-      setBodyValue(nextBody);
+      coordinator.synchronize(contentKey, nextContent);
+      setContent(nextContent);
       setRevision(nextRevision);
       void clearBrowserDraft();
     },
@@ -611,25 +698,27 @@ export function useDraftAutoSave<TSnapshot extends DraftSnapshot>(
     setRecoveryConflict(null);
     setResolvingConflict(false);
     hasEditedRef.current = true;
-    setBodyValue(draft.body);
-    coordinator.unblock(bodyKey);
-  }, [coordinator, recoveryConflict]);
+    setContent(browserDraftContent(draft, initialContent.successSignal));
+    coordinator.unblock(contentKey);
+  }, [coordinator, initialContent.successSignal, recoveryConflict]);
 
   const discardRecovery = useCallback(() => {
     if (!recoveryConflict) return;
-    const saved = coordinator.getSavedValue(bodyKey) ?? runtime.initialBody;
+    const saved = coordinator.getSavedValue(contentKey) ?? initialContent;
     conflictSnapshotRef.current = undefined;
     setRevisionConflictActive(false);
     setRecoveryConflict(null);
     setResolvingConflict(false);
-    coordinator.synchronize(bodyKey, saved);
-    setBodyValue(saved);
+    coordinator.synchronize(contentKey, saved);
+    setContent(saved);
     void clearBrowserDraft();
-  }, [clearBrowserDraft, coordinator, recoveryConflict, runtime]);
+  }, [clearBrowserDraft, coordinator, initialContent, recoveryConflict]);
 
   return {
-    body,
+    body: content.body,
     setBody,
+    successSignal: content.successSignal,
+    setSuccessSignal,
     revision,
     state,
     hydrating: coordinator.isHydrating(),

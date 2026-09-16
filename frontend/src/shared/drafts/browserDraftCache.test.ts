@@ -898,6 +898,41 @@ describe("browser draft cache", () => {
     });
   });
 
+  it("does not delete a recovery record whose success signal changed", async () => {
+    const userId = "conditional-signal-owner";
+    const subjectKey = "goal-review:conditional-signal";
+    const updatedAt = new Date().toISOString();
+    await putBrowserDraft({
+      userId,
+      goalId: "conditional-signal-goal",
+      subjectKey,
+      body: "same body",
+      successSignal: "newer signal",
+      baseRevision: 2,
+      updatedAt,
+    });
+
+    await deleteBrowserDraftIfUnchanged(
+      userId,
+      subjectKey,
+      "same body",
+      2,
+      "older signal",
+    );
+    expect(await getBrowserDraft(userId, subjectKey)).toMatchObject({
+      successSignal: "newer signal",
+    });
+
+    await deleteBrowserDraftIfUnchanged(
+      userId,
+      subjectKey,
+      "same body",
+      2,
+      "newer signal",
+    );
+    expect(await getBrowserDraft(userId, subjectKey)).toBeNull();
+  });
+
   it("sweeps every expired record while preserving fresh records for every user", async () => {
     const now = Date.parse("2026-08-23T12:00:00.000Z");
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);

@@ -20,6 +20,11 @@ import {
   type ReviewDate,
 } from "./schemas";
 
+export type GoalDraftContent = {
+  readonly body: string;
+  readonly successSignal: string | null;
+};
+
 const draftEnvelope = z.object({ draft: draftSchema });
 const reviewDraftEnvelope = z.object({ reviewDraft: draftSchema });
 const adoptedDraftEnvelope = draftEnvelope.extend({
@@ -96,6 +101,7 @@ const sameGoalVersion = (
   left.id === right.id &&
   left.versionNumber === right.versionNumber &&
   left.body === right.body &&
+  left.successSignal === right.successSignal &&
   (left.createdAt === undefined || right.createdAt === undefined
     ? left.createdAt === right.createdAt
     : Date.parse(left.createdAt) === Date.parse(right.createdAt));
@@ -321,7 +327,7 @@ export const getGoalDraft = (
 export const saveGoalDraft = (
   lease: AuthenticatedRequestLease,
   draftId: string,
-  body: string,
+  content: GoalDraftContent,
   expectedRevision: number,
   csrfToken: string,
   signal?: AbortSignal,
@@ -334,7 +340,7 @@ export const saveGoalDraft = (
       method: "PATCH",
       csrfToken,
       signal,
-      body: { body, expectedRevision },
+      body: { ...content, expectedRevision },
     },
   );
 export const discardGoalDraft = (
@@ -445,7 +451,7 @@ export const saveReview = (
   lease: AuthenticatedRequestLease,
   goalId: string,
   expectedReviewDraftId: string,
-  body: string,
+  content: GoalDraftContent,
   expectedRevision: number,
   csrfToken: string,
   signal?: AbortSignal,
@@ -458,7 +464,7 @@ export const saveReview = (
       method: "PATCH",
       csrfToken,
       signal,
-      body: { body, expectedReviewDraftId, expectedRevision },
+      body: { ...content, expectedReviewDraftId, expectedRevision },
     },
   );
 export const refineReview = (

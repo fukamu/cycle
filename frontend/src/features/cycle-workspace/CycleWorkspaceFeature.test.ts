@@ -15,6 +15,7 @@ const cycle: Cycle = {
     id: "30000000-0000-7000-8000-000000000001",
     versionNumber: 1,
     body: "目標",
+    successSignal: null,
   },
   previousCompletedCycleAction: null,
   reviewDate: null,

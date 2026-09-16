@@ -43,18 +43,34 @@ function input(
   save: (
     body: string,
     revision: number,
+    signal: AbortSignal,
   ) => Promise<{ body: string; revision: number }>,
-  loadLatest = vi.fn().mockResolvedValue({ body: "", revision: 0 }),
+  loadLatest: (
+    signal: AbortSignal,
+  ) => Promise<{ body: string; revision: number }> = vi
+    .fn()
+    .mockResolvedValue({ body: "", revision: 0 }),
 ) {
   return {
     userId: "user-1",
     goalId: "goal-1",
     subjectKey: "goal-review:goal-1",
     initialBody: "",
+    initialSuccessSignal: null,
     initialRevision: 0,
-    save,
+    save: async (
+      content: { readonly body: string; readonly successSignal: string },
+      revision: number,
+      signal: AbortSignal,
+    ) => ({
+      ...(await save(content.body, revision, signal)),
+      successSignal: null,
+    }),
     revisionConflictCode: "GOAL_REVIEW_DRAFT_REVISION_CONFLICT" as const,
-    loadLatest,
+    loadLatest: async (signal: AbortSignal) => ({
+      ...(await loadLatest(signal)),
+      successSignal: null,
+    }),
   };
 }
 
@@ -88,6 +104,136 @@ describe("useDraftAutoSave", () => {
     await act(() => vi.advanceTimersByTimeAsync(1));
     expect(save).toHaveBeenCalledOnce();
     expect(save).toHaveBeenCalledWith("second", 0, expect.any(AbortSignal));
+  });
+
+  it("saves a success-signal-only edit in the same revisioned tuple", async () => {
+    vi.useFakeTimers();
+    const save = vi
+      .fn()
+      .mockImplementation(
+        async (content: {
+          readonly body: string;
+          readonly successSignal: string;
+        }) => ({ ...content, revision: 1 }),
+      );
+    const { result } = renderHook(() =>
+      useDraftAutoSave({
+        ...input(vi.fn().mockResolvedValue({ body: "goal", revision: 1 })),
+        initialBody: "goal",
+        initialSuccessSignal: "old signal",
+        save,
+      }),
+    );
+    await act(async () => undefined);
+
+    act(() => result.current.setSuccessSignal("new\nsignal"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+
+    expect(save).toHaveBeenCalledWith(
+      { body: "goal", successSignal: "new\nsignal" },
+      0,
+      expect.any(AbortSignal),
+    );
+    expect(result.current.body).toBe("goal");
+    expect(result.current.successSignal).toBe("new\nsignal");
+    expect(result.current.revision).toBe(1);
+  });
+
+  it("preserves the server signal when hydrating a legacy browser record without the optional field", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getBrowserDraft).mockResolvedValue({
+      userId: "user-1",
+      goalId: "goal-1",
+      subjectKey: "goal-review:goal-1",
+      body: "server body",
+      baseRevision: 0,
+      updatedAt: new Date().toISOString(),
+    });
+    const save = vi.fn().mockResolvedValue({
+      body: "server body",
+      successSignal: "server signal",
+      revision: 1,
+    });
+    const { result } = renderHook(() =>
+      useDraftAutoSave({
+        ...input(
+          vi.fn().mockResolvedValue({ body: "server body", revision: 1 }),
+        ),
+        initialBody: "server body",
+        initialSuccessSignal: "server signal",
+        save,
+      }),
+    );
+
+    await act(async () => undefined);
+    await act(() => vi.advanceTimersByTimeAsync(800));
+
+    expect(result.current.successSignal).toBe("server signal");
+    expect(save).not.toHaveBeenCalled();
+    expect(putBrowserDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "server body",
+        successSignal: "server signal",
+        baseRevision: 0,
+      }),
+    );
+  });
+
+  it("keeps the whole local tuple behind a success-signal revision conflict until restore", async () => {
+    vi.useFakeTimers();
+    const conflict = new APIError(
+      409,
+      "GOAL_REVIEW_DRAFT_REVISION_CONFLICT",
+      "conflict",
+      "request-success-signal",
+    );
+    const save = vi
+      .fn()
+      .mockRejectedValueOnce(conflict)
+      .mockImplementationOnce(async (content) => ({
+        ...content,
+        revision: 8,
+      }));
+    const loadLatest = vi.fn().mockResolvedValue({
+      body: "server body",
+      successSignal: "other device",
+      revision: 7,
+    });
+    const { result } = renderHook(() =>
+      useDraftAutoSave({
+        ...input(
+          vi.fn().mockResolvedValue({ body: "server body", revision: 1 }),
+        ),
+        initialBody: "server body",
+        initialSuccessSignal: "original",
+        save,
+        loadLatest,
+      }),
+    );
+    await act(async () => undefined);
+
+    act(() => result.current.setSuccessSignal("local signal"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    await act(async () => undefined);
+
+    expect(result.current.recoveryConflict).toMatchObject({
+      body: "server body",
+      successSignal: "local signal",
+      baseRevision: 0,
+    });
+    expect(result.current.revision).toBe(7);
+    expect(save).toHaveBeenCalledOnce();
+
+    act(() => result.current.restoreRecovery());
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(save).toHaveBeenNthCalledWith(
+      2,
+      { body: "server body", successSignal: "local signal" },
+      7,
+      expect.any(AbortSignal),
+    );
+    expect(result.current.state.kind).toBe("saved");
   });
 
   it("does not report saved or send edits before browser recovery hydration finishes", async () => {
@@ -153,6 +299,72 @@ describe("useDraftAutoSave", () => {
     expect(result.current.revision).toBe(2);
   });
 
+  it("serializes a newer success signal behind an in-flight tuple save", async () => {
+    vi.useFakeTimers();
+    const first = deferred<{
+      body: string;
+      successSignal: string | null;
+      revision: number;
+    }>();
+    const second = deferred<{
+      body: string;
+      successSignal: string | null;
+      revision: number;
+    }>();
+    const save = vi
+      .fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const { result } = renderHook(() =>
+      useDraftAutoSave({
+        ...input(vi.fn().mockResolvedValue({ body: "goal", revision: 1 })),
+        initialBody: "goal",
+        initialSuccessSignal: "original",
+        save,
+      }),
+    );
+    await act(async () => undefined);
+
+    act(() => result.current.setSuccessSignal("first signal"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    expect(save).toHaveBeenNthCalledWith(
+      1,
+      { body: "goal", successSignal: "first signal" },
+      0,
+      expect.any(AbortSignal),
+    );
+
+    act(() => result.current.setSuccessSignal("latest signal"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    expect(save).toHaveBeenCalledOnce();
+
+    await act(async () =>
+      first.resolve({
+        body: "goal",
+        successSignal: "first signal",
+        revision: 1,
+      }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(save).toHaveBeenNthCalledWith(
+      2,
+      { body: "goal", successSignal: "latest signal" },
+      1,
+      expect.any(AbortSignal),
+    );
+
+    await act(async () =>
+      second.resolve({
+        body: "goal",
+        successSignal: "latest signal",
+        revision: 2,
+      }),
+    );
+    expect(result.current.successSignal).toBe("latest signal");
+    expect(result.current.revision).toBe(2);
+    expect(result.current.state.kind).toBe("saved");
+  });
+
   it("coalesces browser recovery writes for a typing burst", async () => {
     vi.useFakeTimers();
     const save = vi.fn().mockResolvedValue({ body: "abc", revision: 1 });
@@ -206,6 +418,7 @@ describe("useDraftAutoSave", () => {
       goalId: "goal-1",
       subjectKey: "goal-review:goal-1",
       body: "hidden edit",
+      successSignal: "",
       baseRevision: 0,
       updatedAt: expect.any(String),
     });
@@ -250,6 +463,7 @@ describe("useDraftAutoSave", () => {
       "goal-review:goal-1",
       "saved edit",
       0,
+      "",
     );
   });
 
@@ -298,6 +512,7 @@ describe("useDraftAutoSave", () => {
       goalId: "goal-1",
       subjectKey: "goal-review:goal-1",
       body: "previous recovery",
+      successSignal: "",
       baseRevision: 0,
       updatedAt: new Date().toISOString(),
     });
@@ -328,12 +543,14 @@ describe("useDraftAutoSave", () => {
       "goal-review:goal-1",
       "previous recovery",
       0,
+      "",
     );
     expect(deleteBrowserDraftIfUnchanged).not.toHaveBeenCalledWith(
       "user-1",
       "goal-review:goal-1",
       "newer local body",
       0,
+      "",
     );
   });
 
@@ -493,6 +710,7 @@ describe("useDraftAutoSave", () => {
     await act(async () => undefined);
 
     act(() => result.current.setBody("local body to copy"));
+    act(() => result.current.setSuccessSignal("local signal to copy"));
     await act(() => vi.advanceTimersByTimeAsync(800));
     await act(async () => undefined);
 
@@ -503,7 +721,10 @@ describe("useDraftAutoSave", () => {
       errorCode: "AUTOSAVE_SCOPE_MOVED",
     });
     expect(putBrowserDraft).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "local body to copy" }),
+      expect.objectContaining({
+        body: "local body to copy",
+        successSignal: "local signal to copy",
+      }),
     );
 
     act(() => result.current.retry());

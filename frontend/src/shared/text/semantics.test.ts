@@ -4,8 +4,10 @@ import {
   FRAME_TEXT_MAX_CODE_POINTS,
   GOAL_TEXT_MAX_CODE_POINTS,
   hasNonWhitespace,
+  normalizeSuccessSignal,
   normalizeBoundedTextInput,
   normalizeLineEndings,
+  SUCCESS_SIGNAL_MAX_CODE_POINTS,
   textDiffersAfterLineEndingNormalization,
 } from "./semantics";
 
@@ -39,6 +41,25 @@ describe("text semantics", () => {
     expect(normalizeBoundedTextInput(input, 80)).toBe(
       "\t一行目\n二行目\n三行目 \t",
     );
+  });
+
+  it("normalizes optional success signals without trimming meaningful whitespace", () => {
+    expect(normalizeSuccessSignal("  \r\n\t")).toBeNull();
+    expect(normalizeSuccessSignal(" 一行目\r\n二行目 ")).toBe(
+      " 一行目\n二行目 ",
+    );
+    expect(
+      normalizeBoundedTextInput(
+        "😀".repeat(SUCCESS_SIGNAL_MAX_CODE_POINTS),
+        SUCCESS_SIGNAL_MAX_CODE_POINTS,
+      ),
+    ).not.toBeNull();
+    expect(
+      normalizeBoundedTextInput(
+        "😀".repeat(SUCCESS_SIGNAL_MAX_CODE_POINTS + 1),
+        SUCCESS_SIGNAL_MAX_CODE_POINTS,
+      ),
+    ).toBeNull();
   });
 
   it("reports the normalized required and excess code-point counts", () => {
