@@ -165,6 +165,16 @@ func cycleSummaryFromReadRow(row *db.ListCycleSummariesRow) (workspace.CycleSumm
 	if err != nil {
 		return workspace.CycleSummary{}, err
 	}
+	learningPreview, err := cycleLearningPreviewFromSQLC(
+		status,
+		row.CheckPreview,
+		row.CheckPreviewTruncated,
+		row.ActionPreview,
+		row.ActionPreviewTruncated,
+	)
+	if err != nil {
+		return workspace.CycleSummary{}, err
+	}
 	if cycleID == "" || row.SequenceNumber <= 0 || !startedValid {
 		return workspace.CycleSummary{}, cyclePersistenceError("Cycle summary identity or start timestamp is invalid")
 	}
@@ -178,6 +188,33 @@ func cycleSummaryFromReadRow(row *db.ListCycleSummariesRow) (workspace.CycleSumm
 		CancellationReason: cancellationReason,
 		GoalVersion:        version,
 		PlanPreview:        row.PlanPreview,
+		LearningPreview:    learningPreview,
+	}, nil
+}
+
+func cycleLearningPreviewFromSQLC(
+	status cycle.Status,
+	check string,
+	checkTruncated bool,
+	action string,
+	actionTruncated bool,
+) (*workspace.CycleLearningPreview, error) {
+	terminal := status == cycle.StatusCompleted || status == cycle.StatusCanceled
+	if !terminal {
+		if check != "" || checkTruncated || action != "" || actionTruncated {
+			return nil, cyclePersistenceError("active Cycle has terminal learning preview columns")
+		}
+		return nil, nil
+	}
+	return &workspace.CycleLearningPreview{
+		Check: workspace.CycleFramePreview{
+			Text:      check,
+			Truncated: checkTruncated,
+		},
+		Action: workspace.CycleFramePreview{
+			Text:      action,
+			Truncated: actionTruncated,
+		},
 	}, nil
 }
 

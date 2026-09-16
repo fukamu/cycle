@@ -182,6 +182,18 @@ type GoalPage struct {
 	NextCursor *string    `json:"nextCursor"`
 }
 
+const CycleSummaryPreviewMaxCodePoints = 120
+
+type CycleFramePreview struct {
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated"`
+}
+
+type CycleLearningPreview struct {
+	Check  CycleFramePreview `json:"check"`
+	Action CycleFramePreview `json:"action"`
+}
+
 type CycleSummary struct {
 	ID                 string                    `json:"id"`
 	SequenceNumber     int32                     `json:"sequenceNumber"`
@@ -192,6 +204,7 @@ type CycleSummary struct {
 	CancellationReason *cycle.CancellationReason `json:"cancellationReason"`
 	GoalVersion        GoalVersionView           `json:"goalVersion"`
 	PlanPreview        string                    `json:"planPreview"`
+	LearningPreview    *CycleLearningPreview     `json:"learningPreview"`
 }
 
 type CyclePage struct {

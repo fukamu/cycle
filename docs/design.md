@@ -3500,7 +3500,17 @@ Response:
         "versionNumber": 2,
         "body": "平日は主要業務を18時までに終える"
       },
-      "planPreview": "..."
+      "planPreview": "...",
+      "learningPreview": {
+        "check": {
+          "text": "予定より短い時間でも着手できた",
+          "truncated": false
+        },
+        "action": {
+          "text": "次回は開始時刻を先に予定へ入れる",
+          "truncated": false
+        }
+      }
     }
   ],
   "nextCursor": null
@@ -3508,6 +3518,12 @@ Response:
 ```
 
 Goal Version本文を各itemに含め、FrontendがVersionごとにgroupして変更地点を表示できるようにする。本文は§14.1のbounded valueであり、page sizeと合わせたpayload budgetを満たす。
+
+`planPreview`はPの一覧用plain-text previewであり、最大120 Unicode code pointsとする。Pが120 code pointsを超える場合は先頭119 code pointsと末尾の`…`を返し、wire値全体を120 code points以内に保つ。
+
+`learningPreview`はrequired nullableとし、Active Cycleでは`null`、Completed / Canceled CycleではCとAをこの順序で持つobjectを返す。各`text`は保存済み本文の先頭最大120 Unicode code pointsを改行を保ったplain textとして返し、元本文が120 code pointsを超える場合だけ`truncated=true`とする。空またはUnicode whitespaceだけのFrameも別の内容へ置換せず保存値のbounded previewを返し、表示側が保存値のない状態と本文を区別できるようにする。`text`へellipsisを追加せず、canonical全文はCycle Detailだけが所有する。
+
+Previewは既存のowner-scoped Cycle一覧queryで同じrowから取得し、detail queryやitemごとの追加queryを行わない。default 20 / max 50、stable ordering / cursorを維持し、一覧ResponseへC/A全文を含めない。追加の本文telemetry、log、metric、spanを作らない。
 
 `cancellationReason`は各summaryでrequired nullableとし、Canceledでは`goal_achieved|goal_ended|replanned`、Active / Completedでは`null`を返す。Backend expand前のResponseにこのfieldがない期間だけ、Frontend readerは欠落を旧Backend互換として受理する。Unknown valueは受理せず、Frontend activation後に新しい欠落Responseを正規化してcurrent contractとみなさない。
 
@@ -6569,7 +6585,7 @@ Stable CSRFでは、固定key / Session IDのbyte-level golden vectorによりsc
 
 Read operationはcursor tamper、scope mismatch、ordering、pagination境界、cross-user非開示を適用可能な範囲で検証する。
 
-Shared full `CycleView`の`previousCompletedCycleAction`は、Cycle 1の`null`、Active Cycleのexact predecessor、Completed predecessorでは§18.5に従う同一 / `current - 1`のGoal VersionとA object、`replanned` Canceled predecessorでは同一Goal Versionと`null`、terminalの`null`を検証する。Missing / 他reasonのCanceled / non-Completed・non-Canceled / sequence mismatch / futureまたは2以上gapのGoal Version / 解決不能なGoal Version / Completedのblank Aはinvariant errorとし、cross-user / cross-Goalを非開示にする。Start、Cycle detail、Review trigger、Complete、Continue、Replan、Terminateの全full-Cycle surfaceでrequired nullable fieldを検証し、Cycle list / history summaryではrequired nullable cancellation reason、Frame PATCH responseでは従来shapeを固定する。ContinueとReplanはfresh、同一operation replay、作成Cycleが後続stateへ進んだ後のresponse-loss replay、materialization不整合時のrollbackを含め、Continueはlock済みReview Draftの`reviewCycleId`との一致も含める。
+Shared full `CycleView`の`previousCompletedCycleAction`は、Cycle 1の`null`、Active Cycleのexact predecessor、Completed predecessorでは§18.5に従う同一 / `current - 1`のGoal VersionとA object、`replanned` Canceled predecessorでは同一Goal Versionと`null`、terminalの`null`を検証する。Missing / 他reasonのCanceled / non-Completed・non-Canceled / sequence mismatch / futureまたは2以上gapのGoal Version / 解決不能なGoal Version / Completedのblank Aはinvariant errorとし、cross-user / cross-Goalを非開示にする。Start、Cycle detail、Review trigger、Complete、Continue、Replan、Terminateの全full-Cycle surfaceでrequired nullable fieldを検証し、Cycle list / history summaryではrequired nullable cancellation reason、Activeのrequired `learningPreview=null`、terminalのbounded C/A previewとtruncation metadata、Frame PATCH responseでは従来shapeを固定する。120 / 121 Unicode code-point境界、空、Unicode whitespace、改行、pagination境界、stable ordering、同一queryによる取得、cross-user / cross-Goal非開示を実DBで検証する。ContinueとReplanはfresh、同一operation replay、作成Cycleが後続stateへ進んだ後のresponse-loss replay、materialization不整合時のrollbackを含め、Continueはlock済みReview Draftの`reviewCycleId`との一致も含める。
 
 Frontendはfull `CycleView`のfield欠落を拒否し、Cycle 1 / terminalの`null`、Active Cycle `N > 1`のCompleted predecessor objectまたはReplan後の明示`null`、current Cycle IDとの差、exact `N - 1`、同一または直前のGoal Version、非空かつ§14.5上限内のAをschema境界で検証する。Cycle summaryの`cancellationReason`だけはBackend expand中の旧Response欠落と新Responseのrequired nullable値をdual-readし、unknown reasonを拒否する。Active Pだけの表示、同一 / 異なるGoal Version、改行・長文、static semantics、GuideからTextareaまでのreading order、Cycle 1 / D / C / A / terminal / recovery・workspace fenceでの非表示、320px幅・200% zoom・横overflowなし、P Auto Save・Browser Draft・Frame tab keyboard操作の不変をFrontend testで固定する。
 

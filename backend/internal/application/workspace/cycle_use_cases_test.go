@@ -143,6 +143,78 @@ func TestCycleQueriesPreserveResourceSpecificOwnerErrors(t *testing.T) {
 	}
 }
 
+func TestCycleListValidatesBoundedLearningPreviews(t *testing.T) {
+	completedAt := cycleTestNow
+	validLearning := &CycleLearningPreview{
+		Check:  CycleFramePreview{Text: "分かったこと"},
+		Action: CycleFramePreview{Text: strings.Repeat("🌱", CycleSummaryPreviewMaxCodePoints), Truncated: true},
+	}
+	completed := cycleSummaryFixture(cycleTestCycleID1, 1)
+	completed.Status = cycle.StatusCompleted
+	completed.CompletedAt = &completedAt
+	completed.LearningPreview = validLearning
+
+	tests := []struct {
+		name    string
+		mutate  func(*CycleSummary)
+		wantErr bool
+	}{
+		{name: "valid terminal preview"},
+		{name: "active omits learning preview", mutate: func(summary *CycleSummary) {
+			summary.Status = cycle.StatusActive
+			summary.CompletedAt = nil
+			summary.LearningPreview = nil
+		}},
+		{name: "terminal preview may preserve empty frames", mutate: func(summary *CycleSummary) {
+			summary.LearningPreview = &CycleLearningPreview{}
+		}},
+		{name: "terminal preview may preserve newlines", mutate: func(summary *CycleSummary) {
+			summary.LearningPreview.Check.Text = "1行目\n2行目"
+		}},
+		{name: "terminal preview preserves Unicode whitespace", mutate: func(summary *CycleSummary) {
+			summary.LearningPreview.Check.Text = "\u2003\n"
+		}},
+		{name: "active learning preview", mutate: func(summary *CycleSummary) {
+			summary.Status = cycle.StatusActive
+			summary.CompletedAt = nil
+		}, wantErr: true},
+		{name: "missing terminal learning preview", mutate: func(summary *CycleSummary) {
+			summary.LearningPreview = nil
+		}, wantErr: true},
+		{name: "oversized plan preview", mutate: func(summary *CycleSummary) {
+			summary.PlanPreview = strings.Repeat("界", CycleSummaryPreviewMaxCodePoints+1)
+		}, wantErr: true},
+		{name: "oversized learning preview", mutate: func(summary *CycleSummary) {
+			summary.LearningPreview.Check.Text = strings.Repeat("界", CycleSummaryPreviewMaxCodePoints+1)
+		}, wantErr: true},
+		{name: "short preview marked truncated", mutate: func(summary *CycleSummary) {
+			summary.LearningPreview.Check = CycleFramePreview{Text: "短い", Truncated: true}
+		}, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := completed
+			learning := *validLearning
+			candidate.LearningPreview = &learning
+			if test.mutate != nil {
+				test.mutate(&candidate)
+			}
+			queries := &cycleTestQueries{rowPages: [][]CycleSummary{{candidate}}}
+			useCases := NewCycleUseCases(queries, nil, nil, nil, CycleUseCaseSettings{
+				CursorSigningKey: []byte("cycle-wire-secret"),
+			})
+			_, err := useCases.ListCycles(context.Background(), cycleTestUserID, cycleTestGoalID, "", 20)
+			if test.wantErr && !errors.Is(err, ErrCyclePersistenceInvariant) {
+				t.Fatalf("error = %v, want %v", err, ErrCyclePersistenceInvariant)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 type cycleUseCaseTestClock struct {
 	now   time.Time
 	calls int

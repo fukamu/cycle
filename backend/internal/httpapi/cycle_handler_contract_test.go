@@ -51,9 +51,18 @@ func (stub *cycleViewResponseContractWorkspaceStub) GetCycle(
 func (stub *cycleViewResponseContractWorkspaceStub) ListCycles(
 	context.Context, string, string, string, int,
 ) (workspace.CyclePage, error) {
-	return workspace.CyclePage{Items: []workspace.CycleSummary{{
-		ID: stub.completed.ID, SequenceNumber: stub.completed.SequenceNumber, Status: stub.completed.Status,
-	}}}, nil
+	return workspace.CyclePage{Items: []workspace.CycleSummary{
+		{
+			ID: stub.completed.ID, SequenceNumber: stub.completed.SequenceNumber, Status: stub.completed.Status,
+			LearningPreview: &workspace.CycleLearningPreview{
+				Check:  workspace.CycleFramePreview{Text: "分かったこと", Truncated: false},
+				Action: workspace.CycleFramePreview{Text: "次に変えること", Truncated: false},
+			},
+		},
+		{
+			ID: stub.active.ID, SequenceNumber: stub.active.SequenceNumber, Status: stub.active.Status,
+		},
+	}}, nil
 }
 
 func (stub *cycleViewResponseContractWorkspaceStub) SaveFrame(
@@ -321,7 +330,7 @@ func TestPreviousCompletedActionIsAbsentFromSummaryAndFramePatchWire(t *testing.
 	var page struct {
 		Items []map[string]json.RawMessage `json:"items"`
 	}
-	if err := json.Unmarshal(listResponse.Body.Bytes(), &page); err != nil || len(page.Items) != 1 {
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &page); err != nil || len(page.Items) != 2 {
 		t.Fatalf("Cycle list = %#v, error = %v", page, err)
 	}
 	if _, exists := page.Items[0]["previousCompletedCycleAction"]; exists {
@@ -332,6 +341,19 @@ func TestPreviousCompletedActionIsAbsentFromSummaryAndFramePatchWire(t *testing.
 	}
 	if _, exists := page.Items[0]["reviewScheduleRevision"]; exists {
 		t.Fatalf("Cycle summary leaked reviewScheduleRevision: %s", listResponse.Body.String())
+	}
+	learningField, exists := page.Items[0]["learningPreview"]
+	if !exists {
+		t.Fatalf("Cycle summary omitted required learningPreview: %s", listResponse.Body.String())
+	}
+	var learning workspace.CycleLearningPreview
+	if err := json.Unmarshal(learningField, &learning); err != nil ||
+		learning.Check.Text != "分かったこと" || learning.Check.Truncated ||
+		learning.Action.Text != "次に変えること" || learning.Action.Truncated {
+		t.Fatalf("Cycle summary learningPreview = %#v, error = %v", learning, err)
+	}
+	if activeLearning, exists := page.Items[1]["learningPreview"]; !exists || string(activeLearning) != "null" {
+		t.Fatalf("active Cycle summary learningPreview = %s, want required null", activeLearning)
 	}
 
 	patchResponse := serveContract(
