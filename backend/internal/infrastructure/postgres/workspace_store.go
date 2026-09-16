@@ -154,10 +154,22 @@ func validateGoalReviewView(goalID string, view workspace.ReviewView) error {
 	if view.Goal.CurrentVersion.ID == "" || view.TriggerCycle.GoalID != view.Goal.ID ||
 		view.TriggerCycle.Status != cycle.StatusCompleted || view.TriggerCycle.CompletedAt == nil ||
 		view.TriggerCycle.CanceledAt != nil || view.TriggerCycle.CancellationReason != nil ||
-		view.TriggerCycle.GoalVersion.ID != view.Goal.CurrentVersion.ID {
+		!goalVersionViewsMatch(view.TriggerCycle.GoalVersion, view.Goal.CurrentVersion) {
 		return goalReviewInvariantError("Trigger Cycle does not match the reviewed Goal Version")
 	}
 	return nil
+}
+
+func goalVersionViewsMatch(left, right workspace.GoalVersionView) bool {
+	return left.ID == right.ID && left.VersionNumber == right.VersionNumber && left.Body == right.Body &&
+		optionalGoalTextMatches(left.SuccessSignal, right.SuccessSignal) && left.CreatedAt.Equal(right.CreatedAt)
+}
+
+func optionalGoalTextMatches(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func goalReviewMaterializationError(err error) error {

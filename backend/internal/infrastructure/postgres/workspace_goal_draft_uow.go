@@ -58,7 +58,7 @@ func (transaction *workspaceGoalDraftTx) FindCreationDraft(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
-	draft, err := goalDraftFromSQLC(row)
+	draft, err := goalDraftFromFindCreationRow(row)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (transaction *workspaceGoalDraftTx) LockDraftByID(
 	if err != nil {
 		return goal.Draft{}, err
 	}
-	return goalDraftFromSQLC(row)
+	return goalDraftFromLockDraftRow(row)
 }
 
 func (transaction *workspaceGoalDraftTx) LockReviewDraftByGoal(
@@ -98,7 +98,7 @@ func (transaction *workspaceGoalDraftTx) LockReviewDraftByGoal(
 	if err != nil {
 		return goal.Draft{}, err
 	}
-	return goalDraftFromSQLC(row)
+	return goalDraftFromLockReviewDraftRow(row)
 }
 
 func (transaction *workspaceGoalDraftTx) InsertCreationDraft(ctx context.Context, draft goal.Draft) (int64, error) {
@@ -124,7 +124,7 @@ func (transaction *workspaceGoalDraftTx) SaveDraftCAS(
 	draft goal.Draft,
 	expectedRevision int64,
 ) (int64, error) {
-	return transaction.queries.SaveDraftCAS(ctx, db.SaveDraftCASParams{
+	rows, err := transaction.queries.SaveDraftCAS(ctx, db.SaveDraftCASParams{
 		Body:             draft.Body,
 		NewRevision:      draft.Revision,
 		UpdatedAt:        timestamptz(draft.UpdatedAt),
@@ -133,6 +133,23 @@ func (transaction *workspaceGoalDraftTx) SaveDraftCAS(
 		DraftType:        string(draft.Type),
 		ExpectedRevision: expectedRevision,
 	})
+	if err != nil || rows != 1 {
+		return rows, err
+	}
+	if draft.SuccessSignal == nil {
+		_, err = transaction.queries.DeleteGoalDraftSuccessSignal(ctx, mustUUID(draft.ID))
+		return rows, err
+	}
+	signalRows, err := transaction.queries.UpsertGoalDraftSuccessSignal(ctx, db.UpsertGoalDraftSuccessSignalParams{
+		GoalDraftID: mustUUID(draft.ID), SuccessSignal: *draft.SuccessSignal,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if signalRows != 1 {
+		return 0, goalDraftPersistenceError("saved Draft success signal affected an unexpected row count")
+	}
+	return rows, nil
 }
 
 func (transaction *workspaceGoalDraftTx) DeleteCreationDraftCAS(
@@ -267,7 +284,7 @@ func (transaction *workspaceGoalDraftTx) InsertInitialGoal(ctx context.Context, 
 }
 
 func (transaction *workspaceGoalDraftTx) InsertInitialVersion(ctx context.Context, version goal.Version) (int64, error) {
-	return transaction.queries.InsertGoalVersion(ctx, db.InsertGoalVersionParams{
+	rows, err := transaction.queries.InsertGoalVersion(ctx, db.InsertGoalVersionParams{
 		VersionID:            mustUUID(version.ID),
 		UserID:               mustUUID(version.UserID),
 		GoalID:               mustUUID(version.GoalID),
@@ -276,6 +293,19 @@ func (transaction *workspaceGoalDraftTx) InsertInitialVersion(ctx context.Contex
 		CreatedByOperationID: mustUUID(version.CreatedByOperationID),
 		CreatedAt:            timestamptz(version.CreatedAt),
 	})
+	if err != nil || rows != 1 || version.SuccessSignal == nil {
+		return rows, err
+	}
+	signalRows, err := transaction.queries.InsertGoalVersionSuccessSignal(ctx, db.InsertGoalVersionSuccessSignalParams{
+		GoalVersionID: mustUUID(version.ID), SuccessSignal: *version.SuccessSignal,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if signalRows != 1 {
+		return 0, goalDraftPersistenceError("inserted Goal Version success signal affected an unexpected row count")
+	}
+	return rows, nil
 }
 
 func (transaction *workspaceGoalDraftTx) TryInsertInitialCycleClaim(ctx context.Context, current cycle.PDCACycle) (int64, error) {
@@ -1044,22 +1074,78 @@ func aiAdapterPersistenceError(detail string) error {
 }
 
 func goalDraftFromSQLC(row *db.GoalDraft) (goal.Draft, error) {
-	if row == nil || !row.ID.Valid || !row.UserID.Valid ||
-		!isFiniteGoalTimestamptz(row.CreatedAt) || !isFiniteGoalTimestamptz(row.UpdatedAt) {
+	if row == nil {
+		return goal.Draft{}, goalDraftPersistenceError("Draft row is missing")
+	}
+	return goalDraftFromColumns(goalDraftColumns{
+		id: row.ID, userID: row.UserID, draftType: row.DraftType, goalID: row.GoalID,
+		baseGoalVersionID: row.BaseGoalVersionID, reviewCycleID: row.ReviewCycleID,
+		body: row.Body, revision: row.Revision, createdAt: row.CreatedAt, updatedAt: row.UpdatedAt,
+	})
+}
+
+type goalDraftColumns struct {
+	id, userID, goalID, baseGoalVersionID, reviewCycleID pgtype.UUID
+	draftType                                            string
+	body                                                 string
+	successSignal                                        *string
+	revision                                             int64
+	createdAt, updatedAt                                 pgtype.Timestamptz
+}
+
+func goalDraftFromFindCreationRow(row *db.FindCreationDraftRow) (goal.Draft, error) {
+	if row == nil {
+		return goal.Draft{}, goalDraftPersistenceError("Draft row is missing")
+	}
+	return goalDraftFromColumns(goalDraftColumns{
+		id: row.ID, userID: row.UserID, draftType: row.DraftType, goalID: row.GoalID,
+		baseGoalVersionID: row.BaseGoalVersionID, reviewCycleID: row.ReviewCycleID,
+		body: row.Body, successSignal: row.SuccessSignal, revision: row.Revision,
+		createdAt: row.CreatedAt, updatedAt: row.UpdatedAt,
+	})
+}
+
+func goalDraftFromLockDraftRow(row *db.LockDraftByIDRow) (goal.Draft, error) {
+	if row == nil {
+		return goal.Draft{}, goalDraftPersistenceError("Draft row is missing")
+	}
+	return goalDraftFromColumns(goalDraftColumns{
+		id: row.ID, userID: row.UserID, draftType: row.DraftType, goalID: row.GoalID,
+		baseGoalVersionID: row.BaseGoalVersionID, reviewCycleID: row.ReviewCycleID,
+		body: row.Body, successSignal: row.SuccessSignal, revision: row.Revision,
+		createdAt: row.CreatedAt, updatedAt: row.UpdatedAt,
+	})
+}
+
+func goalDraftFromLockReviewDraftRow(row *db.LockReviewDraftByGoalRow) (goal.Draft, error) {
+	if row == nil {
+		return goal.Draft{}, goalDraftPersistenceError("Draft row is missing")
+	}
+	return goalDraftFromColumns(goalDraftColumns{
+		id: row.ID, userID: row.UserID, draftType: row.DraftType, goalID: row.GoalID,
+		baseGoalVersionID: row.BaseGoalVersionID, reviewCycleID: row.ReviewCycleID,
+		body: row.Body, successSignal: row.SuccessSignal, revision: row.Revision,
+		createdAt: row.CreatedAt, updatedAt: row.UpdatedAt,
+	})
+}
+
+func goalDraftFromColumns(row goalDraftColumns) (goal.Draft, error) {
+	if !row.id.Valid || !row.userID.Valid ||
+		!isFiniteGoalTimestamptz(row.createdAt) || !isFiniteGoalTimestamptz(row.updatedAt) {
 		return goal.Draft{}, goalDraftPersistenceError("required identity or timestamp is missing")
 	}
-	id := uuidString(row.ID)
-	userID := uuidString(row.UserID)
+	id := uuidString(row.id)
+	userID := uuidString(row.userID)
 	if id == "" || userID == "" {
 		return goal.Draft{}, goalDraftPersistenceError("required identity is invalid")
 	}
-	goalID, goalIDValid := goalDraftNullableUUID(row.GoalID)
-	baseVersionID, baseVersionIDValid := goalDraftNullableUUID(row.BaseGoalVersionID)
-	reviewCycleID, reviewCycleIDValid := goalDraftNullableUUID(row.ReviewCycleID)
+	goalID, goalIDValid := goalDraftNullableUUID(row.goalID)
+	baseVersionID, baseVersionIDValid := goalDraftNullableUUID(row.baseGoalVersionID)
+	reviewCycleID, reviewCycleIDValid := goalDraftNullableUUID(row.reviewCycleID)
 	if !goalIDValid || !baseVersionIDValid || !reviewCycleIDValid {
 		return goal.Draft{}, goalDraftPersistenceError("reference identity is invalid")
 	}
-	draftType := goal.DraftType(row.DraftType)
+	draftType := goal.DraftType(row.draftType)
 	switch draftType {
 	case goal.DraftCreation:
 		if goalID != nil || baseVersionID != nil || reviewCycleID != nil {
@@ -1079,10 +1165,11 @@ func goalDraftFromSQLC(row *db.GoalDraft) (goal.Draft, error) {
 		GoalID:            goalID,
 		BaseGoalVersionID: baseVersionID,
 		ReviewCycleID:     reviewCycleID,
-		Body:              row.Body,
-		Revision:          row.Revision,
-		CreatedAt:         row.CreatedAt.Time.UTC(),
-		UpdatedAt:         row.UpdatedAt.Time.UTC(),
+		Body:              row.body,
+		SuccessSignal:     row.successSignal,
+		Revision:          row.revision,
+		CreatedAt:         row.createdAt.Time.UTC(),
+		UpdatedAt:         row.updatedAt.Time.UTC(),
 	}, nil
 }
 

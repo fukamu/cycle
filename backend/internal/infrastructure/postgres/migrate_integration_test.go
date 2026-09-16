@@ -20,6 +20,11 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	goalSuccessSignalDown, err := os.ReadFile(filepath.Join(directory, "000009_goal_success_signal.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, goalSuccessSignalDown)
 	replanCancellationDown, err := os.ReadFile(filepath.Join(directory, "000008_cycle_replan_cancellation_reason.down.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -66,12 +71,13 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 8 {
-		t.Fatalf("applied migrations = %v, want 8", result.Applied)
+	if len(result.Applied) != 9 {
+		t.Fatalf("applied migrations = %v, want 9", result.Applied)
 	}
 	baseline, retention, exposure := result.Applied[0], result.Applied[1], result.Applied[2]
 	hashSplit, cleanupIndex, guard, reviewSchedule := result.Applied[3], result.Applied[4], result.Applied[5], result.Applied[6]
 	replanCancellation := result.Applied[7]
+	goalSuccessSignal := result.Applied[8]
 	if baseline.Version != 1 || baseline.Direction != "up" || baseline.File != "000001_fukamu_cycle_baseline.up.sql" ||
 		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" ||
 		exposure.Version != 3 || exposure.Direction != "up" || exposure.File != "000003_ai_usage_settlement_exposure.up.sql" ||
@@ -79,7 +85,8 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 		cleanupIndex.Version != 5 || cleanupIndex.Direction != "up" || cleanupIndex.File != "000005_retention_cleanup_index.up.sql" ||
 		guard.Version != 6 || guard.Direction != "up" || guard.File != "000006_anonymous_rate_limit_guard.up.sql" ||
 		reviewSchedule.Version != 7 || reviewSchedule.Direction != "up" || reviewSchedule.File != "000007_cycle_review_schedule.up.sql" ||
-		replanCancellation.Version != 8 || replanCancellation.Direction != "up" || replanCancellation.File != "000008_cycle_replan_cancellation_reason.up.sql" {
+		replanCancellation.Version != 8 || replanCancellation.Direction != "up" || replanCancellation.File != "000008_cycle_replan_cancellation_reason.up.sql" ||
+		goalSuccessSignal.Version != 9 || goalSuccessSignal.Direction != "up" || goalSuccessSignal.File != "000009_goal_success_signal.up.sql" {
 		t.Fatalf("applied migrations = %+v", result.Applied)
 	}
 	result, err = Migrate(databaseURL, directory)
@@ -92,7 +99,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 8 || users != 0 {
+	if version != 9 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
@@ -108,6 +115,98 @@ VALUES('20000000-0000-7000-8000-000000000001','10000000-0000-7000-8000-000000000
 	if err == nil {
 		t.Fatal("oversize goal draft unexpectedly succeeded")
 	}
+}
+
+func TestGoalSuccessSignalMigrationPreservesOldRowsAndRefusesUnsafeDown(t *testing.T) {
+	pool := integrationPool(t)
+	resetDatabase(t, pool)
+	directory := filepath.Join("..", "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(directory, "000009_goal_success_signal.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile(filepath.Join(directory, "000009_goal_success_signal.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := true
+	t.Cleanup(func() {
+		if !installed {
+			executeMigrationScript(t, pool, up)
+		}
+	})
+
+	executeMigrationScript(t, pool, down)
+	installed = false
+	now := integrationNow()
+	const (
+		userID    = "10000000-0000-7000-8000-000000000001"
+		draftID   = "20000000-0000-7000-8000-000000000001"
+		goalID    = "30000000-0000-7000-8000-000000000001"
+		versionID = "40000000-0000-7000-8000-000000000001"
+		operation = "50000000-0000-7000-8000-000000000001"
+	)
+	if _, err = pool.Exec(t.Context(), `INSERT INTO users(id,last_active_at,created_at,updated_at) VALUES($1,$2,$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(t.Context(), `INSERT INTO goal_drafts(id,user_id,draft_type,body,created_at,updated_at) VALUES($1,$2,'creation','existing draft',$3,$3)`, draftID, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(t.Context(), `INSERT INTO goals(id,user_id,status,current_version_number,next_cycle_sequence_number,created_at,updated_at) VALUES($1,$2,'active_cycle',1,2,$3,$3)`, goalID, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(t.Context(), `INSERT INTO goal_versions(id,user_id,goal_id,version_number,body,created_by_operation_id,created_at) VALUES($1,$2,$3,1,'existing goal',$4,$5)`, versionID, userID, goalID, operation, now); err != nil {
+		t.Fatal(err)
+	}
+
+	executeMigrationScript(t, pool, up)
+	installed = true
+	var draftSignals, versionSignals int
+	if err = pool.QueryRow(t.Context(), `SELECT count(*) FROM goal_draft_success_signals`).Scan(&draftSignals); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(t.Context(), `SELECT count(*) FROM goal_version_success_signals`).Scan(&versionSignals); err != nil {
+		t.Fatal(err)
+	}
+	if draftSignals != 0 || versionSignals != 0 {
+		t.Fatalf("existing-row signals = draft:%d version:%d, want both 0", draftSignals, versionSignals)
+	}
+	var draftColumns, versionColumns int
+	if err = pool.QueryRow(t.Context(), `SELECT
+(SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='goal_drafts'),
+(SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='goal_versions')`).Scan(&draftColumns, &versionColumns); err != nil {
+		t.Fatal(err)
+	}
+	if draftColumns != 10 || versionColumns != 7 {
+		t.Fatalf("legacy base-table shape changed: goal_drafts=%d goal_versions=%d", draftColumns, versionColumns)
+	}
+	if _, err = pool.Exec(t.Context(), `INSERT INTO goal_draft_success_signals(goal_draft_id,success_signal) VALUES($1,'draft signal')`, draftID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(t.Context(), `INSERT INTO goal_version_success_signals(goal_version_id,success_signal) VALUES($1,'version signal')`, versionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(t.Context(), string(down)); err == nil {
+		t.Fatal("unsafe success-signal down unexpectedly succeeded")
+	} else {
+		var databaseError *pgconn.PgError
+		if !errors.As(err, &databaseError) || databaseError.Code != "23514" {
+			t.Fatalf("unsafe down error = %v, want SQLSTATE 23514", err)
+		}
+	}
+	for _, table := range []string{"goal_draft_success_signals", "goal_version_success_signals"} {
+		var exists bool
+		if err = pool.QueryRow(t.Context(), `SELECT to_regclass('public.' || $1) IS NOT NULL`, table).Scan(&exists); err != nil || !exists {
+			t.Fatalf("table %s after refused down = %t, %v", table, exists, err)
+		}
+	}
+	if _, err = pool.Exec(t.Context(), `DELETE FROM goal_draft_success_signals; DELETE FROM goal_version_success_signals`); err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, down)
+	installed = false
+	executeMigrationScript(t, pool, up)
+	installed = true
 }
 
 func TestCycleReplanCancellationReasonMigrationRefusesUnsafeDownAndSupportsReUp(t *testing.T) {
@@ -330,7 +429,7 @@ INSERT INTO migration_runner_shadow.schema_migrations(version, dirty) VALUES(999
 	); err != nil {
 		t.Fatal(err)
 	}
-	if publicVersion != 8 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
+	if publicVersion != 9 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
 		t.Fatalf("migration schemas = public:%d/%t shadow:%d/%t tables:%d",
 			publicVersion, publicDirty, shadowVersion, shadowDirty, shadowTables)
 	}

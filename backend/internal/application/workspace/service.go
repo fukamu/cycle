@@ -139,8 +139,8 @@ func (service *Service) GetDraft(ctx context.Context, userID, draftID string) (D
 	return view, resourceNotFound(err, ErrGoalDraftNotFound)
 }
 
-func (service *Service) SaveDraft(ctx context.Context, userID, draftID, body string, expectedRevision int64) (DraftView, error) {
-	view, err := service.goalDraft.SaveDraft(ctx, userID, draftID, body, expectedRevision)
+func (service *Service) SaveDraft(ctx context.Context, userID, draftID string, input SaveGoalDraftInput) (DraftView, error) {
+	view, err := service.goalDraft.SaveDraft(ctx, userID, draftID, input)
 	return view, resourceNotFound(err, ErrGoalDraftNotFound)
 }
 
@@ -181,8 +181,8 @@ func (service *Service) GetReview(ctx context.Context, userID, goalID string) (R
 	return view, resourceNotFound(err, ErrGoalNotFound)
 }
 
-func (service *Service) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID, body string, expectedRevision int64) (DraftView, error) {
-	view, err := service.goalDraft.SaveReview(ctx, userID, goalID, expectedReviewDraftID, body, expectedRevision)
+func (service *Service) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID string, input SaveGoalDraftInput) (DraftView, error) {
+	view, err := service.goalDraft.SaveReview(ctx, userID, goalID, expectedReviewDraftID, input)
 	return view, resourceNotFound(err, ErrGoalNotFound)
 }
 

@@ -110,7 +110,7 @@ func (useCases *ReviewTransitionUseCases) ContinueReview(ctx context.Context, in
 		if loadErr = validateReviewCurrentVersion(currentVersion, lockedGoal, input.UserID, input.GoalID, draft); loadErr != nil {
 			return ErrGoalVersionConflict
 		}
-		_, changed, transitionErr := goal.ReviewBodyChanged(lockedGoal, currentVersion, draft)
+		_, _, changed, transitionErr := goal.ReviewContentChanged(lockedGoal, currentVersion, draft)
 		if transitionErr != nil {
 			if errors.Is(transitionErr, goal.ErrStateConflict) {
 				return ErrGoalVersionConflict
@@ -718,6 +718,7 @@ func goalVersionViewMatchesDomain(view GoalVersionView, version goal.Version) bo
 	return view.ID == version.ID &&
 		view.VersionNumber == version.VersionNumber &&
 		view.Body == version.Body &&
+		optionalStringsEqual(view.SuccessSignal, version.SuccessSignal) &&
 		view.CreatedAt.Equal(version.CreatedAt)
 }
 
@@ -725,7 +726,15 @@ func goalVersionViewsEqual(first, second GoalVersionView) bool {
 	return first.ID == second.ID &&
 		first.VersionNumber == second.VersionNumber &&
 		first.Body == second.Body &&
+		optionalStringsEqual(first.SuccessSignal, second.SuccessSignal) &&
 		first.CreatedAt.Equal(second.CreatedAt)
+}
+
+func optionalStringsEqual(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func validateTerminationResult(result TerminateResult, input TerminateInput, replayed bool) error {

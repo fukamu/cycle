@@ -35,6 +35,7 @@ SELECT
     gv.id AS goal_version_id,
     gv.version_number AS goal_version_number,
     gv.body AS goal_version_body,
+    gv_signal.success_signal AS goal_version_success_signal,
     gv.created_at AS goal_version_created_at,
     previous_cycle.id AS previous_cycle_id,
     previous_cycle.sequence_number AS previous_cycle_sequence_number,
@@ -49,6 +50,8 @@ JOIN goals AS g
 LEFT JOIN goal_versions AS gv
   ON gv.id = c.goal_version_id
  AND gv.goal_id = c.goal_id
+LEFT JOIN goal_version_success_signals AS gv_signal
+  ON gv_signal.goal_version_id = gv.id
 LEFT JOIN pdca_cycle_review_schedules AS review_schedule
   ON review_schedule.cycle_id = c.id
 LEFT JOIN pdca_cycles AS previous_cycle
@@ -93,6 +96,7 @@ type GetCycleViewRow struct {
 	GoalVersionID                   pgtype.UUID
 	GoalVersionNumber               *int32
 	GoalVersionBody                 *string
+	GoalVersionSuccessSignal        *string
 	GoalVersionCreatedAt            pgtype.Timestamptz
 	PreviousCycleID                 pgtype.UUID
 	PreviousCycleSequenceNumber     *int32
@@ -128,6 +132,7 @@ func (q *Queries) GetCycleView(ctx context.Context, arg GetCycleViewParams) (*Ge
 		&i.GoalVersionID,
 		&i.GoalVersionNumber,
 		&i.GoalVersionBody,
+		&i.GoalVersionSuccessSignal,
 		&i.GoalVersionCreatedAt,
 		&i.PreviousCycleID,
 		&i.PreviousCycleSequenceNumber,
@@ -151,6 +156,7 @@ SELECT
     gv.id AS goal_version_id,
     gv.version_number AS goal_version_number,
     gv.body AS goal_version_body,
+    gv_signal.success_signal AS goal_version_success_signal,
     gv.created_at AS goal_version_created_at,
     CASE
         WHEN char_length(c.plan) > 120 THEN left(c.plan, 119) || '…'
@@ -176,6 +182,8 @@ FROM pdca_cycles AS c
 LEFT JOIN goal_versions AS gv
   ON gv.id = c.goal_version_id
  AND gv.goal_id = c.goal_id
+LEFT JOIN goal_version_success_signals AS gv_signal
+  ON gv_signal.goal_version_id = gv.id
 WHERE c.user_id = $1::uuid
   AND c.goal_id = $2::uuid
   AND (
@@ -198,22 +206,23 @@ type ListCycleSummariesParams struct {
 }
 
 type ListCycleSummariesRow struct {
-	CycleID                pgtype.UUID
-	SequenceNumber         int32
-	Status                 string
-	StartedAt              pgtype.Timestamptz
-	CompletedAt            pgtype.Timestamptz
-	CanceledAt             pgtype.Timestamptz
-	CancellationReason     *string
-	GoalVersionID          pgtype.UUID
-	GoalVersionNumber      *int32
-	GoalVersionBody        *string
-	GoalVersionCreatedAt   pgtype.Timestamptz
-	PlanPreview            string
-	CheckPreview           string
-	CheckPreviewTruncated  bool
-	ActionPreview          string
-	ActionPreviewTruncated bool
+	CycleID                  pgtype.UUID
+	SequenceNumber           int32
+	Status                   string
+	StartedAt                pgtype.Timestamptz
+	CompletedAt              pgtype.Timestamptz
+	CanceledAt               pgtype.Timestamptz
+	CancellationReason       *string
+	GoalVersionID            pgtype.UUID
+	GoalVersionNumber        *int32
+	GoalVersionBody          *string
+	GoalVersionSuccessSignal *string
+	GoalVersionCreatedAt     pgtype.Timestamptz
+	PlanPreview              string
+	CheckPreview             string
+	CheckPreviewTruncated    bool
+	ActionPreview            string
+	ActionPreviewTruncated   bool
 }
 
 func (q *Queries) ListCycleSummaries(ctx context.Context, arg ListCycleSummariesParams) ([]*ListCycleSummariesRow, error) {
@@ -242,6 +251,7 @@ func (q *Queries) ListCycleSummaries(ctx context.Context, arg ListCycleSummaries
 			&i.GoalVersionID,
 			&i.GoalVersionNumber,
 			&i.GoalVersionBody,
+			&i.GoalVersionSuccessSignal,
 			&i.GoalVersionCreatedAt,
 			&i.PlanPreview,
 			&i.CheckPreview,

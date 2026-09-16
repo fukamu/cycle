@@ -18,6 +18,7 @@ SELECT
     gv.id AS goal_version_id,
     gv.version_number AS goal_version_number,
     gv.body AS goal_version_body,
+    gv_signal.success_signal AS goal_version_success_signal,
     gv.created_at AS goal_version_created_at,
     CASE
         WHEN char_length(c.plan) > 120 THEN left(c.plan, 119) || '…'
@@ -43,6 +44,8 @@ FROM pdca_cycles AS c
 LEFT JOIN goal_versions AS gv
   ON gv.id = c.goal_version_id
  AND gv.goal_id = c.goal_id
+LEFT JOIN goal_version_success_signals AS gv_signal
+  ON gv_signal.goal_version_id = gv.id
 WHERE c.user_id = sqlc.arg(user_id)::uuid
   AND c.goal_id = sqlc.arg(goal_id)::uuid
   AND (
@@ -79,6 +82,7 @@ SELECT
     gv.id AS goal_version_id,
     gv.version_number AS goal_version_number,
     gv.body AS goal_version_body,
+    gv_signal.success_signal AS goal_version_success_signal,
     gv.created_at AS goal_version_created_at,
     previous_cycle.id AS previous_cycle_id,
     previous_cycle.sequence_number AS previous_cycle_sequence_number,
@@ -93,6 +97,8 @@ JOIN goals AS g
 LEFT JOIN goal_versions AS gv
   ON gv.id = c.goal_version_id
  AND gv.goal_id = c.goal_id
+LEFT JOIN goal_version_success_signals AS gv_signal
+  ON gv_signal.goal_version_id = gv.id
 LEFT JOIN pdca_cycle_review_schedules AS review_schedule
   ON review_schedule.cycle_id = c.id
 LEFT JOIN pdca_cycles AS previous_cycle

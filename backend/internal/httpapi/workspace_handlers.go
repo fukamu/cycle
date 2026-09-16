@@ -21,14 +21,24 @@ type createDraftRequest struct {
 	InitialBody string `json:"initialBody"`
 }
 type saveDraftRequest struct {
-	Body             string `json:"body"`
-	ExpectedRevision int64  `json:"expectedRevision"`
+	Body             string                    `json:"body"`
+	SuccessSignal    optionalJSONField[string] `json:"successSignal"`
+	ExpectedRevision int64                     `json:"expectedRevision"`
 }
 type saveReviewRequest struct {
-	Body                  string `json:"body"`
-	ExpectedReviewDraftID string `json:"expectedReviewDraftId"`
-	ExpectedRevision      int64  `json:"expectedRevision"`
+	Body                  string                    `json:"body"`
+	SuccessSignal         optionalJSONField[string] `json:"successSignal"`
+	ExpectedReviewDraftID string                    `json:"expectedReviewDraftId"`
+	ExpectedRevision      int64                     `json:"expectedRevision"`
 }
+
+func (field optionalJSONField[T]) pointer() *T {
+	if !field.Present || field.Null {
+		return nil
+	}
+	return &field.Value
+}
+
 type startGoalRequest struct {
 	OperationID           string `json:"operationId"`
 	ExpectedDraftRevision int64  `json:"expectedDraftRevision"`
@@ -188,7 +198,10 @@ func (server *api) saveGoalDraft(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	startedAt := time.Now()
-	view, err := server.dependencies.Workspace.SaveDraft(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), input.Body, input.ExpectedRevision)
+	view, err := server.dependencies.Workspace.SaveDraft(request.Context(), currentUserID(request), chi.URLParam(request, "draftId"), workspace.SaveGoalDraftInput{
+		Body: input.Body, SuccessSignal: workspace.SuccessSignalPatch{Present: input.SuccessSignal.Present, Value: input.SuccessSignal.pointer()},
+		ExpectedRevision: input.ExpectedRevision,
+	})
 	server.observeAutosave(request, "creation_draft", startedAt, err, errors.Is(err, workspace.ErrDraftRevisionConflict))
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalDraftSaveFailed), nil)
@@ -329,7 +342,10 @@ func (server *api) saveGoalReview(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	startedAt := time.Now()
-	view, err := server.dependencies.Workspace.SaveReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.ExpectedReviewDraftID, input.Body, input.ExpectedRevision)
+	view, err := server.dependencies.Workspace.SaveReview(request.Context(), currentUserID(request), chi.URLParam(request, "goalId"), input.ExpectedReviewDraftID, workspace.SaveGoalDraftInput{
+		Body: input.Body, SuccessSignal: workspace.SuccessSignalPatch{Present: input.SuccessSignal.Present, Value: input.SuccessSignal.pointer()},
+		ExpectedRevision: input.ExpectedRevision,
+	})
 	server.observeAutosave(request, "review_draft", startedAt, err, errors.Is(err, workspace.ErrReviewRevisionConflict))
 	if err != nil {
 		server.writeError(writer, request, stableUseCaseError(err, errGoalReviewDraftSaveFailed), nil)

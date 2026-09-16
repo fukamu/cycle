@@ -93,6 +93,8 @@ func classifyError(err error) (int, string, string) {
 		return 400, "GOAL_TEXT_REQUIRED", "目標を入力してください。"
 	case errors.Is(err, goal.ErrTextTooLong):
 		return 400, "GOAL_TEXT_TOO_LONG", "目標は80文字以内で入力してください。"
+	case errors.Is(err, goal.ErrSuccessSignalTooLong):
+		return 400, "GOAL_SUCCESS_SIGNAL_TOO_LONG", "良くなったと分かるサインは120文字以内で入力してください。"
 	case errors.Is(err, cycle.ErrFrameTextTooLong):
 		return 400, "FRAME_TEXT_TOO_LONG", "各項目は200文字以内で入力してください。"
 	case errors.Is(err, cycle.ErrInvalidReviewDate):

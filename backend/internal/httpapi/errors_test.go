@@ -59,6 +59,7 @@ func TestClassifyErrorReportsCurrentTextLimits(t *testing.T) {
 		message string
 	}{
 		{goal.ErrTextTooLong, "GOAL_TEXT_TOO_LONG", "目標は80文字以内で入力してください。"},
+		{goal.ErrSuccessSignalTooLong, "GOAL_SUCCESS_SIGNAL_TOO_LONG", "良くなったと分かるサインは120文字以内で入力してください。"},
 		{cycle.ErrFrameTextTooLong, "FRAME_TEXT_TOO_LONG", "各項目は200文字以内で入力してください。"},
 	}
 	for _, test := range tests {
@@ -122,6 +123,7 @@ func TestClassifyErrorMatchesPublicStatusCodeMatrix(t *testing.T) {
 		{"anti-abuse unavailable", ports.ErrAntiAbuseUnavailable, 503, "ANTI_ABUSE_SERVICE_UNAVAILABLE"},
 		{"goal text required", goal.ErrTextRequired, 400, "GOAL_TEXT_REQUIRED"},
 		{"goal text too long", goal.ErrTextTooLong, 400, "GOAL_TEXT_TOO_LONG"},
+		{"goal success signal too long", goal.ErrSuccessSignalTooLong, 400, "GOAL_SUCCESS_SIGNAL_TOO_LONG"},
 		{"frame text too long", cycle.ErrFrameTextTooLong, 400, "FRAME_TEXT_TOO_LONG"},
 		{"goal forbidden character", goal.ErrForbiddenCharacter, 400, "VALIDATION_ERROR"},
 		{"cycle forbidden character", cycle.ErrForbiddenCharacter, 400, "VALIDATION_ERROR"},

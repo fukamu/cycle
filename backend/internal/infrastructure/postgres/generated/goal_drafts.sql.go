@@ -67,17 +67,45 @@ func (q *Queries) DeleteCreationDraftCAS(ctx context.Context, arg DeleteCreation
 	return result.RowsAffected(), nil
 }
 
+const deleteGoalDraftSuccessSignal = `-- name: DeleteGoalDraftSuccessSignal :execrows
+DELETE FROM goal_draft_success_signals
+WHERE goal_draft_id = $1::uuid
+`
+
+func (q *Queries) DeleteGoalDraftSuccessSignal(ctx context.Context, goalDraftID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteGoalDraftSuccessSignal, goalDraftID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const findCreationDraft = `-- name: FindCreationDraft :one
-SELECT id, user_id, draft_type, goal_id, base_goal_version_id, review_cycle_id,
-       body, revision, created_at, updated_at
-FROM goal_drafts
+SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE user_id = $1::uuid
   AND draft_type = 'creation'
 `
 
-func (q *Queries) FindCreationDraft(ctx context.Context, userID pgtype.UUID) (*GoalDraft, error) {
+type FindCreationDraftRow struct {
+	ID                pgtype.UUID
+	UserID            pgtype.UUID
+	DraftType         string
+	GoalID            pgtype.UUID
+	BaseGoalVersionID pgtype.UUID
+	ReviewCycleID     pgtype.UUID
+	Body              string
+	SuccessSignal     *string
+	Revision          int64
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) FindCreationDraft(ctx context.Context, userID pgtype.UUID) (*FindCreationDraftRow, error) {
 	row := q.db.QueryRow(ctx, findCreationDraft, userID)
-	var i GoalDraft
+	var i FindCreationDraftRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -86,6 +114,7 @@ func (q *Queries) FindCreationDraft(ctx context.Context, userID pgtype.UUID) (*G
 		&i.BaseGoalVersionID,
 		&i.ReviewCycleID,
 		&i.Body,
+		&i.SuccessSignal,
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -171,6 +200,24 @@ func (q *Queries) InsertGoalVersion(ctx context.Context, arg InsertGoalVersionPa
 	return result.RowsAffected(), nil
 }
 
+const insertGoalVersionSuccessSignal = `-- name: InsertGoalVersionSuccessSignal :execrows
+INSERT INTO goal_version_success_signals (goal_version_id, success_signal)
+VALUES ($1::uuid, $2::text)
+`
+
+type InsertGoalVersionSuccessSignalParams struct {
+	GoalVersionID pgtype.UUID
+	SuccessSignal string
+}
+
+func (q *Queries) InsertGoalVersionSuccessSignal(ctx context.Context, arg InsertGoalVersionSuccessSignalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertGoalVersionSuccessSignal, arg.GoalVersionID, arg.SuccessSignal)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertInitialGoal = `-- name: InsertInitialGoal :execrows
 INSERT INTO goals (
     id, user_id, status, current_version_number, next_cycle_sequence_number,
@@ -216,12 +263,13 @@ func (q *Queries) InsertInitialGoal(ctx context.Context, arg InsertInitialGoalPa
 }
 
 const lockDraftByID = `-- name: LockDraftByID :one
-SELECT id, user_id, draft_type, goal_id, base_goal_version_id, review_cycle_id,
-       body, revision, created_at, updated_at
-FROM goal_drafts
+SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE id = $1::uuid
   AND user_id = $2::uuid
-FOR UPDATE
+FOR UPDATE OF d
 `
 
 type LockDraftByIDParams struct {
@@ -229,9 +277,23 @@ type LockDraftByIDParams struct {
 	UserID  pgtype.UUID
 }
 
-func (q *Queries) LockDraftByID(ctx context.Context, arg LockDraftByIDParams) (*GoalDraft, error) {
+type LockDraftByIDRow struct {
+	ID                pgtype.UUID
+	UserID            pgtype.UUID
+	DraftType         string
+	GoalID            pgtype.UUID
+	BaseGoalVersionID pgtype.UUID
+	ReviewCycleID     pgtype.UUID
+	Body              string
+	SuccessSignal     *string
+	Revision          int64
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) LockDraftByID(ctx context.Context, arg LockDraftByIDParams) (*LockDraftByIDRow, error) {
 	row := q.db.QueryRow(ctx, lockDraftByID, arg.DraftID, arg.UserID)
-	var i GoalDraft
+	var i LockDraftByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -240,6 +302,7 @@ func (q *Queries) LockDraftByID(ctx context.Context, arg LockDraftByIDParams) (*
 		&i.BaseGoalVersionID,
 		&i.ReviewCycleID,
 		&i.Body,
+		&i.SuccessSignal,
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -287,13 +350,14 @@ func (q *Queries) LockGoalWithCurrentVersion(ctx context.Context, arg LockGoalWi
 }
 
 const lockReviewDraftByGoal = `-- name: LockReviewDraftByGoal :one
-SELECT id, user_id, draft_type, goal_id, base_goal_version_id, review_cycle_id,
-       body, revision, created_at, updated_at
-FROM goal_drafts
+SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE goal_id = $1::uuid
   AND user_id = $2::uuid
   AND draft_type = 'review'
-FOR UPDATE
+FOR UPDATE OF d
 `
 
 type LockReviewDraftByGoalParams struct {
@@ -301,9 +365,23 @@ type LockReviewDraftByGoalParams struct {
 	UserID pgtype.UUID
 }
 
-func (q *Queries) LockReviewDraftByGoal(ctx context.Context, arg LockReviewDraftByGoalParams) (*GoalDraft, error) {
+type LockReviewDraftByGoalRow struct {
+	ID                pgtype.UUID
+	UserID            pgtype.UUID
+	DraftType         string
+	GoalID            pgtype.UUID
+	BaseGoalVersionID pgtype.UUID
+	ReviewCycleID     pgtype.UUID
+	Body              string
+	SuccessSignal     *string
+	Revision          int64
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) LockReviewDraftByGoal(ctx context.Context, arg LockReviewDraftByGoalParams) (*LockReviewDraftByGoalRow, error) {
 	row := q.db.QueryRow(ctx, lockReviewDraftByGoal, arg.GoalID, arg.UserID)
-	var i GoalDraft
+	var i LockReviewDraftByGoalRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -312,6 +390,7 @@ func (q *Queries) LockReviewDraftByGoal(ctx context.Context, arg LockReviewDraft
 		&i.BaseGoalVersionID,
 		&i.ReviewCycleID,
 		&i.Body,
+		&i.SuccessSignal,
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -350,6 +429,26 @@ func (q *Queries) SaveDraftCAS(ctx context.Context, arg SaveDraftCASParams) (int
 		arg.DraftType,
 		arg.ExpectedRevision,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertGoalDraftSuccessSignal = `-- name: UpsertGoalDraftSuccessSignal :execrows
+INSERT INTO goal_draft_success_signals (goal_draft_id, success_signal)
+VALUES ($1::uuid, $2::text)
+ON CONFLICT (goal_draft_id)
+DO UPDATE SET success_signal = EXCLUDED.success_signal
+`
+
+type UpsertGoalDraftSuccessSignalParams struct {
+	GoalDraftID   pgtype.UUID
+	SuccessSignal string
+}
+
+func (q *Queries) UpsertGoalDraftSuccessSignal(ctx context.Context, arg UpsertGoalDraftSuccessSignalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertGoalDraftSuccessSignal, arg.GoalDraftID, arg.SuccessSignal)
 	if err != nil {
 		return 0, err
 	}

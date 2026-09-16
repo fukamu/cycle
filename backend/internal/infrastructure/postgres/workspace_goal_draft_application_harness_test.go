@@ -80,7 +80,20 @@ func executeGoalDraftSaveUseCase(
 	expectedRevision int64,
 	now time.Time,
 ) (workspace.DraftView, error) {
-	return newGoalDraftIntegrationUseCases(store, now, 0).SaveDraft(ctx, userID, draftID, body, expectedRevision)
+	return executeGoalDraftSaveInputUseCase(store, ctx, userID, draftID, workspace.SaveGoalDraftInput{
+		Body: body, ExpectedRevision: expectedRevision,
+	}, now)
+}
+
+func executeGoalDraftSaveInputUseCase(
+	store *WorkspaceStore,
+	ctx context.Context,
+	userID string,
+	draftID string,
+	input workspace.SaveGoalDraftInput,
+	now time.Time,
+) (workspace.DraftView, error) {
+	return newGoalDraftIntegrationUseCases(store, now, 0).SaveDraft(ctx, userID, draftID, input)
 }
 
 func executeGoalDraftAbandonUseCase(
@@ -103,13 +116,26 @@ func executeGoalReviewSaveUseCase(
 	expectedRevision int64,
 	now time.Time,
 ) (workspace.DraftView, error) {
+	return executeGoalReviewSaveInputUseCase(store, ctx, userID, goalID, expectedReviewDraftID, workspace.SaveGoalDraftInput{
+		Body: body, ExpectedRevision: expectedRevision,
+	}, now)
+}
+
+func executeGoalReviewSaveInputUseCase(
+	store *WorkspaceStore,
+	ctx context.Context,
+	userID string,
+	goalID string,
+	expectedReviewDraftID string,
+	input workspace.SaveGoalDraftInput,
+	now time.Time,
+) (workspace.DraftView, error) {
 	return newGoalDraftIntegrationUseCases(store, now, 0).SaveReview(
 		ctx,
 		userID,
 		goalID,
 		expectedReviewDraftID,
-		body,
-		expectedRevision,
+		input,
 	)
 }
 

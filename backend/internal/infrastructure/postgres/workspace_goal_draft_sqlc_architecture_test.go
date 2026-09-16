@@ -184,6 +184,26 @@ func TestGoalDraftSQLPreservesOwnerTupleLocksAndCAS(t *testing.T) {
 	}
 }
 
+func TestGoalSuccessSignalRemainsOutsideAIReadQueries(t *testing.T) {
+	t.Parallel()
+	goalDraftContents, err := os.ReadFile("queries/goal_drafts.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockTarget := strings.ToLower(goalDraftNamedQuery(t, string(goalDraftContents), "LockGoalWithCurrentVersion"))
+	if strings.Contains(lockTarget, "success_signal") || strings.Contains(lockTarget, "goal_version_success_signals") {
+		t.Fatal("Goal Refine target query includes success signal")
+	}
+	cycleContents, err := os.ReadFile("queries/cycle_transitions.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextCycles := strings.ToLower(goalDraftNamedQuery(t, string(cycleContents), "ListAIContextCycles"))
+	if strings.Contains(contextCycles, "success_signal") || strings.Contains(contextCycles, "goal_version_success_signals") {
+		t.Fatal("AI context query includes success signal")
+	}
+}
+
 func goalDraftNamedQuery(t *testing.T, source, name string) string {
 	t.Helper()
 	marker := "-- name: " + name + " "

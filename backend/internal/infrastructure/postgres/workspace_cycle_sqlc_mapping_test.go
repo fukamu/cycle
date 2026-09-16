@@ -70,23 +70,26 @@ func TestCycleReadMappersDistinguishNullFromInfiniteTimestamps(t *testing.T) {
 	now := time.Date(2026, 8, 24, 12, 34, 56, 0, time.FixedZone("test", 9*60*60))
 	versionNumber := int32(1)
 	versionBody := "Goal"
+	versionSignal := "毎週確認できる"
 	summary := db.ListCycleSummariesRow{
-		CycleID:              mustUUID("14000000-0000-7000-8000-000000000001"),
-		SequenceNumber:       1,
-		Status:               string(cycle.StatusActive),
-		StartedAt:            timestamptz(now),
-		GoalVersionID:        mustUUID("13000000-0000-7000-8000-000000000001"),
-		GoalVersionNumber:    &versionNumber,
-		GoalVersionBody:      &versionBody,
-		GoalVersionCreatedAt: timestamptz(now.Add(-time.Minute)),
-		PlanPreview:          "plan",
+		CycleID:                  mustUUID("14000000-0000-7000-8000-000000000001"),
+		SequenceNumber:           1,
+		Status:                   string(cycle.StatusActive),
+		StartedAt:                timestamptz(now),
+		GoalVersionID:            mustUUID("13000000-0000-7000-8000-000000000001"),
+		GoalVersionNumber:        &versionNumber,
+		GoalVersionBody:          &versionBody,
+		GoalVersionSuccessSignal: &versionSignal,
+		GoalVersionCreatedAt:     timestamptz(now.Add(-time.Minute)),
+		PlanPreview:              "plan",
 	}
 	mappedSummary, err := cycleSummaryFromReadRow(&summary)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if mappedSummary.CompletedAt != nil || mappedSummary.CanceledAt != nil || mappedSummary.CancellationReason != nil ||
-		mappedSummary.StartedAt.Location() != time.UTC || mappedSummary.GoalVersion.CreatedAt.Location() != time.UTC {
+		mappedSummary.StartedAt.Location() != time.UTC || mappedSummary.GoalVersion.CreatedAt.Location() != time.UTC ||
+		mappedSummary.GoalVersion.SuccessSignal == nil || *mappedSummary.GoalVersion.SuccessSignal != versionSignal {
 		t.Fatalf("active summary timestamps = %#v", mappedSummary)
 	}
 	replannedReason := string(cycle.CancellationReplanned)
@@ -146,15 +149,16 @@ func TestCycleReadMappersDistinguishNullFromInfiniteTimestamps(t *testing.T) {
 	}
 
 	view := db.GetCycleViewRow{
-		CycleID:              summary.CycleID,
-		GoalID:               mustUUID("12000000-0000-7000-8000-000000000001"),
-		SequenceNumber:       summary.SequenceNumber,
-		Status:               summary.Status,
-		StartedAt:            summary.StartedAt,
-		GoalVersionID:        summary.GoalVersionID,
-		GoalVersionNumber:    summary.GoalVersionNumber,
-		GoalVersionBody:      summary.GoalVersionBody,
-		GoalVersionCreatedAt: summary.GoalVersionCreatedAt,
+		CycleID:                  summary.CycleID,
+		GoalID:                   mustUUID("12000000-0000-7000-8000-000000000001"),
+		SequenceNumber:           summary.SequenceNumber,
+		Status:                   summary.Status,
+		StartedAt:                summary.StartedAt,
+		GoalVersionID:            summary.GoalVersionID,
+		GoalVersionNumber:        summary.GoalVersionNumber,
+		GoalVersionBody:          summary.GoalVersionBody,
+		GoalVersionSuccessSignal: summary.GoalVersionSuccessSignal,
+		GoalVersionCreatedAt:     summary.GoalVersionCreatedAt,
 	}
 	if _, err := cycleViewFromReadRow(&view); err != nil {
 		t.Fatalf("active Cycle view with NULL optional timestamps: %v", err)

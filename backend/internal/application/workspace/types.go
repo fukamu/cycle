@@ -77,6 +77,7 @@ type GoalVersionView struct {
 	ID            string    `json:"id"`
 	VersionNumber int32     `json:"versionNumber"`
 	Body          string    `json:"body"`
+	SuccessSignal *string   `json:"successSignal"`
 	CreatedAt     time.Time `json:"createdAt,omitempty"`
 }
 
@@ -87,9 +88,21 @@ type DraftView struct {
 	BaseGoalVersionID *string   `json:"baseGoalVersionId,omitempty"`
 	ReviewCycleID     *string   `json:"reviewCycleId,omitempty"`
 	Body              string    `json:"body"`
+	SuccessSignal     *string   `json:"successSignal"`
 	Revision          int64     `json:"revision"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 	Replayed          bool      `json:"-"`
+}
+
+type SuccessSignalPatch struct {
+	Present bool
+	Value   *string
+}
+
+type SaveGoalDraftInput struct {
+	Body             string
+	SuccessSignal    SuccessSignalPatch
+	ExpectedRevision int64
 }
 
 type CycleView struct {

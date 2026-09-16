@@ -578,7 +578,9 @@ func TestSaveReviewForwardsExpectedDraftGeneration(t *testing.T) {
 		reviewDraftID = "30000000-0000-7000-8000-000000000001"
 	)
 
-	view, err := service.SaveReview(context.Background(), userID, goalID, reviewDraftID, "local body", 4)
+	view, err := service.SaveReview(context.Background(), userID, goalID, reviewDraftID, SaveGoalDraftInput{
+		Body: "local body", ExpectedRevision: 4,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

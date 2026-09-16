@@ -23,6 +23,7 @@ SELECT
     gv.goal_id,
     gv.version_number,
     gv.body,
+    signal.success_signal,
     gv.created_by_operation_id,
     gv.created_at
 FROM goals g
@@ -30,6 +31,8 @@ LEFT JOIN goal_versions gv
   ON gv.user_id = g.user_id
  AND gv.goal_id = g.id
  AND gv.version_number = sqlc.arg(version_number)::integer
+LEFT JOIN goal_version_success_signals signal
+  ON signal.goal_version_id = gv.id
 WHERE g.id = sqlc.arg(goal_id)::uuid
   AND g.user_id = sqlc.arg(user_id)::uuid;
 
@@ -59,6 +62,10 @@ VALUES (
     sqlc.arg(updated_at)::timestamptz
 );
 
+-- name: InsertReviewDraftSuccessSignalForTransition :execrows
+INSERT INTO goal_draft_success_signals (goal_draft_id, success_signal)
+VALUES (sqlc.arg(goal_draft_id)::uuid, sqlc.arg(success_signal)::text);
+
 -- name: EnterGoalReviewCAS :execrows
 UPDATE goals
 SET status = 'goal_review',
@@ -73,19 +80,21 @@ WHERE id = sqlc.arg(goal_id)::uuid
 
 -- name: FindReviewDraftByCycle :one
 SELECT
-    id,
-    draft_type,
-    goal_id,
-    base_goal_version_id,
-    review_cycle_id,
-    body,
-    revision,
-    updated_at
-FROM goal_drafts
-WHERE user_id = sqlc.arg(user_id)::uuid
-  AND goal_id = sqlc.arg(goal_id)::uuid
-  AND review_cycle_id = sqlc.arg(cycle_id)::uuid
-  AND draft_type = 'review';
+    d.id,
+    d.draft_type,
+    d.goal_id,
+    d.base_goal_version_id,
+    d.review_cycle_id,
+    d.body,
+    signal.success_signal,
+    d.revision,
+    d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
+WHERE d.user_id = sqlc.arg(user_id)::uuid
+  AND d.goal_id = sqlc.arg(goal_id)::uuid
+  AND d.review_cycle_id = sqlc.arg(cycle_id)::uuid
+  AND d.draft_type = 'review';
 
 -- name: FindGoalTerminationReceipt :one
 SELECT

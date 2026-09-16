@@ -1,26 +1,29 @@
 -- name: FindCreationDraft :one
-SELECT id, user_id, draft_type, goal_id, base_goal_version_id, review_cycle_id,
-       body, revision, created_at, updated_at
-FROM goal_drafts
+SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE user_id = sqlc.arg(user_id)::uuid
   AND draft_type = 'creation';
 
 -- name: LockDraftByID :one
-SELECT id, user_id, draft_type, goal_id, base_goal_version_id, review_cycle_id,
-       body, revision, created_at, updated_at
-FROM goal_drafts
+SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE id = sqlc.arg(draft_id)::uuid
   AND user_id = sqlc.arg(user_id)::uuid
-FOR UPDATE;
+FOR UPDATE OF d;
 
 -- name: LockReviewDraftByGoal :one
-SELECT id, user_id, draft_type, goal_id, base_goal_version_id, review_cycle_id,
-       body, revision, created_at, updated_at
-FROM goal_drafts
+SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE goal_id = sqlc.arg(goal_id)::uuid
   AND user_id = sqlc.arg(user_id)::uuid
   AND draft_type = 'review'
-FOR UPDATE;
+FOR UPDATE OF d;
 
 -- name: InsertCreationDraft :execrows
 INSERT INTO goal_drafts (
@@ -44,6 +47,16 @@ WHERE id = sqlc.arg(draft_id)::uuid
   AND user_id = sqlc.arg(user_id)::uuid
   AND draft_type = sqlc.arg(draft_type)::text
   AND revision = sqlc.arg(expected_revision)::bigint;
+
+-- name: UpsertGoalDraftSuccessSignal :execrows
+INSERT INTO goal_draft_success_signals (goal_draft_id, success_signal)
+VALUES (sqlc.arg(goal_draft_id)::uuid, sqlc.arg(success_signal)::text)
+ON CONFLICT (goal_draft_id)
+DO UPDATE SET success_signal = EXCLUDED.success_signal;
+
+-- name: DeleteGoalDraftSuccessSignal :execrows
+DELETE FROM goal_draft_success_signals
+WHERE goal_draft_id = sqlc.arg(goal_draft_id)::uuid;
 
 -- name: DeleteCreationDraftCAS :execrows
 DELETE FROM goal_drafts
@@ -79,6 +92,10 @@ INSERT INTO goal_versions (
     sqlc.arg(created_by_operation_id)::uuid,
     sqlc.arg(created_at)::timestamptz
 );
+
+-- name: InsertGoalVersionSuccessSignal :execrows
+INSERT INTO goal_version_success_signals (goal_version_id, success_signal)
+VALUES (sqlc.arg(goal_version_id)::uuid, sqlc.arg(success_signal)::text);
 
 -- name: LockGoalWithCurrentVersion :one
 SELECT g.status,

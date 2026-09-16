@@ -59,6 +59,30 @@ func TestUnicodeWhitespaceBlankSemanticsMatchFrontend(t *testing.T) {
 	}
 }
 
+func TestNormalizeSuccessSignalUsesNullableUnicodeCodePointContract(t *testing.T) {
+	if normalized, err := NormalizeSuccessSignal(nil); err != nil || normalized != nil {
+		t.Fatalf("nil signal = %#v, %v", normalized, err)
+	}
+	for _, blank := range []string{"", " \t\n", "\u0085"} {
+		if normalized, err := NormalizeSuccessSignal(&blank); err != nil || normalized != nil {
+			t.Fatalf("blank signal %q = %#v, %v", blank, normalized, err)
+		}
+	}
+	const input = " できたら成功\r\n毎週確認\r維持 "
+	const want = " できたら成功\n毎週確認\n維持 "
+	if normalized, err := NormalizeSuccessSignal(pointer(input)); err != nil || normalized == nil || *normalized != want {
+		t.Fatalf("normalized signal = %#v, %v, want %q", normalized, err, want)
+	}
+	atLimit := strings.Repeat("🌱", MaxSuccessSignalCodePoints)
+	if normalized, err := NormalizeSuccessSignal(&atLimit); err != nil || normalized == nil || *normalized != atLimit {
+		t.Fatalf("120-code-point signal = %#v, %v", normalized, err)
+	}
+	overLimit := atLimit + "🌱"
+	if _, err := NormalizeSuccessSignal(&overLimit); !errors.Is(err, ErrSuccessSignalTooLong) {
+		t.Fatalf("121-code-point signal error = %v", err)
+	}
+}
+
 func TestSaveDraftTreatsSameBodyWithStaleRevisionAsNoOp(t *testing.T) {
 	draft, err := NewDraft("draft", "user", "保存済み目標", now)
 	if err != nil {
@@ -67,12 +91,45 @@ func TestSaveDraftTreatsSameBodyWithStaleRevisionAsNoOp(t *testing.T) {
 	draft.Revision = 2
 	draft.UpdatedAt = now.Add(time.Minute)
 
-	saved, noOp, err := SaveDraft(draft, draft.Body, 1, now.Add(2*time.Minute))
+	saved, noOp, err := SaveDraft(draft, draft.Body, nil, 1, now.Add(2*time.Minute))
 	if err != nil || !noOp || saved != draft {
 		t.Fatalf("stale same-body save = %#v, noOp = %t, error = %v", saved, noOp, err)
 	}
-	if _, _, err = SaveDraft(draft, "異なる目標", 1, now.Add(2*time.Minute)); !errors.Is(err, ErrStateConflict) {
+	if _, _, err = SaveDraft(draft, "異なる目標", nil, 1, now.Add(2*time.Minute)); !errors.Is(err, ErrStateConflict) {
 		t.Fatalf("stale different-body save error = %v, want %v", err, ErrStateConflict)
+	}
+}
+
+func TestSaveDraftVersionsBodyAndSuccessSignalAsOneTuple(t *testing.T) {
+	draft, err := NewDraft("draft", "user", "目標", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft.SuccessSignal = pointer("週3回できる")
+	draft.Revision = 2
+
+	if _, _, err = SaveDraft(draft, draft.Body, pointer("週4回できる"), 1, now); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale signal-only save error = %v", err)
+	}
+	saved, noOp, err := SaveDraft(draft, draft.Body, pointer("週4回できる\r\n継続"), 2, now.Add(time.Minute))
+	if err != nil || noOp || saved.Revision != 3 || saved.SuccessSignal == nil || *saved.SuccessSignal != "週4回できる\n継続" {
+		t.Fatalf("signal-only save = %#v, noOp=%t, err=%v", saved, noOp, err)
+	}
+	cleared, noOp, err := SaveDraft(saved, saved.Body, nil, 3, now.Add(2*time.Minute))
+	if err != nil || noOp || cleared.Revision != 4 || cleared.SuccessSignal != nil {
+		t.Fatalf("signal clear = %#v, noOp=%t, err=%v", cleared, noOp, err)
+	}
+}
+
+func TestStartCopiesDraftSuccessSignalIntoPinnedVersion(t *testing.T) {
+	draft, err := NewDraft("draft", "user", "目標", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft.SuccessSignal = pointer("毎週確認できる")
+	aggregate, err := StartInitial(draft, "goal", "version", "cycle", "operation", "hash", now)
+	if err != nil || aggregate.Version.SuccessSignal == nil || *aggregate.Version.SuccessSignal != *draft.SuccessSignal {
+		t.Fatalf("initial version = %#v, %v", aggregate.Version, err)
 	}
 }
 
@@ -117,7 +174,7 @@ func TestReviewComparisonNormalizesAllLineEndingsWithoutTrimming(t *testing.T) {
 func TestReviewComparisonRequiresReviewCycleReference(t *testing.T) {
 	current, version, draft := reviewFixture(t, "目標")
 	draft.ReviewCycleID = nil
-	if _, _, err := ReviewBodyChanged(current, version, draft); !errors.Is(err, ErrStateConflict) {
+	if _, _, _, err := ReviewContentChanged(current, version, draft); !errors.Is(err, ErrStateConflict) {
 		t.Fatalf("Continue comparison error = %v, want %v", err, ErrStateConflict)
 	}
 	if _, err := ReviewDraftDiffersFromVersion(current, version, draft); !errors.Is(err, ErrStateConflict) {
@@ -137,6 +194,35 @@ func TestReviewChangedBodyCreatesImmutableNextVersion(t *testing.T) {
 	}
 	if version.Body != "元の目標" {
 		t.Fatal("past version was mutated")
+	}
+}
+
+func TestReviewSuccessSignalChangeCreatesImmutableNextVersion(t *testing.T) {
+	current, version, draft := reviewFixture(t, "目標")
+	version.SuccessSignal = pointer("週1回")
+	draft.SuccessSignal = pointer("週2回")
+	result, err := ContinueReview(current, version, draft, "version-2", "cycle-2", "continue", "hash", now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.VersionCreated || result.Version.SuccessSignal == nil || *result.Version.SuccessSignal != "週2回" ||
+		result.Cycle.GoalVersionID != result.Version.ID || *version.SuccessSignal != "週1回" {
+		t.Fatalf("signal-only version transition = %#v", result)
+	}
+	draft.SuccessSignal = pointer("週1回\r\n維持")
+	version.SuccessSignal = pointer("週1回\n維持")
+	result, err = ContinueReview(current, version, draft, "unused", "cycle-3", "continue-2", "hash-2", now.Add(2*time.Hour))
+	if err != nil || result.VersionCreated {
+		t.Fatalf("line-ending-only signal transition = %#v, %v", result, err)
+	}
+}
+
+func TestReviewDiscardComparisonIncludesSuccessSignal(t *testing.T) {
+	current, version, draft := reviewFixture(t, "目標")
+	draft.SuccessSignal = pointer("確認できる")
+	changed, err := ReviewDraftDiffersFromVersion(current, version, draft)
+	if err != nil || !changed {
+		t.Fatalf("signal-only discard comparison = %t, %v", changed, err)
 	}
 }
 
@@ -274,3 +360,5 @@ func reviewFixture(t *testing.T, body string) (Goal, Version, Draft) {
 	}
 	return current, aggregate.Version, review
 }
+
+func pointer(value string) *string { return &value }

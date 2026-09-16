@@ -10,6 +10,7 @@ sql:
       - "migrations/000006_anonymous_rate_limit_guard.up.sql"
       - "migrations/000007_cycle_review_schedule.up.sql"
       - "migrations/000008_cycle_replan_cancellation_reason.up.sql"
+      - "migrations/000009_goal_success_signal.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:

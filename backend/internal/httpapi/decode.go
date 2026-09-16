@@ -40,8 +40,9 @@ func decodeJSON(writer http.ResponseWriter, request *http.Request, destination a
 }
 
 type requestJSONContract struct {
-	required        []string
-	optionalNonNull []string
+	required         []string
+	optionalNonNull  []string
+	optionalNullable []string
 }
 
 func hasValidJSONMembers(object map[string]json.RawMessage, destination any) bool {
@@ -79,6 +80,11 @@ func (contract requestJSONContract) allows(member string) bool {
 			return true
 		}
 	}
+	for _, allowed := range contract.optionalNullable {
+		if member == allowed {
+			return true
+		}
+	}
 	return false
 }
 
@@ -93,9 +99,14 @@ func requestJSONContractFor(destination any) (requestJSONContract, bool) {
 	case *createDraftRequest:
 		return requestJSONContract{optionalNonNull: []string{"initialBody"}}, true
 	case *saveDraftRequest:
-		return requestJSONContract{required: []string{"body", "expectedRevision"}}, true
+		return requestJSONContract{
+			required: []string{"body", "expectedRevision"}, optionalNullable: []string{"successSignal"},
+		}, true
 	case *saveReviewRequest:
-		return requestJSONContract{required: []string{"body", "expectedReviewDraftId", "expectedRevision"}}, true
+		return requestJSONContract{
+			required:         []string{"body", "expectedReviewDraftId", "expectedRevision"},
+			optionalNullable: []string{"successSignal"},
+		}, true
 	case *startGoalRequest:
 		return requestJSONContract{required: []string{"operationId", "expectedDraftRevision"}}, true
 	case *refineGoalRequest:
