@@ -576,7 +576,8 @@ func validateFreshReplanCycleResult(result ReplanCycleResult, replanned goal.Rep
 		result.CanceledCycle.ReviewScheduleRevision != replanned.CanceledCycle.ReviewScheduleRevision ||
 		!reviewDatesEqual(result.CanceledCycle.ReviewDate, replanned.CanceledCycle.ReviewDate) ||
 		result.Goal.ID != input.GoalID || result.Goal.Status != goal.StatusActiveCycle ||
-		result.Goal.Revision != input.ExpectedGoalRevision+1 || result.Goal.CurrentVersion.ID != result.Cycle.GoalVersion.ID ||
+		result.Goal.Revision != input.ExpectedGoalRevision+1 ||
+		!goalVersionViewsEqual(result.Goal.CurrentVersion, result.Cycle.GoalVersion) ||
 		result.Goal.NextCycleSequenceNumber != result.Cycle.SequenceNumber+1 || validateGoalCurrentWork(result.Goal) != nil ||
 		result.Goal.CurrentWork == nil || result.Goal.CurrentWork.Kind != "active_cycle" ||
 		result.Goal.CurrentWork.CycleID != result.Cycle.ID ||
@@ -605,8 +606,8 @@ func validateReplanCyclePair(canceled, next CycleView, goalID, canceledCycleID s
 		validateCycleView(next, goalID, next.ID) != nil ||
 		canceled.Status != cycle.StatusCanceled || canceled.CancellationReason == nil ||
 		*canceled.CancellationReason != cycle.CancellationReplanned || canceled.CanceledAt == nil ||
-		next.SequenceNumber != canceled.SequenceNumber+1 || next.GoalVersion.ID != canceled.GoalVersion.ID ||
-		next.GoalVersion.VersionNumber != canceled.GoalVersion.VersionNumber {
+		next.SequenceNumber != canceled.SequenceNumber+1 ||
+		!goalVersionViewsEqual(next.GoalVersion, canceled.GoalVersion) {
 		return cycleInvariantError("Replan Cycle pair is inconsistent")
 	}
 	return nil
@@ -695,6 +696,7 @@ func validateCompleteCycleReplay(result CompleteCycleResult, receipt CompleteCyc
 			result.ReviewDraft.ReviewCycleID == nil || *result.ReviewDraft.ReviewCycleID != receipt.CycleID ||
 			result.ReviewDraft.BaseGoalVersionID == nil ||
 			*result.ReviewDraft.BaseGoalVersionID != result.CompletedCycle.GoalVersion.ID ||
+			!optionalStringsEqual(result.ReviewDraft.SuccessSignal, result.CompletedCycle.GoalVersion.SuccessSignal) ||
 			result.ReviewDraft.DraftType != string(goal.DraftReview) || result.Goal.Status != goal.StatusGoalReview ||
 			result.Goal.CurrentWork == nil || result.Goal.CurrentWork.ReviewDraftID != result.ReviewDraft.ID ||
 			result.Goal.CurrentWork.TriggerCycleID != receipt.CycleID {
@@ -719,7 +721,7 @@ func validateCompletedCycleResult(result CompleteCycleResult, goalID, cycleID, d
 		return cycleInvariantError("completed Cycle response is inconsistent")
 	}
 	if result.Goal.ID != goalID || result.Goal.Revision != expectedGoalRevision+1 ||
-		result.Goal.CurrentVersion.ID != result.CompletedCycle.GoalVersion.ID || validateGoalCurrentWork(result.Goal) != nil ||
+		!goalVersionViewsEqual(result.Goal.CurrentVersion, result.CompletedCycle.GoalVersion) || validateGoalCurrentWork(result.Goal) != nil ||
 		result.Goal.Status != goal.StatusGoalReview || result.Goal.CurrentWork == nil ||
 		result.Goal.CurrentWork.Kind != "goal_review" || result.Goal.CurrentWork.ReviewDraftID != draftID ||
 		result.Goal.CurrentWork.TriggerCycleID != cycleID ||
@@ -730,7 +732,9 @@ func validateCompletedCycleResult(result CompleteCycleResult, goalID, cycleID, d
 		result.ReviewDraft.GoalID == nil || *result.ReviewDraft.GoalID != goalID ||
 		result.ReviewDraft.ReviewCycleID == nil || *result.ReviewDraft.ReviewCycleID != cycleID ||
 		result.ReviewDraft.BaseGoalVersionID == nil || *result.ReviewDraft.BaseGoalVersionID != result.CompletedCycle.GoalVersion.ID ||
-		result.ReviewDraft.Body != result.CompletedCycle.GoalVersion.Body || result.ReviewDraft.Revision != 0 {
+		result.ReviewDraft.Body != result.CompletedCycle.GoalVersion.Body ||
+		!optionalStringsEqual(result.ReviewDraft.SuccessSignal, result.CompletedCycle.GoalVersion.SuccessSignal) ||
+		result.ReviewDraft.Revision != 0 {
 		return cycleInvariantError("Cycle Review Draft response is inconsistent")
 	}
 	return nil

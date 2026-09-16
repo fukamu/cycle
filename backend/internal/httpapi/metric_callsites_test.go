@@ -76,11 +76,11 @@ type metricWorkspaceService struct {
 	saveFrameErr  error
 }
 
-func (service *metricWorkspaceService) SaveDraft(context.Context, string, string, string, int64) (workspace.DraftView, error) {
+func (service *metricWorkspaceService) SaveDraft(context.Context, string, string, workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
 	return workspace.DraftView{}, service.saveDraftErr
 }
 
-func (service *metricWorkspaceService) SaveReview(context.Context, string, string, string, string, int64) (workspace.DraftView, error) {
+func (service *metricWorkspaceService) SaveReview(context.Context, string, string, string, workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
 	return workspace.DraftView{}, service.saveReviewErr
 }
 

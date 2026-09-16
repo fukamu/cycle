@@ -69,8 +69,8 @@ func (barrier *goalReviewSnapshotBarrier) release() {
 
 func isGoalReviewSnapshotDraftRead(sql string) bool {
 	normalized := normalizeObservedSQL(sql)
-	return strings.Contains(normalized, "from goal_drafts") &&
-		strings.Contains(normalized, "where goal_id=$1 and user_id=$2 and draft_type='review'")
+	return strings.Contains(normalized, "from goal_drafts d") &&
+		strings.Contains(normalized, "where d.goal_id=$1 and d.user_id=$2 and d.draft_type='review'")
 }
 
 func seedGoalReadReviewFixture(

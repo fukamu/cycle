@@ -17,24 +17,27 @@ func TestMapGoalViewRejectsInfiniteTimestamps(t *testing.T) {
 
 	versionNumber := int32(1)
 	versionBody := "body"
+	versionSignal := "週3回できる"
 	now := timestamptz(time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC))
 	valid := goalViewColumns{
-		goalID:                  mustUUID("12000000-0000-7000-8000-000000000001"),
-		goalStatus:              string(goal.StatusEnded),
-		goalCreatedAt:           now,
-		goalTerminalAt:          now,
-		currentVersionID:        mustUUID("13000000-0000-7000-8000-000000000001"),
-		currentVersionNumber:    &versionNumber,
-		currentVersionBody:      &versionBody,
-		currentVersionCreatedAt: now,
-		sortTime:                now,
+		goalID:                      mustUUID("12000000-0000-7000-8000-000000000001"),
+		goalStatus:                  string(goal.StatusEnded),
+		goalCreatedAt:               now,
+		goalTerminalAt:              now,
+		currentVersionID:            mustUUID("13000000-0000-7000-8000-000000000001"),
+		currentVersionNumber:        &versionNumber,
+		currentVersionBody:          &versionBody,
+		currentVersionSuccessSignal: &versionSignal,
+		currentVersionCreatedAt:     now,
+		sortTime:                    now,
 	}
 	view, err := mapGoalView(valid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.View.TerminalAt == nil {
-		t.Fatal("terminal timestamp = nil, want finite timestamp")
+	if view.View.TerminalAt == nil || view.View.CurrentVersion.SuccessSignal == nil ||
+		*view.View.CurrentVersion.SuccessSignal != versionSignal {
+		t.Fatalf("mapped terminal Goal = %#v", view.View)
 	}
 
 	tests := map[string]func(*goalViewColumns){
@@ -77,12 +80,17 @@ func TestMapDraftViewRejectsInfiniteUpdatedTimestamp(t *testing.T) {
 	t.Parallel()
 
 	valid := draftViewColumns{
-		id:        mustUUID("11000000-0000-7000-8000-000000000001"),
-		draftType: string(goal.DraftCreation),
-		updatedAt: timestamptz(time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)),
+		id:            mustUUID("11000000-0000-7000-8000-000000000001"),
+		draftType:     string(goal.DraftCreation),
+		successSignal: goalReviewStringPointer("確認できる"),
+		updatedAt:     timestamptz(time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)),
 	}
-	if _, err := mapDraftView(valid); err != nil {
+	mapped, err := mapDraftView(valid)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if mapped.SuccessSignal == nil || *mapped.SuccessSignal != "確認できる" {
+		t.Fatalf("mapped Draft success signal = %#v", mapped.SuccessSignal)
 	}
 	for name, value := range map[string]pgtype.Timestamptz{
 		"positive infinity": {Valid: true, InfinityModifier: pgtype.Infinity},
@@ -196,6 +204,11 @@ func TestValidateGoalReviewViewRejectsCrossFieldInconsistency(t *testing.T) {
 		},
 		"Trigger Cycle Version differs": {
 			mutate: func(view *workspace.ReviewView) { view.TriggerCycle.GoalVersion.ID = otherID },
+		},
+		"Trigger Cycle success signal differs": {
+			mutate: func(view *workspace.ReviewView) {
+				view.TriggerCycle.GoalVersion.SuccessSignal = goalReviewStringPointer("other signal")
+			},
 		},
 	}
 	for name, test := range tests {

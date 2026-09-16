@@ -1127,11 +1127,14 @@ stateDiagram-v2
 ## 14.2 Goal Version
 
 - Version 1はGoal開始時に作る。
-- Goal Review Draft本文が現在Version本文と、改行正規化後に完全一致する場合は新Versionを作らない。
+- Goal VersionとGoal Draftは、任意の`successSignal`を持つ。これは「何ができたら、この目標に近づけたと言えるか」をUser自身が記述する補助情報であり、Goal Creation / Goal Review Draftでだけ編集できる。
+- `successSignal`は`null`または1〜120 Unicode code pointsとする。`\r\n` / `\r`だけ`\n`へ正規化し、Unicode whitespaceだけの入力は`null`へ正規化する。非空の前後空白、改行、Unicode normalization formは変更しない。NULと§14.1と同じ制御文字は禁止する。
+- Goal Review Draftの本文と`successSignal`の組が現在Versionと正規化後に完全一致する場合は新Versionを作らない。どちらか一方でも異なる場合は新Versionを作る。
 - 意味比較、AI分類、trimによる同一視は行わない。
 - Version作成後はupdate endpoint / repository methodを提供しない。
 - 各Cycleは作成時の`goalVersionId`を保持し、後から変更しない。
 - Goal HistoryはCycleの`goalVersionId`でVersion change地点を特定する。
+- `successSignal`をAI input、Prompt、Context、outputまたは自動判定へ含めない。専用のlog、metric、trace、telemetry fieldへも記録しない。
 
 ## 14.3 Goal Review termination rule
 
@@ -1265,6 +1268,7 @@ Goal Creation DraftとGoal Review Draftを同一Entityで表現し、`draftType`
 | baseGoalVersionId | GoalVersionID | reviewのみ | Review開始時のVersion |
 | reviewCycleId | CycleID | reviewのみ | Reviewを開始させたCompleted Cycle |
 | body | GoalText | Yes | §14.1 |
+| successSignal | string | No | §14.2。row不在を`null`として扱う |
 | revision | int64 | Yes | save / AI採用ごと+1 |
 | createdAt | Instant | Yes | UTC |
 | updatedAt | Instant | Yes | UTC |
@@ -1304,6 +1308,7 @@ Invariant:
 | goalId | GoalID | Yes | parent |
 | versionNumber | int32 | Yes | Goal内1から連番 |
 | body | GoalText | Yes | §14.1の確定済み本文 |
+| successSignal | string | No | §14.2。immutable |
 | createdByOperationId | UUID | Yes | initial start / review continue operation |
 | createdAt | Instant | Yes | UTC |
 
@@ -1550,6 +1555,11 @@ CREATE TABLE goal_versions (
 CREATE INDEX idx_goal_versions_timeline
     ON goal_versions(goal_id, version_number ASC);
 
+CREATE TABLE goal_version_success_signals (
+    goal_version_id UUID PRIMARY KEY REFERENCES goal_versions(id) ON DELETE CASCADE,
+    success_signal TEXT NOT NULL CHECK (char_length(success_signal) BETWEEN 1 AND 120)
+);
+
 CREATE TABLE pdca_cycles (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL,
@@ -1679,6 +1689,11 @@ CREATE UNIQUE INDEX uq_goal_drafts_one_creation_per_user
 CREATE UNIQUE INDEX uq_goal_drafts_one_review_per_goal
     ON goal_drafts(goal_id)
     WHERE draft_type = 'review';
+
+CREATE TABLE goal_draft_success_signals (
+    goal_draft_id UUID PRIMARY KEY REFERENCES goal_drafts(id) ON DELETE CASCADE,
+    success_signal TEXT NOT NULL CHECK (char_length(success_signal) BETWEEN 1 AND 120)
+);
 
 CREATE TABLE ai_generations (
     id UUID PRIMARY KEY,
@@ -1906,6 +1921,7 @@ DB constraintだけでは完全に表現できない次のInvariantはApplicatio
 - Terminal GoalにはActive Cycle 0、Review Draft 0。
 - Review schedule row不在はlogical `reviewDate=null` / `reviewScheduleRevision=0`であり、rowが存在する場合は同じCycleに属してrevisionは非負、dateがnon-nullならrevisionは1以上とする。Cycle / Goal / Account削除ではschedule rowもcascade削除する。
 - Review Draftの`review_cycle_id`は同一GoalのCompleted Cycleで、`base_goal_version_id`はReview開始時のCurrent Versionである。
+- Goal Version / Goal Draftのsuccess signal companion row不在はlogical `successSignal=null`であり、rowが存在する場合は同じVersion / Draftに属する§14.2のnonblank valueとする。Draft / Version / Goal / Account削除ではcompanion rowもcascade削除する。
 - Creation DraftをTargetとするGoal Refineは`goal_id/goal_version_id`がnone、Review DraftをTargetとするGoal RefineはDraftと同じ`goal_id/base_goal_version_id`を持つ。
 - AIGeneration `context_cycle_ids`はすべて同一User・同一Goalに属する。
 - Provider call開始をacceptedするTransactionでは、各AIGenerationと同じlogical operation IDのAIUsageEventをexactly 1件insertする。以後はlifecycleを分離し、Goal/Draft content deletionでAIGenerationだけが先に削除され得る一方、`quotaRetainUntil`到達後かつProvider usage確定済みの期限cleanupでAIUsageEventだけが先に削除され得る。
@@ -1919,7 +1935,7 @@ DB constraintだけでは完全に表現できない次のInvariantはApplicatio
 - Frontend: Unicode code point count。
 - Backend: Go `utf8.RuneCountInString`。
 - Database: PostgreSQL `char_length`。
-- §14.1のGoal、§14.5のFrame、§36のoperation別AI output contractを3層で検証する。
+- §14.1のGoal、§14.2のsuccess signal、§14.5のFrame、§36のoperation別AI output contractを3層で検証する。
 - AI outputを途中切断して保存しない。
 
 ---
@@ -2096,7 +2112,7 @@ sequenceDiagram
     B->>DB: count Progressing Goals
     B->>DB: consume User / Session start rate buckets
     B->>DB: INSERT Goal
-    B->>DB: INSERT Goal Version 1
+    B->>DB: INSERT Goal Version 1（body + successSignal）
     B->>DB: INSERT Cycle 1
     B->>DB: re-parent Goal Refine records
     B->>DB: DELETE Creation Draft
@@ -2108,6 +2124,7 @@ Preconditions:
 
 - Draft owner、type=`creation`、revision一致。
 - bodyが§14.1の確定条件を満たす。
+- Draftの`successSignal`は§14.2に従い、Version 1へ同じ値をcopyする。
 - save済み、running Goal Refineなし。
 - Progressing Goal count < `MaxProgressingGoals`。
 - Fresh startのUser / Session rate limit内。Replayはrate bucketを消費しない。
@@ -2121,7 +2138,7 @@ Transaction details:
 Postconditions:
 
 - Goal status=`active_cycle`。
-- Version 1。
+- Version 1はDraftのbodyと`successSignal`をimmutableに保持する。
 - Cycle 1 status=`active`、Version 1参照。
 - Goal `current_version_number=1`、`next_cycle_sequence_number=2`。
 - Draft削除。
@@ -2149,7 +2166,7 @@ sequenceDiagram
     B->>DB: BEGIN READ COMMITTED / User + Goal + Cycle FOR UPDATE
     B->>DB: validate Active, P/D/C/A, AI idle
     B->>DB: Cycle active → completed
-    B->>DB: INSERT Goal Review Draft from current Goal Version
+    B->>DB: INSERT Goal Review Draft from current Goal Version tuple
     B->>DB: Goal active_cycle → goal_review
     B->>DB: COMMIT
     B-->>F: Completed Cycle + Review workspace
@@ -2164,7 +2181,7 @@ Transaction:
 4. Cycle row `FOR UPDATE`。
 5. owner、Goal status=`active_cycle`、Cycle status=`active`、expected revisions、P/D/C/A、AI idleを検証。
 6. Cycleを`completed`へ更新。
-7. 現Goal Version本文をcopyしてReview Draftをinsert。
+7. 現Goal Versionのbodyと`successSignal`をcopyしてReview Draftをinsert。
 8. Goalを`goal_review`へ更新、revision+1。
 9. `COMMIT`。
 
@@ -2190,8 +2207,8 @@ sequenceDiagram
     U->>F: この目標で次のサイクルへ
     F->>B: continue(operationId, expected Goal/Draft revisions)
     B->>DB: BEGIN / Goal + Review Draft FOR UPDATE
-    B->>DB: compare Draft with current Goal Version
-    alt Goal本文が変更された
+    B->>DB: compare Draft tuple with current Goal Version
+    alt bodyまたはsuccessSignalが変更された
         B->>DB: INSERT Goal Version N+1
         B->>DB: update Goal current version
     else Goal本文が同一
@@ -2210,8 +2227,8 @@ Transaction:
 2. Goal `FOR UPDATE`。
 3. Review Draft `FOR UPDATE`。
 4. Goal status=`goal_review`、expectedGoalRevision / expectedDraftRevision、AI idleを検証。
-5. Draft body trim nonblank。
-6. 現Version本文と改行正規化後に比較。
+5. Draft bodyはtrim後nonblank、`successSignal`は§14.2を満たす。
+6. 現VersionとDraftのbody / `successSignal`をそれぞれ正規化後に比較。
 7. 変更あり: Version N+1を作成しGoal current versionをN+1へ更新。
 8. 変更なし: 現Versionを継続。
 9. `sequenceNumber = goal.next_cycle_sequence_number`でCycleを作成。
@@ -2433,6 +2450,8 @@ Base path: `/api/v1`
 - Cursorはopaque base64url + HMAC署名。
 - Idempotent commandは`operationId` bodyまたは`Idempotency-Key` headerを必須とする。
 
+Goal VersionとGoal Draftを返す全Response surfaceでは、`successSignal`をrequired nullable fieldとして省略しない。値がない場合は明示的な`null`を返す。Goal Versionを内包するHome、Goal list / detail / Review、full Cycle、transition responseも同じcontractを使い、古いrowの欠落を空文字へ補正しない。
+
 Auth=SessionのRequest / Response identityは次の共通Contractに従う。
 
 - Session認証成功後のResponseは、downstream handlerの成功、4xx / 5xx、`204`を問わず`X-Fukamu-Authenticated-User-ID`へrequestを認証したsource Userのcanonical UUID v7を設定する。Session認証に失敗した`401`と、認証を行わないanonymous bootstrap / public endpointにはこのHeaderを設定しない。
@@ -2628,7 +2647,8 @@ Response:
       "currentVersion": {
         "id": "version-uuid",
         "versionNumber": 2,
-        "body": "平日は主要業務を18時までに終えたい"
+        "body": "平日は主要業務を18時までに終えたい",
+        "successSignal": null
       },
       "revision": 7,
       "currentWork": {
@@ -2696,6 +2716,7 @@ Response `201`:
     "id": "draft-uuid",
     "draftType": "creation",
     "body": "",
+    "successSignal": null,
     "revision": 0,
     "updatedAt": "2026-08-18T01:00:00Z"
   }
@@ -2733,6 +2754,7 @@ Request:
 ```json
 {
   "body": "仕事に余裕を持てるようになりたい",
+  "successSignal": "優先順位を決め、無理のない時間で主要業務を終えられる",
   "expectedRevision": 3
 }
 ```
@@ -2740,8 +2762,9 @@ Request:
 Validation:
 
 - body required string。semanticsは§14.1。
+- `successSignal`はoptional nullable。field省略は現在値を保持、明示`null`またはUnicode whitespaceだけはclear、stringは§14.2で正規化する。
 - `expectedRevision >= 0`。
-- no-op contentはrevisionを増やさない。
+- body / `successSignal`の正規化後tupleが同一ならrevisionを増やさない。どちらかが変われば1回だけ増やす。
 
 Response:
 
@@ -2751,6 +2774,7 @@ Response:
     "id": "draft-uuid",
     "draftType": "creation",
     "body": "仕事に余裕を持てるようになりたい",
+    "successSignal": "優先順位を決め、無理のない時間で主要業務を終えられる",
     "revision": 4,
     "updatedAt": "2026-08-18T01:02:00Z"
   }
@@ -2760,6 +2784,7 @@ Response:
 Errors:
 
 - `GOAL_TEXT_TOO_LONG`
+- `GOAL_SUCCESS_SIGNAL_TOO_LONG`
 - `GOAL_DRAFT_NOT_FOUND`
 - `GOAL_DRAFT_REVISION_CONFLICT`
 - `GOAL_DRAFT_SAVE_FAILED`
@@ -2863,7 +2888,7 @@ Transaction:
 1. Draft + Generation lock。
 2. Generation owner / operationType=`goal_refine` / target Draft / status succeededを検証。
 3. `expectedDraftRevision == draft.revision`、`generation.targetRevision <= draft.revision`、`generation.sourceText == draft.body`を検証。
-4. outputをDraft bodyへ設定、Draft revision+1。
+4. outputをDraft bodyへ設定して`successSignal`は変更せず、Draft revision+1。
 5. Generation `adoptedAt`とadopted revisionを記録。
 6. commit。
 
@@ -2874,6 +2899,7 @@ Response:
   "draft": {
     "id": "draft-uuid",
     "body": "仕事の優先順位を整理し、無理のない時間配分で主要業務を終えられる状態を目指す。",
+    "successSignal": "主要業務を18時までに終えられる",
     "revision": 5,
     "updatedAt": "2026-08-18T01:04:00Z"
   },
@@ -2917,7 +2943,8 @@ Response `200`:
     "currentVersion": {
       "id": "version-uuid",
       "versionNumber": 1,
-      "body": "仕事の優先順位を整理し、無理のない時間配分で主要業務を終えられる状態を目指す。"
+      "body": "仕事の優先順位を整理し、無理のない時間配分で主要業務を終えられる状態を目指す。",
+      "successSignal": "主要業務を18時までに終えられる"
     }
   },
   "cycle": {
@@ -2946,6 +2973,7 @@ Errors:
 
 - `GOAL_TEXT_REQUIRED`
 - `GOAL_TEXT_TOO_LONG`
+- `GOAL_SUCCESS_SIGNAL_TOO_LONG`
 - `GOAL_DRAFT_NOT_FOUND`
 - `GOAL_DRAFT_REVISION_CONFLICT`
 - `GOAL_ACTIVE_LIMIT_EXCEEDED`
@@ -2992,7 +3020,8 @@ Response:
       "currentVersion": {
         "id": "version-uuid",
         "versionNumber": 2,
-        "body": "平日は主要業務を18時までに終える"
+        "body": "平日は主要業務を18時までに終える",
+        "successSignal": null
       },
       "cycleCount": 5,
       "terminalAt": "2026-08-17T10:00:00Z"
@@ -3021,7 +3050,8 @@ Response:
     "currentVersion": {
       "id": "version-uuid",
       "versionNumber": 2,
-      "body": "平日は主要業務を18時までに終える"
+      "body": "平日は主要業務を18時までに終える",
+      "successSignal": "主要業務を18時までに終えた日が週4日ある"
     },
     "currentWork": {
       "kind": "goal_review",
@@ -3113,7 +3143,8 @@ Response:
     "currentVersion": {
       "id": "version-uuid",
       "versionNumber": 2,
-      "body": "平日は主要業務を18時までに終える"
+      "body": "平日は主要業務を18時までに終える",
+      "successSignal": null
     }
   },
   "canceledCycle": {
@@ -3188,12 +3219,14 @@ Response:
     "currentVersion": {
       "id": "version-uuid",
       "versionNumber": 2,
-      "body": "平日は主要業務を18時までに終える"
+      "body": "平日は主要業務を18時までに終える",
+      "successSignal": "主要業務を18時までに終えた日が週4日ある"
     }
   },
   "reviewDraft": {
     "id": "draft-uuid",
     "body": "平日は主要業務を18時までに終える",
+    "successSignal": "主要業務を18時までに終えた日が週4日ある",
     "revision": 0,
     "baseGoalVersionId": "version-uuid"
   },
@@ -3228,6 +3261,7 @@ Request:
 ```json
 {
   "body": "平日は18時までに主要業務を終えたい",
+  "successSignal": null,
   "expectedReviewDraftId": "draft-uuid",
   "expectedRevision": 0
 }
@@ -3236,11 +3270,12 @@ Request:
 Validation:
 
 - body required string。semanticsは§14.1。
+- `successSignal`はoptional nullable。field省略 / clear / stringの意味は§22.3と同じ。
 - `expectedReviewDraftId`はrequired UUID v7で、現在openなReview Draft IDと一致する。
 - Goalと指定Review Draftを同一Transaction内でlockし、owner / path Goal / `draftType=review`を検証する。
 - `expectedRevision >= 0`。
 - Goal status=`goal_review`。
-- no-op bodyはrevisionを増やさない。
+- body / `successSignal`の正規化後tupleが同一ならrevisionを増やさない。
 
 Response `200`:
 
@@ -3250,6 +3285,7 @@ Response `200`:
     "id": "draft-uuid",
     "goalId": "goal-uuid",
     "body": "平日は18時までに主要業務を終えたい",
+    "successSignal": null,
     "revision": 1,
     "updatedAt": "2026-08-18T03:10:00Z"
   }
@@ -3260,6 +3296,7 @@ Errors:
 
 - `VALIDATION_ERROR`
 - `GOAL_TEXT_TOO_LONG`
+- `GOAL_SUCCESS_SIGNAL_TOO_LONG`
 - `GOAL_NOT_FOUND`
 - `GOAL_REVIEW_NOT_ACTIVE`
 - `GOAL_REVIEW_DRAFT_REVISION_CONFLICT`
@@ -3345,7 +3382,7 @@ Transaction:
 1. Goal、Review Draft、AIGenerationをglobal lock orderでlockする。
 2. Goal status / revision、Draft revision、Generation owner / type=`goal_refine` / status=`succeeded` / target Draftを検証する。
 3. `expectedDraftRevision == draft.revision`、`generation.targetRevision <= draft.revision`、`generation.sourceText == draft.body`を要求する。提案後に編集しても、元と完全に同じ本文へ戻して保存済みなら採用できる。
-4. Generation outputをReview Draft bodyへ設定し、Draft revisionを+1する。Goal Versionはこの時点では作成しない。
+4. Generation outputをReview Draft bodyへ設定し、`successSignal`は変更せずDraft revisionを+1する。Goal Versionはこの時点では作成しない。
 5. Generation `adoptedAt` / `adoptedDraftRevision`を記録する。
 6. commit。
 
@@ -3357,6 +3394,7 @@ Response `200`:
     "id": "draft-uuid",
     "goalId": "goal-uuid",
     "body": "平日の主要業務を無理のない時間配分で終えられる状態を目指す。",
+    "successSignal": "主要業務を18時までに終えた日が週4日ある",
     "revision": 3,
     "updatedAt": "2026-08-18T03:15:00Z"
   },
@@ -3391,7 +3429,7 @@ Request:
 }
 ```
 
-Response（本文変更あり）:
+Response（bodyまたは`successSignal`変更あり）:
 
 ```json
 {
@@ -3402,7 +3440,8 @@ Response（本文変更あり）:
     "currentVersion": {
       "id": "new-version-uuid",
       "versionNumber": 3,
-      "body": "平日は18時までに主要業務を終えたい"
+      "body": "平日は18時までに主要業務を終えたい",
+      "successSignal": null
     }
   },
   "versionCreated": true,
@@ -3433,7 +3472,7 @@ Response（本文変更あり）:
 }
 ```
 
-本文が同じ場合`versionCreated=false`、current versionを参照する。
+bodyと`successSignal`がどちらも同じ場合だけ`versionCreated=false`としてcurrent versionを参照する。どちらか一方でも変われば`versionCreated=true`とする。
 
 Fresh Continueでは、同じTransaction内のshared full `CycleView` materializationを使用し、`previousCompletedCycleAction.cycleId`がlock済みReview Draftの`reviewCycleId`と一致することをApplicationで検証してからcommitする。Active Cycleを返す通常replayも同じread modelへ収束する。Response loss後のretry時点で作成済みCycleがすでにCompleted / Canceledなら、既存のcurrent-state replay semanticsに従ってterminal Cycleを返し、`previousCompletedCycleAction=null`とする。
 
@@ -3441,6 +3480,7 @@ Errors:
 
 - `GOAL_TEXT_REQUIRED`
 - `GOAL_TEXT_TOO_LONG`
+- `GOAL_SUCCESS_SIGNAL_TOO_LONG`
 - `GOAL_NOT_FOUND`
 - `GOAL_REVIEW_NOT_ACTIVE`
 - `GOAL_VERSION_CONFLICT`
@@ -3455,7 +3495,7 @@ Errors:
 
 ## 24.0 Shared full CycleView read model
 
-Start Goalの`cycle`、Cycle detailの`cycle`、Goal Reviewの`triggerCycle`、Cycle Completeの`completedCycle`、Cycle Replanの`canceledCycle` / `cycle`、Goal Review Continueの`cycle`、Goal Terminateの`canceledCycle`は同じfull `CycleView` contractを使用する。これらのobjectは次のrequired nullable fieldを省略せずに返す。
+Start Goalの`cycle`、Cycle detailの`cycle`、Goal Reviewの`triggerCycle`、Cycle Completeの`completedCycle`、Cycle Replanの`canceledCycle` / `cycle`、Goal Review Continueの`cycle`、Goal Terminateの`canceledCycle`は同じfull `CycleView` contractを使用する。各`goalVersion`は§20.1のrequired nullable `successSignal`を含み、Cycle作成時にpinしたimmutable Versionを返す。これらのobjectは次のrequired nullable fieldを省略せずに返す。
 
 ```json
 {
@@ -3501,7 +3541,8 @@ Response:
       "goalVersion": {
         "id": "version-uuid",
         "versionNumber": 2,
-        "body": "平日は主要業務を18時までに終える"
+        "body": "平日は主要業務を18時までに終える",
+        "successSignal": null
       },
       "planPreview": "...",
       "learningPreview": {
@@ -3549,7 +3590,8 @@ Response:
     "goalVersion": {
       "id": "version-uuid",
       "versionNumber": 2,
-      "body": "平日は主要業務を18時までに終える"
+      "body": "平日は主要業務を18時までに終える",
+      "successSignal": null
     },
     "startedAt": "2026-08-18T00:00:00Z",
     "completedAt": null,
@@ -3767,12 +3809,14 @@ Response:
     "currentVersion": {
       "id": "version-uuid",
       "versionNumber": 2,
-      "body": "平日は主要業務を18時までに終える"
+      "body": "平日は主要業務を18時までに終える",
+      "successSignal": null
     }
   },
   "reviewDraft": {
     "id": "draft-uuid",
     "body": "平日は主要業務を18時までに終える",
+    "successSignal": null,
     "revision": 0
   }
 }
@@ -3883,7 +3927,8 @@ Response `200`:
     "currentVersion": {
       "id": "version-uuid",
       "versionNumber": 2,
-      "body": "平日は主要業務を18時までに終える"
+      "body": "平日は主要業務を18時までに終える",
+      "successSignal": null
     }
   },
   "cycle": {
@@ -3893,7 +3938,8 @@ Response `200`:
     "goalVersion": {
       "id": "version-uuid",
       "versionNumber": 2,
-      "body": "平日は主要業務を18時までに終える"
+      "body": "平日は主要業務を18時までに終える",
+      "successSignal": null
     },
     "reviewDate": null,
     "reviewScheduleRevision": 0,
@@ -4094,6 +4140,7 @@ Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除す�
 | 400 | `VALIDATION_ERROR` | field validation |
 | 400 | `GOAL_TEXT_REQUIRED` | Goal確定/Refine時にtrim後空 |
 | 400 | `GOAL_TEXT_TOO_LONG` | §14.1のGoal text上限違反 |
+| 400 | `GOAL_SUCCESS_SIGNAL_TOO_LONG` | §14.2のsuccess signal上限違反 |
 | 400 | `FRAME_TEXT_TOO_LONG` | §14.5のFrame text上限違反 |
 | 400 | `GOAL_REFINE_INPUT_EMPTY` | Goal Refine入力なし |
 | 400 | `ACTION_GENERATE_INPUT_INCOMPLETE` | P/D/C不足 |
@@ -4794,6 +4841,8 @@ Canonical request hashの意味、保存先、同一key再利用時の判定は�
 | `action_refine` | Active CycleのGoal Version + P/D/C/A | Aの意図を維持して改善し、AへAtomicに反映 |
 
 MVPではGoalのゼロベース生成、P/D/Cの自動生成・自動書換え、AIからの追加質問、Goalの合否判定を実装しない。
+
+`successSignal`はUserだけがGoal Creation / Reviewで編集する情報であり、AI operationのinput、Prompt、Context、output schema、hash materialまたは自動判定へ含めない。Goal Refine suggestionをAdoptしてもDraftの`successSignal`を保持する。
 
 ## 32.2 Ports
 
@@ -5601,6 +5650,8 @@ Shared full `CycleView`の`previousCompletedCycleAction`は、Repository mapper�
 
 Goal / Frameの文字semanticsは§§14.1、14.5だけが所有し、Unicode code point数で判定する。
 
+Success signalの文字semanticsは§14.2だけが所有し、同じUnicode code pointの3層判定を使う。
+
 - TypeScript: `Array.from(value).length`
 - Go: `utf8.RuneCountInString(value)`
 - PostgreSQL: `char_length(value)`
@@ -6380,6 +6431,8 @@ Worker、Static Assets、Containerを同じDeployで更新しても、旧Contain
 Cycle summaryのrequired nullable `learningPreview`もBackend-firstの2 candidateで有効化する。Backend expand candidateで旧Frontendがunknown fieldを無視すること、Activeが`null`、Completed / Canceledがbounded C/A preview objectを全list surfaceで返すことを検証し、authoritative old-image drain後の別Frontend candidateでだけrequired schemaとC/A disclosureを有効化する。Activation後はfield欠落、Activeのobject、terminalの`null`を互換Responseとして受理しない。
 
 Cycle ReplanもBackend-firstの2 candidateで有効化する。Expand candidateは`000008`、Backendの`replanned` read/write・endpoint、Cycle summaryのrequired nullable `cancellationReason`、およびFrontend readerの旧 / 新Backend dual-readだけを含み、`このCycleを中断して再計画`のUI actionを公開しない。Migration後も旧Backend writerが従来の`NULL|goal_achieved|goal_ended`を書けること、expand Backendの全full-Cycle / summary surfaceが新enumを安全に表現できることを検証してdeployする。Authoritative metadataで旧Backend imageのdrainを証明した後にだけ、別Frontend activation candidateでReplan actionを公開する。Drainが証明できない、旧BackendへReplan requestが到達し得る、またはreader互換性を証明できない場合はactivationを停止する。Activation rollbackでは`replanned` rowを読めるFrontend / Backendを維持し、Productionで`000008` downを実行しない。
+
+Goal success signalもBackend-firstの2 candidateで有効化する。Expand candidateは`000009` companion tables、Backendのtri-state Draft save、required nullable read field、Version / Cycle pinningだけを含み、Frontendの入力・表示を公開しない。Base tableへcolumnを追加せず、既存rowはcompanion row不在=`null`、旧Backendの`SELECT *`とwriterは従来shapeのまま動作し、旧Frontendはunknown response fieldを無視できる。Migration適用、Backend expand deploy、authoritative old-image drain、全Goal Version / Draft / full Cycle surfaceのcontract確認後だけ、別Frontend activation candidateを有効化する。旧BackendがPATCHを処理し得る間は新Frontendが`successSignal`を送信してはならない。Rollbackではcompanion tablesを残し、Staging / Productionで`000009` downを実行しない。
 
 ## 44.5 Health endpoints
 

@@ -9,6 +9,7 @@ SELECT
     gv.id AS current_version_id,
     gv.version_number AS current_version_number,
     gv.body AS current_version_body,
+    gv_signal.success_signal AS current_version_success_signal,
     gv.created_at AS current_version_created_at,
     (
         SELECT count(*)
@@ -36,6 +37,8 @@ LEFT JOIN goal_versions gv
     ON gv.user_id = g.user_id
    AND gv.goal_id = g.id
    AND gv.version_number = g.current_version_number
+LEFT JOIN goal_version_success_signals gv_signal
+    ON gv_signal.goal_version_id = gv.id
 LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
@@ -65,6 +68,7 @@ SELECT
     gv.id AS current_version_id,
     gv.version_number AS current_version_number,
     gv.body AS current_version_body,
+    gv_signal.success_signal AS current_version_success_signal,
     gv.created_at AS current_version_created_at,
     (
         SELECT count(*)
@@ -92,6 +96,8 @@ LEFT JOIN goal_versions gv
     ON gv.user_id = g.user_id
    AND gv.goal_id = g.id
    AND gv.version_number = g.current_version_number
+LEFT JOIN goal_version_success_signals gv_signal
+    ON gv_signal.goal_version_id = gv.id
 LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
@@ -145,6 +151,7 @@ SELECT
     gv.id AS current_version_id,
     gv.version_number AS current_version_number,
     gv.body AS current_version_body,
+    gv_signal.success_signal AS current_version_success_signal,
     gv.created_at AS current_version_created_at,
     (
         SELECT count(*)
@@ -172,6 +179,8 @@ LEFT JOIN goal_versions gv
     ON gv.user_id = g.user_id
    AND gv.goal_id = g.id
    AND gv.version_number = g.current_version_number
+LEFT JOIN goal_version_success_signals gv_signal
+    ON gv_signal.goal_version_id = gv.id
 LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
@@ -190,19 +199,25 @@ WHERE g.id = sqlc.arg(goal_id)::uuid
   AND g.user_id = sqlc.arg(user_id)::uuid;
 
 -- name: GetHomeCreationGoalDraft :one
-SELECT id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, updated_at
-FROM goal_drafts
-WHERE user_id = sqlc.arg(user_id)::uuid AND draft_type = 'creation';
+SELECT d.id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id, d.body,
+       signal.success_signal, d.revision, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
+WHERE d.user_id = sqlc.arg(user_id)::uuid AND d.draft_type = 'creation';
 
 -- name: GetGoalDraftByID :one
-SELECT id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, updated_at
-FROM goal_drafts
-WHERE id = sqlc.arg(draft_id)::uuid AND user_id = sqlc.arg(user_id)::uuid;
+SELECT d.id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id, d.body,
+       signal.success_signal, d.revision, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
+WHERE d.id = sqlc.arg(draft_id)::uuid AND d.user_id = sqlc.arg(user_id)::uuid;
 
 -- name: GetGoalReviewDraft :one
-SELECT *
-FROM goal_drafts
-WHERE goal_id = $1 AND user_id = $2 AND draft_type = 'review';
+SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
+WHERE d.goal_id = $1 AND d.user_id = $2 AND d.draft_type = 'review';
 
 -- name: CountProgressingGoals :one
 SELECT count(*)::integer AS count

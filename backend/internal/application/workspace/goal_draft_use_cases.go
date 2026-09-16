@@ -72,11 +72,7 @@ func (useCases *GoalDraftUseCases) CreateDraft(ctx context.Context, userID, body
 	return draftView(draft), err
 }
 
-func (useCases *GoalDraftUseCases) SaveDraft(ctx context.Context, userID, draftID, body string, expectedRevision int64) (view DraftView, err error) {
-	normalized, err := goal.NormalizeText(body, true)
-	if err != nil {
-		return DraftView{}, err
-	}
+func (useCases *GoalDraftUseCases) SaveDraft(ctx context.Context, userID, draftID string, input SaveGoalDraftInput) (view DraftView, err error) {
 	now := useCases.clock.Now().UTC()
 	err = useCases.uow.WithinGoalDraftTransaction(ctx, func(tx GoalDraftTx) error {
 		current, lockErr := tx.LockDraftByID(ctx, userID, draftID)
@@ -86,7 +82,8 @@ func (useCases *GoalDraftUseCases) SaveDraft(ctx context.Context, userID, draftI
 		if current.Type != goal.DraftCreation {
 			return ErrNotFound
 		}
-		saved, noOp, saveErr := goal.SaveDraft(current, normalized, expectedRevision, now)
+		targetSuccessSignal := resolveSuccessSignalPatch(current.SuccessSignal, input.SuccessSignal)
+		saved, noOp, saveErr := goal.SaveDraft(current, input.Body, targetSuccessSignal, input.ExpectedRevision, now)
 		if errors.Is(saveErr, goal.ErrStateConflict) {
 			return ErrDraftRevisionConflict
 		}
@@ -108,7 +105,7 @@ func (useCases *GoalDraftUseCases) SaveDraft(ctx context.Context, userID, draftI
 	return view, err
 }
 
-func (useCases *GoalDraftUseCases) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID, body string, expectedRevision int64) (view DraftView, err error) {
+func (useCases *GoalDraftUseCases) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID string, input SaveGoalDraftInput) (view DraftView, err error) {
 	now := useCases.clock.Now().UTC()
 	err = useCases.uow.WithinGoalDraftTransaction(ctx, func(tx GoalDraftTx) error {
 		target, lockErr := tx.LockGoalWithCurrentVersion(ctx, userID, goalID)
@@ -128,11 +125,8 @@ func (useCases *GoalDraftUseCases) SaveReview(ctx context.Context, userID, goalI
 		if current.Type != goal.DraftReview || current.GoalID == nil || *current.GoalID != goalID {
 			return ErrReviewRevisionConflict
 		}
-		normalized, normalizeErr := goal.NormalizeText(body, true)
-		if normalizeErr != nil {
-			return normalizeErr
-		}
-		saved, noOp, saveErr := goal.SaveDraft(current, normalized, expectedRevision, now)
+		targetSuccessSignal := resolveSuccessSignalPatch(current.SuccessSignal, input.SuccessSignal)
+		saved, noOp, saveErr := goal.SaveDraft(current, input.Body, targetSuccessSignal, input.ExpectedRevision, now)
 		if errors.Is(saveErr, goal.ErrStateConflict) {
 			return ErrReviewRevisionConflict
 		}
@@ -1146,8 +1140,15 @@ func draftView(draft goal.Draft) DraftView {
 	return DraftView{
 		ID: draft.ID, DraftType: string(draft.Type), GoalID: draft.GoalID,
 		BaseGoalVersionID: draft.BaseGoalVersionID, ReviewCycleID: draft.ReviewCycleID,
-		Body: draft.Body, Revision: draft.Revision, UpdatedAt: draft.UpdatedAt,
+		Body: draft.Body, SuccessSignal: draft.SuccessSignal, Revision: draft.Revision, UpdatedAt: draft.UpdatedAt,
 	}
+}
+
+func resolveSuccessSignalPatch(current *string, patch SuccessSignalPatch) *string {
+	if !patch.Present {
+		return current
+	}
+	return patch.Value
 }
 
 func aiContextCycleIDs(cycles []AIContextCycle) []string {

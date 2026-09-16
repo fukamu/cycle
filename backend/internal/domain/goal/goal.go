@@ -9,15 +9,19 @@ import (
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 )
 
-const MaxGoalCodePoints = 80
+const (
+	MaxGoalCodePoints          = 80
+	MaxSuccessSignalCodePoints = 120
+)
 
 var (
-	ErrTextRequired       = errors.New("goal text is required")
-	ErrTextTooLong        = errors.New("goal text is too long")
-	ErrForbiddenCharacter = errors.New("goal text contains a forbidden character")
-	ErrStateConflict      = errors.New("goal state conflict")
-	ErrAlreadyTerminal    = errors.New("goal is already terminal")
-	ErrDiscardRequired    = errors.New("review draft discard confirmation is required")
+	ErrTextRequired         = errors.New("goal text is required")
+	ErrTextTooLong          = errors.New("goal text is too long")
+	ErrSuccessSignalTooLong = errors.New("goal success signal is too long")
+	ErrForbiddenCharacter   = errors.New("goal text contains a forbidden character")
+	ErrStateConflict        = errors.New("goal state conflict")
+	ErrAlreadyTerminal      = errors.New("goal is already terminal")
+	ErrDiscardRequired      = errors.New("review draft discard confirmation is required")
 )
 
 type Status string
@@ -49,6 +53,7 @@ type Version struct {
 	GoalID               string
 	VersionNumber        int32
 	Body                 string
+	SuccessSignal        *string
 	CreatedByOperationID string
 	CreatedAt            time.Time
 }
@@ -68,6 +73,7 @@ type Draft struct {
 	BaseGoalVersionID *string
 	ReviewCycleID     *string
 	Body              string
+	SuccessSignal     *string
 	Revision          int64
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
@@ -93,7 +99,7 @@ type ReplanResult struct {
 }
 
 func NormalizeText(value string, allowEmpty bool) (string, error) {
-	value = strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n")
+	value = normalizeLineEndings(value)
 	for _, codePoint := range value {
 		if codePoint == 0 || (codePoint < 0x20 && codePoint != '\n' && codePoint != '\t') || codePoint == 0x7f {
 			return "", ErrForbiddenCharacter
@@ -108,6 +114,27 @@ func NormalizeText(value string, allowEmpty bool) (string, error) {
 	return value, nil
 }
 
+// NormalizeSuccessSignal canonicalizes an optional, user-authored success
+// signal. A nil or Unicode-whitespace-only value has one canonical form: nil.
+func NormalizeSuccessSignal(value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	normalized := normalizeLineEndings(*value)
+	for _, codePoint := range normalized {
+		if codePoint == 0 || (codePoint < 0x20 && codePoint != '\n' && codePoint != '\t') || codePoint == 0x7f {
+			return nil, ErrForbiddenCharacter
+		}
+	}
+	if strings.TrimSpace(normalized) == "" {
+		return nil, nil
+	}
+	if utf8.RuneCountInString(normalized) > MaxSuccessSignalCodePoints {
+		return nil, ErrSuccessSignalTooLong
+	}
+	return &normalized, nil
+}
+
 func NewDraft(id, userID, body string, now time.Time) (Draft, error) {
 	body, err := NormalizeText(body, true)
 	if err != nil {
@@ -117,18 +144,23 @@ func NewDraft(id, userID, body string, now time.Time) (Draft, error) {
 	return Draft{ID: id, UserID: userID, Type: DraftCreation, Body: body, CreatedAt: now, UpdatedAt: now}, nil
 }
 
-func SaveDraft(current Draft, body string, expectedRevision int64, now time.Time) (Draft, bool, error) {
+func SaveDraft(current Draft, body string, successSignal *string, expectedRevision int64, now time.Time) (Draft, bool, error) {
 	body, err := NormalizeText(body, true)
 	if err != nil {
 		return Draft{}, false, err
 	}
-	if current.Body == body {
+	successSignal, err = NormalizeSuccessSignal(successSignal)
+	if err != nil {
+		return Draft{}, false, err
+	}
+	if current.Body == body && optionalTextEqual(current.SuccessSignal, successSignal) {
 		return current, true, nil
 	}
 	if current.Revision != expectedRevision {
 		return Draft{}, false, ErrStateConflict
 	}
 	current.Body = body
+	current.SuccessSignal = successSignal
 	current.Revision++
 	current.UpdatedAt = now.UTC()
 	return current, false, nil
@@ -142,6 +174,10 @@ func StartInitial(draft Draft, goalID, versionID, cycleID, operationID, requestH
 	if err != nil {
 		return InitialAggregate{}, err
 	}
+	successSignal, err := NormalizeSuccessSignal(draft.SuccessSignal)
+	if err != nil {
+		return InitialAggregate{}, err
+	}
 	now = now.UTC()
 	created := Goal{
 		ID: goalID, UserID: draft.UserID, Status: StatusActiveCycle,
@@ -150,7 +186,7 @@ func StartInitial(draft Draft, goalID, versionID, cycleID, operationID, requestH
 	}
 	version := Version{
 		ID: versionID, UserID: draft.UserID, GoalID: goalID, VersionNumber: 1,
-		Body: body, CreatedByOperationID: operationID, CreatedAt: now,
+		Body: body, SuccessSignal: successSignal, CreatedByOperationID: operationID, CreatedAt: now,
 	}
 	return InitialAggregate{
 		Goal: created, Version: version,
@@ -177,12 +213,12 @@ func NewReviewDraft(id string, current Goal, version Version, completedCycle cyc
 	return Draft{
 		ID: id, UserID: current.UserID, Type: DraftReview,
 		GoalID: &goalID, BaseGoalVersionID: &versionID, ReviewCycleID: &cycleID,
-		Body: version.Body, CreatedAt: now, UpdatedAt: now,
+		Body: version.Body, SuccessSignal: version.SuccessSignal, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 
 func ContinueReview(current Goal, version Version, draft Draft, versionID, cycleID, operationID, requestHash string, now time.Time) (ContinueResult, error) {
-	body, changed, err := ReviewBodyChanged(current, version, draft)
+	body, successSignal, changed, err := ReviewContentChanged(current, version, draft)
 	if err != nil {
 		return ContinueResult{}, err
 	}
@@ -190,7 +226,7 @@ func ContinueReview(current Goal, version Version, draft Draft, versionID, cycle
 	if changed {
 		selected = Version{
 			ID: versionID, UserID: current.UserID, GoalID: current.ID,
-			VersionNumber: current.CurrentVersionNumber + 1, Body: body,
+			VersionNumber: current.CurrentVersionNumber + 1, Body: body, SuccessSignal: successSignal,
 			CreatedByOperationID: operationID, CreatedAt: now.UTC(),
 		}
 		current.CurrentVersionNumber++
@@ -243,19 +279,24 @@ func Replan(
 	return ReplanResult{Goal: current, CanceledCycle: canceled, Cycle: next}, nil
 }
 
-// ReviewBodyChanged validates the Review aggregate references and returns the
-// normalized Draft body together with whether it differs from the immutable
-// current Version. Whitespace remains significant; only line endings are
-// normalized for comparison.
-func ReviewBodyChanged(current Goal, version Version, draft Draft) (string, bool, error) {
+// ReviewContentChanged validates the Review aggregate references and returns
+// the normalized Draft tuple together with whether it differs from the
+// immutable current Version. Goal body whitespace remains significant.
+func ReviewContentChanged(current Goal, version Version, draft Draft) (string, *string, bool, error) {
 	if err := validateReviewReferences(current, version, draft); err != nil {
-		return "", false, err
+		return "", nil, false, err
 	}
 	body, err := NormalizeText(draft.Body, false)
 	if err != nil {
-		return "", false, err
+		return "", nil, false, err
 	}
-	return body, normalizeLineEndings(version.Body) != normalizeLineEndings(body), nil
+	successSignal, err := NormalizeSuccessSignal(draft.SuccessSignal)
+	if err != nil {
+		return "", nil, false, err
+	}
+	changed := normalizeLineEndings(version.Body) != normalizeLineEndings(body) ||
+		!optionalTextEqual(version.SuccessSignal, successSignal)
+	return body, successSignal, changed, nil
 }
 
 // ReviewDraftDiffersFromVersion compares a Review Draft for discard
@@ -265,7 +306,12 @@ func ReviewDraftDiffersFromVersion(current Goal, version Version, draft Draft) (
 	if err := validateReviewReferences(current, version, draft); err != nil {
 		return false, err
 	}
-	return normalizeLineEndings(version.Body) != normalizeLineEndings(draft.Body), nil
+	draftSuccessSignal, err := NormalizeSuccessSignal(draft.SuccessSignal)
+	if err != nil {
+		return false, err
+	}
+	return normalizeLineEndings(version.Body) != normalizeLineEndings(draft.Body) ||
+		!optionalTextEqual(version.SuccessSignal, draftSuccessSignal), nil
 }
 
 func validateReviewReferences(current Goal, version Version, draft Draft) error {
@@ -301,4 +347,11 @@ func Terminate(current Goal, outcome Status, operationID, requestHash string, no
 
 func normalizeLineEndings(value string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n")
+}
+
+func optionalTextEqual(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

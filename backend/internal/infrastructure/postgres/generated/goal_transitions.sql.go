@@ -141,19 +141,21 @@ func (q *Queries) FindGoalTerminationReceipt(ctx context.Context, arg FindGoalTe
 
 const findReviewDraftByCycle = `-- name: FindReviewDraftByCycle :one
 SELECT
-    id,
-    draft_type,
-    goal_id,
-    base_goal_version_id,
-    review_cycle_id,
-    body,
-    revision,
-    updated_at
-FROM goal_drafts
-WHERE user_id = $1::uuid
-  AND goal_id = $2::uuid
-  AND review_cycle_id = $3::uuid
-  AND draft_type = 'review'
+    d.id,
+    d.draft_type,
+    d.goal_id,
+    d.base_goal_version_id,
+    d.review_cycle_id,
+    d.body,
+    signal.success_signal,
+    d.revision,
+    d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
+WHERE d.user_id = $1::uuid
+  AND d.goal_id = $2::uuid
+  AND d.review_cycle_id = $3::uuid
+  AND d.draft_type = 'review'
 `
 
 type FindReviewDraftByCycleParams struct {
@@ -169,6 +171,7 @@ type FindReviewDraftByCycleRow struct {
 	BaseGoalVersionID pgtype.UUID
 	ReviewCycleID     pgtype.UUID
 	Body              string
+	SuccessSignal     *string
 	Revision          int64
 	UpdatedAt         pgtype.Timestamptz
 }
@@ -183,6 +186,7 @@ func (q *Queries) FindReviewDraftByCycle(ctx context.Context, arg FindReviewDraf
 		&i.BaseGoalVersionID,
 		&i.ReviewCycleID,
 		&i.Body,
+		&i.SuccessSignal,
 		&i.Revision,
 		&i.UpdatedAt,
 	)
@@ -246,6 +250,24 @@ func (q *Queries) InsertReviewDraftForTransition(ctx context.Context, arg Insert
 	return result.RowsAffected(), nil
 }
 
+const insertReviewDraftSuccessSignalForTransition = `-- name: InsertReviewDraftSuccessSignalForTransition :execrows
+INSERT INTO goal_draft_success_signals (goal_draft_id, success_signal)
+VALUES ($1::uuid, $2::text)
+`
+
+type InsertReviewDraftSuccessSignalForTransitionParams struct {
+	GoalDraftID   pgtype.UUID
+	SuccessSignal string
+}
+
+func (q *Queries) InsertReviewDraftSuccessSignalForTransition(ctx context.Context, arg InsertReviewDraftSuccessSignalForTransitionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertReviewDraftSuccessSignalForTransition, arg.GoalDraftID, arg.SuccessSignal)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const loadCurrentGoalVersionForTransition = `-- name: LoadCurrentGoalVersionForTransition :one
 SELECT
     gv.id,
@@ -253,6 +275,7 @@ SELECT
     gv.goal_id,
     gv.version_number,
     gv.body,
+    signal.success_signal,
     gv.created_by_operation_id,
     gv.created_at
 FROM goals g
@@ -260,6 +283,8 @@ LEFT JOIN goal_versions gv
   ON gv.user_id = g.user_id
  AND gv.goal_id = g.id
  AND gv.version_number = $1::integer
+LEFT JOIN goal_version_success_signals signal
+  ON signal.goal_version_id = gv.id
 WHERE g.id = $2::uuid
   AND g.user_id = $3::uuid
 `
@@ -276,6 +301,7 @@ type LoadCurrentGoalVersionForTransitionRow struct {
 	GoalID               pgtype.UUID
 	VersionNumber        *int32
 	Body                 *string
+	SuccessSignal        *string
 	CreatedByOperationID pgtype.UUID
 	CreatedAt            pgtype.Timestamptz
 }
@@ -289,6 +315,7 @@ func (q *Queries) LoadCurrentGoalVersionForTransition(ctx context.Context, arg L
 		&i.GoalID,
 		&i.VersionNumber,
 		&i.Body,
+		&i.SuccessSignal,
 		&i.CreatedByOperationID,
 		&i.CreatedAt,
 	)

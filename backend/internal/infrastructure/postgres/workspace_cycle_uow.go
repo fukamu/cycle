@@ -173,6 +173,7 @@ func goalVersionFromTransitionRow(row *db.LoadCurrentGoalVersionForTransitionRow
 		GoalID:               versionGoalID,
 		VersionNumber:        *row.VersionNumber,
 		Body:                 *row.Body,
+		SuccessSignal:        row.SuccessSignal,
 		CreatedByOperationID: createdByOperationID,
 		CreatedAt:            row.CreatedAt.Time.UTC(),
 	}, nil
@@ -375,7 +376,7 @@ func (transaction *workspaceCycleTx) InsertReviewDraft(
 	if draft.Type != goal.DraftReview || draft.GoalID == nil || draft.BaseGoalVersionID == nil || draft.ReviewCycleID == nil {
 		return 0, fmt.Errorf("%w: Cycle Review Draft state is incomplete", workspace.ErrCyclePersistenceInvariant)
 	}
-	return transaction.queries.InsertReviewDraftForTransition(ctx, db.InsertReviewDraftForTransitionParams{
+	rows, err := transaction.queries.InsertReviewDraftForTransition(ctx, db.InsertReviewDraftForTransitionParams{
 		DraftID:           mustUUID(draft.ID),
 		UserID:            mustUUID(draft.UserID),
 		GoalID:            mustUUID(*draft.GoalID),
@@ -386,6 +387,19 @@ func (transaction *workspaceCycleTx) InsertReviewDraft(
 		CreatedAt:         timestamptz(draft.CreatedAt),
 		UpdatedAt:         timestamptz(draft.UpdatedAt),
 	})
+	if err != nil || rows != 1 || draft.SuccessSignal == nil {
+		return rows, err
+	}
+	signalRows, err := transaction.queries.InsertReviewDraftSuccessSignalForTransition(ctx, db.InsertReviewDraftSuccessSignalForTransitionParams{
+		GoalDraftID: mustUUID(draft.ID), SuccessSignal: *draft.SuccessSignal,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if signalRows != 1 {
+		return 0, fmt.Errorf("%w: inserted Review Draft success signal affected an unexpected row count", workspace.ErrCyclePersistenceInvariant)
+	}
+	return rows, nil
 }
 
 func (transaction *workspaceCycleTx) EnterGoalReviewCAS(
@@ -512,6 +526,7 @@ func reviewDraftViewFromTransitionRow(row *db.FindReviewDraftByCycleRow) (worksp
 		BaseGoalVersionID: &baseGoalVersionID,
 		ReviewCycleID:     &reviewCycleID,
 		Body:              row.Body,
+		SuccessSignal:     row.SuccessSignal,
 		Revision:          row.Revision,
 		UpdatedAt:         row.UpdatedAt.Time.UTC(),
 	}, nil

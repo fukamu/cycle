@@ -21,26 +21,27 @@ type goalViewRow struct {
 }
 
 type goalViewColumns struct {
-	goalID                     pgtype.UUID
-	goalStatus                 string
-	goalRevision               int64
-	nextCycleSequenceNumber    int32
-	goalCreatedAt              pgtype.Timestamptz
-	goalTerminalAt             pgtype.Timestamptz
-	currentVersionID           pgtype.UUID
-	currentVersionNumber       *int32
-	currentVersionBody         *string
-	currentVersionCreatedAt    pgtype.Timestamptz
-	cycleCount                 int32
-	activeCycleID              pgtype.UUID
-	activeCycleSequenceNumber  *int32
-	activeCycleReviewDate      pgtype.Date
-	activeCycleReviewRevision  int64
-	reviewDraftID              pgtype.UUID
-	triggerCycleID             pgtype.UUID
-	triggerCycleSequenceNumber *int32
-	category                   int16
-	sortTime                   pgtype.Timestamptz
+	goalID                      pgtype.UUID
+	goalStatus                  string
+	goalRevision                int64
+	nextCycleSequenceNumber     int32
+	goalCreatedAt               pgtype.Timestamptz
+	goalTerminalAt              pgtype.Timestamptz
+	currentVersionID            pgtype.UUID
+	currentVersionNumber        *int32
+	currentVersionBody          *string
+	currentVersionSuccessSignal *string
+	currentVersionCreatedAt     pgtype.Timestamptz
+	cycleCount                  int32
+	activeCycleID               pgtype.UUID
+	activeCycleSequenceNumber   *int32
+	activeCycleReviewDate       pgtype.Date
+	activeCycleReviewRevision   int64
+	reviewDraftID               pgtype.UUID
+	triggerCycleID              pgtype.UUID
+	triggerCycleSequenceNumber  *int32
+	category                    int16
+	sortTime                    pgtype.Timestamptz
 }
 
 func getGoalView(ctx context.Context, query db.DBTX, userID, goalID string) (workspace.GoalView, error) {
@@ -67,7 +68,8 @@ func goalViewFromGetRow(row *db.GetGoalViewRow) (goalViewRow, error) {
 		nextCycleSequenceNumber: row.NextCycleSequenceNumber, goalCreatedAt: row.GoalCreatedAt,
 		goalTerminalAt: row.GoalTerminalAt, currentVersionID: row.CurrentVersionID,
 		currentVersionNumber: row.CurrentVersionNumber, currentVersionBody: row.CurrentVersionBody,
-		currentVersionCreatedAt: row.CurrentVersionCreatedAt, cycleCount: row.CycleCount,
+		currentVersionSuccessSignal: row.CurrentVersionSuccessSignal,
+		currentVersionCreatedAt:     row.CurrentVersionCreatedAt, cycleCount: row.CycleCount,
 		activeCycleID: row.ActiveCycleID, activeCycleSequenceNumber: row.ActiveCycleSequenceNumber,
 		activeCycleReviewDate: row.ActiveCycleReviewDate, activeCycleReviewRevision: row.ActiveCycleReviewScheduleRevision,
 		reviewDraftID: row.ReviewDraftID, triggerCycleID: row.TriggerCycleID,
@@ -81,7 +83,8 @@ func goalViewFromHomeRow(row *db.ListHomeGoalViewsRow) (goalViewRow, error) {
 		nextCycleSequenceNumber: row.NextCycleSequenceNumber, goalCreatedAt: row.GoalCreatedAt,
 		goalTerminalAt: row.GoalTerminalAt, currentVersionID: row.CurrentVersionID,
 		currentVersionNumber: row.CurrentVersionNumber, currentVersionBody: row.CurrentVersionBody,
-		currentVersionCreatedAt: row.CurrentVersionCreatedAt, cycleCount: row.CycleCount,
+		currentVersionSuccessSignal: row.CurrentVersionSuccessSignal,
+		currentVersionCreatedAt:     row.CurrentVersionCreatedAt, cycleCount: row.CycleCount,
 		activeCycleID: row.ActiveCycleID, activeCycleSequenceNumber: row.ActiveCycleSequenceNumber,
 		activeCycleReviewDate: row.ActiveCycleReviewDate, activeCycleReviewRevision: row.ActiveCycleReviewScheduleRevision,
 		reviewDraftID: row.ReviewDraftID, triggerCycleID: row.TriggerCycleID,
@@ -95,7 +98,8 @@ func goalViewFromListRow(row *db.ListGoalViewsRow) (goalViewRow, error) {
 		nextCycleSequenceNumber: row.NextCycleSequenceNumber, goalCreatedAt: row.GoalCreatedAt,
 		goalTerminalAt: row.GoalTerminalAt, currentVersionID: row.CurrentVersionID,
 		currentVersionNumber: row.CurrentVersionNumber, currentVersionBody: row.CurrentVersionBody,
-		currentVersionCreatedAt: row.CurrentVersionCreatedAt, cycleCount: row.CycleCount,
+		currentVersionSuccessSignal: row.CurrentVersionSuccessSignal,
+		currentVersionCreatedAt:     row.CurrentVersionCreatedAt, cycleCount: row.CycleCount,
 		activeCycleID: row.ActiveCycleID, activeCycleSequenceNumber: row.ActiveCycleSequenceNumber,
 		activeCycleReviewDate: row.ActiveCycleReviewDate, activeCycleReviewRevision: row.ActiveCycleReviewScheduleRevision,
 		reviewDraftID: row.ReviewDraftID, triggerCycleID: row.TriggerCycleID,
@@ -133,6 +137,7 @@ func mapGoalView(columns goalViewColumns) (goalViewRow, error) {
 				ID:            currentVersionID,
 				VersionNumber: *columns.currentVersionNumber,
 				Body:          *columns.currentVersionBody,
+				SuccessSignal: columns.currentVersionSuccessSignal,
 				CreatedAt:     columns.currentVersionCreatedAt.Time,
 			},
 		},
@@ -203,6 +208,7 @@ type draftViewColumns struct {
 	baseGoalVersionID pgtype.UUID
 	reviewCycleID     pgtype.UUID
 	body              string
+	successSignal     *string
 	revision          int64
 	updatedAt         pgtype.Timestamptz
 }
@@ -211,7 +217,7 @@ func draftViewFromHomeRow(row *db.GetHomeCreationGoalDraftRow) (workspace.DraftV
 	return mapDraftView(draftViewColumns{
 		id: row.ID, draftType: row.DraftType, goalID: row.GoalID,
 		baseGoalVersionID: row.BaseGoalVersionID, reviewCycleID: row.ReviewCycleID,
-		body: row.Body, revision: row.Revision, updatedAt: row.UpdatedAt,
+		body: row.Body, successSignal: row.SuccessSignal, revision: row.Revision, updatedAt: row.UpdatedAt,
 	})
 }
 
@@ -219,15 +225,15 @@ func draftViewFromIDRow(row *db.GetGoalDraftByIDRow) (workspace.DraftView, error
 	return mapDraftView(draftViewColumns{
 		id: row.ID, draftType: row.DraftType, goalID: row.GoalID,
 		baseGoalVersionID: row.BaseGoalVersionID, reviewCycleID: row.ReviewCycleID,
-		body: row.Body, revision: row.Revision, updatedAt: row.UpdatedAt,
+		body: row.Body, successSignal: row.SuccessSignal, revision: row.Revision, updatedAt: row.UpdatedAt,
 	})
 }
 
-func draftViewFromGoalDraft(row *db.GoalDraft) (workspace.DraftView, error) {
+func draftViewFromGoalDraft(row *db.GetGoalReviewDraftRow) (workspace.DraftView, error) {
 	return mapDraftView(draftViewColumns{
 		id: row.ID, draftType: row.DraftType, goalID: row.GoalID,
 		baseGoalVersionID: row.BaseGoalVersionID, reviewCycleID: row.ReviewCycleID,
-		body: row.Body, revision: row.Revision, updatedAt: row.UpdatedAt,
+		body: row.Body, successSignal: row.SuccessSignal, revision: row.Revision, updatedAt: row.UpdatedAt,
 	})
 }
 
@@ -258,6 +264,7 @@ func mapDraftView(columns draftViewColumns) (workspace.DraftView, error) {
 		BaseGoalVersionID: baseGoalVersionID,
 		ReviewCycleID:     reviewCycleID,
 		Body:              columns.body,
+		SuccessSignal:     columns.successSignal,
 		Revision:          columns.revision,
 		UpdatedAt:         columns.updatedAt.Time,
 	}, nil

@@ -124,6 +124,7 @@ type goalDraftFakeTx struct {
 	suggestion        GoalSuggestionState
 
 	insertedDraft        goal.Draft
+	savedDraft           goal.Draft
 	initialGoal          goal.Goal
 	initialVersion       goal.Version
 	initialCycle         cycle.PDCACycle
@@ -172,7 +173,8 @@ func (tx *goalDraftFakeTx) InsertCreationDraft(_ context.Context, draft goal.Dra
 	return tx.mutation("insert_creation_draft")
 }
 
-func (tx *goalDraftFakeTx) SaveDraftCAS(context.Context, goal.Draft, int64) (int64, error) {
+func (tx *goalDraftFakeTx) SaveDraftCAS(_ context.Context, draft goal.Draft, _ int64) (int64, error) {
+	tx.savedDraft = draft
 	return tx.mutation("save_draft")
 }
 
@@ -481,6 +483,8 @@ func reviewDraft(body string, revision int64) goal.Draft {
 	return draft
 }
 
+func pointerTo(value string) *string { return &value }
+
 func goalDraftTestAIContext(_ context.Context, snapshot AISnapshot) (AISnapshot, error) {
 	snapshot.CanonicalProviderInputHash = goalDraftTestCanonicalProviderInputHash
 	return snapshot, nil
@@ -499,6 +503,50 @@ func TestGoalDraftUseCasesCreateNormalizesAndLocksUserFirst(t *testing.T) {
 	if !reflect.DeepEqual(tx.trace, []string{"lock_user", "find_creation_draft", "insert_creation_draft"}) ||
 		uow.committed != 1 {
 		t.Fatalf("trace/transaction = %v / %#v", tx.trace, uow)
+	}
+}
+
+func TestGoalDraftUseCasesSaveDraftPreservesClearsAndSetsSuccessSignal(t *testing.T) {
+	existing := "既存のサイン"
+	tests := []struct {
+		name  string
+		patch SuccessSignalPatch
+		want  *string
+	}{
+		{name: "missing preserves", patch: SuccessSignalPatch{}, want: &existing},
+		{name: "explicit null clears", patch: SuccessSignalPatch{Present: true}, want: nil},
+		{name: "string normalizes", patch: SuccessSignalPatch{Present: true, Value: pointerTo("新しい\r\nサイン")}, want: pointerTo("新しい\nサイン")},
+		{name: "blank canonicalizes to null", patch: SuccessSignalPatch{Present: true, Value: pointerTo(" \t\n")}, want: nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tx := &goalDraftFakeTx{draft: creationDraft("目標", 4)}
+			tx.draft.SuccessSignal = &existing
+			useCases, uow := newGoalDraftTestUseCases(tx)
+			view, err := useCases.SaveDraft(context.Background(), goalDraftTestUserID, goalDraftTestDraftID, SaveGoalDraftInput{
+				Body: "変更した目標", SuccessSignal: test.patch, ExpectedRevision: 4,
+			})
+			if err != nil || uow.committed != 1 || tx.savedDraft.Revision != 5 ||
+				!optionalStringsEqual(view.SuccessSignal, test.want) || !optionalStringsEqual(tx.savedDraft.SuccessSignal, test.want) {
+				t.Fatalf("view/saved/transaction/error = %#v / %#v / %#v / %v", view, tx.savedDraft, uow, err)
+			}
+		})
+	}
+}
+
+func TestGoalDraftUseCasesAIAdoptionPreservesSuccessSignal(t *testing.T) {
+	signal := "AIへ送らず保持するサイン"
+	tx := &goalDraftFakeTx{
+		draft:      creationDraft("元の本文", 4),
+		suggestion: GoalSuggestionState{TargetRevision: 4, SourceText: "元の本文", Output: "改善した本文"},
+	}
+	tx.draft.SuccessSignal = &signal
+	useCases, _ := newGoalDraftTestUseCases(tx)
+	view, err := useCases.AdoptGoalSuggestion(
+		context.Background(), goalDraftTestUserID, goalDraftTestDraftID, "", goalDraftTestGenerationID, 4, nil,
+	)
+	if err != nil || view.SuccessSignal == nil || *view.SuccessSignal != signal {
+		t.Fatalf("AI adoption view = %#v, %v", view, err)
 	}
 }
 
@@ -661,7 +709,8 @@ func TestGoalDraftUseCasesSaveReviewPreservesLeaseAndMissingDraftPrecedence(t *t
 	}
 	useCases, uow := newGoalDraftTestUseCases(tx)
 	view, err := useCases.SaveReview(
-		context.Background(), goalDraftTestUserID, goalDraftTestGoalID, goalDraftTestDraftID, "保存済みReview", 1,
+		context.Background(), goalDraftTestUserID, goalDraftTestGoalID, goalDraftTestDraftID,
+		SaveGoalDraftInput{Body: "保存済みReview", ExpectedRevision: 1},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -676,7 +725,8 @@ func TestGoalDraftUseCasesSaveReviewPreservesLeaseAndMissingDraftPrecedence(t *t
 	}
 	useCases, uow = newGoalDraftTestUseCases(tx)
 	_, err = useCases.SaveReview(
-		context.Background(), goalDraftTestUserID, goalDraftTestGoalID, goalDraftTestDraftID, "変更", 1,
+		context.Background(), goalDraftTestUserID, goalDraftTestGoalID, goalDraftTestDraftID,
+		SaveGoalDraftInput{Body: "変更", ExpectedRevision: 1},
 	)
 	if !errors.Is(err, ErrReviewRevisionConflict) || uow.rolledBack != 1 {
 		t.Fatalf("error/transaction = %v / %#v", err, uow)
@@ -716,7 +766,8 @@ func TestGoalDraftUseCasesSaveReviewValidatesBodyAfterOwnerStateAndLease(t *test
 		t.Run(test.name, func(t *testing.T) {
 			useCases, uow := newGoalDraftTestUseCases(test.tx)
 			_, err := useCases.SaveReview(
-				context.Background(), goalDraftTestUserID, goalDraftTestGoalID, goalDraftTestDraftID, invalidBody, 1,
+				context.Background(), goalDraftTestUserID, goalDraftTestGoalID, goalDraftTestDraftID,
+				SaveGoalDraftInput{Body: invalidBody, ExpectedRevision: 1},
 			)
 			if !errors.Is(err, test.want) || uow.rolledBack != 1 || !reflect.DeepEqual(test.tx.trace, test.trace) {
 				t.Fatalf("error/transaction/trace = %v / %#v / %v", err, uow, test.tx.trace)

@@ -127,6 +127,7 @@ func cycleGoalVersionViewFromSQLC(
 	id pgtype.UUID,
 	versionNumber *int32,
 	body *string,
+	successSignal *string,
 	createdValue pgtype.Timestamptz,
 ) (workspace.GoalVersionView, error) {
 	createdAt, createdValid := finiteCycleTimestamp(createdValue)
@@ -138,6 +139,7 @@ func cycleGoalVersionViewFromSQLC(
 		ID:            versionID,
 		VersionNumber: *versionNumber,
 		Body:          *body,
+		SuccessSignal: successSignal,
 		CreatedAt:     createdAt,
 	}, nil
 }
@@ -160,6 +162,7 @@ func cycleSummaryFromReadRow(row *db.ListCycleSummariesRow) (workspace.CycleSumm
 		row.GoalVersionID,
 		row.GoalVersionNumber,
 		row.GoalVersionBody,
+		row.GoalVersionSuccessSignal,
 		row.GoalVersionCreatedAt,
 	)
 	if err != nil {
@@ -237,6 +240,7 @@ func cycleViewFromReadRow(row *db.GetCycleViewRow) (workspace.CycleView, error) 
 		row.GoalVersionID,
 		row.GoalVersionNumber,
 		row.GoalVersionBody,
+		row.GoalVersionSuccessSignal,
 		row.GoalVersionCreatedAt,
 	)
 	if err != nil {

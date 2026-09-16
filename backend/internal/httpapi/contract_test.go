@@ -80,10 +80,10 @@ type contractWorkspaceStub struct {
 	httpapi.WorkspaceService
 	home           func(context.Context, string) (workspace.HomeView, error)
 	createDraft    func(context.Context, string, string) (workspace.DraftView, error)
-	saveDraft      func(context.Context, string, string, string, int64) (workspace.DraftView, error)
+	saveDraft      func(context.Context, string, string, workspace.SaveGoalDraftInput) (workspace.DraftView, error)
 	startGoal      func(context.Context, string, string, string, string, int64) (workspace.StartGoalResult, error)
 	getGoal        func(context.Context, string, string) (workspace.GoalView, error)
-	saveReview     func(context.Context, string, string, string, string, int64) (workspace.DraftView, error)
+	saveReview     func(context.Context, string, string, string, workspace.SaveGoalDraftInput) (workspace.DraftView, error)
 	saveFrame      func(context.Context, workspace.SaveFrameInput) (workspace.SaveFrameResult, error)
 	refineGoal     func(context.Context, workspace.GoalRefineInput) (workspace.AIResponse, error)
 	adoptGoal      func(context.Context, string, string, string, string, int64, *int64) (workspace.DraftView, error)
@@ -110,11 +110,11 @@ func (stub *contractWorkspaceStub) CreateDraft(ctx context.Context, userID, body
 	return stub.createDraft(ctx, userID, body)
 }
 
-func (stub *contractWorkspaceStub) SaveDraft(ctx context.Context, userID, draftID, body string, revision int64) (workspace.DraftView, error) {
+func (stub *contractWorkspaceStub) SaveDraft(ctx context.Context, userID, draftID string, input workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
 	if stub.saveDraft == nil {
 		panic("unexpected SaveDraft call")
 	}
-	return stub.saveDraft(ctx, userID, draftID, body, revision)
+	return stub.saveDraft(ctx, userID, draftID, input)
 }
 
 func (stub *contractWorkspaceStub) StartGoal(
@@ -138,11 +138,11 @@ func (stub *contractWorkspaceStub) GetGoal(ctx context.Context, userID, goalID s
 	return stub.getGoal(ctx, userID, goalID)
 }
 
-func (stub *contractWorkspaceStub) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID, body string, revision int64) (workspace.DraftView, error) {
+func (stub *contractWorkspaceStub) SaveReview(ctx context.Context, userID, goalID, expectedReviewDraftID string, input workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
 	if stub.saveReview == nil {
 		panic("unexpected SaveReview call")
 	}
-	return stub.saveReview(ctx, userID, goalID, expectedReviewDraftID, body, revision)
+	return stub.saveReview(ctx, userID, goalID, expectedReviewDraftID, input)
 }
 
 func (stub *contractWorkspaceStub) SaveFrame(ctx context.Context, input workspace.SaveFrameInput) (workspace.SaveFrameResult, error) {
@@ -277,7 +277,7 @@ func (probe *requiredMemberWorkspaceProbe) CreateDraft(context.Context, string, 
 	return workspace.DraftView{}, nil
 }
 
-func (probe *requiredMemberWorkspaceProbe) SaveDraft(context.Context, string, string, string, int64) (workspace.DraftView, error) {
+func (probe *requiredMemberWorkspaceProbe) SaveDraft(context.Context, string, string, workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
 	probe.calls++
 	return workspace.DraftView{}, nil
 }
@@ -297,7 +297,7 @@ func (probe *requiredMemberWorkspaceProbe) AdoptGoalSuggestion(context.Context, 
 	return workspace.DraftView{}, nil
 }
 
-func (probe *requiredMemberWorkspaceProbe) SaveReview(context.Context, string, string, string, string, int64) (workspace.DraftView, error) {
+func (probe *requiredMemberWorkspaceProbe) SaveReview(context.Context, string, string, string, workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
 	probe.calls++
 	return workspace.DraftView{}, nil
 }
@@ -1256,7 +1256,7 @@ func TestRecoveryDetailsAndFailuresExposeNoSensitiveCause(t *testing.T) {
 		const bodySentinel = "private goal body sentinel"
 		const errorSentinel = "database credential sentinel"
 		var logs bytes.Buffer
-		spaces := &contractWorkspaceStub{saveDraft: func(context.Context, string, string, string, int64) (workspace.DraftView, error) {
+		spaces := &contractWorkspaceStub{saveDraft: func(context.Context, string, string, workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
 			return workspace.DraftView{}, errors.New(errorSentinel)
 		}}
 		logger := slog.New(slog.NewJSONHandler(&logs, nil))
@@ -1273,9 +1273,9 @@ func TestRecoveryDetailsAndFailuresExposeNoSensitiveCause(t *testing.T) {
 
 func TestAutosaveRevisionConflictsHaveStableHTTPContract(t *testing.T) {
 	t.Run("creation draft", func(t *testing.T) {
-		spaces := &contractWorkspaceStub{saveDraft: func(_ context.Context, userID, draftID, body string, revision int64) (workspace.DraftView, error) {
-			if userID != contractUserID || draftID != contractDraftID || body != "local goal" || revision != 3 {
-				t.Fatalf("SaveDraft input = %q/%q/%q/%d", userID, draftID, body, revision)
+		spaces := &contractWorkspaceStub{saveDraft: func(_ context.Context, userID, draftID string, input workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
+			if userID != contractUserID || draftID != contractDraftID || input.Body != "local goal" || input.ExpectedRevision != 3 {
+				t.Fatalf("SaveDraft input = %q/%q/%#v", userID, draftID, input)
 			}
 			return workspace.DraftView{}, workspace.ErrDraftRevisionConflict
 		}}
@@ -1286,10 +1286,10 @@ func TestAutosaveRevisionConflictsHaveStableHTTPContract(t *testing.T) {
 	})
 
 	t.Run("goal review draft", func(t *testing.T) {
-		spaces := &contractWorkspaceStub{saveReview: func(_ context.Context, userID, goalID, expectedReviewDraftID, body string, revision int64) (workspace.DraftView, error) {
+		spaces := &contractWorkspaceStub{saveReview: func(_ context.Context, userID, goalID, expectedReviewDraftID string, input workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
 			if userID != contractUserID || goalID != contractGoalID || expectedReviewDraftID != contractReviewDraftID ||
-				body != "local review goal" || revision != 5 {
-				t.Fatalf("SaveReview input = %q/%q/%q/%q/%d", userID, goalID, expectedReviewDraftID, body, revision)
+				input.Body != "local review goal" || input.ExpectedRevision != 5 {
+				t.Fatalf("SaveReview input = %q/%q/%q/%#v", userID, goalID, expectedReviewDraftID, input)
 			}
 			return workspace.DraftView{}, workspace.ErrReviewRevisionConflict
 		}}
@@ -1330,6 +1330,100 @@ func TestAutosaveRevisionConflictsHaveStableHTTPContract(t *testing.T) {
 			`{"content":"local plan","expectedFrameRevision":7}`, addContractAuthentication)
 		assertContractError(t, response, http.StatusConflict, "CYCLE_REVISION_CONFLICT", nil)
 	})
+}
+
+func TestGoalDraftSuccessSignalPatchPreservesClearAndSetTriState(t *testing.T) {
+	tests := []struct {
+		name        string
+		member      string
+		wantPresent bool
+		wantValue   *string
+	}{
+		{name: "missing preserves"},
+		{name: "explicit null clears", member: `,"successSignal":null`, wantPresent: true},
+		{name: "string sets", member: `,"successSignal":"週3回できる"`, wantPresent: true, wantValue: pointerToString("週3回できる")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			spaces := &contractWorkspaceStub{saveDraft: func(_ context.Context, _, _ string, input workspace.SaveGoalDraftInput) (workspace.DraftView, error) {
+				if input.SuccessSignal.Present != test.wantPresent || !equalOptionalString(input.SuccessSignal.Value, test.wantValue) {
+					t.Fatalf("success signal patch = %#v, want present=%t value=%#v", input.SuccessSignal, test.wantPresent, test.wantValue)
+				}
+				return workspace.DraftView{ID: contractDraftID, DraftType: "creation", Body: input.Body, SuccessSignal: input.SuccessSignal.Value}, nil
+			}}
+			router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+			response := serveContract(router, http.MethodPatch, "/api/v1/goal-drafts/"+contractDraftID,
+				`{"body":"目標","expectedRevision":0`+test.member+`}`, addContractAuthentication)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status/body = %d / %s", response.Code, response.Body.String())
+			}
+			var payload map[string]map[string]json.RawMessage
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := payload["draft"]["successSignal"]; !ok {
+				t.Fatalf("response omitted required nullable successSignal: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestGoalReviewSuccessSignalPatchPreservesClearAndSetTriState(t *testing.T) {
+	existing := pointerToString("既存のサイン")
+	tests := []struct {
+		name        string
+		member      string
+		wantPresent bool
+		wantValue   *string
+		response    *string
+	}{
+		{name: "missing preserves", response: existing},
+		{name: "explicit null clears", member: `,"successSignal":null`, wantPresent: true},
+		{
+			name: "string sets", member: `,"successSignal":"週3回できる"`, wantPresent: true,
+			wantValue: pointerToString("週3回できる"), response: pointerToString("週3回できる"),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			spaces := &contractWorkspaceStub{saveReview: func(
+				_ context.Context, userID, goalID, expectedReviewDraftID string, input workspace.SaveGoalDraftInput,
+			) (workspace.DraftView, error) {
+				if userID != contractUserID || goalID != contractGoalID || expectedReviewDraftID != contractReviewDraftID {
+					t.Fatalf("SaveReview identity = %q/%q/%q", userID, goalID, expectedReviewDraftID)
+				}
+				if input.SuccessSignal.Present != test.wantPresent || !equalOptionalString(input.SuccessSignal.Value, test.wantValue) {
+					t.Fatalf("success signal patch = %#v, want present=%t value=%#v", input.SuccessSignal, test.wantPresent, test.wantValue)
+				}
+				return workspace.DraftView{
+					ID: contractReviewDraftID, DraftType: "review", Body: input.Body, SuccessSignal: test.response,
+				}, nil
+			}}
+			router := contractRouter(authenticatedContractSessions(), spaces, &contractAccountStub{}, nil)
+			response := serveContract(router, http.MethodPatch, "/api/v1/goals/"+contractGoalID+"/review",
+				`{"body":"目標","expectedReviewDraftId":"`+contractReviewDraftID+`","expectedRevision":0`+test.member+`}`,
+				addContractAuthentication)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status/body = %d / %s", response.Code, response.Body.String())
+			}
+			var payload map[string]map[string]json.RawMessage
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := payload["reviewDraft"]["successSignal"]; !ok {
+				t.Fatalf("response omitted required nullable successSignal: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+func pointerToString(value string) *string { return &value }
+
+func equalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func TestGoalStartUsesAuthenticatedSessionAndReturnsGenericRateLimit(t *testing.T) {

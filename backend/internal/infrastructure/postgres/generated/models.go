@@ -143,6 +143,11 @@ type GoalDraft struct {
 	UpdatedAt         pgtype.Timestamptz
 }
 
+type GoalDraftSuccessSignal struct {
+	GoalDraftID   pgtype.UUID
+	SuccessSignal string
+}
+
 type GoalVersion struct {
 	ID                   pgtype.UUID
 	UserID               pgtype.UUID
@@ -151,6 +156,11 @@ type GoalVersion struct {
 	Body                 string
 	CreatedByOperationID pgtype.UUID
 	CreatedAt            pgtype.Timestamptz
+}
+
+type GoalVersionSuccessSignal struct {
+	GoalVersionID pgtype.UUID
+	SuccessSignal string
 }
 
 type PdcaCycle struct {

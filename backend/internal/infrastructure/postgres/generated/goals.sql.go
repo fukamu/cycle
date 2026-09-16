@@ -25,9 +25,11 @@ func (q *Queries) CountProgressingGoals(ctx context.Context, userID pgtype.UUID)
 }
 
 const getGoalDraftByID = `-- name: GetGoalDraftByID :one
-SELECT id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, updated_at
-FROM goal_drafts
-WHERE id = $1::uuid AND user_id = $2::uuid
+SELECT d.id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id, d.body,
+       signal.success_signal, d.revision, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
+WHERE d.id = $1::uuid AND d.user_id = $2::uuid
 `
 
 type GetGoalDraftByIDParams struct {
@@ -42,6 +44,7 @@ type GetGoalDraftByIDRow struct {
 	BaseGoalVersionID pgtype.UUID
 	ReviewCycleID     pgtype.UUID
 	Body              string
+	SuccessSignal     *string
 	Revision          int64
 	UpdatedAt         pgtype.Timestamptz
 }
@@ -56,6 +59,7 @@ func (q *Queries) GetGoalDraftByID(ctx context.Context, arg GetGoalDraftByIDPara
 		&i.BaseGoalVersionID,
 		&i.ReviewCycleID,
 		&i.Body,
+		&i.SuccessSignal,
 		&i.Revision,
 		&i.UpdatedAt,
 	)
@@ -63,9 +67,11 @@ func (q *Queries) GetGoalDraftByID(ctx context.Context, arg GetGoalDraftByIDPara
 }
 
 const getGoalReviewDraft = `-- name: GetGoalReviewDraft :one
-SELECT id, user_id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, created_at, updated_at
-FROM goal_drafts
-WHERE goal_id = $1 AND user_id = $2 AND draft_type = 'review'
+SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
+WHERE d.goal_id = $1 AND d.user_id = $2 AND d.draft_type = 'review'
 `
 
 type GetGoalReviewDraftParams struct {
@@ -73,9 +79,23 @@ type GetGoalReviewDraftParams struct {
 	UserID pgtype.UUID
 }
 
-func (q *Queries) GetGoalReviewDraft(ctx context.Context, arg GetGoalReviewDraftParams) (*GoalDraft, error) {
+type GetGoalReviewDraftRow struct {
+	ID                pgtype.UUID
+	UserID            pgtype.UUID
+	DraftType         string
+	GoalID            pgtype.UUID
+	BaseGoalVersionID pgtype.UUID
+	ReviewCycleID     pgtype.UUID
+	Body              string
+	SuccessSignal     *string
+	Revision          int64
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) GetGoalReviewDraft(ctx context.Context, arg GetGoalReviewDraftParams) (*GetGoalReviewDraftRow, error) {
 	row := q.db.QueryRow(ctx, getGoalReviewDraft, arg.GoalID, arg.UserID)
-	var i GoalDraft
+	var i GetGoalReviewDraftRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -84,6 +104,7 @@ func (q *Queries) GetGoalReviewDraft(ctx context.Context, arg GetGoalReviewDraft
 		&i.BaseGoalVersionID,
 		&i.ReviewCycleID,
 		&i.Body,
+		&i.SuccessSignal,
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -102,6 +123,7 @@ SELECT
     gv.id AS current_version_id,
     gv.version_number AS current_version_number,
     gv.body AS current_version_body,
+    gv_signal.success_signal AS current_version_success_signal,
     gv.created_at AS current_version_created_at,
     (
         SELECT count(*)
@@ -129,6 +151,8 @@ LEFT JOIN goal_versions gv
     ON gv.user_id = g.user_id
    AND gv.goal_id = g.id
    AND gv.version_number = g.current_version_number
+LEFT JOIN goal_version_success_signals gv_signal
+    ON gv_signal.goal_version_id = gv.id
 LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
@@ -162,6 +186,7 @@ type GetGoalViewRow struct {
 	CurrentVersionID                  pgtype.UUID
 	CurrentVersionNumber              *int32
 	CurrentVersionBody                *string
+	CurrentVersionSuccessSignal       *string
 	CurrentVersionCreatedAt           pgtype.Timestamptz
 	CycleCount                        int32
 	ActiveCycleID                     pgtype.UUID
@@ -188,6 +213,7 @@ func (q *Queries) GetGoalView(ctx context.Context, arg GetGoalViewParams) (*GetG
 		&i.CurrentVersionID,
 		&i.CurrentVersionNumber,
 		&i.CurrentVersionBody,
+		&i.CurrentVersionSuccessSignal,
 		&i.CurrentVersionCreatedAt,
 		&i.CycleCount,
 		&i.ActiveCycleID,
@@ -204,9 +230,11 @@ func (q *Queries) GetGoalView(ctx context.Context, arg GetGoalViewParams) (*GetG
 }
 
 const getHomeCreationGoalDraft = `-- name: GetHomeCreationGoalDraft :one
-SELECT id, draft_type, goal_id, base_goal_version_id, review_cycle_id, body, revision, updated_at
-FROM goal_drafts
-WHERE user_id = $1::uuid AND draft_type = 'creation'
+SELECT d.id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id, d.body,
+       signal.success_signal, d.revision, d.updated_at
+FROM goal_drafts d
+LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
+WHERE d.user_id = $1::uuid AND d.draft_type = 'creation'
 `
 
 type GetHomeCreationGoalDraftRow struct {
@@ -216,6 +244,7 @@ type GetHomeCreationGoalDraftRow struct {
 	BaseGoalVersionID pgtype.UUID
 	ReviewCycleID     pgtype.UUID
 	Body              string
+	SuccessSignal     *string
 	Revision          int64
 	UpdatedAt         pgtype.Timestamptz
 }
@@ -230,6 +259,7 @@ func (q *Queries) GetHomeCreationGoalDraft(ctx context.Context, userID pgtype.UU
 		&i.BaseGoalVersionID,
 		&i.ReviewCycleID,
 		&i.Body,
+		&i.SuccessSignal,
 		&i.Revision,
 		&i.UpdatedAt,
 	)
@@ -247,6 +277,7 @@ SELECT
     gv.id AS current_version_id,
     gv.version_number AS current_version_number,
     gv.body AS current_version_body,
+    gv_signal.success_signal AS current_version_success_signal,
     gv.created_at AS current_version_created_at,
     (
         SELECT count(*)
@@ -274,6 +305,8 @@ LEFT JOIN goal_versions gv
     ON gv.user_id = g.user_id
    AND gv.goal_id = g.id
    AND gv.version_number = g.current_version_number
+LEFT JOIN goal_version_success_signals gv_signal
+    ON gv_signal.goal_version_id = gv.id
 LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
@@ -336,6 +369,7 @@ type ListGoalViewsRow struct {
 	CurrentVersionID                  pgtype.UUID
 	CurrentVersionNumber              *int32
 	CurrentVersionBody                *string
+	CurrentVersionSuccessSignal       *string
 	CurrentVersionCreatedAt           pgtype.Timestamptz
 	CycleCount                        int32
 	ActiveCycleID                     pgtype.UUID
@@ -375,6 +409,7 @@ func (q *Queries) ListGoalViews(ctx context.Context, arg ListGoalViewsParams) ([
 			&i.CurrentVersionID,
 			&i.CurrentVersionNumber,
 			&i.CurrentVersionBody,
+			&i.CurrentVersionSuccessSignal,
 			&i.CurrentVersionCreatedAt,
 			&i.CycleCount,
 			&i.ActiveCycleID,
@@ -408,6 +443,7 @@ SELECT
     gv.id AS current_version_id,
     gv.version_number AS current_version_number,
     gv.body AS current_version_body,
+    gv_signal.success_signal AS current_version_success_signal,
     gv.created_at AS current_version_created_at,
     (
         SELECT count(*)
@@ -435,6 +471,8 @@ LEFT JOIN goal_versions gv
     ON gv.user_id = g.user_id
    AND gv.goal_id = g.id
    AND gv.version_number = g.current_version_number
+LEFT JOIN goal_version_success_signals gv_signal
+    ON gv_signal.goal_version_id = gv.id
 LEFT JOIN pdca_cycles active_cycle
     ON active_cycle.user_id = g.user_id
    AND active_cycle.goal_id = g.id
@@ -464,6 +502,7 @@ type ListHomeGoalViewsRow struct {
 	CurrentVersionID                  pgtype.UUID
 	CurrentVersionNumber              *int32
 	CurrentVersionBody                *string
+	CurrentVersionSuccessSignal       *string
 	CurrentVersionCreatedAt           pgtype.Timestamptz
 	CycleCount                        int32
 	ActiveCycleID                     pgtype.UUID
@@ -496,6 +535,7 @@ func (q *Queries) ListHomeGoalViews(ctx context.Context, userID pgtype.UUID) ([]
 			&i.CurrentVersionID,
 			&i.CurrentVersionNumber,
 			&i.CurrentVersionBody,
+			&i.CurrentVersionSuccessSignal,
 			&i.CurrentVersionCreatedAt,
 			&i.CycleCount,
 			&i.ActiveCycleID,
