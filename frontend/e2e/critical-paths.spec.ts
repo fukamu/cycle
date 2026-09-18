@@ -8,7 +8,6 @@ import {
   cycleTimelineLearningCopy,
   frameCopy,
   homeCopy,
-  reviewScheduleCopy,
   textCounterCopy,
 } from "../src/shared/copy/ja";
 import { newUUIDv7 } from "../src/shared/id/uuid";
@@ -970,132 +969,6 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
     name: "良くなったと分かるサイン",
   });
   await expect(cycleOneSuccessSignal.locator("p")).toHaveText(successSignalV1);
-  const cycleOnePath = new URL(page.url()).pathname;
-  const initialReviewDate = "2099-12-31";
-  const changedReviewDate = "2099-12-30";
-  const schedule = page.getByRole("region", {
-    name: reviewScheduleCopy.heading,
-  });
-  await expect(schedule.getByText(reviewScheduleCopy.unset)).toBeVisible();
-  const reviewDateInput = schedule.getByLabel(reviewScheduleCopy.inputLabel);
-  await reviewDateInput.focus();
-  await reviewDateInput.fill(initialReviewDate);
-  const setReviewDate = schedule.getByRole("button", {
-    name: reviewScheduleCopy.set,
-  });
-  await expect(setReviewDate).toBeEnabled();
-  for (let step = 0; step < 6; step += 1) {
-    if (
-      await setReviewDate.evaluate(
-        (button) => document.activeElement === button,
-      )
-    )
-      break;
-    await expect(reviewDateInput).toBeFocused();
-    await page.keyboard.press("Tab");
-  }
-  await expect(setReviewDate).toBeFocused();
-  const setRequestPromise = page.waitForRequest(
-    (request) =>
-      request.method() === "PATCH" &&
-      request.url().endsWith("/review-schedule"),
-  );
-  await setReviewDate.press("Enter");
-  const setRequest = await setRequestPromise;
-  expect(setRequest.postDataJSON()).toEqual({
-    action: "set",
-    reviewDate: initialReviewDate,
-    expectedReviewScheduleRevision: 0,
-  });
-  await expect(schedule.getByText(initialReviewDate)).toBeVisible();
-  await expect(schedule.getByText("（予定日です）")).toBeVisible();
-
-  const assertReviewScheduleLayout = async () => {
-    await expect(schedule).toBeVisible();
-    expect(
-      await schedule.evaluate((element) => {
-        const style = window.getComputedStyle(element);
-        return {
-          overflowX: style.overflowX,
-          overflowY: style.overflowY,
-          horizontalOverflow:
-            document.documentElement.scrollWidth >
-            document.documentElement.clientWidth,
-        };
-      }),
-    ).toEqual({
-      overflowX: "visible",
-      overflowY: "visible",
-      horizontalOverflow: false,
-    });
-    for (const button of await schedule.getByRole("button").all())
-      expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
-  };
-  await page.setViewportSize({ width: 320, height: 844 });
-  await assertReviewScheduleLayout();
-  await page.setViewportSize({ width: 640, height: 844 });
-  await page.evaluate(() =>
-    document.documentElement.style.setProperty("zoom", "2"),
-  );
-  await assertReviewScheduleLayout();
-  await page.evaluate(() =>
-    document.documentElement.style.removeProperty("zoom"),
-  );
-  await page.setViewportSize({ width: 1280, height: 720 });
-
-  await page.getByRole("link", { name: "FUKAMU Cycle ホーム" }).click();
-  const scheduledCard = page.getByRole("article", { name: goalText });
-  await expect(scheduledCard.getByText(initialReviewDate)).toBeVisible();
-  await expect(scheduledCard.getByText("（予定日です）")).toBeVisible();
-  await expect(
-    scheduledCard.locator("button, input, select, textarea"),
-  ).toHaveCount(0);
-  await scheduledCard.getByRole("link", { name: "Cycle 1を続ける" }).click();
-  await expect(page).toHaveURL(cycleOnePath);
-
-  const changeRequestPromise = page.waitForRequest(
-    (request) =>
-      request.method() === "PATCH" &&
-      request.url().endsWith("/review-schedule"),
-  );
-  await reviewDateInput.fill(changedReviewDate);
-  await schedule
-    .getByRole("button", { name: reviewScheduleCopy.change })
-    .click();
-  expect((await changeRequestPromise).postDataJSON()).toEqual({
-    action: "set",
-    reviewDate: changedReviewDate,
-    expectedReviewScheduleRevision: 1,
-  });
-  await expect(schedule.getByText(changedReviewDate)).toBeVisible();
-
-  const clearRequestPromise = page.waitForRequest(
-    (request) =>
-      request.method() === "PATCH" &&
-      request.url().endsWith("/review-schedule"),
-  );
-  const clearReviewDate = schedule.getByRole("button", {
-    name: reviewScheduleCopy.clear,
-  });
-  await clearReviewDate.focus();
-  await clearReviewDate.press("Enter");
-  expect((await clearRequestPromise).postDataJSON()).toEqual({
-    action: "clear",
-    expectedReviewScheduleRevision: 2,
-  });
-  await expect(schedule.getByText(reviewScheduleCopy.unset)).toBeVisible();
-
-  const finalSetResponse = page.waitForResponse(
-    (response) =>
-      response.request().method() === "PATCH" &&
-      response.url().endsWith("/review-schedule") &&
-      response.ok(),
-  );
-  await reviewDateInput.fill(initialReviewDate);
-  await schedule.getByRole("button", { name: reviewScheduleCopy.set }).click();
-  await finalSetResponse;
-  await expect(schedule.getByText(initialReviewDate)).toBeVisible();
-
   const planEditor = page.getByRole("textbox", { name: "P — Plan" });
   await expect(planEditor).not.toHaveAttribute("maxlength");
   await expectTextCounterAtNarrowWidths(page, "P — Plan", 0, 200);
@@ -1278,13 +1151,6 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(
     page.getByRole("region", { name: "良くなったと分かるサイン" }).locator("p"),
   ).toHaveText(successSignalV2);
-  const cycleTwoSchedule = page.getByRole("region", {
-    name: reviewScheduleCopy.heading,
-  });
-  await expect(
-    cycleTwoSchedule.getByText(reviewScheduleCopy.unset),
-  ).toBeVisible();
-  await expect(cycleTwoSchedule.getByText(initialReviewDate)).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "P Plan" })).toHaveAttribute(
     "aria-selected",
     "true",
@@ -1511,16 +1377,6 @@ test("goal creation, cycle completion, review, next cycle, timeline, and delete"
   await expect(
     page.getByRole("region", { name: "良くなったと分かるサイン" }).locator("p"),
   ).toHaveText(successSignalV1);
-  const terminalSchedule = page.getByRole("region", {
-    name: reviewScheduleCopy.heading,
-  });
-  await expect(terminalSchedule.getByText(initialReviewDate)).toBeVisible();
-  await expect(
-    terminalSchedule.getByText(reviewScheduleCopy.terminal),
-  ).toBeVisible();
-  await expect(
-    terminalSchedule.getByLabel(reviewScheduleCopy.inputLabel),
-  ).toHaveCount(0);
   await page.getByRole("tab", { name: "C Check" }).click();
   await expect(page.getByRole("textbox", { name: "C — Check" })).toHaveValue(
     reviewNarrowContent.check,

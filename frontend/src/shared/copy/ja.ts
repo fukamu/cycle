@@ -1,5 +1,4 @@
 import type { Frame } from "../api/schemas";
-import type { ReviewDateState } from "../date/localDate";
 
 export const firstUseGuideCopy = {
   heading: "はじめてガイド",
@@ -111,31 +110,6 @@ export const cyclePreviousActionReferenceCopy = {
     "前回決めた次のアクションです。今回も続けること・変えることを考える手がかりにしてください。",
   goalVersionChanged:
     "前回のCycle後に目標が変更されています。現在の目標に合う内容を参考にしてください。",
-} as const;
-
-export const reviewScheduleCopy = {
-  heading: "見直す日",
-  unset: "未設定",
-  state: {
-    today: "本日です",
-    upcoming: "予定日です",
-    overdue: "予定日を過ぎています",
-  } satisfies Record<ReviewDateState, string>,
-  inputLabel: "見直す日を入力",
-  inputGuide:
-    "この端末のカレンダー日付と比較して、本日・予定・超過を表示します。",
-  set: "見直す日を設定",
-  change: "変更を保存",
-  clear: "設定を解除",
-  saving: "見直す日を更新しています…",
-  saved: "見直す日を更新しました。",
-  invalid: "YYYY-MM-DD形式の有効な日付を入力してください。",
-  conflict:
-    "別の更新が反映されています。現在の見直す日を確認して、もう一度保存してください。",
-  terminal: "このCycleで確定した見直す日です。",
-  commandPending: "サイクルの操作が完了してから変更してください。",
-  terminalCommandsPending:
-    "見直す日の更新が完了してから、サイクルや目標の操作を続けてください。",
 } as const;
 
 export type CycleFrameTemplate = {
@@ -301,7 +275,6 @@ export const cycleReplanCopy = {
   disabled: {
     hydrating: "この端末の入力を確認しています。完了後に再計画できます。",
     ai: "AI処理の完了後に再計画できます。",
-    reviewSchedule: "見直す日の保存完了後に再計画できます。",
     saving: "入力の保存完了を確認しています。",
     pending: "ほかの処理が完了するまでお待ちください。",
   },
