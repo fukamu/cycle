@@ -360,7 +360,6 @@ summary:focus-visible {
 .draft-card,
 .empty-card,
 .editor-card,
-.cycle-review-schedule,
 .review-decision-context,
 .suggestion-panel,
 .cycle-summary,
@@ -411,7 +410,6 @@ summary:focus-visible {
 }
 
 .goal-card__status,
-.goal-card__review-schedule,
 .goal-card__helper {
   margin: 0;
   overflow-wrap: anywhere;
@@ -424,12 +422,6 @@ summary:focus-visible {
 
 .goal-card__helper {
   color: var(--muted);
-}
-
-.goal-card__review-schedule {
-  color: var(--ink);
-  font-size: var(--font-size-small);
-  font-variant-numeric: tabular-nums;
 }
 
 .goal-card__cta {
@@ -899,81 +891,6 @@ button:disabled {
   color: var(--brand-dark);
   font-size: var(--font-size-small);
   font-weight: var(--font-weight-bold);
-}
-
-.cycle-review-schedule {
-  display: grid;
-  gap: 16px;
-  min-width: 0;
-  margin-bottom: 22px;
-}
-
-.cycle-review-schedule__summary {
-  display: grid;
-  gap: 6px;
-}
-
-.cycle-review-schedule__summary h2,
-.cycle-review-schedule__summary p,
-.cycle-review-schedule form,
-.cycle-review-schedule__guide,
-.cycle-review-schedule .inline-success {
-  margin: 0;
-}
-
-.cycle-review-schedule__summary h2 {
-  color: var(--brand-deep);
-  font-size: 1.05rem;
-}
-
-.cycle-review-schedule__summary p {
-  overflow-wrap: anywhere;
-}
-
-.cycle-review-schedule__summary time {
-  font-variant-numeric: tabular-nums;
-}
-
-.cycle-review-schedule form {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-}
-
-.cycle-review-schedule label {
-  font-weight: var(--font-weight-bold);
-}
-
-.cycle-review-schedule input {
-  width: min(100%, 22rem);
-  min-height: 44px;
-  padding: 10px 12px;
-  color: var(--ink);
-  background: white;
-  border: 1px solid var(--brand);
-  border-radius: 10px;
-}
-
-.cycle-review-schedule input:disabled {
-  background: var(--brand-soft);
-}
-
-.cycle-review-schedule__guide {
-  color: var(--muted);
-  font-size: var(--font-size-small);
-}
-
-.cycle-review-schedule__terminal-guidance {
-  margin: 0;
-  color: var(--brand-dark);
-  font-size: var(--font-size-small);
-  font-weight: var(--font-weight-medium);
-  overflow-wrap: anywhere;
-}
-
-.cycle-review-schedule .inline-success {
-  color: var(--brand-dark);
-  font-weight: var(--font-weight-medium);
 }
 
 .editor-card {

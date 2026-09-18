@@ -512,7 +512,7 @@ Cycle 3を振り返り、目標を続けるか決めましょう。
 ```
 
 - `currentWork.kind=active_cycle`: `Cycle {cycleSequenceNumber} 実行中`、`P/D/C/Aの記録を続けましょう。`、`Cycle {cycleSequenceNumber}を続ける`を表示し、Active Cycle routeへ遷移する。
-- Active Cycleに見直す日が設定されている場合は、その`YYYY-MM-DD`と、Browser local calendar dateとの比較で導出したToday / Upcoming / Overdueを色だけに依存しないtextで表示する。日付変更時もCardの位置を変えない。
+- `currentWork.kind=active_cycle`の`reviewSchedule`は互換read modelとして受理するが、Home Cardには日付、設定状態、入力controlを表示しない。保存済み値の有無や変更でCardの位置を変えない。
 - `currentWork.kind=goal_review`: `目標の見直し中`、`Cycle {triggerCycleSequenceNumber}を振り返り、目標を続けるか決めましょう。`、`目標を見直す`を表示し、Goal Review routeへ遷移する。
 - Goal本文はCardのheadingとし、改行を維持しながら長い文字列を折り返す。CTAは44px以上のtouch targetとし、Collection順と同じ安定したfocus順を維持する。320px幅および200% text zoomで横scrollを発生させない。
 
@@ -627,7 +627,7 @@ Active Cycle `N > 1`のP選択中に§14.5の`previousCompletedCycleAction`がob
 
 Cycle 1、直接の前Cycleが`canceled(reason=replanned)`で`previousCompletedCycleAction=null`のActive Cycle、D / C / A、Completed / Canceled Cycleでは前回A Panelを表示しない。Active PでもBrowser Draft Recoveryまたはrevision recoveryの確認中、workspace移動またはGoal削除のfence中は表示せず、staleな前回Aを現行入力と並べない。通常状態のreading orderはP Guide → 前回A Panel → P template → P Textareaとし、前回A Panelの表示はP本文、Auto Save、Frame revision、Browser Draft、Recovery、AI、選択Frameまたはfocusを変更しない。
 
-Active Cycleでは任意の`見直す日`を`YYYY-MM-DD`のcalendar dateとして表示し、未設定、設定/変更、明示Clearを区別する。設定/変更とClearはFrame Auto Saveへ混ぜず、各操作を明示確定してから送る。設定済み日はBrowser local calendar dateとの比較からToday / Upcoming / Overdueをtextで併記し、timezone/offsetを日付値へ保存しない。Completed / Canceledでは確定時点の値をRead-onlyで表示し、変更controlを出さない。
+First-party FrontendはActive Cycle、Completed / Canceled Cycle、Home、Historyのいずれにも`見直す日`の日付、設定状態、入力・変更・Clear controlを表示せず、Review schedule mutation APIを呼び出さない。既存の保存値は削除せず、§14.5のDomain semantics、full `CycleView` / Home DTO、mutation endpoint、DB table、Replanのexpected revisionをrollback互換境界として維持する。これらのcontractや保存dataを将来削除する場合は、別の仕様変更として承認し、新しいforward migrationで扱う。
 
 Active CycleのPまたはD選択中は、Guideの後、Textareaの前に任意のbuilt-in templateを段階表示する。標準では明示操作`テンプレートから書き始める（任意）`だけを閉じた状態で示し、操作時に同じ場所で3件を展開する。展開後は各templateの名称、用途、実際に挿入する全文preview、明示操作`{template名}を挿入`を選択前から示す。P / Dを切り替えた場合は遷移先を閉じた標準状態で表示し、展開状態を永続化しない。現在Frameが空文字またはUnicode whitespaceだけの場合だけ、明示操作で既存本文全体をpreviewどおり置き換え、同じTextarea入力・Auto Save経路へ渡して末尾へfocusする。挿入直後は展開した領域内に`テンプレートの挿入を取り消す`を提供し、その後はtemplate IDや選択情報を持たないplain textとして自由に編集できる。
 
@@ -1090,7 +1090,7 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> active: Goal開始またはGoal Review確定
-    active --> active: Auto Save / Action AI適用 / 見直す日の設定・変更・解除
+    active --> active: Auto Save / Action AI適用 / 互換APIによる見直す日の設定・変更・解除
     active --> completed: P/D/C/A入力済みでCycle完了
     active --> canceled: Goal達成または終了
     active --> canceled: 再計画
@@ -2410,7 +2410,7 @@ Canonical request hashはpathの`goalId` / `cycleId`と、bodyの`expectedGoalRe
 - Backend / DB: UTC `TIMESTAMPTZ`。
 - API: RFC 3339 UTC string。
 - Frontend: Browser local timezoneで表示。
-- Cycleの`reviewDate`だけはInstantではなくLocalDateであり、DB `DATE` / API exact `YYYY-MM-DD`を維持する。Today / Upcoming / Overdueは表示時のBrowser local calendar dateと比較して導出し、device timezoneやclockの変更で分類だけが変わっても保存値は変えない。
+- Cycleの`reviewDate`だけはInstantではなくLocalDateであり、DB `DATE` / API exact `YYYY-MM-DD`を維持する。First-party Frontendはこの値を表示しないため、Browser local timezone、device clock、offsetによる表示用分類を導出しない。
 - Dの日時付きクイック追記はDomain timestampではなくUserが明示操作でD本文へ追加するplain textである。操作時点のBrowser local date/timeと`Date.getTimezoneOffset()`に対応する数値UTC offsetを使用し、DST等でoffsetが変わる地域ではその瞬間のoffsetを記録する。Server canonical timeへの補正、後からの再計算、timezone名への変換は行わない。
 - Active Cycle: `YYYY/MM/DD 〜`。
 - Completed / Canceled: 同日なら単一日、別日なら`開始 〜 終了`。
@@ -3846,6 +3846,8 @@ Errors:
 **Use Case:** ChangeReviewSchedule
 **Auth:** Session
 **Authorization:** Goal owner + Cycle same Goal + Goal `active_cycle` + Cycle `active`
+
+このendpointはUI-first撤去後のrollback互換境界として維持し、First-party Frontendからは呼び出さない。保存済み値の破棄やcontract削除を伴う変更はこのendpointの段階的廃止とは別のforward変更として扱う。
 
 Set / change request:
 
@@ -6610,7 +6612,7 @@ Governance / Policyの大規模negative fixture suiteは、gate / CI control-pla
 | Bootstrap、Session、Google、Account Delete | §§18.2、21、25、27、41.10 | Domain/Application、HTTP matrix、実DB concurrency、Frontend identity fence、E2E |
 | 初回Guide / Browser-local state | §§2.2–2.3、6.5、9.10、11.6、27.4–27.5、28.8、29.12、40.7、41.13、42.3、43.9 | Frontend predicate/storage/identity unit、component/A11y/responsive、two-tab race、AI-free E2E、privacy/telemetry negative assertion |
 | Goal Draft、Start、limit、Version | §§12、14、18.3、22 | Domain boundary、HTTP、real-DB rollback/concurrency、Frontend editor、E2E |
-| Cycle save、P/D template、review schedule、complete、replan、Review、termination、full Cycle predecessor read | §§9.6–9.7、13–14、18.4–18.6、18.10、23–24、28 | template preview / blank・non-blank・terminal・IME・recovery・UndoのFrontend、content / schedule revision・transition・read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
+| Cycle save、P/D template、review schedule互換境界、complete、replan、Review、termination、full Cycle predecessor read | §§9.6–9.7、13–14、18.4–18.6、18.10、23–24、28 | template preview / blank・non-blank・terminal・IME・recovery・UndoのFrontend、review schedule非表示・非mutationのFrontend、content / schedule revision・transition・read-model unit、全full-Cycle HTTP surface、real-DB replay/lock/scope/rollback、autosave component、E2E |
 | History / Goal Delete / retention | §§9.4、14.8、18.7、23.4、38.2、39.5 | read-model unit、authz/API、real-DB cascade/CAS/cleanup、E2E |
 | AI prompt、schema、context、result | §§32–37 | typed fake、mock transport、semantic boundary、context-isolation query/application、Frontend adoption |
 | AI quota、cost、abuse | §§38–39 | real-DB quota/rate/budget/settlement/cleanup concurrency、failure and replay |
@@ -6636,7 +6638,7 @@ Exact test file名やcase IDはRepositoryのTest suiteをSourceとし、本書�
 8. Browser identity/route generation変更後に旧payloadを公開しないこと。
 9. 削除後にcontent、cache、late callbackがresourceを復元しないこと。
 
-Review scheduleは、unset / set / change / clear、Gregorian dateの最小・最大・不正shape・存在しない日・範囲外、schedule revision 0と独立増分、same-target response-loss retry、stale different-target conflict、set / clearとCycle完了・Goal終了の直列化、terminal freeze、次Cycleへの非継承、Homeの安定順序、Cycle / Goal / Account削除cascadeをDomain、HTTP、Application、実PostgreSQLで検証する。全full `CycleView` surfaceはrequired `reviewDate` / `reviewScheduleRevision`を返し、Homeは`active_cycle`だけrequired nested schedule object、`goal_review`ではomit、Cycle list / Frame responseは従来shapeのままとする。
+Review scheduleの互換境界は、unset / set / change / clear、Gregorian dateの最小・最大・不正shape・存在しない日・範囲外、schedule revision 0と独立増分、same-target response-loss retry、stale different-target conflict、set / clearとCycle完了・Goal終了の直列化、terminal freeze、次Cycleへの非継承、Homeの安定順序、Cycle / Goal / Account削除cascadeをDomain、HTTP、Application、実PostgreSQLで検証する。全full `CycleView` surfaceはrequired `reviewDate` / `reviewScheduleRevision`を返し、Homeは`active_cycle`だけrequired nested schedule object、`goal_review`ではomit、Cycle list / Frame responseは従来shapeのままとする。Frontendは保存済みscheduleを含むDTOを受理しながら日付とcontrolを表示せず、review schedule mutationを送らないことをComponent testで固定する。
 
 Browser Draft privacy境界では、Goalに紐づくDraft putとdelete cleanupの両直列化順、Goal cleanupとAccount cleanupの両直列化順、別User / Goal isolation、旧schema writer、advisoryのsender / receiver / 重複 / 未達を決定的に検証する。
 

@@ -25,16 +25,12 @@ import {
   type GoalDeletionCleanupOutcome,
 } from "../features/goal-deletion";
 import { APIError } from "../shared/api/client";
-import { NetworkError } from "../shared/api/networkError";
 import {
-  cycleActionCopy,
   cycleFrameCopy,
   cycleFrameTemplateCopy,
-  cycleGoalActionCopy,
   cyclePreviousActionReferenceCopy,
   firstUseGuideCopy,
   frameCopy,
-  reviewScheduleCopy,
 } from "../shared/copy/ja";
 import {
   AutoSaveScopeProvider,
@@ -44,7 +40,6 @@ import { PostCommitCleanupBoundary } from "../shared/cleanup/PostCommitCleanupBo
 import type { Cycle, Goal, Session } from "../shared/api/schemas";
 import {
   completeCycle,
-  changeReviewSchedule,
   deleteGoal,
   generateAction,
   getCycle,
@@ -72,7 +67,6 @@ import { GoalWorkspacePage } from "./GoalWorkspacePage";
 
 vi.mock("../shared/api/workspace", () => ({
   completeCycle: vi.fn(),
-  changeReviewSchedule: vi.fn(),
   deleteGoal: vi.fn(),
   generateAction: vi.fn(),
   getCycle: vi.fn(),
@@ -398,536 +392,30 @@ describe("GoalWorkspacePage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it.each([
-    {
-      label: "Goal",
-      goalSchedule: {
-        reviewDate: "2026-09-25",
-        reviewScheduleRevision: 2,
-      },
-      cycleSchedule: {
-        reviewDate: "2026-09-24",
-        reviewScheduleRevision: 1,
-      },
-      expected: "2026-09-25",
-    },
-    {
-      label: "Cycle",
-      goalSchedule: {
-        reviewDate: "2026-09-24",
-        reviewScheduleRevision: 1,
-      },
-      cycleSchedule: {
-        reviewDate: "2026-09-26",
-        reviewScheduleRevision: 2,
-      },
-      expected: "2026-09-26",
-    },
-  ])(
-    "reconciles a newer $label schedule across the initial parallel detail reads",
-    async ({ goalSchedule, cycleSchedule, expected }) => {
-      vi.mocked(getGoal).mockResolvedValue({
-        goal: {
-          ...goal,
-          currentWork: {
-            kind: "active_cycle",
-            cycleId: cycle.id,
-            cycleSequenceNumber: 1,
-            reviewSchedule: goalSchedule,
-          },
-        },
-      });
-      vi.mocked(getCycle).mockResolvedValue({
-        cycle: { ...cycle, ...cycleSchedule },
-      });
-      const cache = new QueryClient({
-        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-      });
-      renderPage(cache);
-
-      expect(await screen.findByText(expected)).toHaveAttribute(
-        "datetime",
-        expected,
-      );
-      expect(screen.getByLabelText(reviewScheduleCopy.inputLabel)).toHaveValue(
-        expected,
-      );
-    },
-  );
-
-  it("fails closed and refetches both initial details for an equal-revision date disagreement", async () => {
-    const goalSchedule = {
-      reviewDate: "2026-09-24",
-      reviewScheduleRevision: 1,
-    } as const;
-    const conflictingCycle: Cycle = {
-      ...cycle,
-      reviewDate: "2026-09-25",
-      reviewScheduleRevision: 1,
-    };
-    const convergedCycle: Cycle = {
-      ...conflictingCycle,
-      reviewDate: goalSchedule.reviewDate,
-    };
-    const scheduledGoal: Goal = {
-      ...goal,
-      currentWork: {
-        kind: "active_cycle",
-        cycleId: cycle.id,
-        cycleSequenceNumber: 1,
-        reviewSchedule: goalSchedule,
-      },
-    };
-    vi.mocked(getGoal)
-      .mockReset()
-      .mockResolvedValueOnce({ goal: scheduledGoal })
-      .mockResolvedValueOnce({ goal: scheduledGoal });
-    vi.mocked(getCycle)
-      .mockReset()
-      .mockResolvedValueOnce({ cycle: conflictingCycle })
-      .mockResolvedValueOnce({ cycle: convergedCycle });
-    const cache = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  it("keeps a saved review schedule hidden from the workspace", async () => {
+    const reviewDate = "2026-09-25";
+    vi.mocked(getCycle).mockResolvedValue({
+      cycle: { ...cycle, reviewDate, reviewScheduleRevision: 3 },
     });
-    renderPage(cache);
-
-    const error = await screen.findByRole("alert");
-    expect(error).toHaveTextContent("読み込めませんでした。");
-    fireEvent.click(within(error).getByRole("button", { name: "再試行" }));
-
-    expect(await screen.findByText(goalSchedule.reviewDate)).toHaveAttribute(
-      "datetime",
-      goalSchedule.reviewDate,
-    );
-    expect(getGoal).toHaveBeenCalledTimes(2);
-    expect(getCycle).toHaveBeenCalledTimes(2);
-  });
-
-  it("serializes a pending schedule change with terminal commands without pausing Frame editing or autosave", async () => {
-    const scheduleChange =
-      deferred<Awaited<ReturnType<typeof changeReviewSchedule>>>();
-    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
-    vi.mocked(changeReviewSchedule).mockReturnValue(scheduleChange.promise);
-    const cache = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
-    renderPage(cache);
-
-    fireEvent.click(await screen.findByRole("tab", { name: /A\s*Action/ }));
-    const complete = await screen.findByRole("button", {
-      name: "サイクルを完了",
-    });
-    await waitFor(() => expect(complete).toBeEnabled());
-    const scheduleInput = screen.getByLabelText(reviewScheduleCopy.inputLabel);
-    fireEvent.change(scheduleInput, { target: { value: "2026-09-25" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: reviewScheduleCopy.set }),
-    );
-    await waitFor(() => expect(changeReviewSchedule).toHaveBeenCalledOnce());
-
-    expect(complete).toBeDisabled();
-    const replan = screen.getByRole("button", {
-      name: "このCycleを中断して再計画",
-    });
-    expect(replan).toBeDisabled();
-    expect(replan).toHaveAccessibleDescription(
-      "見直す日の保存完了後に再計画できます。",
-    );
-    const pendingGuidance = screen.getByText(
-      reviewScheduleCopy.terminalCommandsPending,
-    );
-    expect(complete.getAttribute("aria-describedby")?.split(" ")).toContain(
-      pendingGuidance.id,
-    );
-    expect(
-      screen.getByRole("button", { name: "アクションを生成" }),
-    ).toBeEnabled();
-    for (const name of ["アクションを生成", "AIで推敲"]) {
-      const button = screen.getByRole("button", { name });
-      expect(button).toBeEnabled();
-      expect(
-        button.getAttribute("aria-describedby")?.split(" ") ?? [],
-      ).not.toContain(pendingGuidance.id);
-    }
-    fireEvent.click(screen.getByText("目標の操作"));
-    const goalActions = document.querySelector<HTMLElement>(".goal-actions");
-    expect(goalActions).not.toBeNull();
-    if (!goalActions) throw new Error("Goal actions are missing");
-    for (const name of ["目標を達成として終了", "目標を終了", "目標を削除"]) {
-      const button = within(goalActions).getByRole("button", { name });
-      expect(button).toBeDisabled();
-      expect(button.getAttribute("aria-describedby")?.split(" ")).toContain(
-        pendingGuidance.id,
-      );
-    }
-
-    fireEvent.click(screen.getByRole("tab", { name: /P\s*Plan/ }));
-    const editor = screen.getByRole("textbox", { name: "P — Plan" });
-    expect(editor).not.toHaveAttribute("readonly");
-    fireEvent.change(editor, { target: { value: "日付保存中も編集するP" } });
-    fireEvent.blur(editor);
-    await waitFor(() => expect(saveCycleFrame).toHaveBeenCalledOnce());
-    await waitFor(() => expect(putBrowserDraft).toHaveBeenCalled());
-
-    scheduleChange.resolve({
-      cycle: {
-        ...completableCycle,
-        reviewDate: "2026-09-25",
-        reviewScheduleRevision: 1,
-      },
-    });
-    expect(await screen.findByText(reviewScheduleCopy.saved)).toBeVisible();
-    fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "サイクルを完了" }),
-      ).toBeEnabled(),
-    );
-  });
-
-  it("keeps existing AI guidance while appending the schedule-pending reason only to terminal commands", async () => {
-    const scheduleChange =
-      deferred<Awaited<ReturnType<typeof changeReviewSchedule>>>();
-    const refinement = deferred<Awaited<ReturnType<typeof refineAction>>>();
-    vi.mocked(getCycle).mockResolvedValue({ cycle: completableCycle });
-    vi.mocked(changeReviewSchedule).mockReturnValue(scheduleChange.promise);
-    vi.mocked(refineAction).mockReturnValue(refinement.promise);
-    const cache = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
-    renderPage(cache);
-
-    fireEvent.click(await screen.findByRole("tab", { name: /A\s*Action/ }));
-    const scheduleInput = screen.getByLabelText(reviewScheduleCopy.inputLabel);
-    fireEvent.change(scheduleInput, { target: { value: "2026-09-25" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: reviewScheduleCopy.set }),
-    );
-    await waitFor(() => expect(changeReviewSchedule).toHaveBeenCalledOnce());
-
-    fireEvent.click(screen.getByRole("button", { name: "AIで推敲" }));
-    await waitFor(() => expect(refineAction).toHaveBeenCalledOnce());
-
-    const pendingGuidance = screen.getByText(
-      reviewScheduleCopy.terminalCommandsPending,
-    );
-    const aiGuidance = screen.getByText(cycleActionCopy.disabled.aiRefining);
-    const refining = screen.getByRole("button", { name: "推敲しています…" });
-    expect(refining).toHaveAttribute("aria-describedby", aiGuidance.id);
-    expect(refining.getAttribute("aria-describedby")?.split(" ")).not.toContain(
-      pendingGuidance.id,
-    );
-    const complete = screen.getByRole("button", {
-      name: "サイクルを完了",
-    });
-    expect(complete.getAttribute("aria-describedby")?.split(" ")).toEqual(
-      expect.arrayContaining([aiGuidance.id, pendingGuidance.id]),
-    );
-
-    fireEvent.click(screen.getByText("目標の操作"));
-    const goalActions = document.querySelector<HTMLElement>(".goal-actions");
-    expect(goalActions).not.toBeNull();
-    if (!goalActions) throw new Error("Goal actions are missing");
-    const goalGuidance = within(goalActions).getByText(
-      cycleGoalActionCopy.disabled.aiRefining,
-    );
-    for (const name of ["目標を達成として終了", "目標を終了"]) {
-      expect(
-        within(goalActions)
-          .getByRole("button", { name })
-          .getAttribute("aria-describedby")
-          ?.split(" "),
-      ).toEqual(expect.arrayContaining([goalGuidance.id, pendingGuidance.id]));
-    }
-    expect(
-      within(goalActions)
-        .getByRole("button", { name: "目標を削除" })
-        .getAttribute("aria-describedby")
-        ?.split(" "),
-    ).toEqual([pendingGuidance.id]);
-
-    await act(async () => refinement.reject(new Error("provider failure")));
-    await act(async () =>
-      scheduleChange.resolve({
-        cycle: {
-          ...completableCycle,
-          reviewDate: "2026-09-25",
-          reviewScheduleRevision: 1,
-        },
-      }),
-    );
-  });
-
-  it("does not publish a late schedule response after the route generation changes", async () => {
-    const scheduleChange =
-      deferred<Awaited<ReturnType<typeof changeReviewSchedule>>>();
-    vi.mocked(changeReviewSchedule).mockReturnValue(scheduleChange.promise);
-    const cache = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
-    renderPage(cache, { reviewScheduleRouteSwitch: true });
-
-    const scheduleInput = await screen.findByLabelText(
-      reviewScheduleCopy.inputLabel,
-    );
-    fireEvent.change(scheduleInput, { target: { value: "2026-09-25" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: reviewScheduleCopy.set }),
-    );
-    await waitFor(() => expect(changeReviewSchedule).toHaveBeenCalledOnce());
-    fireEvent.click(screen.getByRole("link", { name: "同じ画面を再表示" }));
-
-    await act(async () => {
-      scheduleChange.resolve({
-        cycle: {
-          ...cycle,
-          reviewDate: "2026-09-25",
-          reviewScheduleRevision: 1,
-        },
-      });
-      await scheduleChange.promise;
-    });
-
-    expect(
-      cache.getQueryData<{ cycle: Cycle }>(
-        userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
-      )?.cycle.reviewDate,
-    ).toBeNull();
-    expect(
-      screen.queryByText(reviewScheduleCopy.saved),
-    ).not.toBeInTheDocument();
-    expect(scheduleInput).toHaveValue("2026-09-25");
-  });
-
-  it("does not publish a late terminal Cycle as a successful schedule change", async () => {
-    const terminalGoal: Goal = {
-      ...goal,
-      status: "ended",
-      revision: goal.revision + 1,
-      currentWork: null,
-      terminalAt: "2026-09-15T00:00:00.000Z",
-    };
-    vi.mocked(getGoal)
-      .mockReset()
-      .mockResolvedValueOnce({ goal })
-      .mockResolvedValueOnce({ goal: terminalGoal });
-    vi.mocked(changeReviewSchedule).mockResolvedValue({
-      cycle: {
-        ...cycle,
-        status: "canceled",
-        canceledAt: "2026-09-15T00:00:00.000Z",
-        cancellationReason: "goal_ended",
-        reviewDate: "2026-09-25",
-        reviewScheduleRevision: 1,
-      },
-    });
-    const cache = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
-    renderPage(cache);
-
-    const scheduleInput = await screen.findByLabelText(
-      reviewScheduleCopy.inputLabel,
-    );
-    fireEvent.change(scheduleInput, { target: { value: "2026-09-25" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: reviewScheduleCopy.set }),
-    );
-
-    expect(
-      await screen.findByText("現在の作業状態が更新されました"),
-    ).toBeVisible();
-    expect(
-      screen.queryByText(reviewScheduleCopy.saved),
-    ).not.toBeInTheDocument();
-    expect(
-      cache.getQueryData<{ cycle: Cycle }>(
-        userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
-      )?.cycle.reviewDate,
-    ).toBeNull();
-  });
-
-  it("preserves an equal-revision schedule invariant instead of masking it as a revision conflict", async () => {
-    const configuredCycle: Cycle = {
-      ...cycle,
-      reviewDate: "2026-09-24",
-      reviewScheduleRevision: 1,
-    };
-    vi.mocked(getCycle)
-      .mockReset()
-      .mockResolvedValueOnce({ cycle: configuredCycle })
-      .mockResolvedValueOnce({
-        cycle: {
-          ...configuredCycle,
-          reviewDate: "2026-09-26",
-          reviewScheduleRevision: 1,
-        },
-      });
-    vi.mocked(changeReviewSchedule).mockRejectedValue(
-      new APIError(
-        409,
-        "CYCLE_REVISION_CONFLICT",
-        "stale revision",
-        "request-review-schedule-conflict",
-      ),
-    );
-    const cache = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
-    renderPage(cache);
-
-    const scheduleInput = await screen.findByLabelText(
-      reviewScheduleCopy.inputLabel,
-    );
-    fireEvent.change(scheduleInput, { target: { value: "2026-09-25" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: reviewScheduleCopy.change }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "サーバーから正しい見直す日を受け取れませんでした。画面を読み込み直してください。",
-    );
-    expect(screen.queryByText(reviewScheduleCopy.conflict)).toBeNull();
-    expect(changeReviewSchedule).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    {
-      label:
-        "accepts a response-loss recovery that reached the requested target",
-      status: 409,
-      code: "CYCLE_REVISION_CONFLICT",
-      latestReviewDate: "2026-09-25",
-      expectedMessage: reviewScheduleCopy.saved,
-    },
-    {
-      label: "reports a revision conflict when recovery finds another target",
-      status: 409,
-      code: "CYCLE_REVISION_CONFLICT",
-      latestReviewDate: "2026-09-26",
-      expectedMessage: reviewScheduleCopy.conflict,
-    },
-    {
-      label:
-        "retains the original update error when recovery finds another target",
-      status: 500,
-      code: "REVIEW_SCHEDULE_UPDATE_FAILED",
-      latestReviewDate: "2026-09-26",
-      expectedMessage:
-        "処理中にエラーが発生しました。入力内容は保持されています。もう一度お試しください。",
-    },
-  ] as const)(
-    "$label",
-    async ({ status, code, latestReviewDate, expectedMessage }) => {
-      const configuredCycle: Cycle = {
-        ...cycle,
-        reviewDate: "2026-09-24",
-        reviewScheduleRevision: 1,
-      };
-      const configuredGoal: Goal = {
+    vi.mocked(getGoal).mockResolvedValue({
+      goal: {
         ...goal,
         currentWork: {
           kind: "active_cycle",
-          cycleId: configuredCycle.id,
-          cycleSequenceNumber: configuredCycle.sequenceNumber,
-          reviewSchedule: {
-            reviewDate: configuredCycle.reviewDate,
-            reviewScheduleRevision: configuredCycle.reviewScheduleRevision,
-          },
-        },
-      };
-      const latestCycle: Cycle = {
-        ...configuredCycle,
-        reviewDate: latestReviewDate,
-        reviewScheduleRevision: 2,
-      };
-      vi.mocked(getGoal).mockResolvedValue({ goal: configuredGoal });
-      vi.mocked(getCycle)
-        .mockReset()
-        .mockResolvedValueOnce({ cycle: configuredCycle })
-        .mockResolvedValueOnce({ cycle: latestCycle });
-      vi.mocked(changeReviewSchedule).mockRejectedValue(
-        new APIError(status, code, "review schedule update failed", code),
-      );
-      const cache = new QueryClient({
-        defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-      });
-      renderPage(cache);
-
-      const scheduleInput = await screen.findByLabelText(
-        reviewScheduleCopy.inputLabel,
-      );
-      fireEvent.change(scheduleInput, { target: { value: "2026-09-25" } });
-      fireEvent.click(
-        screen.getByRole("button", { name: reviewScheduleCopy.change }),
-      );
-
-      expect(await screen.findByText(expectedMessage)).toBeVisible();
-      await waitFor(() => expect(scheduleInput).toHaveValue("2026-09-25"));
-      expect(changeReviewSchedule).toHaveBeenCalledOnce();
-      expect(getCycle).toHaveBeenCalledTimes(2);
-      expect(
-        cache.getQueryData<{ cycle: Cycle }>(
-          userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
-        )?.cycle,
-      ).toMatchObject({
-        reviewDate: latestReviewDate,
-        reviewScheduleRevision: 2,
-      });
-    },
-  );
-
-  it("keeps the requested date and reports a refresh transport failure without resending the mutation", async () => {
-    const configuredCycle: Cycle = {
-      ...cycle,
-      reviewDate: "2026-09-24",
-      reviewScheduleRevision: 1,
-    };
-    const configuredGoal: Goal = {
-      ...goal,
-      currentWork: {
-        kind: "active_cycle",
-        cycleId: configuredCycle.id,
-        cycleSequenceNumber: configuredCycle.sequenceNumber,
-        reviewSchedule: {
-          reviewDate: configuredCycle.reviewDate,
-          reviewScheduleRevision: configuredCycle.reviewScheduleRevision,
+          cycleId: cycle.id,
+          cycleSequenceNumber: cycle.sequenceNumber,
+          reviewSchedule: { reviewDate, reviewScheduleRevision: 3 },
         },
       },
-    };
-    vi.mocked(getGoal).mockResolvedValue({ goal: configuredGoal });
-    vi.mocked(getCycle)
-      .mockReset()
-      .mockResolvedValueOnce({ cycle: configuredCycle })
-      .mockRejectedValueOnce(new NetworkError());
-    vi.mocked(changeReviewSchedule).mockRejectedValue(cycleRevisionConflict());
+    });
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache);
+    const view = renderPage(cache);
 
-    const scheduleInput = await screen.findByLabelText(
-      reviewScheduleCopy.inputLabel,
-    );
-    fireEvent.change(scheduleInput, { target: { value: "2026-09-25" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: reviewScheduleCopy.change }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "通信できませんでした。接続を確認して、もう一度お試しください。",
-    );
-    expect(scheduleInput).toHaveValue("2026-09-25");
-    expect(changeReviewSchedule).toHaveBeenCalledOnce();
-    expect(getCycle).toHaveBeenCalledTimes(2);
-    expect(
-      cache.getQueryData<{ cycle: Cycle }>(
-        userQueryKeys.cycle(session.user.id, goal.id, cycle.id),
-      )?.cycle,
-    ).toMatchObject({
-      reviewDate: configuredCycle.reviewDate,
-      reviewScheduleRevision: configuredCycle.reviewScheduleRevision,
-    });
+    await screen.findByText("保存済み");
+    expect(screen.queryByText(reviewDate)).not.toBeInTheDocument();
+    expect(view.container.querySelector('input[type="date"]')).toBeNull();
   });
 
   it("hides the previous Action before workspace-move conflict navigation", async () => {
@@ -2188,7 +1676,13 @@ describe("GoalWorkspacePage", () => {
     "keeps $status Cycle actions read-only without presenting unavailable CTAs",
     async ({ status, endedAt }) => {
       vi.mocked(getCycle).mockResolvedValue({
-        cycle: { ...completableCycle, status, ...endedAt },
+        cycle: {
+          ...completableCycle,
+          status,
+          ...endedAt,
+          reviewDate: "2026-09-25",
+          reviewScheduleRevision: 2,
+        },
       });
       const cache = new QueryClient({
         defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -2197,6 +1691,8 @@ describe("GoalWorkspacePage", () => {
       const view = renderPage(cache, { goalDeletionAdvisory: advisory });
 
       await screen.findByText("読み取り専用");
+      expect(screen.queryByText("2026-09-25")).not.toBeInTheDocument();
+      expect(view.container.querySelector('input[type="date"]')).toBeNull();
       expect(
         view.container.querySelector(".goal-actions"),
       ).not.toBeInTheDocument();
@@ -4761,13 +4257,8 @@ describe("GoalWorkspacePage", () => {
 
   it("disables both AI commands while a terminal command is pending", async () => {
     const completion = deferred<Awaited<ReturnType<typeof completeCycle>>>();
-    const scheduledCompletableCycle: Cycle = {
-      ...completableCycle,
-      reviewDate: "2026-09-25",
-      reviewScheduleRevision: 1,
-    };
     vi.mocked(getCycle).mockResolvedValue({
-      cycle: scheduledCompletableCycle,
+      cycle: completableCycle,
     });
     vi.mocked(completeCycle).mockReturnValue(completion.promise);
     const cache = new QueryClient({
@@ -4777,16 +4268,6 @@ describe("GoalWorkspacePage", () => {
 
     await confirmCycleCompletion();
     await waitFor(() => expect(completeCycle).toHaveBeenCalledOnce());
-
-    const scheduleInput = screen.getByLabelText(reviewScheduleCopy.inputLabel);
-    expect(scheduleInput).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: reviewScheduleCopy.change }),
-    ).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: reviewScheduleCopy.clear }),
-    ).toBeDisabled();
-    expect(screen.getByText(reviewScheduleCopy.commandPending)).toBeVisible();
 
     expect(
       screen.getByRole("button", { name: "アクションを生成" }),
@@ -6325,7 +5806,7 @@ describe("GoalWorkspacePage", () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache, { reviewScheduleRouteSwitch: true });
+    renderPage(cache, { sameRouteSwitch: true });
     await screen.findByText("保存済み");
 
     fireEvent.click(
@@ -6453,7 +5934,7 @@ describe("GoalWorkspacePage", () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache, { reviewScheduleRouteSwitch: true });
+    renderPage(cache, { sameRouteSwitch: true });
     const editor = await screen.findByRole("textbox", { name: "P — Plan" });
     await screen.findByText("保存済み");
 
@@ -6494,7 +5975,7 @@ describe("GoalWorkspacePage", () => {
     const cache = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    renderPage(cache, { reviewScheduleRouteSwitch: true });
+    renderPage(cache, { sameRouteSwitch: true });
     await screen.findByText("保存済み");
 
     fireEvent.click(
@@ -6898,7 +6379,6 @@ describe("GoalWorkspacePage", () => {
     expect(screen.getByRole("textbox", { name: "P — Plan" })).toHaveAttribute(
       "readonly",
     );
-    expect(screen.getByLabelText(reviewScheduleCopy.inputLabel)).toBeDisabled();
     fireEvent.click(screen.getByRole("tab", { name: /A\s*Action/ }));
     expect(
       screen.getByRole("button", { name: "アクションを生成" }),
@@ -6991,7 +6471,7 @@ function renderPage(
     readonly cleanupSwitchCycleId?: string;
     readonly goalDeletionAdvisory?: GoalDeletionAdvisoryHarness;
     readonly identityQuiesceControl?: boolean;
-    readonly reviewScheduleRouteSwitch?: boolean;
+    readonly sameRouteSwitch?: boolean;
     readonly strictMode?: boolean;
     readonly switchCycleId?: string;
   } = {},
@@ -7022,7 +6502,7 @@ function renderPage(
                 {options.commandRouteSwitch ? (
                   <Link to="/external">コマンド中に外部routeへ移動</Link>
                 ) : null}
-                {options.reviewScheduleRouteSwitch ? (
+                {options.sameRouteSwitch ? (
                   <Link
                     to={`/workspace/${goal.id}/cycles/${cycle.id}?refresh=1`}
                   >

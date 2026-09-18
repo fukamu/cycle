@@ -23,7 +23,6 @@ import {
   cacheCycleFrame,
   cacheGoal,
   cacheReview,
-  publishReviewSchedule,
   resolvePreferredGoal,
   userQueryKeys,
 } from "../goal-collection";
@@ -43,7 +42,6 @@ import {
 import type { CurrentWork, Cycle, Frame, Goal } from "../../shared/api/schemas";
 import {
   completeCycle,
-  changeReviewSchedule,
   deleteGoal,
   generateAction,
   getCycle,
@@ -52,7 +50,6 @@ import {
   refineAction,
   saveCycleFrame,
   terminateGoal,
-  type ReviewScheduleChange,
 } from "../../shared/api/workspace";
 import {
   DraftCacheWarning,
@@ -78,7 +75,6 @@ import {
   cycleReplanCopy,
   frameCopy,
   goalSuccessSignalCopy,
-  reviewScheduleCopy,
   type CycleFrameTemplate,
 } from "../../shared/copy/ja";
 import {
@@ -99,7 +95,6 @@ import {
   formatActivePeriod,
   formatCompletedPeriod,
 } from "../../shared/date/format";
-import { useBrowserLocalDate } from "../../shared/date/useBrowserLocalDate";
 import {
   FRAME_TEXT_MAX_CODE_POINTS,
   hasNonWhitespace,
@@ -115,11 +110,8 @@ import {
 } from "./model/eligibility";
 import { CycleCheckComparison } from "./CycleCheckComparison";
 import { CycleCompletionSummary } from "./CycleCompletionSummary";
+import { CycleCancellationReason } from "./CycleCancellationReason";
 import { CyclePreviousActionReference } from "./CyclePreviousActionReference";
-import {
-  CycleReviewSchedule,
-  type ReviewScheduleMutationOutcome,
-} from "./CycleReviewSchedule";
 import {
   CycleFrameTemplatePicker,
   type TemplateFrame,
@@ -306,30 +298,11 @@ function isGoalNotFound(error: unknown): error is APIError {
   );
 }
 
-function isReviewScheduleRefreshError(error: unknown): error is APIError {
-  return (
-    error instanceof APIError &&
-    ((error.status === 409 && error.code === "CYCLE_REVISION_CONFLICT") ||
-      (error.status === 500 && error.code === "REVIEW_SCHEDULE_UPDATE_FAILED"))
-  );
-}
-
 function descriptionIds(
   ...ids: readonly (string | undefined)[]
 ): string | undefined {
   const description = ids.filter((id): id is string => Boolean(id)).join(" ");
   return description || undefined;
-}
-
-function isReviewScheduleWorkspaceConflict(error: unknown): error is APIError {
-  if (!(error instanceof APIError)) return false;
-  return (
-    isGoalNotFound(error) ||
-    (error.status === 404 && error.code === "CYCLE_NOT_FOUND") ||
-    (error.status === 409 &&
-      (error.code === "GOAL_STATE_CONFLICT" ||
-        error.code === "CYCLE_NOT_ACTIVE"))
-  );
 }
 
 function isCycleCommandWorkspaceConflict(
@@ -501,7 +474,6 @@ function CycleWorkspace({
     "idle",
   );
   const [pendingAction, setPendingAction] = useState(false);
-  const [reviewSchedulePending, setReviewSchedulePending] = useState(false);
   const [replanPreparing, setReplanPreparing] = useState(false);
   const [confirmation, setConfirmation] = useState<WorkspaceConfirmation>();
   const [error, setError] = useState<string>();
@@ -512,11 +484,9 @@ function CycleWorkspace({
   const [composingFrame, setComposingFrame] = useState<Frame>();
   const [frameTemplateUndo, setFrameTemplateUndo] =
     useState<FrameTemplateUndo>();
-  const today = useBrowserLocalDate();
   const actionGuidanceId = useId();
   const goalActionGuidanceId = useId();
   const successSignalHeadingId = useId();
-  const reviewSchedulePendingGuidanceId = useId();
   const replanGuidanceId = useId();
   const textLimitFeedbackId = useId();
   const terminalFrameEmptyId = useId();
@@ -541,7 +511,6 @@ function CycleWorkspace({
   const mountedRef = useRef(true);
   const cacheDisabledRef = useRef(false);
   const pendingActionRef = useRef(false);
-  const reviewSchedulePendingRef = useRef(false);
   const doQuickEntryUndoRef = useRef<DoQuickEntryUndo | undefined>(undefined);
   const isDoComposingRef = useRef(false);
   const composingFrameRef = useRef<Frame | undefined>(undefined);
@@ -580,11 +549,6 @@ function CycleWorkspace({
     () => lease.isCurrent() && mountedRef.current,
     [lease],
   );
-  const setReviewScheduleRequestPending = useCallback((pending: boolean) => {
-    reviewSchedulePendingRef.current = pending;
-    if (mountedRef.current) setReviewSchedulePending(pending);
-  }, []);
-
   const settleBrowserOperation = useCallback(
     async (operation: () => Promise<unknown>): Promise<void> => {
       try {
@@ -1680,7 +1644,6 @@ function CycleWorkspace({
       !isActivePage() ||
       coordinator.isHydrating() ||
       pendingActionRef.current ||
-      reviewSchedulePendingRef.current ||
       movedWorkspaceRef.current ||
       aiState !== "idle"
     )
@@ -2065,115 +2028,6 @@ function CycleWorkspace({
     ],
   );
 
-  const submitReviewSchedule = useCallback(
-    async (
-      change: ReviewScheduleChange,
-    ): Promise<ReviewScheduleMutationOutcome> => {
-      const routeOwnership = captureRouteOwnership();
-      const targetDate = change.action === "set" ? change.reviewDate : null;
-      const publish = (
-        candidate: Cycle,
-      ): ReviewScheduleMutationOutcome | "workspace-moved" => {
-        if (
-          !isActivePage() ||
-          !routeOwnership.isCurrent() ||
-          deletedFenceStartedRef.current ||
-          movedWorkspaceRef.current
-        )
-          return { kind: "abandoned" };
-        const publication = publishReviewSchedule(
-          cache,
-          userId,
-          goal.id,
-          cycle.id,
-          candidate,
-        );
-        if (publication.kind === "workspace-moved") return "workspace-moved";
-        if (publication.kind === "invariant")
-          return {
-            kind: "error",
-            message:
-              "サーバーから正しい見直す日を受け取れませんでした。画面を読み込み直してください。",
-          };
-        return publication.schedule.reviewDate === targetDate
-          ? { kind: "saved", schedule: publication.schedule }
-          : { kind: "conflict", message: reviewScheduleCopy.conflict };
-      };
-
-      if (pendingActionRef.current) return { kind: "abandoned" };
-
-      try {
-        const result = await runGoalDeletionFencedRequest(() =>
-          changeReviewSchedule(
-            sessionLease,
-            goal.id,
-            cycle.id,
-            change,
-            csrfTokenRef.current,
-            sessionLease.signal,
-          ),
-        );
-        const outcome = publish(result.cycle);
-        if (outcome !== "workspace-moved") return outcome;
-        await refreshCanonicalWorkspace(routeOwnership);
-        return { kind: "abandoned" };
-      } catch (cause) {
-        if (!isActivePage()) return { kind: "abandoned" };
-        if (isReviewScheduleRefreshError(cause)) {
-          try {
-            const latest = await runGoalDeletionFencedRequest(() =>
-              getCycle(sessionLease, goal.id, cycle.id, sessionLease.signal),
-            );
-            const outcome = publish(latest.cycle);
-            if (outcome === "workspace-moved") {
-              await refreshCanonicalWorkspace(routeOwnership);
-              return { kind: "abandoned" };
-            }
-            if (
-              outcome.kind === "saved" ||
-              outcome.kind === "error" ||
-              outcome.kind === "abandoned"
-            )
-              return outcome;
-            return cause.code === "CYCLE_REVISION_CONFLICT"
-              ? { kind: "conflict", message: reviewScheduleCopy.conflict }
-              : {
-                  kind: "error",
-                  message: toErrorPresentation(cause).message,
-                };
-          } catch (refreshCause) {
-            if (isReviewScheduleWorkspaceConflict(refreshCause)) {
-              if (!isGoalNotFound(refreshCause))
-                await refreshCanonicalWorkspace(routeOwnership);
-              return { kind: "abandoned" };
-            }
-            return {
-              kind: "error",
-              message: toErrorPresentation(refreshCause).message,
-            };
-          }
-        }
-        if (isReviewScheduleWorkspaceConflict(cause)) {
-          if (!isGoalNotFound(cause))
-            await refreshCanonicalWorkspace(routeOwnership);
-          return { kind: "abandoned" };
-        }
-        return { kind: "error", message: toErrorPresentation(cause).message };
-      }
-    },
-    [
-      cache,
-      captureRouteOwnership,
-      cycle.id,
-      goal.id,
-      isActivePage,
-      refreshCanonicalWorkspace,
-      runGoalDeletionFencedRequest,
-      sessionLease,
-      userId,
-    ],
-  );
-
   async function recoverTerminalCommand(
     command: CycleTerminalCommand,
     cause: unknown,
@@ -2229,7 +2083,7 @@ function CycleWorkspace({
     coordinator.synchronize("action", action);
   }
   const eligibility = getCycleEligibility(values, saveState, aiState);
-  const commandsAvailable = !pendingAction && !reviewSchedulePending;
+  const commandsAvailable = !pendingAction;
   function requestAI(kind: "generating" | "refining") {
     const eligible =
       kind === "generating"
@@ -2346,7 +2200,6 @@ function CycleWorkspace({
     if (
       !isActivePage() ||
       pendingActionRef.current ||
-      reviewSchedulePendingRef.current ||
       movedWorkspaceRef.current
     )
       return false;
@@ -2650,9 +2503,6 @@ function CycleWorkspace({
   const actionDescribedBy = (command: "generate" | "refine" | "complete") =>
     descriptionIds(
       actionGuidance?.commands.includes(command) ? actionGuidanceId : undefined,
-      reviewSchedulePending && command === "complete"
-        ? reviewSchedulePendingGuidanceId
-        : undefined,
     );
   const goalActionGuidance = getCycleGoalActionGuidance(saveState, aiState, {
     pendingAction,
@@ -2667,19 +2517,16 @@ function CycleWorkspace({
       goalActionGuidance?.commands.includes(command)
         ? goalActionGuidanceId
         : undefined,
-      reviewSchedulePending ? reviewSchedulePendingGuidanceId : undefined,
     );
   const replanDisabledReason = coordinator.isHydrating()
     ? cycleReplanCopy.disabled.hydrating
     : aiState !== "idle"
       ? cycleReplanCopy.disabled.ai
-      : reviewSchedulePending
-        ? cycleReplanCopy.disabled.reviewSchedule
-        : pendingAction
-          ? replanPreparing
-            ? cycleReplanCopy.disabled.saving
-            : cycleReplanCopy.disabled.pending
-          : undefined;
+      : pendingAction
+        ? replanPreparing
+          ? cycleReplanCopy.disabled.saving
+          : cycleReplanCopy.disabled.pending
+        : undefined;
   const end = cycle.completedAt ?? cycle.canceledAt;
   return (
     <main className="page editor-page">
@@ -2706,16 +2553,7 @@ function CycleWorkspace({
             : formatActivePeriod(cycle.startedAt)}
         </p>
       </header>
-      {!workspaceMoved && (
-        <CycleReviewSchedule
-          cycle={cycle}
-          today={today}
-          disabled={pendingAction}
-          terminalCommandGuidanceId={reviewSchedulePendingGuidanceId}
-          onSubmit={submitReviewSchedule}
-          onPendingChange={setReviewScheduleRequestPending}
-        />
-      )}
+      {!workspaceMoved && <CycleCancellationReason cycle={cycle} />}
       <div className="frame-tabs" role="tablist" aria-label="PDCAフレーム">
         {frames.map((frame) => {
           const tabCopy = frameCopy[frame];
@@ -2971,9 +2809,7 @@ function CycleWorkspace({
               className="button button--primary action-controls__complete"
               type="button"
               aria-describedby={actionDescribedBy("complete")}
-              disabled={
-                !actionControls.complete.enabled || reviewSchedulePending
-              }
+              disabled={!actionControls.complete.enabled}
               onClick={() => setConfirmation({ kind: "complete-cycle" })}
             >
               サイクルを完了
@@ -3059,7 +2895,7 @@ function CycleWorkspace({
               className="danger-link"
               type="button"
               aria-describedby={goalActionDescribedBy("delete")}
-              disabled={pendingAction || reviewSchedulePending}
+              disabled={pendingAction}
               onClick={() => setConfirmation({ kind: "delete" })}
             >
               目標を削除

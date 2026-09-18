@@ -17,7 +17,6 @@ import {
   reviewSchema,
   saveFrameSchema,
   type Frame,
-  type ReviewDate,
 } from "./schemas";
 
 export type GoalDraftContent = {
@@ -287,17 +286,6 @@ type CommandRequestOptions = {
   readonly operationId: string;
   readonly csrfToken: string;
 };
-
-export type ReviewScheduleChange =
-  | {
-      readonly action: "set";
-      readonly reviewDate: ReviewDate;
-      readonly expectedReviewScheduleRevision: number;
-    }
-  | {
-      readonly action: "clear";
-      readonly expectedReviewScheduleRevision: number;
-    };
 
 export const getHome = (
   lease: AuthenticatedRequestLease,
@@ -598,25 +586,6 @@ export const getCycle = (
     cycleEnvelopeFor(goalId, cycleId),
     {
       signal,
-    },
-  );
-export const changeReviewSchedule = (
-  lease: AuthenticatedRequestLease,
-  goalId: string,
-  cycleId: string,
-  change: ReviewScheduleChange,
-  csrfToken: string,
-  signal?: AbortSignal,
-) =>
-  requestAuthenticatedJSON(
-    lease,
-    `/api/v1/goals/${goalId}/cycles/${cycleId}/review-schedule`,
-    cycleEnvelopeFor(goalId, cycleId),
-    {
-      method: "PATCH",
-      csrfToken,
-      signal,
-      body: change,
     },
   );
 export const saveCycleFrame = (

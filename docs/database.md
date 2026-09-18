@@ -21,6 +21,8 @@
 
 `000007`は既存`pdca_cycles`の列shapeを変えず、schedule用tableだけを追加するadditive migrationです。Row不在はlogical unset / revision 0、最初のsetでrowを作成し、clear後は`review_date=NULL`と増加済みrevisionを持つrowを維持します。Cycle削除ではFK cascadeします。Migration-first期間も旧Applicationの`LockCycleForTransition SELECT c.*`は従来どおり固定列数でScanでき、旧Applicationは新tableを無視できます。新ApplicationのreadはLEFT JOIN / logical defaultを使います。Schema-compatibleなApplication rollbackではtableを残し、Productionでdownを実行しません。
 
+First-party Frontendでreview schedule UIを提供しない現行contractでも、`pdca_cycle_review_schedules`と既存rowはrollback互換境界として維持します。`000007`を編集せず、UI撤去を理由にrowの削除、backfill、table drop、down migrationを実行しません。将来contractと保存dataを廃止する場合は別途承認されたforward migrationで扱います。
+
 `000006`は既存dataのbackfillを行わず、空のguard tableを追加するadditive migrationです。Migration-firstでApplicationより先に適用し、旧Application instanceは新tableを無視できます。新Applicationだけがguardを取得するため、mixed-version rollout中はper-IP直列化を保証済みと扱わず、旧instanceがすべて停止した後にstrict contractへ切り替わったと判断します。Schema-compatibleなApplication rollbackではtableを残し、Productionでdownを実行しません。
 
 `000005`はplain transactional `CREATE INDEX`を使います。Data-bearing Productionへ適用する前に対象table規模でwrite lock影響と所要時間を評価し、未評価または許容不能ならdeployを停止します。適用済みmigrationは書き換えず、必要な修正は新しいforward migrationで行います。

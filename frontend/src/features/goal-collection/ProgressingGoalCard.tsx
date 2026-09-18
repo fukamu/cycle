@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
 
-import { reviewScheduleCopy } from "../../shared/copy/ja";
 import type { ProgressingGoalCardViewModel } from "./progressingGoalCardModel";
 
 export function ProgressingGoalCard({
@@ -17,17 +16,6 @@ export function ProgressingGoalCard({
       </h3>
       <div className="goal-card__progress">
         <p className="goal-card__status">{view.currentPlace}</p>
-        {view.reviewSchedule && (
-          <p className="goal-card__review-schedule">
-            見直す日：
-            <time dateTime={view.reviewSchedule.reviewDate}>
-              {view.reviewSchedule.reviewDate}
-            </time>
-            <span>
-              （{reviewScheduleCopy.state[view.reviewSchedule.state]}）
-            </span>
-          </p>
-        )}
         <p className="goal-card__helper">{view.helper}</p>
       </div>
       <Link className="button button--primary goal-card__cta" to={view.target}>
