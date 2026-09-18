@@ -1157,7 +1157,7 @@ pass "candidate go.mod cannot replace the digest-pinned local Go toolchain"
 go_policy_fixture="${test_root}/go-module-policy"
 go_policy_valid="${go_policy_fixture}/valid"
 mkdir -p -- "${go_policy_valid}"
-printf '%s\n' 'module example.invalid/go-policy-fixture' '' 'go 1.27.0' >"${go_policy_valid}/go.mod"
+printf '%s\n' 'module example.invalid/go-policy-fixture' '' 'go 1.27.1' >"${go_policy_valid}/go.mod"
 printf '%s\n' 'example.invalid/placeholder v0.0.0 h1:YWJjZA==' >"${go_policy_valid}/go.sum"
 security_validate_go_module_policy \
   "${go_policy_valid}" \
@@ -1244,7 +1244,7 @@ expect_failure \
 
 toolchain_fixture="${go_policy_fixture}/toolchain"
 cp -R -- "${go_policy_valid}" "${toolchain_fixture}"
-printf '%s\n' '' 'toolchain go1.27.0' >>"${toolchain_fixture}/go.mod"
+printf '%s\n' '' 'toolchain go1.27.1' >>"${toolchain_fixture}/go.mod"
 expect_failure \
   "Go module toolchain directive fixture" \
   security_validate_go_module_policy \
@@ -1358,7 +1358,7 @@ mkdir -p -- "${snapshot_repo}/backend" "${snapshot_repo}/infra/terraform/staging
 git -C "${snapshot_repo}" init --quiet
 printf '%s\n' '.env' '*.key' '*.tfvars' '.terraform/' >"${snapshot_repo}/.gitignore"
 printf '%s\n' '{"name":"snapshot-fixture","private":true}' >"${snapshot_repo}/package.json"
-printf '%s\n' 'module example.invalid/snapshotfixture' '' 'go 1.27.0' >"${snapshot_repo}/backend/go.mod"
+printf '%s\n' 'module example.invalid/snapshotfixture' '' 'go 1.27.1' >"${snapshot_repo}/backend/go.mod"
 printf '%s\n' 'terraform {}' >"${snapshot_repo}/infra/terraform/staging/main.tf"
 printf '%s\n' 'FROM scratch' >"${snapshot_repo}/Dockerfile"
 git -C "${snapshot_repo}" add .gitignore package.json backend/go.mod infra/terraform/staging/main.tf Dockerfile
@@ -2475,7 +2475,7 @@ pass "Terraform syntax preflight rejects unparsed files; Trivy rejects public SS
 
 gosec_fixture="${test_root}/gosec"
 mkdir -p -- "${gosec_fixture}"
-printf '%s\n' 'module example.invalid/securityfixture' '' 'go 1.27.0' >"${gosec_fixture}/go.mod"
+printf '%s\n' 'module example.invalid/securityfixture' '' 'go 1.27.1' >"${gosec_fixture}/go.mod"
 gosec_lines=(
   '//go:build !cgo'
   ''
@@ -2540,7 +2540,7 @@ mkdir -p -- "${govuln_fixture}"
 govuln_mod_lines=(
   'module example.invalid/vulnfixture'
   ''
-  'go 1.27.0'
+  'go 1.27.1'
   ''
   'require golang.org/x/text v0.3.5'
 )

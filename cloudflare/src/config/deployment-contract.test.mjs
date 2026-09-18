@@ -885,7 +885,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     [
       "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
       "        with:",
-      "          go-version: 1.27.0",
+      "          go-version: 1.27.1",
       "          cache-dependency-path: backend/go.sum",
     ].join("\n"),
     "deployment Go setup step",
@@ -1951,8 +1951,8 @@ function backendGoInventory() {
   );
   assert.equal(
     versionResult.stdout.trim(),
-    "go1.27.0",
-    "configuration parity must use Go 1.27.0",
+    "go1.27.1",
+    "configuration parity must use Go 1.27.1",
   );
 
   const backendFiles = repositoryFiles("backend", ".go").filter(

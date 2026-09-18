@@ -2068,7 +2068,7 @@ validate_exact_functional_steps() {
           "          persist-credentials: false" \
           "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0" \
           "        with:" \
-          '          go-version: "1.27.0"' \
+          '          go-version: "1.27.1"' \
           "          cache-dependency-path: backend/go.sum" \
           "      - run: GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1" \
           "      - run: sqlc compile" \
@@ -2131,7 +2131,7 @@ validate_exact_functional_steps() {
           "          install: false" \
           "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0" \
           "        with:" \
-          '          go-version: "1.27.0"' \
+          '          go-version: "1.27.1"' \
           "          cache-dependency-path: backend/go.sum" \
           "      - run: pnpm install --frozen-lockfile --ignore-scripts" \
           "      - name: Verify dependency install preserved candidate tree" \
