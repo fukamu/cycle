@@ -783,7 +783,7 @@ security_validate_text_inventory() {
           if (!/^[0-9a-f]{40}$/.test(legacyOid) || !Number.isSafeInteger(legacySize) || legacySize < 1) {
             throw new Error("invalid legacy binary identity");
           }
-          const commits = parseHexLines(execGit(["rev-list", "--all"]), "commit inventory");
+          const commits = parseHexLines(execGit(["rev-list", "HEAD"]), "commit inventory");
           const treeBlobKinds = new Map();
           let treeEntryCount = 0;
           let legacyPathSeen = false;
@@ -824,8 +824,29 @@ security_validate_text_inventory() {
           }
           if (treeBlobKinds.size < 1) throw new Error("empty history tree inventory");
 
+          const mergedTagRefsBuffer = execGit([
+            "for-each-ref",
+            "--merged=HEAD",
+            "--format=%(refname)",
+            "refs/tags/",
+          ], undefined, maximumTextFileSize);
+          validateText(mergedTagRefsBuffer);
+          const mergedTagRefsText = decoder.decode(mergedTagRefsBuffer);
+          const mergedTagRefs = mergedTagRefsText.length === 0
+            ? []
+            : mergedTagRefsText.split("\n").slice(0, -1);
+          if (
+            (mergedTagRefsText.length > 0 && !mergedTagRefsText.endsWith("\n")) ||
+            mergedTagRefs.length > maximumEntries ||
+            mergedTagRefs.some((refName) => !/^refs\/tags\/[A-Za-z0-9._@+\/-]+$/.test(refName))
+          ) {
+            throw new Error("invalid merged tag ref inventory");
+          }
           const reachableOids = parseHexLines(
-            execGit(["rev-list", "--objects", "--all", "--no-object-names"]),
+            execGit(
+              ["rev-list", "--objects", "HEAD", "--no-object-names", "--stdin"],
+              Buffer.from(mergedTagRefs.length === 0 ? "" : mergedTagRefs.join("\n") + "\n", "ascii"),
+            ),
             "reachable object inventory",
           );
           const batchInput = Buffer.from(reachableOids.join("\n") + "\n", "ascii");
@@ -928,18 +949,6 @@ security_validate_text_inventory() {
           }
           if (metadataOffset !== metadataBatch.length) {
             throw new Error("unexpected commit/tag metadata batch suffix");
-          }
-          const refNames = execGit(["for-each-ref", "--format=%(refname)"]);
-          if (refNames.length < 1 || refNames.length > maximumTextFileSize) {
-            throw new Error("invalid ref-name inventory size");
-          }
-          validateText(refNames);
-          const decodedRefNames = decoder.decode(refNames);
-          if (
-            !decodedRefNames.endsWith("\n") ||
-            decodedRefNames.split("\n").slice(0, -1).some((refName) => !/^refs\/[A-Za-z0-9._@+\/-]+$/.test(refName))
-          ) {
-            throw new Error("invalid ref-name inventory");
           }
         } else {
           throw new Error("unknown text inventory mode");
@@ -2058,9 +2067,10 @@ security_run_gitleaks_normalized_text() {
         history)
           : > /tmp/history-names
           : > /tmp/history-names.raw
+          : > /tmp/history-tag-refs
           : > /tmp/history-text-oids
           tab="$(printf "\t")"
-          git rev-list --all > /tmp/history-commits
+          git rev-list HEAD > /tmp/history-commits
           test -s /tmp/history-commits
           while IFS= read -r commit_id; do
             case "${commit_id}" in
@@ -2102,7 +2112,19 @@ security_run_gitleaks_normalized_text() {
             append_manifest_name "${manifest_kind}" "${manifest_name}" /tmp/history-names
           done < /tmp/history-names.sorted
           sort -u /tmp/history-text-oids > /tmp/history-text-oids.sorted
-          git rev-list --objects --all --no-object-names > /tmp/reachable-objects
+          git for-each-ref --merged=HEAD --format="%(refname)%00" refs/tags/ > /tmp/history-tag-ref-names
+          while IFS= read -r -d "" tag_ref; do
+            case "${tag_ref}" in
+              refs/tags/*) ;;
+              *) exit 1 ;;
+            esac
+            validate_manifest_name "${tag_ref}"
+            printf "%s\n" "${tag_ref}" >> /tmp/history-tag-refs
+            IFS= read -r tag_ref_record_terminator
+            test -z "${tag_ref_record_terminator}"
+          done < /tmp/history-tag-ref-names
+          git rev-list --objects HEAD --no-object-names --stdin \
+            < /tmp/history-tag-refs > /tmp/reachable-objects
           test -s /tmp/reachable-objects
           sort -u /tmp/reachable-objects > /tmp/unique-objects
           git cat-file --batch-check="%(objectname) %(objecttype) %(objectsize)" \
@@ -2125,17 +2147,6 @@ security_run_gitleaks_normalized_text() {
               "" | *[!0-9]*) exit 1 ;;
             esac
           done < /tmp/object-inventory
-          git for-each-ref --format="%(refname)%00" > /tmp/ref-names
-          test -s /tmp/ref-names
-          while IFS= read -r -d "" ref_name; do
-            case "${ref_name}" in
-              refs/*) ;;
-              *) exit 1 ;;
-            esac
-            append_manifest_name history-ref "${ref_name}" /tmp/history-names
-            IFS= read -r ref_record_terminator
-            test -z "${ref_record_terminator}"
-          done < /tmp/ref-names
           materialize_manifest HISTORY_NAMES /tmp/history-names
           ;;
         *) exit 1 ;;
@@ -2198,7 +2209,7 @@ security_run_gitleaks_history() {
   if [[ -n "${ignore_relative_path}" ]]; then
     command+=(--gitleaks-ignore-path "/source/${ignore_relative_path}")
   fi
-  command+=("--log-opts=--all --full-history -m --text --no-ext-diff --no-textconv" /source)
+  command+=("--log-opts=--full-history -m --text --no-ext-diff --no-textconv HEAD" /source)
   "${command[@]}" >"${log_path}" 2>&1 || scan_status=$?
   ((scan_status == 0)) || return "${scan_status}"
   security_validate_gitleaks_log "${log_path}"
