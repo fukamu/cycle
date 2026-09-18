@@ -1079,16 +1079,20 @@ cp -- "${text_path_history}/shared.txt" "${text_path_history}/shared.gif"
 git -C "${text_path_history}" add shared.gif
 git -C "${text_path_history}" -c user.name='Text Path Fixture' -c user.email='text-path-fixture.invalid@example.invalid' commit --quiet -m 'same blob at unapproved path'
 git -C "${text_path_history}" checkout --quiet main
+security_validate_history_text_files "${text_path_history}" \
+  || fail "unmerged secondary-ref path changed current HEAD history validation"
+git -C "${text_path_history}" checkout --quiet hidden-unapproved
 expect_failure \
-  "unapproved same-OID path on secondary ref fixture" \
+  "unapproved same-OID path in current HEAD ancestry fixture" \
   security_validate_history_text_files \
   "${text_path_history}"
+git -C "${text_path_history}" checkout --quiet main
 
 unset guarded_original_commit guarded_replacement_commit newline_candidate_path fsmonitor_marker fsmonitor_hook pager_marker pager_hook pager_driver included_git_config promisor_repo promisor_marker promisor_helper promisor_missing_oid promisor_object_path promisor_diff_status
-pass "candidate, index, and all-ref history accept approved text or bounded PNG assets; Git graph overrides and binary-policy drift fail closed"
+pass "candidate, index, and exact HEAD history accept approved text or bounded PNG assets; unrelated refs stay outside the release candidate and Git graph overrides or binary-policy drift fail closed"
 
 security_tools_source="${repo_root}/scripts/lib/security-tools.sh"
-merge_history_option_count="$(awk 'index($0, "--log-opts=--all --full-history -m --text --no-ext-diff --no-textconv") { count += 1 } END { print count + 0 }' "${security_tools_source}")"
+merge_history_option_count="$(awk 'index($0, "--log-opts=--full-history -m --text --no-ext-diff --no-textconv HEAD") { count += 1 } END { print count + 0 }' "${security_tools_source}")"
 exact_registry_count="$(awk 'index($0, "pnpm --config.manage-package-manager-versions=false --registry=https://registry.npmjs.org/ --ignore-pnpmfile audit") { count += 1 } END { print count + 0 }' "${security_tools_source}")"
 gosec_directory_exclusion_count="$(awk 'index($0, "-exclude-dir") { count += 1 } END { print count + 0 }' "${security_tools_source}")"
 archive_depth_count="$(awk 'index($0, "--max-archive-depth=5") { count += 1 } END { print count + 0 }' "${security_tools_source}")"
@@ -2064,6 +2068,9 @@ if grep -Fq -- "${normalized_name_secret}" "${output_root}/gitleaks-normalized-s
   fail "normalized staged name output exposed the runtime secret"
 fi
 git -C "${normalized_name_repo}" -c user.name='Normalized Name Fixture' -c user.email='normalized-name-fixture.invalid@example.invalid' commit --quiet -m 'add filename fixture'
+printf '%s\n' 'second benign version' >"${normalized_name_repo}/${normalized_secret_filename}"
+git -C "${normalized_name_repo}" add "${normalized_secret_filename}"
+git -C "${normalized_name_repo}" -c user.name='Normalized Name Fixture' -c user.email='normalized-name-fixture.invalid@example.invalid' commit --quiet -m 'retain repeated filename fixture'
 git -C "${normalized_name_repo}" add --all
 git -C "${normalized_name_repo}" -c user.name='Normalized Name Fixture' -c user.email='normalized-name-fixture.invalid@example.invalid' commit --quiet -m 'remove filename fixture'
 security_validate_history_text_files "${normalized_name_repo}" \
@@ -2081,11 +2088,11 @@ if grep -Fq -- "${normalized_name_secret}" "${output_root}/gitleaks-normalized-h
   fail "normalized historical name output exposed the runtime secret"
 fi
 unset normalized_secret_filename normalized_name_secret
-pass "bounded name manifests reject candidate, divergent index, and deleted-history filename-only secrets without exposing values"
+pass "bounded name manifests reject candidate, divergent index, and deduplicated deleted-history filename-only secrets without exposing values"
 
 normalized_metadata_fixture="${test_root}/normalized-metadata"
 normalized_metadata_secret="$(printf '%s%s%s%s' 'gh' 'p_' 'Q1w2E3r4T5y6U7i8' 'O9p0A1s2D3f4G5h6J7k8')"
-for metadata_case in commit tag ref; do
+for metadata_case in commit tag; do
   metadata_repo="${normalized_metadata_fixture}/${metadata_case}"
   mkdir -p -- "${metadata_repo}"
   git -C "${metadata_repo}" init --quiet
@@ -2098,8 +2105,6 @@ for metadata_case in commit tag ref; do
   fi
   if [[ "${metadata_case}" == "tag" ]]; then
     git -C "${metadata_repo}" -c user.name='Normalized Metadata Fixture' -c user.email='normalized-metadata-fixture.invalid@example.invalid' tag -a reviewed-tag -m "${normalized_metadata_secret}"
-  elif [[ "${metadata_case}" == "ref" ]]; then
-    git -C "${metadata_repo}" branch "${normalized_metadata_secret}"
   fi
   security_validate_history_text_files "${metadata_repo}" \
     || fail "strict history text policy rejected ${metadata_case} metadata fixture"
@@ -2116,8 +2121,69 @@ for metadata_case in commit tag ref; do
     fail "normalized ${metadata_case} metadata output exposed the runtime secret"
   fi
 done
+
+metadata_repo="${normalized_metadata_fixture}/ref"
+mkdir -p -- "${metadata_repo}"
+git -C "${metadata_repo}" init --quiet
+printf '%s\n' 'benign ref-name fixture' >"${metadata_repo}/fixture.txt"
+git -C "${metadata_repo}" add fixture.txt
+git -C "${metadata_repo}" -c user.name='Normalized Metadata Fixture' -c user.email='normalized-metadata-fixture.invalid@example.invalid' commit --quiet -m root
+git -C "${metadata_repo}" branch "${normalized_metadata_secret}"
+security_validate_history_text_files "${metadata_repo}" \
+  || fail "unrelated lightweight ref name changed current HEAD history validation"
+security_run_gitleaks_normalized_text \
+  "${metadata_repo}" \
+  history \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-ref-metadata.log" \
+  || fail "unrelated lightweight ref name changed the current HEAD normalized scan"
+if grep -Fq -- "${normalized_metadata_secret}" "${output_root}/gitleaks-normalized-ref-metadata.log"; then
+  fail "normalized ref metadata output exposed the runtime secret"
+fi
 unset metadata_case metadata_repo normalized_metadata_secret
-pass "normalized history rejects secrets present only in commit messages, annotated-tag messages, or lightweight ref names"
+pass "normalized history rejects secrets in reachable commit and annotated-tag messages while unrelated ref names stay outside candidate content"
+
+normalized_head_fixture="${test_root}/normalized-head-ancestry"
+normalized_unreachable_secret="$(printf '%s%s%s%s' 'gh' 'p_' 'R1s2T3u4V5w6X7y8' 'Z9a0B1c2D3e4F5g6H7i8')"
+mkdir -p -- "${normalized_head_fixture}"
+git -C "${normalized_head_fixture}" init --quiet
+git -C "${normalized_head_fixture}" symbolic-ref HEAD refs/heads/main
+printf '%s\n' 'benign root' >"${normalized_head_fixture}/fixture.txt"
+git -C "${normalized_head_fixture}" add fixture.txt
+git -C "${normalized_head_fixture}" -c user.name='Normalized HEAD Fixture' -c user.email='normalized-head-fixture.invalid@example.invalid' commit --quiet -m root
+git -C "${normalized_head_fixture}" checkout --quiet -b unmerged-secret
+printf 'token=%s\n' "${normalized_unreachable_secret}" >"${normalized_head_fixture}/unmerged.txt"
+git -C "${normalized_head_fixture}" add unmerged.txt
+git -C "${normalized_head_fixture}" -c user.name='Normalized HEAD Fixture' -c user.email='normalized-head-fixture.invalid@example.invalid' commit --quiet -m 'unmerged secret'
+git -C "${normalized_head_fixture}" checkout --quiet main
+security_validate_history_text_files "${normalized_head_fixture}" \
+  || fail "unreachable secondary-branch object changed current HEAD history validation"
+security_run_gitleaks_normalized_text \
+  "${normalized_head_fixture}" \
+  history \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-head-ancestry.log" \
+  || fail "unreachable secondary-branch object changed the current HEAD normalized scan"
+if grep -Fq -- "${normalized_unreachable_secret}" "${output_root}/gitleaks-normalized-head-ancestry.log"; then
+  fail "normalized HEAD ancestry output exposed the unreachable runtime secret"
+fi
+git -C "${normalized_head_fixture}" checkout --quiet unmerged-secret
+security_validate_history_text_files "${normalized_head_fixture}" \
+  || fail "strict history text policy rejected the branch when it became current HEAD"
+expect_failure \
+  "normalized current-HEAD branch secret fixture" \
+  security_run_gitleaks_normalized_text \
+  "${normalized_head_fixture}" \
+  history \
+  "${gitleaks_config}" \
+  "${output_root}/gitleaks-normalized-current-head-negative.log"
+grep -Fq -- 'leaks found' "${output_root}/gitleaks-normalized-current-head-negative.log" \
+  || fail "normalized current-HEAD history did not contain a finding"
+if grep -Fq -- "${normalized_unreachable_secret}" "${output_root}/gitleaks-normalized-current-head-negative.log"; then
+  fail "normalized current-HEAD output exposed the runtime secret"
+fi
+unset normalized_head_fixture normalized_unreachable_secret
+pass "exact HEAD ancestry excludes unrelated branch objects and scans them when that branch becomes the candidate"
 
 merge_secret_fixture="${test_root}/merge-secret"
 mkdir -p -- "${merge_secret_fixture}"
