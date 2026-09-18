@@ -6,15 +6,15 @@
 
 - Bash 5.0以上とGNU userland（Ubuntu 20.04/24.04、WSL2）
 - Node.js 24以上、pnpm 11.22.0（lock fileはrootの `pnpm-lock.yaml`）
-- Go 1.27.0
+- Go 1.27.1
 - PostgreSQL（version、固定Docker image、起動方法は [`database.md`](database.md#local-postgresql)）
-- sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.27.0によるfallbackも利用可能）
+- sqlc 1.31.1、またはDocker（Backendの品質チェックとSQL生成に必要。Go 1.27.1によるfallbackも利用可能）
 - Docker EngineとDocker Buildx（PostgreSQLの簡易起動、Cloudflare Container imageのbuild、InfrastructureのDocker build context監査に必要）
 - Chromium（E2Eを実行する場合）
 - Terraform 1.15.8（Staging/全体checkとCloudflare Turnstile基盤変更に必要）
 - Python 3と`curl`、`jq`、`openssl`、`realpath`、`sha256sum`、`base64`、`tar`、`zip`、`script`、`sed`、`awk`、`find`、`sort`、`mktemp`
 
-CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.27.0と [`database.md`のPostgreSQL pin](database.md#構成)を前提にします。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
+CIとContainer imageはNode.js 24、pnpm 11.22.0、Go 1.27.1と [`database.md`のPostgreSQL pin](database.md#構成)を前提にします。Staging基盤はTerraform 1.15.8とCloudflare provider 5.22.0、Wrangler 4.123.0をpinしています。ローカルでも同じversionを使ってください。Frontendだけを確認する場合はGo・PostgreSQL・sqlc・Terraformは不要です。
 
 sqlcはRepository標準のラッパーで実行します。ラッパーはsqlc 1.31.1がHostにあればそれを使い、なければ`sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537`を`docker run --rm`で起動します。Docker serverも利用できない場合は、Goでpin済みの一時toolを`.tmp/tools`へbuildしてfallbackします。これによりsqlcをHostへ常設する必要はありません。Docker/Goはいずれも初回だけimageまたはmoduleのdownloadが必要で、一時toolは通常のsafe clean対象です。
 
