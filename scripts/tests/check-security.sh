@@ -2064,6 +2064,9 @@ if grep -Fq -- "${normalized_name_secret}" "${output_root}/gitleaks-normalized-s
   fail "normalized staged name output exposed the runtime secret"
 fi
 git -C "${normalized_name_repo}" -c user.name='Normalized Name Fixture' -c user.email='normalized-name-fixture.invalid@example.invalid' commit --quiet -m 'add filename fixture'
+printf '%s\n' 'second benign version' >"${normalized_name_repo}/${normalized_secret_filename}"
+git -C "${normalized_name_repo}" add "${normalized_secret_filename}"
+git -C "${normalized_name_repo}" -c user.name='Normalized Name Fixture' -c user.email='normalized-name-fixture.invalid@example.invalid' commit --quiet -m 'retain repeated filename fixture'
 git -C "${normalized_name_repo}" add --all
 git -C "${normalized_name_repo}" -c user.name='Normalized Name Fixture' -c user.email='normalized-name-fixture.invalid@example.invalid' commit --quiet -m 'remove filename fixture'
 security_validate_history_text_files "${normalized_name_repo}" \
@@ -2081,7 +2084,7 @@ if grep -Fq -- "${normalized_name_secret}" "${output_root}/gitleaks-normalized-h
   fail "normalized historical name output exposed the runtime secret"
 fi
 unset normalized_secret_filename normalized_name_secret
-pass "bounded name manifests reject candidate, divergent index, and deleted-history filename-only secrets without exposing values"
+pass "bounded name manifests reject candidate, divergent index, and deduplicated deleted-history filename-only secrets without exposing values"
 
 normalized_metadata_fixture="${test_root}/normalized-metadata"
 normalized_metadata_secret="$(printf '%s%s%s%s' 'gh' 'p_' 'Q1w2E3r4T5y6U7i8' 'O9p0A1s2D3f4G5h6J7k8')"

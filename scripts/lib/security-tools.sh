@@ -2057,6 +2057,7 @@ security_run_gitleaks_normalized_text() {
           ;;
         history)
           : > /tmp/history-names
+          : > /tmp/history-names.raw
           : > /tmp/history-text-oids
           tab="$(printf "\t")"
           git rev-list --all > /tmp/history-commits
@@ -2082,7 +2083,7 @@ security_run_gitleaks_normalized_text() {
                 "" | *[!0-9a-f]*) exit 1 ;;
               esac
               test "${#3}" -eq 40
-              append_manifest_name history-path "${relative_path}" /tmp/history-names
+              append_manifest_name history-path "${relative_path}" /tmp/history-names.raw
               if is_approved_asset_path "${relative_path}"; then
                 test "$1" = 100644
                 is_approved_asset_oid "$3"
@@ -2092,6 +2093,14 @@ security_run_gitleaks_normalized_text() {
               fi
             done < /tmp/history-tree
           done < /tmp/history-commits
+          sort -u /tmp/history-names.raw > /tmp/history-names.sorted
+          manifest_entry_count=0
+          manifest_byte_count=0
+          while IFS="${tab}" read -r manifest_kind manifest_name manifest_extra; do
+            test -z "${manifest_extra}"
+            test "${manifest_kind}" = history-path
+            append_manifest_name "${manifest_kind}" "${manifest_name}" /tmp/history-names
+          done < /tmp/history-names.sorted
           sort -u /tmp/history-text-oids > /tmp/history-text-oids.sorted
           git rev-list --objects --all --no-object-names > /tmp/reachable-objects
           test -s /tmp/reachable-objects
