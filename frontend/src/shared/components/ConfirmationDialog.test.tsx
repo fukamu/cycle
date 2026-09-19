@@ -54,6 +54,22 @@ describe("ConfirmationDialog", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("focuses cancel after opening when structured content has earlier controls", () => {
+    render(
+      <ConfirmationDialog
+        title="サイクルを完了する前に確認"
+        confirmLabel="サイクルを完了"
+        describeContent={false}
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+      >
+        <button type="button">Pを編集</button>
+      </ConfirmationDialog>,
+    );
+
+    expect(screen.getByRole("button", { name: "キャンセル" })).toHaveFocus();
+  });
+
   it("can leave structured content out of a flattened accessible description", () => {
     render(
       <ConfirmationDialog
@@ -91,6 +107,9 @@ describe("ConfirmationDialog", () => {
     );
 
     expect(screen.getByRole("button", { name: "キャンセル" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "同じ操作を再試行" }),
+    ).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(
       screen.getByRole("dialog", { name: "結果を確認できません" }),

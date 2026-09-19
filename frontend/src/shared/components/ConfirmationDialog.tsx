@@ -26,6 +26,8 @@ export function ConfirmationDialog({
   onCancel,
 }: ConfirmationDialogProps) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const cancelButton = useRef<HTMLButtonElement>(null);
+  const confirmButton = useRef<HTMLButtonElement>(null);
   const trigger = useRef<HTMLElement | null>(
     document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -44,6 +46,10 @@ export function ConfirmationDialog({
       // jsdom and older embedded browsers may not implement showModal.
       element.setAttribute("open", "");
     }
+    const initialFocus = cancelButton.current?.disabled
+      ? confirmButton.current
+      : cancelButton.current;
+    initialFocus?.focus();
     return () => {
       if (element.open) {
         if (typeof element.close === "function") element.close();
@@ -78,22 +84,22 @@ export function ConfirmationDialog({
         </div>
         <div className="button-row confirmation-dialog__actions">
           <button
+            ref={cancelButton}
             className="button button--secondary"
             type="button"
-            autoFocus={!cancelDisabled}
             disabled={cancelDisabled}
             onClick={onCancel}
           >
             {cancelLabel}
           </button>
           <button
+            ref={confirmButton}
             className={
               confirmTone === "danger"
                 ? "button button--danger"
                 : "button button--primary"
             }
             type="button"
-            autoFocus={cancelDisabled}
             onClick={onConfirm}
           >
             {confirmLabel}
