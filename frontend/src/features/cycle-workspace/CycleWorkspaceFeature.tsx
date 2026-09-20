@@ -59,7 +59,6 @@ import {
   useCapturePostCommitRouteOwnership,
   usePostCommitCleanup,
 } from "../../shared/cleanup/postCommitCleanupContext";
-import { ConfirmationDialog } from "../../shared/components/ConfirmationDialog";
 import { TextCounter } from "../../shared/components/TextCounter";
 import {
   cycleActionCopy,
@@ -105,7 +104,10 @@ import {
   getCycleGoalActionGuidance,
 } from "./model/eligibility";
 import { CycleCheckComparison } from "./CycleCheckComparison";
-import { CycleCompletionSummary } from "./CycleCompletionSummary";
+import {
+  CycleWorkspaceConfirmations,
+  type WorkspaceConfirmation,
+} from "./CycleWorkspaceConfirmations";
 import { CycleCancellationReason } from "./CycleCancellationReason";
 import { CyclePreviousActionReference } from "./CyclePreviousActionReference";
 import {
@@ -218,15 +220,6 @@ function descriptionIds(
   const description = ids.filter((id): id is string => Boolean(id)).join(" ");
   return description || undefined;
 }
-
-type WorkspaceConfirmation =
-  | { readonly kind: "replace-action" }
-  | { readonly kind: "complete-cycle" }
-  | { readonly kind: "replan" }
-  | { readonly kind: "replan-discard"; readonly cleanupFailed?: boolean }
-  | { readonly kind: "replan-retry" }
-  | { readonly kind: "terminate"; readonly outcome: "achieved" | "ended" }
-  | { readonly kind: "delete" };
 
 export function CycleWorkspaceFeature({
   goalId,
@@ -2787,124 +2780,19 @@ function CycleWorkspace({
           </div>
         </details>
       )}
-      {confirmation?.kind === "replace-action" && (
-        <ConfirmationDialog
-          title="現在のAを置き換えますか？"
-          confirmLabel="AIで置き換える"
-          onCancel={() => setConfirmation(undefined)}
-          onConfirm={() => {
-            setConfirmation(undefined);
-            void runAI("generating", true);
-          }}
-        >
-          <p>現在のAをAI生成結果で置き換えます。</p>
-        </ConfirmationDialog>
-      )}
-      {confirmation?.kind === "complete-cycle" && (
-        <ConfirmationDialog
-          title="サイクルを完了する前に確認"
-          confirmLabel="サイクルを完了"
-          size="wide"
-          describeContent={false}
-          onCancel={() => setConfirmation(undefined)}
-          onConfirm={() => {
-            setConfirmation(undefined);
-            void finish();
-          }}
-        >
-          <CycleCompletionSummary
-            goalVersionNumber={cycle.goalVersion.versionNumber}
-            cycleSequenceNumber={cycle.sequenceNumber}
-            goalBody={cycle.goalVersion.body}
-            values={values}
-            onEdit={editFrameFromCompletionSummary}
-          />
-        </ConfirmationDialog>
-      )}
-      {confirmation?.kind === "replan" && (
-        <ConfirmationDialog
-          title={cycleReplanCopy.confirm.title}
-          confirmLabel={cycleReplanCopy.confirm.action}
-          onCancel={cancelReplan}
-          onConfirm={() => {
-            setConfirmation(undefined);
-            void runReplan(false);
-          }}
-        >
-          <p>{cycleReplanCopy.confirm.history}</p>
-          <p>{cycleReplanCopy.confirm.successor}</p>
-        </ConfirmationDialog>
-      )}
-      {confirmation?.kind === "replan-discard" && (
-        <ConfirmationDialog
-          title={cycleReplanCopy.discard.title}
-          confirmLabel={cycleReplanCopy.discard.action}
-          confirmTone="danger"
-          onCancel={cancelReplan}
-          onConfirm={() => {
-            setConfirmation(undefined);
-            void runReplan(true);
-          }}
-        >
-          <p>{cycleReplanCopy.discard.warning}</p>
-          <p>{cycleReplanCopy.discard.retained}</p>
-          {confirmation.cleanupFailed && (
-            <p className="inline-error" role="alert">
-              {cycleReplanCopy.discard.cleanupFailed}
-            </p>
-          )}
-        </ConfirmationDialog>
-      )}
-      {confirmation?.kind === "replan-retry" && (
-        <ConfirmationDialog
-          title={cycleReplanCopy.retry.title}
-          confirmLabel={cycleReplanCopy.retry.action}
-          cancelDisabled
-          onCancel={() => undefined}
-          onConfirm={() => {
-            setConfirmation(undefined);
-            void runReplan(false);
-          }}
-        >
-          <p>{cycleReplanCopy.retry.explanation}</p>
-          <p>{cycleReplanCopy.retry.frozen}</p>
-        </ConfirmationDialog>
-      )}
-      {confirmation?.kind === "terminate" && (
-        <ConfirmationDialog
-          title={`目標を${
-            confirmation.outcome === "achieved" ? "達成として終了" : "終了"
-          }しますか？`}
-          confirmLabel={
-            confirmation.outcome === "achieved" ? "目標を達成" : "目標を終了"
-          }
-          confirmTone="danger"
-          onCancel={() => setConfirmation(undefined)}
-          onConfirm={() => {
-            const { outcome } = confirmation;
-            setConfirmation(undefined);
-            void terminate(outcome);
-          }}
-        >
-          <p>現在のCycleはCanceledの読み取り専用履歴として残ります。</p>
-        </ConfirmationDialog>
-      )}
-      {confirmation?.kind === "delete" && (
-        <ConfirmationDialog
-          title="目標を削除しますか？"
-          confirmLabel="目標を削除"
-          confirmTone="danger"
-          onCancel={() => setConfirmation(undefined)}
-          onConfirm={() => {
-            setConfirmation(undefined);
-            void remove();
-          }}
-        >
-          <p>
-            この目標とすべてのCycle履歴を完全に削除します。この操作は取り消せません。
-          </p>
-        </ConfirmationDialog>
-      )}
+      <CycleWorkspaceConfirmations
+        confirmation={confirmation}
+        cycle={cycle}
+        values={values}
+        onCancelReplan={cancelReplan}
+        onComplete={finish}
+        onDelete={remove}
+        onDismiss={() => setConfirmation(undefined)}
+        onEditCompletionFrame={editFrameFromCompletionSummary}
+        onReplaceAction={() => runAI("generating", true)}
+        onReplan={runReplan}
+        onTerminate={terminate}
+      />
     </main>
   );
 }
