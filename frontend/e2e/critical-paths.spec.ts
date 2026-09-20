@@ -2081,9 +2081,30 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   await expect(discard).toBeVisible();
   expect((await discard.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   let fail = true;
+  let patchRequests = 0;
   await page.route("**/api/v1/goal-drafts/*", async (route) => {
-    if (route.request().method() === "PATCH" && fail) {
-      await route.abort("connectionfailed");
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    patchRequests += 1;
+    if (fail) {
+      const expectedUserId = route.request().headers()[
+        "x-fukamu-expected-user-id"
+      ];
+      if (!expectedUserId) throw new Error("missing expected user identity");
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        headers: { "X-Fukamu-Authenticated-User-ID": expectedUserId },
+        body: JSON.stringify({
+          error: {
+            code: "VALIDATION_ERROR",
+            message: "temporary test failure",
+            requestId: "00000000-0000-7000-8000-000000002074",
+          },
+        }),
+      });
       return;
     }
     await route.continue();
@@ -2093,13 +2114,22 @@ test("a failed autosave keeps the browser draft and retry persists it", async ({
   await expect(page.getByRole("alert")).toContainText("保存失敗", {
     timeout: 45_000,
   });
+  expect(patchRequests).toBe(1);
   const browserDraftBodies = await readBrowserDraftBodies(page);
   expect(browserDraftBodies).toContain("失敗しても保持する目標");
   fail = false;
   const retry = page.getByRole("button", { name: "再試行" });
   expect((await retry.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  const retryResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" &&
+      new URL(response.url()).pathname.startsWith("/api/v1/goal-drafts/") &&
+      response.status() === 200,
+  );
   await retry.click();
+  await retryResponse;
   await expect(page.getByText("保存済み")).toBeVisible();
+  expect(patchRequests).toBe(2);
   await page.reload();
   await expect(editor).toHaveValue("失敗しても保持する目標");
 });
