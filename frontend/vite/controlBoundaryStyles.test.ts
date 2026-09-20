@@ -7,10 +7,6 @@ import { describe, expect, it } from "vitest";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const applicationStyles = readFileSync(resolve(root, "src/styles.css"), "utf8");
-const betaAdmissionStyles = readFileSync(
-  resolve(root, "src/features/beta-admission/BetaAdmissionGate.css"),
-  "utf8",
-);
 
 type CssBlock = Readonly<{ prelude: string; body: string }>;
 
@@ -61,9 +57,6 @@ describe("control boundary styles", () => {
       ruleBody(applicationStyles, [".button--secondary", ".secondary-button"]),
     ).toContain("border-color: var(--brand);");
     expect(ruleBody(applicationStyles, ["textarea"])).toContain(
-      "border: 1px solid var(--brand);",
-    );
-    expect(ruleBody(betaAdmissionStyles, [".beta-admission input"])).toContain(
       "border: 1px solid var(--brand);",
     );
   });

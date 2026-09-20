@@ -38,8 +38,6 @@ const uuidV7Pattern =
 
 export function createStagingCSRFRolloutBrowserAdapter({
   baseURL,
-  admissionMode,
-  inviteToken,
   bootstrapID,
   marker,
   repositoryRoot,
@@ -49,7 +47,6 @@ export function createStagingCSRFRolloutBrowserAdapter({
   if (typeof retryCheckpointEnabled !== "boolean") {
     throw new Error("staging deploy retry checkpoint mode is invalid");
   }
-  let currentInviteToken = inviteToken;
   let browser;
   let context;
   let pageA;
@@ -120,13 +117,8 @@ export function createStagingCSRFRolloutBrowserAdapter({
       await pageA.route("**/api/v1/session/anonymous", anonymousSessionRoute);
       try {
         session = await enterStagingCritical({
-          context: {
-            addInitScript: (...values) => pageA.addInitScript(...values),
-          },
           page: pageA,
           baseURL,
-          admissionMode,
-          inviteToken: currentInviteToken,
           captureAnonymousSession: (currentPage) =>
             captureStagingAnonymousSession(currentPage),
           claimInitialSessionRetry:
@@ -142,7 +134,6 @@ export function createStagingCSRFRolloutBrowserAdapter({
           "**/api/v1/session/anonymous",
           anonymousSessionRoute,
         );
-        currentInviteToken = "";
       }
       const checkpointFailure = anonymousSessionCheckpoint.failure();
       if (checkpointFailure !== undefined) throw checkpointFailure;
@@ -424,7 +415,6 @@ export function createStagingCSRFRolloutBrowserAdapter({
 
     async close() {
       if (closed) return;
-      currentInviteToken = "";
       const failures = [];
       try {
         await stopDeploymentChild();

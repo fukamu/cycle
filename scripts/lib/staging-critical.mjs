@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 
 const canonicalStagingBaseURL = "https://cycle.staging.fukamu.matoruru.com";
-const inviteTokenPattern = /^fukamu_cycle_beta_[A-Za-z0-9_-]{43}$/;
 const uuidV7Pattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const maximumUUIDTimestamp = 0xffffffffffff;
@@ -86,13 +85,6 @@ export function stagingCriticalExecution(mode) {
   });
 }
 
-export function parseStagingAdmissionMode(value) {
-  if (value !== "auto" && value !== "off" && value !== "closed") {
-    throw new Error("staging admission mode is invalid");
-  }
-  return value;
-}
-
 export function formatStagingCriticalDiagnostic(failure, metadata) {
   if (
     !(failure instanceof StagingCriticalFailure) ||
@@ -118,14 +110,8 @@ export function formatStagingCriticalDiagnostic(failure, metadata) {
   return `::${metadata.diagnosticLevel}::${diagnosticName}; target=${metadata.target}; mutation_started=${metadata.mutationStarted}; cleanup_state=${metadata.cleanupState}; phase=${failure.phase}; reason=${failure.reason}; run_id=${metadata.runID}; run_attempt=${metadata.runAttempt}; candidate_sha=${metadata.commitSHA}.`;
 }
 
-export async function runStagingCritical({
-  mode,
-  admissionMode,
-  adapter,
-  retryOptions,
-}) {
+export async function runStagingCritical({ mode, adapter, retryOptions }) {
   parseStagingCriticalMode(mode);
-  if (mode !== "preflight") parseStagingAdmissionMode(admissionMode);
   if (typeof adapter !== "object" || adapter === null) {
     throw new Error("staging critical adapter is invalid");
   }
@@ -169,7 +155,7 @@ export async function runStagingCritical({
       bootstrapMayHaveRun = true;
       phase = "entry";
       cleanupState = "unverified";
-      session = await adapter.enter(admissionMode);
+      session = await adapter.enter();
       if (session === undefined) {
         throw new StagingCriticalFailure(
           phase,
@@ -295,13 +281,6 @@ export function parseStagingBaseURL(value) {
     throw new Error("staging base URL is not canonical");
   }
   return canonicalStagingBaseURL;
-}
-
-export function validateStagingInviteToken(value) {
-  if (typeof value !== "string" || !inviteTokenPattern.test(value)) {
-    throw new Error("staging invite token is invalid");
-  }
-  return value;
 }
 
 export function deriveBootstrapUUIDv7(runKey, timestampMilliseconds) {

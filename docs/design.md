@@ -6038,7 +6038,7 @@ autosave_duration_ms{resource_type}
 revision_conflict_total{resource_type}
 ```
 
-Browser Draft Recoveryは§28.6のFrontend behaviorと§48のFrontend unit / E2Eで保証する。Closed Betaでは`draft_recovery_total`をMinimum metricに含めず、件数・率・cohortを収集またはexportしない。Browser event / beacon、Backend ingest / metric、DB rollupを追加せず、User / Session / Goal / Cycle / Draft ID、HMAC pseudonym、本文、revision、timestamp、User-Agent、error detailをこの目的で新たに収集しない。専用dashboard、alert、query ownerも設けない。
+Browser Draft Recoveryは§28.6のFrontend behaviorと§48のFrontend unit / E2Eで保証する。`draft_recovery_total`をMinimum metricに含めず、件数・率・cohortを収集またはexportしない。Browser event / beacon、Backend ingest / metric、DB rollupを追加せず、User / Session / Goal / Cycle / Draft ID、HMAC pseudonym、本文、revision、timestamp、User-Agent、error detailをこの目的で新たに収集しない。専用dashboard、alert、query ownerも設けない。
 
 Account Delete / DSR対象となる新しいtelemetry recordを作らず、既存のBrowser Draft削除・tombstoneは§§41.10–41.11に従う。
 
@@ -6491,7 +6491,6 @@ Goal success signalもBackend-firstの2 candidateで有効化する。Expand can
 | Rate limit / Turnstile | §39 | `docs/environment.md`、Worker/Backend config |
 | Database pool | §44.6 | `docs/environment.md`、typed Backend config |
 | Observability exporter | §§42、44.2 | `docs/environment.md`、deployment contract |
-| Closed Beta ingress | §44 | `docs/environment.md`、Worker/deployment contract |
 
 Semantic ownerがProduct上の意味と許容関係を定め、運用inventoryがexact key、source、Environment別設定を定める。両者を一つの表へ混在させない。
 

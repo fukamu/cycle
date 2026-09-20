@@ -105,15 +105,6 @@ export function requestAnonymousSessionBootstrapJSON<T>(
   });
 }
 
-export function requestBetaAdmissionJSON<T>(
-  schema: z.ZodType<T>,
-  options: RequestOptions = {},
-): Promise<T> {
-  return requestJSON("/api/__beta/admission/redeem", schema, options, {
-    kind: "public",
-  });
-}
-
 async function requestJSON<T>(
   path: string,
   schema: z.ZodType<T>,

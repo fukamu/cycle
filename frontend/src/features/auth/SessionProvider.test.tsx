@@ -163,83 +163,12 @@ beforeEach(() => {
   tombstoneDeletedGoalAndClearDraftsMock.mockResolvedValue(undefined);
 });
 
-describe("SessionProvider admission boundary", () => {
+describe("SessionProvider initial session boundary", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("shows the invite gate before Turnstile and continues after redeem", async () => {
-    const requests: string[] = [];
-    let admitted = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const path = typeof input === "string" ? input : input.toString();
-        requests.push(path);
-        if (path === "/api/__beta/admission/redeem") {
-          admitted = true;
-          return new Response(null, { status: 204 });
-        }
-        if (path === "/api/v1/session" && !admitted) {
-          return errorResponse(403, "BETA_ADMISSION_REQUIRED");
-        }
-        if (path === "/api/v1/session") {
-          return sessionResponse(session);
-        }
-        throw new Error(`unexpected request: ${path}`);
-      }),
-    );
-
-    renderProvider();
-
-    expect(
-      await screen.findByRole("heading", {
-        name: "招待された方のみご利用いただけます",
-      }),
-    ).toBeInTheDocument();
-    expect(requests).toEqual(["/api/v1/session"]);
-
-    const user = userEvent.setup();
-    await user.type(
-      screen.getByLabelText("招待Token"),
-      `fukamu_cycle_beta_${"a".repeat(43)}`,
-    );
-    await user.click(screen.getByRole("button", { name: "利用を開始する" }));
-
-    expect(await screen.findByText("application ready")).toBeInTheDocument();
-    expect(requests).toEqual([
-      "/api/v1/session",
-      "/api/__beta/admission/redeem",
-      "/api/v1/session",
-    ]);
-  });
-
-  it("keeps the gate open when the invite token is invalid", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const path = typeof input === "string" ? input : input.toString();
-        if (path === "/api/v1/session") {
-          return errorResponse(403, "BETA_ADMISSION_REQUIRED");
-        }
-        return errorResponse(403, "BETA_INVITE_INVALID");
-      }),
-    );
-
-    renderProvider();
-    const user = userEvent.setup();
-    await user.type(await screen.findByLabelText("招待Token"), "invalid");
-    await user.click(screen.getByRole("button", { name: "利用を開始する" }));
-
-    expect(
-      await screen.findByRole("alert", {
-        name: "",
-      }),
-    ).toHaveTextContent("招待Tokenを確認できませんでした");
-    expect(screen.queryByText("application ready")).not.toBeInTheDocument();
-  });
-
-  it("keeps the normal anonymous bootstrap flow independent of admission", async () => {
+  it("uses the normal anonymous bootstrap flow", async () => {
     const requests: { method: string; path: string }[] = [];
     const advisory = createAdvisoryChannelHarness();
     vi.stubGlobal(
@@ -263,11 +192,6 @@ describe("SessionProvider admission boundary", () => {
     });
 
     expect(await screen.findByText("application ready")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", {
-        name: "招待された方のみご利用いただけます",
-      }),
-    ).not.toBeInTheDocument();
     expect(requests).toEqual([
       { method: "GET", path: "/api/v1/session" },
       { method: "GET", path: "/api/v1/session" },

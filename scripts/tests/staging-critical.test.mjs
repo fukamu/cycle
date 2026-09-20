@@ -9,7 +9,6 @@ import {
   formatStagingCriticalDiagnostic,
   parseAnonymousSession,
   parsePublicAnonymousSession,
-  parseStagingAdmissionMode,
   parseStagingBaseURL,
   parseStagingCriticalMode,
   retryPublicAccountDelete,
@@ -19,7 +18,6 @@ import {
   StagingCriticalFailure,
   stagingCriticalFailureReasons,
   stagingCriticalPhases,
-  validateStagingInviteToken,
 } from "../lib/staging-critical.mjs";
 
 const canonicalBaseURL = "https://cycle.staging.fukamu.matoruru.com";
@@ -43,19 +41,6 @@ test("accepts only the canonical staging origin without exposing rejected input"
         !error.message.includes(invalid),
     );
   }
-});
-
-test("validates the generated invite-token contract without echoing candidates", () => {
-  const token = `fukamu_cycle_beta_${"A".repeat(43)}`;
-  assert.equal(validateStagingInviteToken(token), token);
-  const invalid = `${token}private-suffix`;
-  assert.throws(
-    () => validateStagingInviteToken(invalid),
-    (error) =>
-      error instanceof Error &&
-      error.message === "staging invite token is invalid" &&
-      !error.message.includes(invalid),
-  );
 });
 
 test("derives a deterministic UUIDv7 with the supplied stable timestamp", () => {
@@ -88,11 +73,7 @@ test("accepts only closed staging mode enums", () => {
   assert.equal(parseStagingCriticalMode("preflight"), "preflight");
   assert.equal(parseStagingCriticalMode("baseline"), "baseline");
   assert.equal(parseStagingCriticalMode("full"), "full");
-  assert.equal(parseStagingAdmissionMode("auto"), "auto");
-  assert.equal(parseStagingAdmissionMode("off"), "off");
-  assert.equal(parseStagingAdmissionMode("closed"), "closed");
   assert.throws(() => parseStagingCriticalMode("private-mode"));
-  assert.throws(() => parseStagingAdmissionMode("private-mode"));
   assert.throws(
     () => new StagingCriticalFailure("private-phase", "unexpected_status"),
   );
@@ -180,10 +161,6 @@ test("keeps the browser harness free of secret-bearing diagnostics and artifacts
     /\b(?:recordVideo|screenshot|trace:|tracing\.)\b/,
   );
   assert.doesNotMatch(browserSources, /\bcatch\s*\(\s*[A-Za-z_$]/);
-  assert.equal(
-    source.match(/process\.env\.STAGING_E2E_INVITE_TOKEN/g)?.length,
-    4,
-  );
   const anonymousCapture = source.slice(
     source.indexOf("function captureAnonymousSession("),
     source.indexOf("async function discoverSession("),
@@ -195,13 +172,7 @@ test("keeps the browser harness free of secret-bearing diagnostics and artifacts
     /response\.headers\(\)\[authenticatedUserIDHeader\] !== undefined/,
   );
   assert.doesNotMatch(anonymousCapture, /parseAnonymousSession/);
-  for (const name of [
-    "DEBUG",
-    "NODE_DEBUG",
-    "NODE_OPTIONS",
-    "PWDEBUG",
-    "STAGING_E2E_INVITE_TOKEN",
-  ]) {
+  for (const name of ["DEBUG", "NODE_DEBUG", "NODE_OPTIONS", "PWDEBUG"]) {
     assert.match(source, new RegExp(`delete process\\.env\\.${name}`));
   }
 
@@ -213,50 +184,21 @@ test("keeps the browser harness free of secret-bearing diagnostics and artifacts
   assert.doesNotMatch(cleanup, /response\.(?:body|json|text)\(/);
 });
 
-function withBrowserGlobals(location, history, callback) {
-  assert.equal(Object.hasOwn(globalThis, "location"), false);
-  assert.equal(Object.hasOwn(globalThis, "history"), false);
-  Object.defineProperty(globalThis, "location", {
-    configurable: true,
-    value: location,
-  });
-  Object.defineProperty(globalThis, "history", {
-    configurable: true,
-    value: history,
-  });
-  try {
-    return callback();
-  } finally {
-    delete globalThis.location;
-    delete globalThis.history;
-  }
-}
-
-function entryFixture(
-  currentMode,
-  {
-    failEntry = false,
-    showRetry = false,
-    showRateLimit = false,
-    showApplicationError = false,
-    keepRetryVisible = false,
-    failRetryTransition = false,
-    onRetryClick,
-  } = {},
-) {
+function entryFixture({
+  failEntry = false,
+  showRetry = false,
+  showRateLimit = false,
+  showApplicationError = false,
+  keepRetryVisible = false,
+  failRetryTransition = false,
+  onRetryClick,
+} = {}) {
   const calls = [];
-  const location = { pathname: "/", search: "?source=staging", hash: "" };
   let retryVisible = showRetry;
-  let injectedURL = "";
-  const history = {
-    state: null,
-    replaceState(_state, _unused, nextURL) {
-      injectedURL = nextURL;
-      const hashStart = nextURL.indexOf("#");
-      location.hash = hashStart === -1 ? "" : nextURL.slice(hashStart);
-    },
-  };
   const newGoalButton = {
+    or() {
+      return entryButtons;
+    },
     async waitFor(options) {
       assert.deepEqual(options, { state: "visible" });
       calls.push("wait-new-goal");
@@ -320,43 +262,16 @@ function entryFixture(
       };
     },
   };
-  const admissionButton = {
-    or() {
-      return entryButtons;
-    },
-    async isVisible() {
-      return currentMode === "closed";
-    },
-    async click() {
-      calls.push("click-admission");
-    },
-  };
   return {
     calls,
-    get injectedURL() {
-      return injectedURL;
-    },
-    context: {
-      async addInitScript(callback, argument) {
-        calls.push("install-fragment");
-        withBrowserGlobals(location, history, () => callback(argument));
-      },
-    },
     page: {
       async goto(URL, options) {
         assert.equal(URL, canonicalBaseURL);
         assert.deepEqual(options, { waitUntil: "domcontentloaded" });
         calls.push("goto");
-        if (location.hash.includes("beta-invite")) {
-          location.hash = "";
-          calls.push("consume-fragment");
-        }
       },
       getByRole(role, options) {
         assert.equal(role, "button");
-        if (options.name === "\u5229\u7528\u3092\u958b\u59cb\u3059\u308b") {
-          return admissionButton;
-        }
         assert.equal(
           options.name,
           "\u65b0\u3057\u3044\u76ee\u6a19\u3092\u8a2d\u5b9a",
@@ -374,13 +289,6 @@ function entryFixture(
           return applicationErrorBoundary;
         }
         assert.fail(`unexpected selector: ${selector}`);
-      },
-      async waitForFunction(callback) {
-        calls.push("wait-fragment-cleared");
-        assert.equal(
-          withBrowserGlobals(location, history, () => callback()),
-          true,
-        );
       },
     },
   };
@@ -406,8 +314,8 @@ function fakeAdapter(overrides = {}) {
       async seedBootstrap() {
         calls.push("seed");
       },
-      async enter(admissionMode) {
-        calls.push(`entry:${admissionMode}`);
+      async enter() {
+        calls.push("entry");
         return session;
       },
       async discoverSession() {
@@ -438,11 +346,10 @@ function fakeAdapter(overrides = {}) {
   };
 }
 
-async function runFake(mode, admissionMode, overrides = {}) {
+async function runFake(mode, overrides = {}) {
   const fake = fakeAdapter(overrides);
   const result = await runStagingCritical({
     mode,
-    admissionMode,
     adapter: fake.adapter,
     retryOptions: {
       retryDelaysMilliseconds: [],
@@ -453,17 +360,14 @@ async function runFake(mode, admissionMode, overrides = {}) {
 }
 
 test("limits the blocking preflight to health and readiness", async () => {
-  const { calls, failures, cleanupState } = await runFake(
-    "preflight",
-    undefined,
-  );
+  const { calls, failures, cleanupState } = await runFake("preflight");
   assert.deepEqual(failures, []);
   assert.equal(cleanupState, "not_applicable");
   assert.deepEqual(calls, ["launch", "health", "readiness", "close"]);
 });
 
 test("fails the preflight before any anonymous operation", async () => {
-  const unhealthy = await runFake("preflight", undefined, {
+  const unhealthy = await runFake("preflight", {
     async checkHealth() {
       return 503;
     },
@@ -475,7 +379,7 @@ test("fails the preflight before any anonymous operation", async () => {
   assert.equal(unhealthy.cleanupState, "not_applicable");
   assert.deepEqual(unhealthy.calls, ["launch", "close"]);
 
-  const unready = await runFake("preflight", undefined, {
+  const unready = await runFake("preflight", {
     async checkReadiness() {
       return 503;
     },
@@ -488,87 +392,38 @@ test("fails the preflight before any anonymous operation", async () => {
   assert.deepEqual(unready.calls, ["launch", "health", "close"]);
 });
 
-test("runs off and closed baselines with discovery and public cleanup", async () => {
-  for (const admissionMode of ["off", "closed"]) {
-    const { calls, failures, cleanupState } = await runFake(
-      "baseline",
-      admissionMode,
-    );
-    assert.deepEqual(failures, []);
-    assert.equal(cleanupState, "verified");
-    assert.deepEqual(calls, [
-      "launch",
-      "health",
-      "readiness",
-      "seed",
-      `entry:${admissionMode}`,
-      "discover",
-      "before-cleanup",
-      "discover",
-      "delete",
-      "verify",
-      "close",
-    ]);
-    assert.equal(calls.includes("full"), false);
-  }
+test("runs the baseline with discovery and public cleanup", async () => {
+  const { calls, failures, cleanupState } = await runFake("baseline");
+  assert.deepEqual(failures, []);
+  assert.equal(cleanupState, "verified");
+  assert.deepEqual(calls, [
+    "launch",
+    "health",
+    "readiness",
+    "seed",
+    "entry",
+    "discover",
+    "before-cleanup",
+    "discover",
+    "delete",
+    "verify",
+    "close",
+  ]);
+  assert.equal(calls.includes("full"), false);
 });
 
-test("auto entry follows the current UI across candidate admission transitions", async (t) => {
-  for (const currentMode of ["off", "closed"]) {
-    for (const candidateMode of ["off", "closed"]) {
-      await t.test(`${currentMode} -> ${candidateMode}`, async () => {
-        const fixture = entryFixture(currentMode);
-        const session = {
-          userID,
-          csrfToken: "private-csrf-token",
-        };
-        const result = await enterStagingCritical({
-          context: fixture.context,
-          page: fixture.page,
-          baseURL: canonicalBaseURL,
-          admissionMode: "auto",
-          inviteToken: `fukamu_cycle_beta_${"A".repeat(43)}`,
-          captureAnonymousSession() {
-            fixture.calls.push("capture-session");
-            return Promise.resolve(session);
-          },
-        });
-        assert.equal(result, session);
-        assert.match(
-          fixture.injectedURL,
-          /^\/\?source=staging#beta-invite=fukamu_cycle_beta_/,
-        );
-        assert.deepEqual(fixture.calls, [
-          "install-fragment",
-          "capture-session",
-          "goto",
-          "consume-fragment",
-          "wait-entry-cta",
-          "wait-fragment-cleared",
-          ...(currentMode === "closed" ? ["click-admission"] : []),
-          "wait-new-goal",
-        ]);
-      });
-    }
-  }
-});
-
-test("off entry skips invite handling and opens New Goal directly", async () => {
-  const fixture = entryFixture("off");
+test("entry opens New Goal directly", async () => {
+  const fixture = entryFixture();
   const session = { userID, csrfToken: "private-csrf-token" };
   const result = await enterStagingCritical({
-    context: fixture.context,
     page: fixture.page,
     baseURL: canonicalBaseURL,
-    admissionMode: "off",
-    inviteToken: "",
     captureAnonymousSession() {
       fixture.calls.push("capture-session");
       return Promise.resolve(session);
     },
   });
   assert.equal(result, session);
-  assert.equal(fixture.injectedURL, "");
   assert.deepEqual(fixture.calls, [
     "capture-session",
     "goto",
@@ -578,7 +433,7 @@ test("off entry skips invite handling and opens New Goal directly", async () => 
 });
 
 test("observes a pending anonymous session capture before entry can fail", async () => {
-  const fixture = entryFixture("off", { failEntry: true });
+  const fixture = entryFixture({ failEntry: true });
   const pendingCapture = new Promise(() => undefined);
   const originalThen = pendingCapture.then.bind(pendingCapture);
   let rejectionObserved = false;
@@ -589,11 +444,8 @@ test("observes a pending anonymous session capture before entry can fail", async
 
   await assert.rejects(
     enterStagingCritical({
-      context: fixture.context,
       page: fixture.page,
       baseURL: canonicalBaseURL,
-      admissionMode: "off",
-      inviteToken: "",
       captureAnonymousSession() {
         fixture.calls.push("capture-session");
         return pendingCapture;
@@ -614,13 +466,10 @@ test("observes a pending anonymous session capture before entry can fail", async
 });
 
 test("maps an anonymous session capture rejection to an unobserved session", async () => {
-  const fixture = entryFixture("off");
+  const fixture = entryFixture();
   const result = await enterStagingCritical({
-    context: fixture.context,
     page: fixture.page,
     baseURL: canonicalBaseURL,
-    admissionMode: "off",
-    inviteToken: "",
     captureAnonymousSession() {
       fixture.calls.push("capture-session");
       return Promise.reject(new Error("private response failure"));
@@ -636,18 +485,15 @@ test("maps an anonymous session capture rejection to an unobserved session", asy
 });
 
 test("preserves a closed anonymous session rejection when entry also fails", async () => {
-  const fixture = entryFixture("off", { failEntry: true });
+  const fixture = entryFixture({ failEntry: true });
   const captureFailure = new StagingCriticalFailure(
     "entry",
     "anonymous_session_rate_limited",
   );
   await assert.rejects(
     enterStagingCritical({
-      context: fixture.context,
       page: fixture.page,
       baseURL: canonicalBaseURL,
-      admissionMode: "off",
-      inviteToken: "",
       captureAnonymousSession() {
         fixture.calls.push("capture-session");
         return Promise.reject(captureFailure);
@@ -668,14 +514,11 @@ test("does not retry an unobserved anonymous session without an accepted claim",
     ["denied", () => false],
   ]) {
     await t.test(name, async () => {
-      const fixture = entryFixture("off", { showRetry: true });
+      const fixture = entryFixture({ showRetry: true });
       await assert.rejects(
         enterStagingCritical({
-          context: fixture.context,
           page: fixture.page,
           baseURL: canonicalBaseURL,
-          admissionMode: "off",
-          inviteToken: "",
           captureAnonymousSession() {
             fixture.calls.push("capture-session");
             return new Promise(() => undefined);
@@ -706,14 +549,11 @@ test("does not confuse other entry boundaries with the initial Session Retry", a
     ],
   ]) {
     await t.test(name, async () => {
-      const fixture = entryFixture("off", options);
+      const fixture = entryFixture(options);
       await assert.rejects(
         enterStagingCritical({
-          context: fixture.context,
           page: fixture.page,
           baseURL: canonicalBaseURL,
-          admissionMode: "off",
-          inviteToken: "",
           captureAnonymousSession() {
             fixture.calls.push("capture-session");
             return new Promise(() => undefined);
@@ -730,16 +570,13 @@ test("does not confuse other entry boundaries with the initial Session Retry", a
 });
 
 test("retries the initial pre-request state once with the same capture", async () => {
-  const fixture = entryFixture("off", { showRetry: true });
+  const fixture = entryFixture({ showRetry: true });
   const session = { userID, csrfToken: "private-csrf-token" };
   let captures = 0;
   let claims = 0;
   const result = await enterStagingCritical({
-    context: fixture.context,
     page: fixture.page,
     baseURL: canonicalBaseURL,
-    admissionMode: "off",
-    inviteToken: "",
     captureAnonymousSession() {
       captures += 1;
       fixture.calls.push("capture-session");
@@ -765,18 +602,15 @@ test("retries the initial pre-request state once with the same capture", async (
 });
 
 test("fails closed after the claimed retry reaches Retry again", async () => {
-  const fixture = entryFixture("off", {
+  const fixture = entryFixture({
     showRetry: true,
     keepRetryVisible: true,
   });
   let claims = 0;
   await assert.rejects(
     enterStagingCritical({
-      context: fixture.context,
       page: fixture.page,
       baseURL: canonicalBaseURL,
-      admissionMode: "off",
-      inviteToken: "",
       captureAnonymousSession() {
         fixture.calls.push("capture-session");
         return new Promise(() => undefined);
@@ -811,16 +645,13 @@ test("does not await capture when a POST is unobserved or observation is unavail
     ["POST unobserved", () => false],
   ]) {
     await t.test(name, async () => {
-      const fixture = entryFixture("off", {
+      const fixture = entryFixture({
         showRetry: true,
         failRetryTransition: true,
       });
       const entry = enterStagingCritical({
-        context: fixture.context,
         page: fixture.page,
         baseURL: canonicalBaseURL,
-        admissionMode: "off",
-        inviteToken: "",
         captureAnonymousSession() {
           fixture.calls.push("capture-session");
           return new Promise(() => undefined);
@@ -856,7 +687,7 @@ test("retains a delayed successful POST session when the Retry transition times 
   const retained = [];
   let captures = 0;
   let resolveCapture;
-  const fixture = entryFixture("off", {
+  const fixture = entryFixture({
     showRetry: true,
     failRetryTransition: true,
     onRetryClick() {
@@ -865,11 +696,8 @@ test("retains a delayed successful POST session when the Retry transition times 
   });
   await assert.rejects(
     enterStagingCritical({
-      context: fixture.context,
       page: fixture.page,
       baseURL: canonicalBaseURL,
-      admissionMode: "off",
-      inviteToken: "",
       captureAnonymousSession() {
         captures += 1;
         fixture.calls.push("capture-session");
@@ -902,7 +730,7 @@ test("waits boundedly for a late classified POST failure before entry failure", 
     "anonymous_session_unavailable",
   );
   let rejectCapture;
-  const fixture = entryFixture("off", {
+  const fixture = entryFixture({
     showRetry: true,
     failRetryTransition: true,
     onRetryClick() {
@@ -911,11 +739,8 @@ test("waits boundedly for a late classified POST failure before entry failure", 
   });
   await assert.rejects(
     enterStagingCritical({
-      context: fixture.context,
       page: fixture.page,
       baseURL: canonicalBaseURL,
-      admissionMode: "off",
-      inviteToken: "",
       captureAnonymousSession() {
         fixture.calls.push("capture-session");
         return new Promise((_resolve, reject) => {
@@ -939,7 +764,7 @@ test("prioritizes a classified POST failure during the claimed retry", async () 
     "anonymous_session_rate_limited",
   );
   let rejectCapture;
-  const fixture = entryFixture("off", {
+  const fixture = entryFixture({
     showRetry: true,
     keepRetryVisible: true,
     onRetryClick() {
@@ -948,11 +773,8 @@ test("prioritizes a classified POST failure during the claimed retry", async () 
   });
   await assert.rejects(
     enterStagingCritical({
-      context: fixture.context,
       page: fixture.page,
       baseURL: canonicalBaseURL,
-      admissionMode: "off",
-      inviteToken: "",
       captureAnonymousSession() {
         fixture.calls.push("capture-session");
         return new Promise((_resolve, reject) => {
@@ -970,7 +792,7 @@ test("prioritizes a classified POST failure during the claimed retry", async () 
 });
 
 test("retains the post-deploy full journey", async () => {
-  const { calls, failures, cleanupState } = await runFake("full", "closed");
+  const { calls, failures, cleanupState } = await runFake("full");
   assert.deepEqual(failures, []);
   assert.equal(cleanupState, "verified");
   assert.equal(calls.includes("full"), true);
@@ -978,7 +800,7 @@ test("retains the post-deploy full journey", async () => {
 });
 
 test("keeps candidate cleanup hard after a full journey failure", async () => {
-  const result = await runFake("full", "closed", {
+  const result = await runFake("full", {
     async runFullJourney(setPhase) {
       setPhase("review_transition");
       throw new Error("private candidate response body");
@@ -993,7 +815,7 @@ test("keeps candidate cleanup hard after a full journey failure", async () => {
 });
 
 test("maps entry and anonymous bootstrap failures to closed reasons and still cleans", async () => {
-  const timedOut = await runFake("baseline", "off", {
+  const timedOut = await runFake("baseline", {
     async enter() {
       throw new StagingCriticalFailure("entry", "entry_cta_timeout");
     },
@@ -1005,7 +827,7 @@ test("maps entry and anonymous bootstrap failures to closed reasons and still cl
   assert.equal(timedOut.cleanupState, "verified");
   assert.equal(timedOut.calls.includes("delete"), true);
 
-  const notObserved = await runFake("baseline", "closed", {
+  const notObserved = await runFake("baseline", {
     async enter() {
       return undefined;
     },
@@ -1019,7 +841,7 @@ test("maps entry and anonymous bootstrap failures to closed reasons and still cl
 });
 
 test("fails closed when public deletion or the final 401 proof fails", async () => {
-  const deletionFailure = await runFake("baseline", "off", {
+  const deletionFailure = await runFake("baseline", {
     async deleteAccount() {
       throw new Error("private body https://example.invalid/?token=secret");
     },
@@ -1030,7 +852,7 @@ test("fails closed when public deletion or the final 401 proof fails", async () 
   );
   assert.equal(deletionFailure.cleanupState, "unverified");
 
-  const proofFailure = await runFake("baseline", "off", {
+  const proofFailure = await runFake("baseline", {
     async verifyDeleted() {
       return 200;
     },
@@ -1066,7 +888,6 @@ test("uses the validated session for cleanup when rediscovery fails", async () =
   });
   const { failures, cleanupState } = await runStagingCritical({
     mode: "baseline",
-    admissionMode: "auto",
     adapter: fake.adapter,
     retryOptions: {
       retryDelaysMilliseconds: [],
@@ -1099,7 +920,7 @@ test("never promotes a mismatched initial discovery to the deletion target", asy
   let deletedSession;
   const fake = fakeAdapter({
     async enter() {
-      fake.calls.push("entry:auto");
+      fake.calls.push("entry");
       return capturedSession;
     },
     async discoverSession() {
@@ -1114,7 +935,6 @@ test("never promotes a mismatched initial discovery to the deletion target", asy
   });
   const { failures, cleanupState } = await runStagingCritical({
     mode: "baseline",
-    admissionMode: "auto",
     adapter: fake.adapter,
     retryOptions: {
       retryDelaysMilliseconds: [],
@@ -1152,7 +972,7 @@ test("never promotes a mismatched cleanup discovery after validation", async () 
   let deletedSession;
   const fake = fakeAdapter({
     async enter() {
-      fake.calls.push("entry:auto");
+      fake.calls.push("entry");
       return capturedSession;
     },
     async discoverSession() {
@@ -1168,7 +988,6 @@ test("never promotes a mismatched cleanup discovery after validation", async () 
   });
   const { failures, cleanupState } = await runStagingCritical({
     mode: "baseline",
-    admissionMode: "auto",
     adapter: fake.adapter,
     retryOptions: {
       retryDelaysMilliseconds: [],
@@ -1190,7 +1009,7 @@ test("never promotes a mismatched cleanup discovery after validation", async () 
 });
 
 test("classifies health and session discovery failures without exception details", async () => {
-  const unhealthy = await runFake("baseline", "off", {
+  const unhealthy = await runFake("baseline", {
     async checkHealth() {
       throw new Error("private upstream response body");
     },
@@ -1201,7 +1020,7 @@ test("classifies health and session discovery failures without exception details
   );
   assert.equal(unhealthy.cleanupState, "not_started");
 
-  const discoveryFailure = await runFake("baseline", "closed", {
+  const discoveryFailure = await runFake("baseline", {
     async discoverSession() {
       throw new Error("private cookie and account id");
     },
@@ -1220,7 +1039,7 @@ test("classifies health and session discovery failures without exception details
 test("formats only closed-enum diagnostics and validated run metadata", () => {
   const privateValues = [
     "https://example.invalid/path?token=secret#fragment",
-    "private-invite-token",
+    "private-entry-token",
     "private-turnstile-token",
     "private-csrf-token",
     "private-cookie-and-session",
@@ -1339,8 +1158,6 @@ test("avoids duplicating the current journey before the one-time rollout gate", 
   assert.ok(0 <= preflight && preflight < rollout && rollout < postDeploy);
   const preflightStep = workflow.slice(preflight, rollout);
   assert.match(preflightStep, /STAGING_CRITICAL_MODE: preflight/);
-  assert.doesNotMatch(preflightStep, /STAGING_ADMISSION_MODE:/);
-  assert.doesNotMatch(preflightStep, /STAGING_E2E_INVITE_TOKEN:/);
   assert.doesNotMatch(preflightStep, /continue-on-error:/);
   assert.doesNotMatch(workflow, /STAGING_CRITICAL_MODE: baseline/);
   const rolloutStep = workflow.slice(rollout, postDeploy);
@@ -1374,10 +1191,6 @@ test("avoids duplicating the current journey before the one-time rollout gate", 
   const postDeployStep = workflow.slice(postDeploy);
   assert.match(postDeployStep, /STAGING_CRITICAL_MODE: full/);
   assert.doesNotMatch(postDeployStep, /continue-on-error:/);
-  assert.match(
-    postDeployStep,
-    /STAGING_ADMISSION_MODE: \$\{\{ env\.BETA_ADMISSION_MODE \}\}/,
-  );
 });
 
 test("retries public deletion without reading or exposing response bodies", async () => {

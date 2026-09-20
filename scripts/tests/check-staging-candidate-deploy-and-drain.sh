@@ -153,7 +153,6 @@ run_child() {
     CURSOR_SIGNING_SECRET=cursor-private-value \
     OPENAI_API_KEY=openai-private-value \
     TURNSTILE_SECRET_KEY=turnstile-private-value \
-    BETA_ADMISSION_MODE=off \
     AI_MODEL=model \
     OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example.invalid \
     DB_MAX_OPEN_CONNS=1 DB_MAX_IDLE_CONNS=1 DB_CONN_MAX_LIFETIME_MINUTES=1 \

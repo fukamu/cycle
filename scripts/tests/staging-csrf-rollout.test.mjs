@@ -719,19 +719,8 @@ test("keeps browser evidence memory-only and invokes one fixed child adapter", (
   );
   assert.match(entry, /Object\.defineProperty\(globalThis, "BroadcastChannel"/);
   assert.match(entry, /const \[sessionA, sessionB\] = await Promise\.all/);
-  assert.doesNotMatch(entry, /process\.env\.STAGING_E2E_INVITE_TOKEN/);
   assert.doesNotMatch(entry, /process\.env/);
-  assert.equal(
-    harness.match(/process\.env\.STAGING_E2E_INVITE_TOKEN/g)?.length,
-    2,
-  );
-  for (const name of [
-    "DEBUG",
-    "NODE_DEBUG",
-    "NODE_OPTIONS",
-    "PWDEBUG",
-    "STAGING_E2E_INVITE_TOKEN",
-  ]) {
+  for (const name of ["DEBUG", "NODE_DEBUG", "NODE_OPTIONS", "PWDEBUG"]) {
     assert.match(harness, new RegExp(`delete process\\.env\\.${name}`));
   }
 });

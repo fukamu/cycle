@@ -26,7 +26,6 @@ test("materializes only the exact Worker secret allowlist", () => {
   const writes = [];
   const baseEnvironment = {
     WORKER_SECRETS_FILE: "/tmp/worker-secrets.json",
-    BETA_ADMISSION_MODE: "off",
     DATABASE_URL: "database-private",
     OTEL_EXPORTER_OTLP_HEADERS: "otel-private",
     SESSION_TOKEN_PEPPER: "session-private",
@@ -61,20 +60,6 @@ test("materializes only the exact Worker secret allowlist", () => {
     "TURNSTILE_SECRET_KEY",
   ]);
 
-  const closedWrites = [];
-  materializeStagingWorkerSecrets({
-    argv: [],
-    env: {
-      ...baseEnvironment,
-      BETA_ADMISSION_MODE: "closed",
-      BETA_ADMISSION_COOKIE_KEY: "admission-private",
-    },
-    writeFile: (...values) => closedWrites.push(values),
-  });
-  assert.equal(
-    JSON.parse(closedWrites[0][1]).BETA_ADMISSION_COOKIE_KEY,
-    "admission-private",
-  );
   assert.throws(
     () =>
       materializeStagingWorkerSecrets({

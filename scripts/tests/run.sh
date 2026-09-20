@@ -918,27 +918,6 @@ EOF
   pass "reset requires exact confirmation and rejects production, remote Docker, and wrong images"
 }
 
-test_admission_helpers() {
-  local key
-  key="$("${repo_root}/scripts/new-beta-admission-key.sh" 2>"${test_root}/key-warning")"
-  [[ "${key}" =~ ^[A-Za-z0-9_-]{43}$ ]] || fail "Admission key is not 32-byte base64url"
-
-  local output
-  local token
-  local digest
-  local expected_digest
-  output="$("${repo_root}/scripts/new-beta-invite.sh" --invite-id tester-1 2>"${test_root}/invite-warning")"
-  token="$(sed -n 's/^Token: //p' <<<"${output}")"
-  digest="$(sed -n 's/^Allowlist entry: .*"digest":"\([0-9a-f]*\)".*/\1/p' <<<"${output}")"
-  [[ "${token}" =~ ^fukamu_cycle_beta_[A-Za-z0-9_-]{43}$ ]] \
-    || fail "Admission invite token has an unexpected format"
-  expected_digest="$(printf '%s' "${token}" | sha256sum | awk '{print $1}')"
-  [[ "${digest}" == "${expected_digest}" ]] || fail "Admission invite digest does not match the token"
-  assert_failure "invalid invite ID" \
-    "${repo_root}/scripts/new-beta-invite.sh" --invite-id INVALID
-  pass "Admission helpers generate base64url secrets and matching SHA-256 digests"
-}
-
 test_setup
 test_import_env
 test_frontend_check
@@ -950,7 +929,6 @@ test_local_app
 test_sqlc_runner
 test_clean
 test_reset_local_db
-test_admission_helpers
 bash "${script_dir}/check-control-plane-fixtures.sh"
 bash "${script_dir}/check-terraform-state-recovery.sh"
 node --test "${script_dir}/staging-critical.test.mjs"

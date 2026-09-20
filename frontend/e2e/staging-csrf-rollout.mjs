@@ -9,9 +9,7 @@ import {
 } from "../../scripts/lib/staging-csrf-rollout.mjs";
 import {
   deriveBootstrapUUIDv7,
-  parseStagingAdmissionMode,
   parseStagingBaseURL,
-  validateStagingInviteToken,
 } from "../../scripts/lib/staging-critical.mjs";
 import { createStagingCSRFRolloutBrowserAdapter } from "./staging-csrf-rollout-entry.mjs";
 
@@ -30,20 +28,10 @@ process.once("SIGTERM", interrupt);
 
 let failures;
 let runMetadata = { runID: "local", runAttempt: "local", commitSHA: "local" };
-let inviteToken = "";
 try {
   const baseURL = parseStagingBaseURL(process.env.STAGING_BASE_URL);
-  const admissionMode = parseStagingAdmissionMode(
-    process.env.STAGING_ADMISSION_MODE,
-  );
-  if (admissionMode !== "off") {
-    inviteToken = validateStagingInviteToken(
-      process.env.STAGING_E2E_INVITE_TOKEN,
-    );
-  }
   runMetadata = parseRunMetadata(process.env);
 
-  delete process.env.STAGING_E2E_INVITE_TOKEN;
   delete process.env.DEBUG;
   delete process.env.NODE_DEBUG;
   delete process.env.NODE_OPTIONS;
@@ -53,8 +41,6 @@ try {
   const privateRunKey = randomBytes(32).toString("hex");
   adapter = createStagingCSRFRolloutBrowserAdapter({
     baseURL,
-    admissionMode,
-    inviteToken,
     bootstrapID: deriveBootstrapUUIDv7(
       `${privateRunKey}:bootstrap`,
       timestampMilliseconds,
@@ -63,14 +49,12 @@ try {
     repositoryRoot,
     retryCheckpointEnabled: runMetadata.runID !== "local",
   });
-  inviteToken = "";
   failures = await runStagingCSRFRollout({ adapter });
 } catch {
   failures = [
     new StagingCSRFRolloutFailure("configuration", "unexpected_status"),
   ];
 } finally {
-  inviteToken = "";
   if (adapter !== undefined) {
     await adapter.close().catch(() => undefined);
   }

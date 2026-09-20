@@ -23,13 +23,11 @@ const validatorPath = resolve(
 );
 const stagingOrigin = "https://cycle.staging.fukamu.matoruru.com";
 const productionReferralURL = "https://cycle.fukamu.com/";
-const benignCookieKey = Buffer.alloc(32, 7).toString("base64url");
 const stagingTurnstileSiteKey = "1x00000000000000000000BB";
 const stagingTurnstileSecretKey = "1x0000000000000000000000000000000AA";
 
-test("deployment validator accepts valid off and closed inputs", () => {
+test("deployment validator accepts valid inputs", () => {
   assert.deepEqual(validateDeploymentInputs(validEnvironment()), []);
-  assert.deepEqual(validateDeploymentInputs(validClosedEnvironment()), []);
 });
 
 test("deployment validator trims required inputs for presence", () => {
@@ -61,56 +59,6 @@ test("deployment validator derives every required input from the contract", () =
       validateDeploymentInputs(validEnvironment({ [name]: " \t " })),
       [{ code: "MISSING_REQUIRED_INPUT", key: name }],
       name,
-    );
-  }
-});
-
-test("deployment validator delegates strict invite validation", () => {
-  const cases = [
-    ["entry schema", "[{}]"],
-    [
-      "duplicate entry",
-      JSON.stringify([inviteEntry("beta-001", 1), inviteEntry("beta-001", 2)]),
-    ],
-    ["entry limit", JSON.stringify(inviteEntries(1_001))],
-  ];
-  for (const [name, invites] of cases) {
-    const problems = validateDeploymentInputs(
-      validClosedEnvironment({ BETA_INVITES: invites }),
-    );
-    assert.deepEqual(
-      problems,
-      [{ code: "INVALID_INPUT", key: "BETA_INVITES" }],
-      name,
-    );
-  }
-});
-
-test("closed-only inputs are ignored off and required closed", () => {
-  assert.deepEqual(
-    validateDeploymentInputs(
-      validEnvironment({
-        BETA_ADMISSION_COOKIE_TTL_DAYS: "invalid",
-        BETA_INVITES: "invalid",
-        BETA_ADMISSION_COOKIE_KEY: "invalid",
-      }),
-    ),
-    [],
-  );
-
-  for (const name of [
-    ...contract.closedBeta.conditionalVariables,
-    ...contract.closedBeta.conditionalSecrets,
-  ]) {
-    const environment = validClosedEnvironment();
-    environment[name] = " \t ";
-    const problems = validateDeploymentInputs(environment);
-    assert.equal(
-      problems.some(
-        (problem) =>
-          problem.code === "MISSING_REQUIRED_INPUT" && problem.key === name,
-      ),
-      true,
     );
   }
 });
@@ -149,37 +97,19 @@ test("deployment validator binds the official Turnstile test pair to staging", (
 });
 
 test("CLI reports stable identifiers without input values", () => {
-  const inviteCanary = "RAW_TOKEN_CANARY";
-  const digestCanary = "DIGEST_CANARY";
-  const keyCanary = "KEY_CANARY";
-  const inviteResult = runCLI({
-    BETA_INVITES: JSON.stringify([
-      { id: "beta-001", digest: digestCanary, token: inviteCanary },
-    ]),
-  });
-  const keyResult = runCLI({
-    BETA_ADMISSION_COOKIE_KEY: keyCanary,
-  });
+  const originCanary = "https://PRIVATE_ORIGIN_CANARY.invalid";
+  const result = runCLI({ PUBLIC_ORIGIN: originCanary });
 
-  assert.equal(inviteResult.status, 1);
-  assert.equal(keyResult.status, 1);
-  assert.equal(inviteResult.stdout, "");
-  assert.equal(keyResult.stdout, "");
-  assert.match(inviteResult.stderr, /::error::INVALID_INPUT:BETA_INVITES/);
-  assert.match(
-    keyResult.stderr,
-    /::error::INVALID_INPUT:BETA_ADMISSION_COOKIE_KEY/,
-  );
-  const output = `${inviteResult.stderr}\n${keyResult.stderr}`;
-  for (const canary of [inviteCanary, digestCanary, keyCanary]) {
-    assert.equal(output.includes(canary), false);
-  }
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /::error::INVALID_INPUT:PUBLIC_ORIGIN/);
+  assert.equal(result.stderr.includes(originCanary), false);
 });
 
 function runCLI(overrides) {
   return spawnSync(process.execPath, [validatorPath], {
     encoding: "utf8",
-    env: validClosedEnvironment(overrides),
+    env: validEnvironment(overrides),
   });
 }
 
@@ -189,7 +119,6 @@ function validEnvironment(overrides = {}) {
   return {
     ...environment,
     PUBLIC_ORIGIN: stagingOrigin,
-    BETA_ADMISSION_MODE: "off",
     APP_REFERRAL_URL: "",
     TURNSTILE_SITE_KEY: stagingTurnstileSiteKey,
     TURNSTILE_SECRET_KEY: stagingTurnstileSecretKey,
@@ -197,34 +126,13 @@ function validEnvironment(overrides = {}) {
   };
 }
 
-function validClosedEnvironment(overrides = {}) {
-  return validEnvironment({
-    BETA_ADMISSION_MODE: "closed",
-    BETA_ADMISSION_COOKIE_TTL_DAYS: "180",
-    BETA_INVITES: JSON.stringify([inviteEntry("beta-001", 1)]),
-    BETA_ADMISSION_COOKIE_KEY: benignCookieKey,
-    ...overrides,
-  });
-}
-
 function requiredNames() {
   return [
     ...new Set([
       ...contract.backend.githubVariables,
       ...contract.backend.secrets,
-      contract.closedBeta.mode.name,
       ...Object.values(contract.frontend.required),
       ...contract.deploy.requiredOnly,
     ]),
   ];
-}
-
-function inviteEntries(count) {
-  return Array.from({ length: count }, (_, index) =>
-    inviteEntry(`beta-${index}`, index),
-  );
-}
-
-function inviteEntry(id, digestIndex) {
-  return { id, digest: digestIndex.toString(16).padStart(64, "0") };
 }

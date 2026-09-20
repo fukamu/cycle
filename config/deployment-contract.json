@@ -65,14 +65,6 @@
       "TURNSTILE_SECRET_KEY"
     ]
   },
-  "closedBeta": {
-    "mode": {
-      "name": "BETA_ADMISSION_MODE",
-      "allowed": ["off", "closed"]
-    },
-    "conditionalVariables": ["BETA_ADMISSION_COOKIE_TTL_DAYS", "BETA_INVITES"],
-    "conditionalSecrets": ["BETA_ADMISSION_COOKIE_KEY"]
-  },
   "frontend": {
     "fixed": {
       "VITE_DEPLOYMENT_ENV": "staging"

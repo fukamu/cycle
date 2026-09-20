@@ -1,6 +1,6 @@
 # Cloud deployment・運用
 
-この文書はTerraform bootstrap、Staging deployment、監視、incident、rollback / restore、Production運用準備のSource of Truthです。Application仕様は [`design.md`](design.md)、正確な環境変数名・分類・validationは [`environment.md`](environment.md)、Database / Migrationは [`database.md`](database.md)、一時Closed Betaの発行・失効・撤去は [`closed-beta-admission.md`](closed-beta-admission.md) が所有します。現在実装済みのcloud targetはStaging Lightだけで、Productionは未構築です。
+この文書はTerraform bootstrap、Staging deployment、監視、incident、rollback / restore、Production運用準備のSource of Truthです。Application仕様は [`design.md`](design.md)、正確な環境変数名・分類・validationは [`environment.md`](environment.md)、Database / Migrationは [`database.md`](database.md) が所有します。現在実装済みのcloud targetはStaging Lightだけで、Productionは未構築です。
 
 ## Environment・ownership
 
@@ -178,7 +178,7 @@ Cloudflare application deploy tokenは対象account / zoneのWorker、Container�
 
 - `staging-terraform-apply`: Apply専用名のR2 Read & Write credentialだけを保管し、同名をrepositoryへ登録せず、deployment branchを`main`へ制限する。
 - `staging`: Application runtime / migration / deploy inputsを保管し、deployment branchを`main`へ制限する。
-- Exact secret / variable list、Closed Beta追加値、Frontend public mappingは [`environment.md`](environment.md) だけを更新する。
+- Exact secret / variable listとFrontend public mappingは [`environment.md`](environment.md) だけを更新する。
 - Workflowは [`deployment-contract.json`](../config/deployment-contract.json) から入力分類を導出し、Worker parserとBackend typed config checkerをmigration前に実行する。
 - Runtime pooled URLとmigration direct URLを混同せず、migration secretをWorker / Containerへ渡さない。
 - OptionalなApplication紹介導線は承認済み固定root URLだけを許可し、User Dataを共有payloadへ含めない。
@@ -214,9 +214,9 @@ configured approver / dispatch input / exact main SHA / CI / no-change Plan or A
 -> 公開account-delete APIでaccount cleanup
 ```
 
-Generic pre-switch hard gateはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへ`/healthz`と`/readyz`だけを確認します。Stable CSRF初回rolloutではlegacy / stable互換性をexact-main CIの決定的なtestで確認し、#139の同一Browser process / Contextはauthoritative drain後のcandidate-publicだけでAdmission off / closedの自動判定、Turnstile anonymous bootstrap、fresh stable Sessionを所有します。同じDeploy runでgeneric anonymous journeyを先行させるとcurrent-publicのTurnstile / anonymous-create rate-limitを自己消費し得るため、manual `baseline` diagnosticは実行しません。Exact-main CI evidenceが確認できなければrelease mutationへ進まず、candidateのstable two-tab / security smokeまたはaccount cleanupが失敗した場合はreleaseを成功としません。
+Generic pre-switch hard gateはmigration、Worker secrets file作成、Wrangler deployより前に、現在配信中のStagingへ`/healthz`と`/readyz`だけを確認します。Stable CSRF初回rolloutではlegacy / stable互換性をexact-main CIの決定的なtestで確認し、#139の同一Browser process / Contextはauthoritative drain後のcandidate-publicだけでTurnstile anonymous bootstrapとfresh stable Sessionを所有します。同じDeploy runでgeneric anonymous journeyを先行させるとcurrent-publicのTurnstile / anonymous-create rate-limitを自己消費し得るため、manual `baseline` diagnosticは実行しません。Exact-main CI evidenceが確認できなければrelease mutationへ進まず、candidateのstable two-tab / security smokeまたはaccount cleanupが失敗した場合はreleaseを成功としません。
 
-Post-deploy `full`だけがcandidateの`BETA_ADMISSION_MODE`を使い、`off`ではInvite Tokenをharnessへ渡しません。Candidate critical journeyまたはcleanupの失敗ではreleaseを成功としません。Migration失敗時もWrangler deployへ進みません。Recovery modeはApplication authorization boundaryであり、stable初回rolloutのpartial resumeやsmoke bypassには使いません。
+Post-deploy `full`のcandidate critical journeyまたはcleanupが失敗した場合はreleaseを成功としません。Migration失敗時もWrangler deployへ進みません。Recovery modeはApplication authorization boundaryであり、stable初回rolloutのpartial resumeやsmoke bypassには使いません。
 
 `Deploy Staging`のattempt 1が失敗した場合、同じworkflow runを一度だけ安全に再試行できるのは、attempt 1が`completed` / `failure`であり、自動生成されたcheckpointをhuman audit用artifactとexact immutable Actions cache key `staging-deploy-retry-<commit>-<run-id>-1`へ保存し、attempt 2が同じkeyから復元したfileについて次の全条件を満たす場合だけです。
 
@@ -327,7 +327,7 @@ Stagingはpublic internetから到達可能です。URLの秘匿をaccess contro
 - Cloudflare Worker / Containerのconsole出力をWorkers Logsで収集する。
 - Cloudflare automatic tracesは5%、logsは100% sampleを維持する。
 - Go safe JSON loggerは [`design.md` §42.2](design.md#422-structured-log-fields) のfieldだけを記録し、free-form message、unknown / malformed fieldを拒否する。
-- Backend traceとserver-side metricをvendor-neutralなOTLP/HTTPでexportする。Browser Draft RecoveryはClosed Betaでは収集・export経路を持たない。正本は[`design.md` §42.3](design.md#423-minimum-metrics)とする。
+- Backend traceとserver-side metricをvendor-neutralなOTLP/HTTPでexportする。Browser Draft Recoveryは収集・export経路を持たない。正本は[`design.md` §42.3](design.md#423-minimum-metrics)とする。
 - Cloudflare Analytics / Logs、Neon Monitoring、OpenAI usageを横断して確認する。
 
 OTLP endpoint / header credential ownerと実値、retention、dashboard、alert、notification、uptime monitor、on-callはProduction release blockerです。Collector障害はApplication requestやreadinessを失敗させず、bounded retry後の固定diagnosticだけをWorkers Logsへ出します。Process終了時はHTTP requestをdrainしてからtrace / metric providerをflushします。
@@ -433,10 +433,6 @@ Guard migrationを含むreleaseはmigration-firstで適用し、旧Application i
 
 Deployment / version、Container rollout、Worker exception、cold-startを確認し、static-only、API-only、domain / TLS全体を切り分けます。DDoS mitigationとApplication 429 / 403を混同しません。
 
-## Temporary Closed Beta Admission
-
-Invite発行、新規redeem停止、Cookie key rotation、一般公開切替、7日間安定確認、物理撤去の唯一の手順は [`closed-beta-admission.md`](closed-beta-admission.md) です。このrunbookを撤去条件成立前に統合・削除しません。Raw Invite Token、digest、Admission Cookie、Cookie keyをlogへ追加せず、設定不備は既存Sessionではなく新規Anonymous bootstrapだけをfail-closedにすることを確認します。
-
 ## Environment / secret rotation
 
 1. [`environment.md`](environment.md)でscope、secret / public、validation、影響を確認する。
@@ -504,7 +500,7 @@ Staging停止は通常deployから分離し、data / secret ownerと復旧不要
 
 ## Production readiness・data
 
-Production専用Cloudflare Worker / Container、Neon project、Turnstile、Google client、R2 state、GitHub Environment、capacity、backup、alert値は未構築です。初回公開では [`closed-beta-admission.md`](closed-beta-admission.md) に従いAdmissionを`closed`で開始し、Stagingのhostname、secret、DB、state、provider limitを転用しません。
+Production専用Cloudflare Worker / Container、Neon project、Turnstile、Google client、R2 state、GitHub Environment、capacity、backup、alert値は未構築です。初回公開ではStagingのhostname、secret、DB、state、provider limitを転用しません。
 
 - Production dataへのaccessは最小権限・最短時間にし、目的と承認を記録する。
 - Production dataをStaging / local / testへcopyしない。

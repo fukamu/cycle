@@ -437,7 +437,6 @@ async function validateOperationalDocumentationTopology() {
     ".fukamu/playbook/lock.json",
     ".fukamu/playbook/overrides.json",
     "AGENTS.md",
-    "docs/closed-beta-admission.md",
     "docs/database.md",
     "docs/design.md",
     "docs/development.md",
