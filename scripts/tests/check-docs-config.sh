@@ -21,11 +21,73 @@ assert_failure_contains() {
   local description="$1"
   local expected="$2"
   shift 2
+  if [[ "${config_fixture_batch_enabled:-0}" == "1" &&
+    "$#" -eq 2 &&
+    "$1" == "bash" &&
+    "$2" == */scripts/check-config-parity.sh ]]; then
+    queue_config_fixture \
+      "${2%/scripts/check-config-parity.sh}" \
+      "fail" \
+      "${description}" \
+      "${expected}"
+    return
+  fi
   local output="${test_root}/last-output"
   if "$@" >"${output}" 2>&1; then
     fail "${description} unexpectedly succeeded"
   fi
   assert_last_failure_contains "${description}" "${expected}"
+}
+
+queue_config_fixture() {
+  local fixture_root="$1"
+  local expectation="$2"
+  local description="$3"
+  local expected_message="$4"
+  printf '%s\0%s\0%s\0%s\0' \
+    "${fixture_root}" \
+    "${expectation}" \
+    "${description}" \
+    "${expected_message}" \
+    >>"${config_fixture_batch_manifest}"
+}
+
+run_config_fixture_batch() {
+  local helper_bin="${test_root}/config-parity-helper-bin"
+  local parser_binary="${test_root}/config-go-ast-inventory"
+  local go_version
+  go_version="$(GOENV=off GOTOOLCHAIN=local go env GOVERSION)"
+  [[ "${go_version}" == "go1.27.1" ]] \
+    || fail "configuration parity batch requires Go 1.27.1, got ${go_version}"
+  GOENV=off GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly \
+    go build -o "${parser_binary}" "${repo_root}/scripts/config-go-ast-inventory.go"
+  mkdir -p -- "${helper_bin}"
+  # shellcheck disable=SC2016 # The generated helper expands these expressions at runtime.
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -Eeuo pipefail' \
+    'if [[ "$#" -eq 2 && "$1" == "env" && "$2" == "GOVERSION" ]]; then' \
+    '  printf "%s\\n" "go1.27.1"' \
+    '  exit 0' \
+    'fi' \
+    'if [[ "$#" -ge 3 && "$1" == "run" && "$2" == */scripts/config-go-ast-inventory.go ]]; then' \
+    '  shift 2' \
+    '  exec "${FUKAMU_CONFIG_GO_AST_INVENTORY_BINARY:?}" "$@"' \
+    'fi' \
+    'printf "unsupported configuration fixture Go invocation:" >&2' \
+    'printf " %q" "$@" >&2' \
+    'printf "\\n" >&2' \
+    'exit 64' \
+    >"${helper_bin}/go"
+  chmod +x "${helper_bin}/go"
+
+  PATH="${helper_bin}:${PATH}" \
+    FUKAMU_CONFIG_GO_AST_INVENTORY_BINARY="${parser_binary}" \
+    FUKAMU_CONFIG_PARSE5_MODULE="$(realpath -e -- "${repo_root}/frontend/node_modules/parse5/dist/index.js")" \
+    FUKAMU_CONFIG_TYPESCRIPT_MODULE="$(realpath -e -- "${repo_root}/cloudflare/node_modules/typescript/lib/typescript.js")" \
+    node "${repo_root}/scripts/tests/check-config-parity-batch.mjs" \
+    "${config_fixture_batch_manifest}" \
+    || fail "configuration parity batch fixtures failed"
 }
 
 assert_last_failure_contains() {
@@ -876,9 +938,14 @@ insert_after_exact_line() {
 
 test_config_gate() {
   local canonical_worker_env_vars
+  local config_fixture_batch_enabled
+  local config_fixture_batch_manifest
   local fake_worker_comment
   local fixture
   local frontend_docs_line
+  config_fixture_batch_enabled=0
+  config_fixture_batch_manifest="${test_root}/config-parity-batch-manifest"
+  : >"${config_fixture_batch_manifest}"
   fixture="$(new_config_fixture valid)"
   insert_before_exact_line \
     "${fixture}/frontend/src/features/app-referral/config.ts" \
@@ -918,8 +985,11 @@ test_config_gate() {
     '// os /* non-consumer */ . LookupEnv' \
     'var _ = "reader. stringValue(UNMODELED_ENV) reader . lookup(key)"' \
     >>"${fixture}/backend/internal/config/config.go"
-  bash "${fixture}/scripts/check-config-parity.sh" >/dev/null \
-    || fail "configuration parity gate treated Go comments or string literals as environment consumers"
+  queue_config_fixture \
+    "${fixture}" \
+    "pass" \
+    "configuration parity gate treated Go comments or string literals as environment consumers" \
+    ""
 
   fixture="$(new_config_fixture ignored-backend-source)"
   mkdir -p -- "${fixture}/backend/.tmp"
@@ -955,6 +1025,8 @@ test_config_gate() {
     $'\t\t\tAIPerIPMinute:             reader.intValue("RATE_AI_PER_IP_MINUTE", 10),'
   assert_failure_contains "Backend config drift" "Backend contract/config.go" \
     bash "${fixture}/scripts/check-config-parity.sh"
+
+  config_fixture_batch_enabled=1
 
   fixture="$(new_config_fixture unknown-backend-reader)"
   replace_exact_line \
@@ -1439,6 +1511,7 @@ test_config_gate() {
     'void Object.getPrototypeOf({});' \
     'void Object.getPrototypeOf({});' \
     >"${fixture}/cloudflare/src/worker-reflective-constructor-dynamic-code.ts"
+  config_fixture_batch_enabled=0
   assert_failure_contains "Worker reflective constructor dynamic code" \
     "cloudflare/src/worker-reflective-constructor-dynamic-code.ts:2:27" \
     bash "${fixture}/scripts/check-config-parity.sh"
@@ -1448,6 +1521,7 @@ test_config_gate() {
     "cloudflare/src/worker-reflective-constructor-dynamic-code.ts:10:6"
   assert_last_failure_excludes "Worker reflective constructor dynamic code" \
     "return globalThis"
+  config_fixture_batch_enabled=1
 
   fixture="$(new_config_fixture worker-data-url-module)"
   printf '%s\n' \
@@ -2362,6 +2436,9 @@ test_config_gate() {
     '  RATE_AI_PER_USER_MINUTE RATE_AI_PER_SESSION_MINUTE RATE_AI_PER_IP_MINUTE'
   assert_failure_contains "deployment workflow drift" "deployment contract/fixed child Worker variables" \
     bash "${fixture}/scripts/check-config-parity.sh"
+
+  config_fixture_batch_enabled=0
+  run_config_fixture_batch
 
   pass "configuration parity gate has deterministic cross-boundary negative fixtures"
 }
