@@ -8,7 +8,6 @@
     "cycleProductContract": "docs/design.md",
     "repositoryInstructions": "AGENTS.md",
     "localProcedureOwners": [
-      "docs/closed-beta-admission.md",
       "docs/database.md",
       "docs/development.md",
       "docs/environment.md",

@@ -779,6 +779,7 @@ Terraform M27ではApply直前に`terraform state pull`し、SHA-256を計算し
 - 2026-08-22: Frontend、Backend、Cloudflare、Terraform、E2E、空DB baselineを固定環境で検証。
 - 2026-08-22: 仕様矛盾3件とarchitecture/CI/Terraform方針をuser判断で確定。
 - 2026-08-22: ExecPlanを`.codex/plans/whole-system-reform.md`として作成。改革実装は未開始。
+- 2026-09-20: Product Owner判断により、Production公開前のClosed Beta構想を撤回した。現行のProduct contract、Worker / Frontend runtime、deploy input、Staging harness、test、runbookからAdmission / Inviteの全surfaceを一括撤去し、互換経路やDB migrationは設けない。過去の記録は当時の検証証跡として改変せず、本entryでsupersedeする。
 - 現在の再開位置: Whole-system reformのM0–M33は完了し、追加実装の再開位置はない。将来の変更は本ExecPlanを既存契約と検証証跡として扱い、新しい目的・scope・rollbackを持つ別計画で開始する。Production/Staging deploy/apply、R2、secret変更、live data操作は本計画では実行していない。
 
 ## 26. Final definition of done

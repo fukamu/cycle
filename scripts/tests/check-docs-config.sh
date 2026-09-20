@@ -111,7 +111,6 @@ install_playbook_fixture() {
       >"${fixture}/README.md"
   fi
   for target in \
-    'docs/closed-beta-admission.md' \
     'docs/database.md' \
     'docs/design.md' \
     'docs/development.md' \
@@ -308,7 +307,6 @@ enable_operational_documentation_topology() {
     >"${fixture}/AGENTS.md"
   write_valid_design_trace "${fixture}"
   for target in \
-    'docs/closed-beta-admission.md' \
     'docs/database.md' \
     'docs/development.md' \
     'docs/environment.md' \
@@ -317,7 +315,6 @@ enable_operational_documentation_topology() {
   done
   for target in \
     'AGENTS.md' \
-    'docs/closed-beta-admission.md' \
     'docs/database.md' \
     'docs/design.md' \
     'docs/development.md' \
@@ -701,7 +698,6 @@ new_config_fixture() {
     "${fixture}/backend/internal/config" \
     "${fixture}/backend/internal/infrastructure/observability" \
     "${fixture}/backend/internal/infrastructure/postgres" \
-    "${fixture}/cloudflare/src/beta-admission" \
     "${fixture}/cloudflare/src/config" \
     "${fixture}/config" \
     "${fixture}/docs" \
@@ -720,7 +716,6 @@ new_config_fixture() {
   cp -- "${repo_root}/backend/internal/infrastructure/postgres/kpi_report_repository.go" "${fixture}/backend/internal/infrastructure/postgres/kpi_report_repository.go"
   cp -- "${repo_root}/cloudflare/package.json" "${fixture}/cloudflare/package.json"
   ln -s -- "${repo_root}/cloudflare/node_modules" "${fixture}/cloudflare/node_modules"
-  cp -- "${repo_root}/cloudflare/src/beta-admission/beta-admission.ts" "${fixture}/cloudflare/src/beta-admission/beta-admission.ts"
   cp -- "${repo_root}/cloudflare/src/config/deployment-contract.test.mjs" "${fixture}/cloudflare/src/config/deployment-contract.test.mjs"
   cp -- "${repo_root}/scripts/config-go-ast-inventory.go" "${fixture}/scripts/config-go-ast-inventory.go"
   cp -- "${repo_root}/cloudflare/src/index.ts" "${fixture}/cloudflare/src/index.ts"
@@ -913,11 +908,6 @@ test_config_gate() {
     "${fixture}/frontend/src/main.tsx" \
     'import { mountApplication } from "./app/mountApplication";' \
     $'import "../../shared/frontend-environment-decoy.ts";\nimport { mountApplication } from "./app/mountApplication";'
-  printf '%s\n' \
-    '' \
-    '// Benign module decoy: import * as workers from "cloudflare:workers";' \
-    '// Reflect.get(workers, "env");' \
-    >>"${fixture}/cloudflare/src/beta-admission/beta-admission.ts"
   bash "${fixture}/scripts/check-config-parity.sh" >/dev/null \
     || fail "configuration parity gate rejected canonical syntax or benign AST decoys"
 
@@ -1313,8 +1303,8 @@ test_config_gate() {
     >"${fixture}/cloudflare/src/environment-side-effect.ts"
   insert_before_exact_line \
     "${fixture}/cloudflare/src/index.ts" \
-    'import { handleBetaAdmission } from "./beta-admission/beta-admission";' \
-    $'import "./environment-side-effect";\nimport { handleBetaAdmission } from "./beta-admission/beta-admission";'
+    'const backendInstanceID = "staging-singleton";' \
+    $'import "./environment-side-effect";\nconst backendInstanceID = "staging-singleton";'
   assert_failure_contains "Worker side-effect module environment import" \
     "Worker cloudflare:workers module reference inventory" \
     bash "${fixture}/scripts/check-config-parity.sh"
@@ -1328,8 +1318,8 @@ test_config_gate() {
     >"${fixture}/shared/worker-environment.ts"
   insert_before_exact_line \
     "${fixture}/cloudflare/src/index.ts" \
-    'import { handleBetaAdmission } from "./beta-admission/beta-admission";' \
-    $'import "../../shared/worker-environment";\nimport { handleBetaAdmission } from "./beta-admission/beta-admission";'
+    'const backendInstanceID = "staging-singleton";' \
+    $'import "../../shared/worker-environment";\nconst backendInstanceID = "staging-singleton";'
   assert_failure_contains "Worker root shared environment import" \
     "Worker cloudflare:workers module reference inventory" \
     bash "${fixture}/scripts/check-config-parity.sh"
@@ -1341,8 +1331,8 @@ test_config_gate() {
     >"${fixture}/cloudflare/src/require-environment.ts"
   insert_before_exact_line \
     "${fixture}/cloudflare/src/index.ts" \
-    'import { handleBetaAdmission } from "./beta-admission/beta-admission";' \
-    $'import "./require-environment";\nimport { handleBetaAdmission } from "./beta-admission/beta-admission";'
+    'const backendInstanceID = "staging-singleton";' \
+    $'import "./require-environment";\nconst backendInstanceID = "staging-singleton";'
   assert_failure_contains "Worker computed require environment module" \
     "Worker cloudflare:workers module reference inventory" \
     bash "${fixture}/scripts/check-config-parity.sh"
@@ -1350,8 +1340,8 @@ test_config_gate() {
   fixture="$(new_config_fixture worker-outside-root-local-import)"
   insert_before_exact_line \
     "${fixture}/cloudflare/src/index.ts" \
-    'import { handleBetaAdmission } from "./beta-admission/beta-admission";' \
-    $'import "../../../outside-worker.ts";\nimport { handleBetaAdmission } from "./beta-admission/beta-admission";'
+    'const backendInstanceID = "staging-singleton";' \
+    $'import "../../../outside-worker.ts";\nconst backendInstanceID = "staging-singleton";'
   assert_failure_contains "Worker outside-root local import" \
     "local module reference must remain inside the candidate repository" \
     bash "${fixture}/scripts/check-config-parity.sh"
@@ -1359,8 +1349,8 @@ test_config_gate() {
   fixture="$(new_config_fixture worker-wrapped-dynamic-outside-root-import)"
   insert_before_exact_line \
     "${fixture}/cloudflare/src/index.ts" \
-    'import { handleBetaAdmission } from "./beta-admission/beta-admission";' \
-    $'void import(("../../../../outside-worker.ts") satisfies string);\nimport { handleBetaAdmission } from "./beta-admission/beta-admission";'
+    'const backendInstanceID = "staging-singleton";' \
+    $'void import(("../../../../outside-worker.ts") satisfies string);\nconst backendInstanceID = "staging-singleton";'
   assert_failure_contains "Worker wrapped dynamic outside-root import" \
     "local module reference must remain inside the candidate repository" \
     bash "${fixture}/scripts/check-config-parity.sh"
@@ -1368,8 +1358,8 @@ test_config_gate() {
   fixture="$(new_config_fixture worker-file-url-import)"
   insert_before_exact_line \
     "${fixture}/cloudflare/src/index.ts" \
-    'import { handleBetaAdmission } from "./beta-admission/beta-admission";' \
-    $'import "file:///tmp/outside-worker.ts";\nimport { handleBetaAdmission } from "./beta-admission/beta-admission";'
+    'const backendInstanceID = "staging-singleton";' \
+    $'import "file:///tmp/outside-worker.ts";\nconst backendInstanceID = "staging-singleton";'
   assert_failure_contains "Worker file URL import" \
     "file URL module references are forbidden" \
     bash "${fixture}/scripts/check-config-parity.sh"
@@ -1502,32 +1492,14 @@ test_config_gate() {
     >"${fixture}/cloudflare/src/leak-bindings.ts"
   insert_before_exact_line \
     "${fixture}/cloudflare/src/index.ts" \
-    'import { handleBetaAdmission } from "./beta-admission/beta-admission";' \
-    $'import { leakBindings } from "./leak-bindings";\nimport { handleBetaAdmission } from "./beta-admission/beta-admission";'
+    'const backendInstanceID = "staging-singleton";' \
+    $'import { leakBindings } from "./leak-bindings";\nconst backendInstanceID = "staging-singleton";'
   insert_before_exact_line \
     "${fixture}/cloudflare/src/index.ts" \
     '    if (!isBackendRequest(new URL(request.url))) {' \
     '    leakBindings(bindings);'
   assert_failure_contains "Worker handler bindings passed to another module" \
     "Worker handler bindings provenance" \
-    bash "${fixture}/scripts/check-config-parity.sh"
-
-  fixture="$(new_config_fixture worker-beta-bindings-extra-access)"
-  insert_before_exact_line \
-    "${fixture}/cloudflare/src/beta-admission/beta-admission.ts" \
-    '  if (bindings.BETA_ADMISSION_MODE === "off") return { mode: "off" };' \
-    '  void bindings.OPENAI_API_KEY;'
-  assert_failure_contains "Worker beta bindings extra access" \
-    "Worker handler bindings provenance" \
-    bash "${fixture}/scripts/check-config-parity.sh"
-
-  fixture="$(new_config_fixture worker-beta-bindings-arguments-access)"
-  insert_before_exact_line \
-    "${fixture}/cloudflare/src/beta-admission/beta-admission.ts" \
-    '  if (bindings.BETA_ADMISSION_MODE === "off") return { mode: "off" };' \
-    '  void Reflect.get(arguments[0], "BETA_ADMISSION_MODE");'
-  assert_failure_contains "Worker beta bindings arguments access" \
-    "Worker cloudflare:workers module reference inventory" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture worker-extra-durable-object-binding)"
@@ -2308,16 +2280,6 @@ test_config_gate() {
     'PUBLIC_ORIGIN="${DATABASE_URL}"'
   assert_failure_contains "Worker modeled source reassignment" \
     "the fixed child must not rewrite a modeled Worker variable source" \
-    bash "${fixture}/scripts/check-config-parity.sh"
-
-  fixture="$(new_config_fixture worker-conditional-condition)"
-  # shellcheck disable=SC2016 # Child-script parameter expansions are intentional fixture literals.
-  replace_exact_line \
-    "${fixture}/scripts/run-staging-candidate-deploy-and-drain.sh" \
-    'if [[ "${BETA_ADMISSION_MODE}" == "closed" ]]; then' \
-    'if [[ "${BETA_ADMISSION_MODE}" == "off" ]]; then'
-  assert_failure_contains "Worker conditional condition drift" \
-    "the fixed child must gate closed-Beta variables on closed mode" \
     bash "${fixture}/scripts/check-config-parity.sh"
 
   fixture="$(new_config_fixture duplicate-worker-deploy-step)"

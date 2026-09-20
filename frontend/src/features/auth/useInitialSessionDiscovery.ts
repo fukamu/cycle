@@ -7,7 +7,6 @@ import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLease
 import type { PublishSessionIdentityAdvisory } from "./sessionIdentityAdvisory";
 import {
   isInitialSessionAnonymousCreationBlocked,
-  isBetaAdmissionRequired,
   isInitialSessionRateLimited,
   isSessionBoundaryOwnedError,
   loadInitialSession,
@@ -71,7 +70,6 @@ export function useInitialSessionDiscovery(
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
     retry: (failureCount, error) =>
-      !isBetaAdmissionRequired(error) &&
       !isInitialSessionRateLimited(error) &&
       !isInitialSessionAnonymousCreationBlocked(error) &&
       !isSessionBoundaryOwnedError(error) &&

@@ -30,7 +30,6 @@ Cycle固有のアプリケーション要件・仕様・設計の最上位Source
 | Environment variables                               | [`docs/environment.md`](docs/environment.md)                 |
 | Database / Migration                                 | [`docs/database.md`](docs/database.md)                       |
 | Cloud deployment / operations / troubleshooting     | [`docs/operations.md`](docs/operations.md)                   |
-| Temporary Closed Beta admission                     | [`docs/closed-beta-admission.md`](docs/closed-beta-admission.md) |
 
 同じruleを複数文書へcopyせず、専門のSource of Truthへlinkしてください。
 

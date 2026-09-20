@@ -29,11 +29,6 @@ export function materializeStagingWorkerSecrets({
     throw new Error("staging Worker secret materialization failed");
   }
   const names = [...requiredSecretNames];
-  if (env.BETA_ADMISSION_MODE === "closed") {
-    names.push("BETA_ADMISSION_COOKIE_KEY");
-  } else if (env.BETA_ADMISSION_MODE !== "off") {
-    throw new Error("staging Worker secret materialization failed");
-  }
   if (
     names.some((name) => typeof env[name] !== "string" || !/\S/.test(env[name]))
   ) {

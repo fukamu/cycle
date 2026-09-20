@@ -10,13 +10,11 @@ import {
   formatStagingCriticalDiagnostic,
   parseAnonymousSession,
   parsePublicAnonymousSession,
-  parseStagingAdmissionMode,
   parseStagingBaseURL,
   parseStagingCriticalMode,
   runStagingCritical,
   stagingCriticalExecution,
   StagingCriticalFailure,
-  validateStagingInviteToken,
 } from "../../scripts/lib/staging-critical.mjs";
 import { enterStagingCritical } from "./staging-critical-entry.mjs";
 
@@ -25,7 +23,6 @@ const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 const authenticatedUserIDHeader = "x-fukamu-authenticated-user-id";
 const expectedUserIDHeader = "X-Fukamu-Expected-User-ID";
 
-let inviteToken = "";
 let browser;
 let context;
 let page;
@@ -65,25 +62,6 @@ try {
     cleanupState: runMetadata.cleanupState,
   };
   const baseURL = parseStagingBaseURL(process.env.STAGING_BASE_URL);
-  let admissionMode;
-  if (mode === "preflight") {
-    if (
-      process.env.STAGING_ADMISSION_MODE !== undefined ||
-      process.env.STAGING_E2E_INVITE_TOKEN !== undefined
-    ) {
-      throw new Error("preflight does not accept admission configuration");
-    }
-  } else {
-    admissionMode = parseStagingAdmissionMode(
-      process.env.STAGING_ADMISSION_MODE,
-    );
-  }
-  if (admissionMode !== undefined && admissionMode !== "off") {
-    inviteToken = validateStagingInviteToken(
-      process.env.STAGING_E2E_INVITE_TOKEN,
-    );
-  }
-  delete process.env.STAGING_E2E_INVITE_TOKEN;
   delete process.env.DEBUG;
   delete process.env.NODE_DEBUG;
   delete process.env.NODE_OPTIONS;
@@ -97,7 +75,6 @@ try {
   const goalText = `Staging critical ${marker}`;
   const result = await runStagingCritical({
     mode,
-    admissionMode,
     adapter: {
       async launch() {
         throwIfInterrupted();
@@ -121,15 +98,10 @@ try {
         throwIfInterrupted();
         await seedBootstrapID(page, bootstrapID);
       },
-      async enter(currentAdmissionMode) {
-        const currentInviteToken = inviteToken;
-        inviteToken = "";
+      async enter() {
         return enterStagingCritical({
-          context,
           page,
           baseURL,
-          admissionMode: currentAdmissionMode,
-          inviteToken: currentInviteToken,
           captureAnonymousSession,
         });
       },
@@ -161,8 +133,6 @@ try {
 } catch {
   failures = [new StagingCriticalFailure("configuration", "unexpected_status")];
 } finally {
-  inviteToken = "";
-  delete process.env.STAGING_E2E_INVITE_TOKEN;
   if (context !== undefined) {
     await context.close().catch(() => undefined);
   }

@@ -1,6 +1,6 @@
 # 環境変数
 
-この文書は環境変数名、意味、scope、secret / public分類の運用上のSource of Truthです。Typed validationとdefaultは [`backend/internal/config/config.go`](../backend/internal/config/config.go)、Cloudflareへの受け渡しは [`cloudflare/src/index.ts`](../cloudflare/src/index.ts)、deploy入力の分類とmappingは [`deployment-contract.json`](../config/deployment-contract.json) が実装根拠です。Deploy workflowはこのcontractと同じBackend config checker、Closed Beta parserを実行します。上位仕様は [`design.md`](design.md)、bootstrapとrelease手順は [`operations.md`](operations.md) です。
+この文書は環境変数名、意味、scope、secret / public分類の運用上のSource of Truthです。Typed validationとdefaultは [`backend/internal/config/config.go`](../backend/internal/config/config.go)、Cloudflareへの受け渡しは [`cloudflare/src/index.ts`](../cloudflare/src/index.ts)、deploy入力の分類とmappingは [`deployment-contract.json`](../config/deployment-contract.json) が実装根拠です。Deploy workflowはこのcontractと同じBackend config checkerを実行します。上位仕様は [`design.md`](design.md)、bootstrapとrelease手順は [`operations.md`](operations.md) です。
 
 ## Environment / secret rules
 
@@ -13,17 +13,6 @@ Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging L
 - Neon migration direct URLはGitHub Actionsだけが使い、Worker/Containerへ渡しません。Runtimeにはpooled URLだけを渡します。
 - R2 backendはrepositoryのPlan用Object Read Only credentialと `staging-terraform-apply` EnvironmentのApply用Object Read & Write credentialを別tokenにし、Terraform/Turnstile token、Cloudflare deploy tokenとも分離します。
 - Session/bootstrap pepper、rate-limit HMAC、cursor署名secretは環境ごと・用途ごとに異なる24文字以上の高entropy値にします。`CSRF_TOKEN_PEPPER`だけはBackendが使うbyte列で32 bytes以上を必須とし、Deployment用には環境専用・用途専用のCSPRNG由来256-bit相当keyを設定します。Productionでは値を表示・logせず由来を確認できることをdeploy gateにします。
-
-## Temporary Closed Beta ingress
-
-Closed Beta AdmissionはCloudflare Workerだけが使用する一時的な公開ingress制御です。ApplicationのBackend runtimeやFrontend bundleへ値を渡しません。発行、失効、一般公開時の撤去は [`closed-beta-admission.md`](closed-beta-admission.md) を参照してください。
-
-| Variable | Purpose | Requirement / exposure |
-|---|---|---|
-| `BETA_ADMISSION_MODE` | `closed`で新規Anonymous bootstrap前にAdmissionを強制、`off`で無効化 | Worker-only non-secret。Staging workflowは未設定時`off`、初期Productionは`closed` |
-| `BETA_ADMISSION_COOKIE_TTL_DAYS` | Admission Cookie期限 | `closed`時のみ1〜730のinteger、Worker-only non-secret |
-| `BETA_INVITES` | 非個人Invite IDとSHA-256 Token digestのJSON array | `closed`時のみ1〜1000件。entryはexactな`{id,digest}`、IDは1〜64文字の`[a-z0-9][a-z0-9_-]*`、digestは64文字lowercase hex、ID/digestは各unique。Worker-only non-secret、Raw Token禁止 |
-| `BETA_ADMISSION_COOKIE_KEY` | Admission Cookie HMAC-SHA-256署名 | `closed`時のみ32 random bytesのbase64url、**secret** |
 
 ## Backend runtime
 
@@ -120,8 +109,6 @@ Frontend public valueとBackendの対応値は同じGitHub Environment入力か�
 | `KPI_DATABASE_URL` | Survivor funnel KPI report専用PostgreSQL URL | **secret**。引数、`DATABASE_URL`、`TEST_DATABASE_URL`、ambient `PG*`へfallbackしない。現在は破棄可能なlocal `*_test` DBだけに手動設定し、Production / Staging source、owner、schedulerは未決 |
 | `STAGING_BASE_URL` | pre-switch health / manual current-public diagnostic / post-deploy critical journeyのcanonical origin | workflowが`PUBLIC_ORIGIN`からstep scopeで設定。固定Staging HTTPS originだけを許可 |
 | `STAGING_CRITICAL_MODE` | `preflight`でcurrent-public health/readiness、`baseline`でmanual current-public diagnostic、`full`でcandidate post-deploy全journey | workflowまたは承認済みmanual diagnosticがstep scopeで固定し、未知値を拒否。Deploy workflowは`baseline`を実行しない |
-| `STAGING_ADMISSION_MODE` | `baseline` / `full` critical journeyのAdmission entry処理 | Manual `baseline`は現在配信中revisionをcandidate設定から推測しない`auto`、post-deployは`BETA_ADMISSION_MODE`由来の`off` / `closed`をstep scopeで設定し、未知値を拒否。`preflight`へ渡さない |
-| `STAGING_E2E_INVITE_TOKEN` | manual auto baseline / post-deploy closed journey / #139初回rolloutのClosed Beta admission | **GitHub `staging` Environment secret**。生成済みRaw Token形式を必須とし、専用harnessだけへstep scopeで渡す。argv/log/trace/screenshot/artifact、Frontend bundle、Worker/Container、`preflight`へ渡さない。Post-deploy `off`ではharnessへ渡さない |
 | `TEST_DATABASE_URL` | disposable integration/E2E DB | runtime/Production DBを指定禁止 |
 | `FUKAMU_CYCLE_GO_BINARY` | Playwright用Go executable | optional |
 | `FUKAMU_CYCLE_SERVER_BINARY` | prebuilt E2E server | optional、指定時は事前migration必要 |
@@ -211,7 +198,7 @@ LEGACY_RETIREMENT_APPROVER
 
 ## GitHub `staging` Environment
 
-Runtime/deployのexact required listは [`deploy.yml`](../.github/workflows/deploy.yml) の`Validate required deployment inputs`がenforceします。Critical journey専用`STAGING_E2E_INVITE_TOKEN`は#139初回rollout、manual `baseline` diagnostic、traffic切替後の`full`が値を表示せず検証し、pre-switch health / readiness `preflight`へは渡しません。
+Runtime/deployのexact required listは [`deploy.yml`](../.github/workflows/deploy.yml) の`Validate required deployment inputs`がenforceします。
 
 Secrets:
 
@@ -228,21 +215,15 @@ BOOTSTRAP_ID_PEPPER
 RATE_LIMIT_HMAC_SECRET
 CURSOR_SIGNING_SECRET
 TURNSTILE_SECRET_KEY
-STAGING_E2E_INVITE_TOKEN
 ```
 
-`STAGING_E2E_INVITE_TOKEN`は常に非個人Inviteとして専用発行し、Raw値をpassword managerからGitHub Environmentへ一度だけ登録します。Pre-switch `auto`は現在配信中revisionがclosedでも通過できるようこのTokenを必須とします。Post-deploy `off`はTokenを要求せずharness processへ渡しません。`BETA_ADMISSION_MODE=closed`では対応する非個人Invite ID/digestを`BETA_INVITES`へ含めます。Application runtimeへRaw Tokenを渡しません。
-
 `TURNSTILE_SECRET_KEY`はStagingではCloudflare公式always-pass test secretを登録し、variable `TURNSTILE_SITE_KEY`には対応するinvisible test sitekeyを登録します。両値は同時に切り替え、片側だけを実credentialへ戻しません。WorkflowとBackend startupはcanonical Staging originへの`staging_test` profileを固定し、不一致をcredential値を出さずに拒否します。Terraformが所有する実widgetは変更・削除せず、blocking E2Eのcredential sourceとしては使用しません。
-
-Closed BetaをStagingで検証する場合だけ、secretへ`BETA_ADMISSION_COOKIE_KEY`を追加します。`BETA_ADMISSION_MODE=off`では不要です。
 
 Variables:
 
 ```text
 PUBLIC_ORIGIN
 OTEL_EXPORTER_OTLP_ENDPOINT
-BETA_ADMISSION_MODE
 GOOGLE_WEB_CLIENT_ID
 TURNSTILE_SITE_KEY
 DB_MAX_OPEN_CONNS
@@ -284,6 +265,4 @@ RATE_AI_PER_IP_MINUTE
 
 Stagingの`OTEL_EXPORTER_OTLP_ENDPOINT`と`OTEL_EXPORTER_OTLP_HEADERS`は、Operations ownerがcollector、credential ownerとpinned SDK defaultのsampler / export volumeを承認するまで設定せず、live deployを行いません。この2変数以外の`OTEL_*`は未承認のSDK overrideとして全profileで拒否します。Headerはephemeral secrets fileだけを経由してWorker Secretへ渡し、endpoint、workflow log、errorへcredentialを混在させません。Retention、dashboard、alert、notification、on-callの決定はProduction release blockerとして[`operations.md`](operations.md)で管理します。
 
-Staging deploy workflowはGitHub Environmentで`BETA_ADMISSION_MODE`が未設定の場合に明示的な`off`をWorkerへ渡します。Worker binding自体の欠落や未知のmodeは設定不備として新規利用開始をfail-closedにします。`closed`へ変更する場合だけ`BETA_ADMISSION_COOKIE_TTL_DAYS`と`BETA_INVITES`も追加し、上記のCookie key secretと同じdeployで反映します。
-
-Production Environmentは未構築です。公開domainは`cycle.fukamu.com`とし、Production専用resourceと値を追加するときは初期値`BETA_ADMISSION_MODE=closed`を必須にします。Stagingのsecret、DB、provider値を転用しません。Production専用`CSRF_TOKEN_PEPPER`がCSPRNG由来256-bit相当であることをsecret値なしで確認できない間はdeployせず、[`operations.md`](operations.md#session-bound-stable-csrf-v1-release)に従ってmaintenance rotationの要否を先に判断します。
+Production Environmentは未構築です。公開domainは`cycle.fukamu.com`とし、Production専用resourceと値を追加するときはStagingのsecret、DB、provider値を転用しません。Production専用`CSRF_TOKEN_PEPPER`がCSPRNG由来256-bit相当であることをsecret値なしで確認できない間はdeployせず、[`operations.md`](operations.md#session-bound-stable-csrf-v1-release)に従ってmaintenance rotationの要否を先に判断します。

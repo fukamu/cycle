@@ -46,28 +46,7 @@ fi
 if [[ "${STAGING_CRITICAL_MODE:-}" != "preflight" && "${STAGING_CRITICAL_MODE:-}" != "baseline" && "${STAGING_CRITICAL_MODE:-}" != "full" ]]; then
   fail_configuration
 fi
-if [[ "${STAGING_CRITICAL_MODE}" == "preflight" ]]; then
-  if [[ -n "${STAGING_ADMISSION_MODE+x}" || -n "${STAGING_E2E_INVITE_TOKEN+x}" ]]; then
-    fail_configuration
-  fi
-else
-  if [[ "${STAGING_ADMISSION_MODE:-}" != "auto" && "${STAGING_ADMISSION_MODE:-}" != "off" && "${STAGING_ADMISSION_MODE:-}" != "closed" ]]; then
-    fail_configuration
-  fi
-  if [[ "${STAGING_ADMISSION_MODE}" != "off" && ! "${STAGING_E2E_INVITE_TOKEN:-}" =~ [^[:space:]] ]]; then
-    fail_configuration
-  fi
-fi
-
-# Playwright debug modes can print browser evaluation arguments. The invite
-# token must remain available only to the dedicated harness process.
 unset DEBUG NODE_DEBUG NODE_OPTIONS PWDEBUG
-if [[ "${STAGING_CRITICAL_MODE}" == "preflight" ]]; then
-  unset STAGING_ADMISSION_MODE
-  unset STAGING_E2E_INVITE_TOKEN
-elif [[ "${STAGING_ADMISSION_MODE}" == "off" ]]; then
-  unset STAGING_E2E_INVITE_TOKEN
-fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(realpath -e -- "${script_dir}/..")"

@@ -99,15 +99,11 @@ const backendSecretSources = secretSourceMappings(
   contract.deploy.aliases,
 );
 const validationSecretSources = secretSourceMappings(
-  [
-    ...contract.backend.secrets,
-    ...contract.deploy.requiredOnly,
-    ...contract.closedBeta.conditionalSecrets,
-  ],
+  [...contract.backend.secrets, ...contract.deploy.requiredOnly],
   contract.deploy.aliases,
 );
 const workerSecretSources = secretSourceMappings(
-  [...contract.backend.secrets, ...contract.closedBeta.conditionalSecrets],
+  contract.backend.secrets,
   contract.deploy.aliases,
 );
 const cloudflareDeploySecretSources = secretSourceMappings([
@@ -169,7 +165,7 @@ const approvedCleanupPostgresEnvironmentVariables = [
 ];
 
 test("deployment contract is the exact repository handoff classification", () => {
-  const { backend, closedBeta, deploy, frontend } = contract;
+  const { backend, deploy, frontend } = contract;
   assert.equal(contract.version, 1);
   assert.doesNotMatch(
     workflow,
@@ -736,8 +732,6 @@ test("deployment contract is the exact repository handoff classification", () =>
   const expectedWranglerVariableNames = [
     ...backend.githubVariables,
     ...Object.keys(backend.derived),
-    closedBeta.mode.name,
-    ...closedBeta.conditionalVariables,
   ];
   assertExactSet(
     expectedWranglerVariableNames,
@@ -778,8 +772,6 @@ test("deployment contract is the exact repository handoff classification", () =>
   const workflowVariableMappings = expressionMappings(jobEnvironment, "vars");
   const expectedVariableSources = unique([
     ...backend.githubVariables,
-    closedBeta.mode.name,
-    ...closedBeta.conditionalVariables,
     ...Object.values(frontend.required),
     ...Object.values(frontend.optional),
   ]);
@@ -950,10 +942,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     "deployment contract/input validation secret environment",
   );
   assert.doesNotMatch(validationStep, /run:\s*\|/);
-  assert.doesNotMatch(
-    validationStep,
-    /\brequired=\(|\bjq\b|BETA_INVITES must|BETA_ADMISSION_COOKIE_TTL_DAYS must/,
-  );
+  assert.doesNotMatch(validationStep, /\brequired=\(|\bjq\b/);
   assertStepExecutionControls(
     validationStep,
     "Validate required deployment inputs",
@@ -979,11 +968,6 @@ test("deployment contract is the exact repository handoff classification", () =>
       },
       GH_TOKEN: { kind: "literal", value: "${{ github.token }}" },
       STAGING_BASE_URL: { kind: "environment", value: "PUBLIC_ORIGIN" },
-      STAGING_ADMISSION_MODE: { kind: "literal", value: "auto" },
-      STAGING_E2E_INVITE_TOKEN: {
-        kind: "secret",
-        value: "STAGING_E2E_INVITE_TOKEN",
-      },
       STAGING_DEPLOY_CHECKPOINT_STATE_FILE: {
         kind: "literal",
         value:
@@ -1389,7 +1373,7 @@ test("deployment contract is the exact repository handoff classification", () =>
     "the workflow must not bypass the fixed rollout child for deployment",
   );
   assertExactSet(
-    [...backend.githubVariables, closedBeta.mode.name],
+    backend.githubVariables,
     extractBashArray(candidateDeployAndDrainScript, "variable_names"),
     "deployment contract/fixed child Worker variables",
   );
@@ -1400,15 +1384,6 @@ test("deployment contract is the exact repository handoff classification", () =>
     1,
     "the fixed child must map each classified Worker variable exactly once",
   );
-  for (const name of closedBeta.conditionalVariables) {
-    assert.equal(
-      candidateDeployAndDrainScript.split(
-        `--var "${name}:${bashParameter(name)}"`,
-      ).length - 1,
-      1,
-      `the fixed child must map conditional Worker variable ${name}`,
-    );
-  }
   for (const [target, source] of Object.entries(backend.derived)) {
     assert.equal(
       candidateDeployAndDrainScript.split(
@@ -1471,13 +1446,6 @@ test("deployment contract is the exact repository handoff classification", () =>
     1,
     "Wrangler must consume the classified Worker variable arguments exactly once",
   );
-  assert.equal(
-    candidateDeployAndDrainScript.split(
-      'if [[ "${BETA_ADMISSION_MODE}" == "closed" ]]; then',
-    ).length - 1,
-    1,
-    "the fixed child must gate closed-Beta variables on closed mode",
-  );
   assert.doesNotMatch(
     candidateDeployAndDrainScript,
     /^PUBLIC_ORIGIN=/m,
@@ -1506,17 +1474,6 @@ test("deployment contract is the exact repository handoff classification", () =>
     backend.secrets,
     matches(materializedSecretNames, /"([A-Z][A-Z0-9_]*)"/g),
     "deployment contract/Worker secret materializer",
-  );
-  assert.ok(
-    workerSecretsMaterializer.includes(
-      'names.push("BETA_ADMISSION_COOKIE_KEY")',
-    ),
-    "closed-Beta secret must be materialized only for closed mode",
-  );
-  assertExactSet(
-    closedBeta.conditionalSecrets,
-    matches(workerSecretsMaterializer, /names\.push\("([A-Z][A-Z0-9_]*)"\)/g),
-    "deployment contract/conditional Worker secret materializer",
   );
   assert.ok(
     workerSecretsMaterializer.includes('flag: "wx"') &&
@@ -1618,8 +1575,6 @@ test("deployment contract is the exact repository handoff classification", () =>
       "        env:",
       "          STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}",
       "          STAGING_CRITICAL_MODE: full",
-      "          STAGING_ADMISSION_MODE: ${{ env.BETA_ADMISSION_MODE }}",
-      "          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}",
       "        run: bash ./scripts/check-staging-critical.sh",
     ].join("\n"),
     "deployment post-deploy staging critical journey step",
@@ -1630,14 +1585,6 @@ test("deployment contract is the exact repository handoff classification", () =>
       value: "PUBLIC_ORIGIN",
     },
     STAGING_CRITICAL_MODE: { kind: "literal", value: "full" },
-    STAGING_ADMISSION_MODE: {
-      kind: "environment",
-      value: "BETA_ADMISSION_MODE",
-    },
-    STAGING_E2E_INVITE_TOKEN: {
-      kind: "secret",
-      value: "STAGING_E2E_INVITE_TOKEN",
-    },
   });
 
   const frontendExampleKeys = matches(
@@ -1815,8 +1762,6 @@ test("deployment contract is the exact repository handoff classification", () =>
     "NEON_MIGRATION_DATABASE_URL",
     ...Object.values(workerSecretSources),
     ...Object.values(cloudflareDeploySecretSources),
-    "STAGING_E2E_INVITE_TOKEN",
-    "STAGING_E2E_INVITE_TOKEN",
   ].sort();
   assert.deepEqual(
     matches(deployJob, /\$\{\{ secrets\.([A-Z][A-Z0-9_]*) \}\}/g).sort(),
@@ -1891,26 +1836,7 @@ test("current workflow rejects whitespace-only reasoning effort", () => {
   );
 });
 
-test("current workflow rejects runtime-invalid non-empty BETA_INVITES", () => {
-  const result = runWorkflowValidation({
-    BETA_ADMISSION_MODE: "closed",
-    BETA_ADMISSION_COOKIE_TTL_DAYS: "180",
-    BETA_INVITES: "[{}]",
-    BETA_ADMISSION_COOKIE_KEY: "A".repeat(43),
-  });
-  assert.equal(
-    result.error,
-    undefined,
-    "workflow validator command did not run",
-  );
-  assert.notEqual(
-    result.status,
-    0,
-    "Validate required deployment inputs accepted BETA_INVITES=[{}]",
-  );
-});
-
-test("current workflow accepts complete valid off-mode inputs", () => {
+test("current workflow accepts complete valid inputs", () => {
   const result = runWorkflowValidation({});
   assert.equal(
     result.error,
@@ -2625,12 +2551,6 @@ function assertNoDynamicWorkerCode(sourceFile, path, label) {
 function assertWorkerBindingProvenance(sourceFile, getContainerImport) {
   const label = "Worker handler bindings provenance";
   assert.ok(getContainerImport !== undefined, label);
-  const [handleBetaAdmissionImport] = assertExactNamedImport(
-    sourceFile,
-    "./beta-admission/beta-admission",
-    ["handleBetaAdmission"],
-    label,
-  );
   const defaultExports = sourceFile.statements.filter(
     (statement) =>
       typescript.isExportAssignment(statement) &&
@@ -2703,18 +2623,6 @@ function assertWorkerBindingProvenance(sourceFile, getContainerImport) {
     label,
   );
 
-  const handleBetaAdmissionCalls = collectDirectIdentifierCalls(
-    fetchMethod,
-    "handleBetaAdmission",
-  );
-  assert.equal(handleBetaAdmissionCalls.length, 1, label);
-  const handleBetaAdmissionCall = handleBetaAdmissionCalls[0];
-  assert.equal(handleBetaAdmissionCall.arguments.length, 2, label);
-  assert.ok(
-    typescript.isIdentifier(handleBetaAdmissionCall.arguments[1]) &&
-      handleBetaAdmissionCall.arguments[1].text === "bindings",
-    label,
-  );
   const getContainerCalls = collectDirectIdentifierCalls(
     fetchMethod,
     "getContainer",
@@ -2742,7 +2650,6 @@ function assertWorkerBindingProvenance(sourceFile, getContainerImport) {
     [
       fetchMethod.parameters[1].name,
       bindingAccesses[0].expression,
-      handleBetaAdmissionCall.arguments[1],
       bindingAccesses[1].expression,
     ],
     label,
@@ -2750,107 +2657,8 @@ function assertWorkerBindingProvenance(sourceFile, getContainerImport) {
   assertIdentifierNodeInventory(fetchMethod, "arguments", [], label);
   assertIdentifierNodeInventory(
     sourceFile,
-    "handleBetaAdmission",
-    [handleBetaAdmissionImport.name, handleBetaAdmissionCall.expression],
-    label,
-  );
-  assertIdentifierNodeInventory(
-    sourceFile,
     "getContainer",
     [getContainerImport.name, getContainerCall.expression],
-    label,
-  );
-
-  const betaSourceFile = parseTypeScriptRepositoryFile(
-    "cloudflare/src/beta-admission/beta-admission.ts",
-    "Worker beta-admission source must parse before bindings analysis",
-  );
-  const exactTopLevelFunction = (name) => {
-    const declarations = betaSourceFile.statements.filter(
-      (statement) =>
-        typescript.isFunctionDeclaration(statement) &&
-        typescript.isIdentifier(statement.name) &&
-        statement.name.text === name,
-    );
-    assert.equal(declarations.length, 1, label);
-    assert.ok(declarations[0].body !== undefined, label);
-    return declarations[0];
-  };
-  const admissionFunction = exactTopLevelFunction("handleBetaAdmission");
-  assert.equal(admissionFunction.parameters.length, 3, label);
-  assertCanonicalIdentifierParameter(
-    admissionFunction.parameters[1],
-    "bindings",
-    label,
-  );
-  const parseCalls = collectDirectIdentifierCalls(
-    admissionFunction,
-    "parseBetaAdmissionConfig",
-  );
-  assert.equal(parseCalls.length, 1, label);
-  const parseCall = parseCalls[0];
-  assert.equal(parseCall.arguments.length, 1, label);
-  assert.ok(
-    typescript.isIdentifier(parseCall.arguments[0]) &&
-      parseCall.arguments[0].text === "bindings",
-    label,
-  );
-  assertIdentifierNodeInventory(
-    admissionFunction,
-    "bindings",
-    [admissionFunction.parameters[1].name, parseCall.arguments[0]],
-    label,
-  );
-  assertIdentifierNodeInventory(admissionFunction, "arguments", [], label);
-
-  const parserFunction = exactTopLevelFunction("parseBetaAdmissionConfig");
-  assert.equal(parserFunction.parameters.length, 1, label);
-  assertCanonicalIdentifierParameter(
-    parserFunction.parameters[0],
-    "bindings",
-    label,
-  );
-  const parserAccesses = [];
-  const visitParserAccesses = (node) => {
-    if (
-      typescript.isPropertyAccessExpression(node) &&
-      node.questionDotToken === undefined &&
-      typescript.isIdentifier(node.expression) &&
-      node.expression.text === "bindings" &&
-      typescript.isIdentifier(node.name)
-    ) {
-      parserAccesses.push(node);
-    }
-    typescript.forEachChild(node, visitParserAccesses);
-  };
-  visitParserAccesses(parserFunction);
-  assert.deepEqual(
-    parserAccesses.map((access) => access.name.text),
-    [
-      "BETA_ADMISSION_MODE",
-      "BETA_ADMISSION_MODE",
-      "PUBLIC_ORIGIN",
-      "PUBLIC_ORIGIN",
-      "BETA_ADMISSION_COOKIE_TTL_DAYS",
-      "BETA_ADMISSION_COOKIE_KEY",
-      "BETA_INVITES",
-    ],
-    label,
-  );
-  assertIdentifierNodeInventory(
-    parserFunction,
-    "bindings",
-    [
-      parserFunction.parameters[0].name,
-      ...parserAccesses.map((access) => access.expression),
-    ],
-    label,
-  );
-  assertIdentifierNodeInventory(parserFunction, "arguments", [], label);
-  assertIdentifierNodeInventory(
-    betaSourceFile,
-    "parseBetaAdmissionConfig",
-    [parseCall.expression, parserFunction.name],
     label,
   );
 }
@@ -4281,14 +4089,10 @@ function runWorkflowValidation(overrides) {
   const environment = {
     PATH: process.env.PATH ?? "",
     APP_REFERRAL_URL: "",
-    BETA_ADMISSION_COOKIE_TTL_DAYS: "",
-    BETA_INVITES: "",
-    BETA_ADMISSION_COOKIE_KEY: "",
   };
   for (const name of validationRequiredKeys) environment[name] = "fixture";
   Object.assign(environment, {
     PUBLIC_ORIGIN: "https://cycle.staging.fukamu.matoruru.com",
-    BETA_ADMISSION_MODE: "off",
     TURNSTILE_SITE_KEY: "1x00000000000000000000BB",
     TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
     ...overrides,
@@ -4304,7 +4108,6 @@ function requiredInputNames(deploymentContract) {
   return unique([
     ...deploymentContract.backend.githubVariables,
     ...deploymentContract.backend.secrets,
-    deploymentContract.closedBeta.mode.name,
     ...Object.values(deploymentContract.frontend.required),
     ...deploymentContract.deploy.requiredOnly,
   ]);
@@ -4339,17 +4142,6 @@ function expressionMappings(block, context) {
           source: `resolve.outputs.${resolved[2]}`,
         };
       }
-    }
-    if (
-      mapping === undefined &&
-      line ===
-        "      BETA_ADMISSION_MODE: ${{ vars.BETA_ADMISSION_MODE || 'off' }}"
-    ) {
-      mapping = {
-        target: "BETA_ADMISSION_MODE",
-        context: "vars",
-        source: "BETA_ADMISSION_MODE",
-      };
     }
     if (mapping === undefined) {
       const retryMappings = {

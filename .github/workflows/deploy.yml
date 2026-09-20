@@ -503,9 +503,6 @@ jobs:
       DEPLOY_MODE: ${{ inputs.mode }}
       PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
-      BETA_ADMISSION_MODE: ${{ vars.BETA_ADMISSION_MODE || 'off' }}
-      BETA_ADMISSION_COOKIE_TTL_DAYS: ${{ vars.BETA_ADMISSION_COOKIE_TTL_DAYS }}
-      BETA_INVITES: ${{ vars.BETA_INVITES }}
       APP_REFERRAL_URL: ${{ vars.APP_REFERRAL_URL }}
       GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
       TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
@@ -599,7 +596,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}
-          BETA_ADMISSION_COOKIE_KEY: ${{ secrets.BETA_ADMISSION_COOKIE_KEY }}
         run: node ./scripts/validate-deploy-inputs.mjs
 
       - name: Install JavaScript dependencies
@@ -661,8 +657,6 @@ jobs:
           EXACT_MAIN_CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}
           GH_TOKEN: ${{ github.token }}
           STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}
-          STAGING_ADMISSION_MODE: auto
-          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}
           STAGING_DEPLOY_CHECKPOINT_STATE_FILE: ${{ runner.temp }}/fukamu-cycle-staging-deploy-retry-state.json
           MIGRATION_DATABASE_URL: ${{ secrets.NEON_MIGRATION_DATABASE_URL }}
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
@@ -674,7 +668,6 @@ jobs:
           CURSOR_SIGNING_SECRET: ${{ secrets.CURSOR_SIGNING_SECRET }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
-          BETA_ADMISSION_COOKIE_KEY: ${{ secrets.BETA_ADMISSION_COOKIE_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -716,8 +709,6 @@ jobs:
         env:
           STAGING_BASE_URL: ${{ env.PUBLIC_ORIGIN }}
           STAGING_CRITICAL_MODE: full
-          STAGING_ADMISSION_MODE: ${{ env.BETA_ADMISSION_MODE }}
-          STAGING_E2E_INVITE_TOKEN: ${{ secrets.STAGING_E2E_INVITE_TOKEN }}
         run: bash ./scripts/check-staging-critical.sh
 
       - name: Finalize safe deployment retry checkpoint

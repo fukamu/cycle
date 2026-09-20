@@ -68,7 +68,6 @@ new_fixture() {
     "${repo_root}/README.md" \
     "${fixture}/"
   for target in \
-    'docs/closed-beta-admission.md' \
     'docs/database.md' \
     'docs/design.md' \
     'docs/development.md' \

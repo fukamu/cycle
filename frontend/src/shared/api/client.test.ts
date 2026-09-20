@@ -4,7 +4,6 @@ import {
   APIError,
   requestAnonymousSessionBootstrapJSON,
   requestAuthenticatedJSON,
-  requestBetaAdmissionJSON,
   requestCurrentSessionJSON,
   type AuthenticatedRequestLease,
 } from "./client";
@@ -55,7 +54,7 @@ describe("requestJSON transport failures", () => {
 
     let failure: unknown;
     try {
-      await requestBetaAdmissionJSON(responseSchema);
+      await requestAnonymousSessionBootstrapJSON(responseSchema);
     } catch (error) {
       failure = error;
     }
@@ -73,7 +72,7 @@ describe("requestJSON transport failures", () => {
 
     let failure: unknown;
     try {
-      await requestBetaAdmissionJSON(responseSchema, {
+      await requestAnonymousSessionBootstrapJSON(responseSchema, {
         signal: controller.signal,
       });
     } catch (error) {
@@ -112,7 +111,7 @@ describe("requestJSON API failures", () => {
 
     let failure: unknown;
     try {
-      await requestBetaAdmissionJSON(responseSchema);
+      await requestAnonymousSessionBootstrapJSON(responseSchema);
     } catch (error) {
       failure = error;
     }
@@ -159,7 +158,7 @@ describe("requestJSON API failures", () => {
 
     let failure: unknown;
     try {
-      await requestBetaAdmissionJSON(responseSchema);
+      await requestAnonymousSessionBootstrapJSON(responseSchema);
     } catch (error) {
       failure = error;
     }
@@ -188,7 +187,6 @@ it("exports only endpoint-specific credentialed transports", async () => {
   expect(clientModule).not.toHaveProperty("requestPublicJSON");
   expect(clientModule).not.toHaveProperty("requestSessionDiscoveryJSON");
   expect(clientModule).toHaveProperty("requestAnonymousSessionBootstrapJSON");
-  expect(clientModule).toHaveProperty("requestBetaAdmissionJSON");
   expect(clientModule).toHaveProperty("requestCurrentSessionJSON");
 });
 
@@ -493,35 +491,26 @@ describe("session and public transports", () => {
     });
   });
 
-  it.each(["public", "anonymous"] as const)(
-    "uses no-store for the %s transport",
-    async (kind) => {
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockResolvedValue(Response.json({ ok: true }));
-      vi.stubGlobal("fetch", fetchMock);
+  it("uses no-store for the anonymous bootstrap transport", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
 
-      const client =
-        kind === "public"
-          ? requestBetaAdmissionJSON
-          : requestAnonymousSessionBootstrapJSON;
-      await expect(client(responseSchema)).resolves.toEqual({
-        ok: true,
-      });
-      expect(fetchMock.mock.calls[0]?.[0]).toBe(
-        kind === "public"
-          ? "/api/__beta/admission/redeem"
-          : "/api/v1/session/anonymous",
-      );
-      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
-        cache: "no-store",
-        credentials: "same-origin",
-      });
-      expect(
-        new Headers(fetchMock.mock.calls[0]?.[1]?.headers).has(
-          "X-Fukamu-Expected-User-ID",
-        ),
-      ).toBe(false);
-    },
-  );
+    await expect(
+      requestAnonymousSessionBootstrapJSON(responseSchema),
+    ).resolves.toEqual({
+      ok: true,
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/session/anonymous");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    expect(
+      new Headers(fetchMock.mock.calls[0]?.[1]?.headers).has(
+        "X-Fukamu-Expected-User-ID",
+      ),
+    ).toBe(false);
+  });
 });

@@ -125,9 +125,6 @@ const messageByCode = {
   GOAL_DELETE_FAILED: operationMessage,
   ACCOUNT_DELETE_FAILED: operationMessage,
   INTERNAL_ERROR: preservedInputMessage,
-  BETA_ADMISSION_REQUIRED: "招待を確認してください。",
-  BETA_ADMISSION_UNAVAILABLE: serviceMessage,
-  BETA_INVITE_INVALID: "招待を確認できませんでした。",
 } satisfies Readonly<Record<StableAPIErrorCode, string>>;
 
 function requestIdOf(error: APIError): Readonly<{ requestId?: string }> {

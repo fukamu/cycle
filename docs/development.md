@@ -465,11 +465,11 @@ Playwright自身の既定portは55432です。このリポジトリのDocker例�
 
 `./scripts/check-staging-critical.sh`は通常のlocal checkではありません。`Deploy Staging`は最初に`preflight`で現在配信中のStagingのhealth / readinessだけをblocking確認し、traffic切替とsmoke test後に`full`でcandidateのGoal / Cycle / Review / History journeyとcleanup proofをblocking確認します。
 
-`baseline`は現在配信中Stagingのanonymous bootstrap、session discovery、公開account-delete、削除後401を確認するmanual / 別runのnon-blocking diagnosticです。検出した失敗はwarning annotationを出してprocessをnon-zero終了させますが、Deploy workflowへ接続しないためcandidate releaseをblockしません。Admissionは`auto`で、現在のUIが`off`ならNew Goalへ直接進み、`closed`なら招待fragmentをmemory上で消費して「利用を開始する」を選択できます。Stable CSRF初回rollout中の`Deploy Staging`はlegacy compatibilityをexact-main CIの決定的なtestで確認し、#139 harnessはauthoritative drain後のcandidate-publicだけでanonymous Sessionを一度作成してstable two-tab / security smokeを実行します。同じrunner / IPでcurrent-publicのTurnstileやanonymous-create rate-limitを重複消費しないよう、generic `baseline`を自動実行しません。Manual diagnosticの失敗は候補releaseの成功証拠にせず、candidate-publicのhard gateも代替しません。
+`baseline`は現在配信中Stagingのanonymous bootstrap、session discovery、公開account-delete、削除後401を確認するmanual / 別runのnon-blocking diagnosticです。検出した失敗はwarning annotationを出してprocessをnon-zero終了させますが、Deploy workflowへ接続しないためcandidate releaseをblockしません。Stable CSRF初回rollout中の`Deploy Staging`はlegacy compatibilityをexact-main CIの決定的なtestで確認し、#139 harnessはauthoritative drain後のcandidate-publicだけでanonymous Sessionを一度作成してstable two-tab / security smokeを実行します。同じrunner / IPでcurrent-publicのTurnstileやanonymous-create rate-limitを重複消費しないよう、generic `baseline`を自動実行しません。Manual diagnosticの失敗は候補releaseの成功証拠にせず、candidate-publicのhard gateも代替しません。
 
-`STAGING_BASE_URL`と`STAGING_CRITICAL_MODE`はstep scopeで渡し、`preflight`ではAdmission設定とInvite Tokenを渡しません。`baseline` / `full`だけ`STAGING_ADMISSION_MODE`を渡し、`auto` / `closed`の場合だけ`STAGING_E2E_INVITE_TOKEN`をGitHub `staging` Environmentから注入します。値を引数にはせず、`off`ではwrapperがInvite TokenをHarnessへ渡しません。HarnessはPlaywright test reporterを使わず、trace、screenshot、video、artifactを作らず、debug modeを無効化します。成功・失敗にかかわらず、検証済みsessionがあれば一時的なcleanup rediscovery失敗時にも公開account-delete APIを試行し、失敗はtarget / release mutation / cleanup stateを含むclosed-enum診断に残します。
+`STAGING_BASE_URL`と`STAGING_CRITICAL_MODE`はstep scopeで渡します。HarnessはPlaywright test reporterを使わず、trace、screenshot、video、artifactを作らず、debug modeを無効化します。成功・失敗にかかわらず、検証済みsessionがあれば一時的なcleanup rediscovery失敗時にも公開account-delete APIを試行し、失敗はtarget / release mutation / cleanup stateを含むclosed-enum診断に残します。
 
-Localから日常的に実行せず、Production originやProduction dataへ向けません。障害調査でOperations ownerが直接実行する場合も、承認済みsecret managerから環境へ注入し、shell history、process argument、terminal recordingへRaw Invite Tokenを残さず、[`operations.md`](operations.md#staging-critical-journey-cleanup)のcleanup確認まで完了させます。
+Localから日常的に実行せず、Production originやProduction dataへ向けません。障害調査でOperations ownerが直接実行する場合も、[`operations.md`](operations.md#staging-critical-journey-cleanup)のcleanup確認まで完了させます。
 
 ### Stable CSRF initial rollout fixtures
 

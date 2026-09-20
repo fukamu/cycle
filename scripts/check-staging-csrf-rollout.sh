@@ -20,17 +20,7 @@ fi
 if [[ ! "${STAGING_BASE_URL:-}" =~ [^[:space:]] ]]; then
   fail_configuration
 fi
-if [[ "${STAGING_ADMISSION_MODE:-}" != "auto" && "${STAGING_ADMISSION_MODE:-}" != "off" && "${STAGING_ADMISSION_MODE:-}" != "closed" ]]; then
-  fail_configuration
-fi
-if [[ "${STAGING_ADMISSION_MODE}" != "off" && ! "${STAGING_E2E_INVITE_TOKEN:-}" =~ [^[:space:]] ]]; then
-  fail_configuration
-fi
-
 unset DEBUG NODE_DEBUG NODE_OPTIONS PWDEBUG
-if [[ "${STAGING_ADMISSION_MODE}" == "off" ]]; then
-  unset STAGING_E2E_INVITE_TOKEN
-fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(realpath -e -- "${script_dir}/..")"

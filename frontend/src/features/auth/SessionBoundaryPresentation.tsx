@@ -13,12 +13,10 @@ import { toErrorPresentation } from "../../shared/api/errorPresentation";
 import type { Session } from "../../shared/api/schemas";
 import type { SessionRecoveryEvent } from "../../shared/api/sessionRecoveryEvents";
 import { InteractionAvailabilityProvider } from "../../shared/interaction/InteractionAvailabilityProvider";
-import { BetaAdmissionGate } from "../beta-admission/BetaAdmissionGate";
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
 import type { RuntimeRecoveryState } from "./sessionBoundaryContracts";
 import {
   isInitialSessionAnonymousCreationBlocked,
-  isBetaAdmissionRequired,
   isInitialSessionRateLimited,
 } from "./sessionDiscovery";
 import {
@@ -128,7 +126,6 @@ export function SessionBoundaryPresentation({
         error={query.error}
         reloadApplication={reloadApplication}
         retry={() => void query.refetch()}
-        retryAdmission={() => query.refetch()}
       />
     );
   }
@@ -244,18 +241,13 @@ function InitialSessionError({
   error,
   reloadApplication,
   retry,
-  retryAdmission,
 }: {
   readonly error: Error;
   readonly reloadApplication: () => void;
   readonly retry: () => void;
-  readonly retryAdmission: () => Promise<unknown>;
 }) {
   if (error instanceof SessionIdentityError) {
     return <ReloadOnlyMessage reloadApplication={reloadApplication} />;
-  }
-  if (isBetaAdmissionRequired(error)) {
-    return <BetaAdmissionGate onAdmitted={retryAdmission} />;
   }
   if (isInitialSessionRateLimited(error)) {
     return (

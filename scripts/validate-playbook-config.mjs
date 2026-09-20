@@ -22,7 +22,6 @@ const requiredPaths = [
   ".github/workflows/playbook.yml",
   "AGENTS.md",
   "README.md",
-  "docs/closed-beta-admission.md",
   "docs/database.md",
   "docs/design.md",
   "docs/development.md",
@@ -116,7 +115,6 @@ if (
   config.ownership.repositoryInstructions !== "AGENTS.md" ||
   JSON.stringify(config.ownership.localProcedureOwners) !==
     JSON.stringify([
-      "docs/closed-beta-admission.md",
       "docs/database.md",
       "docs/development.md",
       "docs/environment.md",
