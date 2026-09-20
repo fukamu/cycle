@@ -10,11 +10,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import {
-  type QueryClient,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
 import { useAuthenticatedRequestLease, useSession } from "../auth";
@@ -39,7 +35,7 @@ import {
   type AutoSaveBrowserOperationQueue,
   useAutoSaveScopeRegistry,
 } from "../../shared/autosave/AutoSaveScopeProvider";
-import type { CurrentWork, Cycle, Frame, Goal } from "../../shared/api/schemas";
+import type { Cycle, Frame, Goal } from "../../shared/api/schemas";
 import {
   completeCycle,
   deleteGoal,
@@ -129,6 +125,15 @@ import {
   resolvePreferredCycle,
 } from "./cycleSnapshot";
 import {
+  type CycleTerminalCommand,
+  isCycleCommandWorkspaceConflict,
+  isCycleWorkspaceRecoveryError,
+  isGoalNotFound,
+  type MovedWorkspace,
+  publishMovedActiveWorkspace,
+  replayWorkspacePath,
+} from "./workspaceRecovery";
+import {
   forgetSelectedCycleFrame,
   readSelectedCycleFrame,
   rememberSelectedCycleFrame,
@@ -155,16 +160,6 @@ type FrameTemplateUndo = {
   readonly before: string;
   readonly after: string;
 };
-type MovedWorkspace = {
-  readonly currentWorkspace: CurrentWork | null;
-  readonly href?: string;
-  readonly recovery?: "loading" | "failed" | "deleted";
-  readonly goalSnapshot?: Goal;
-  readonly cycleSnapshot?: Cycle;
-};
-
-type CycleTerminalCommand = "complete" | "replan" | "terminate" | "delete";
-
 type ReplanCommandSnapshot = {
   readonly expectedGoalRevision: number;
   readonly expectedContentRevision: number;
@@ -217,122 +212,11 @@ function cycleGoalActionGuidanceText(
   }
 }
 
-function replayWorkspacePath(
-  goalId: string,
-  currentWorkspace: CurrentWork | null,
-): string {
-  if (currentWorkspace?.kind === "active_cycle")
-    return `/goals/${goalId}/cycles/${currentWorkspace.cycleId}`;
-  if (currentWorkspace?.kind === "goal_review")
-    return `/goals/${goalId}/review`;
-  return `/history/goals/${goalId}`;
-}
-
-function publishMovedActiveWorkspace(
-  cache: QueryClient,
-  userId: string,
-  movedWorkspace: MovedWorkspace,
-): boolean {
-  const goalSnapshot = movedWorkspace.goalSnapshot;
-  const cycleSnapshot = movedWorkspace.cycleSnapshot;
-  if (!goalSnapshot && !cycleSnapshot)
-    return movedWorkspace.currentWorkspace?.kind !== "active_cycle";
-  if (!goalSnapshot || !cycleSnapshot) return false;
-
-  const goalKey = userQueryKeys.goal(userId, goalSnapshot.id);
-  const goalResolution = resolvePreferredGoal(
-    cache.getQueryData<{ readonly goal: Goal }>(goalKey)?.goal,
-    goalSnapshot,
-  );
-  if (goalResolution.kind === "invariant") {
-    cache.removeQueries({ queryKey: goalKey, exact: true });
-    return false;
-  }
-  const cycleKey = userQueryKeys.cycle(
-    userId,
-    goalSnapshot.id,
-    cycleSnapshot.id,
-  );
-  const cycleResolution = resolvePreferredCycle(
-    cache.getQueryData<{ readonly cycle: Cycle }>(cycleKey)?.cycle,
-    cycleSnapshot,
-  );
-  if (cycleResolution.kind === "invariant") {
-    cache.removeQueries({ queryKey: cycleKey, exact: true });
-    return false;
-  }
-  const reconciliation = reconcileActiveCycleSchedule(
-    goalResolution.goal,
-    cycleResolution.cycle,
-  );
-  if (reconciliation.kind === "invariant") return false;
-  const currentWork = reconciliation.goal.currentWork;
-  if (
-    reconciliation.goal.status !== "active_cycle" ||
-    currentWork?.kind !== "active_cycle" ||
-    currentWork.cycleId !== reconciliation.cycle.id ||
-    reconciliation.cycle.status !== "active"
-  )
-    return false;
-
-  cacheGoal(cache, userId, reconciliation.goal);
-  cache.setQueryData(cycleKey, { cycle: reconciliation.cycle });
-  return true;
-}
-
-function isCycleWorkspaceRecoveryError(error: unknown): error is APIError {
-  return (
-    error instanceof APIError &&
-    error.status === 409 &&
-    (error.code === "CYCLE_REVISION_CONFLICT" ||
-      error.code === "GOAL_STATE_CONFLICT" ||
-      error.code === "CYCLE_NOT_ACTIVE")
-  );
-}
-
-function isGoalNotFound(error: unknown): error is APIError {
-  return (
-    error instanceof APIError &&
-    error.status === 404 &&
-    error.code === "GOAL_NOT_FOUND"
-  );
-}
-
 function descriptionIds(
   ...ids: readonly (string | undefined)[]
 ): string | undefined {
   const description = ids.filter((id): id is string => Boolean(id)).join(" ");
   return description || undefined;
-}
-
-function isCycleCommandWorkspaceConflict(
-  command: CycleTerminalCommand,
-  error: unknown,
-): error is APIError {
-  if (isGoalNotFound(error)) return true;
-  if (!(error instanceof APIError)) return false;
-  if (command === "replan")
-    return (
-      (error.status === 404 && error.code === "CYCLE_NOT_FOUND") ||
-      (error.status === 409 &&
-        (error.code === "GOAL_STATE_CONFLICT" ||
-          error.code === "GOAL_VERSION_CONFLICT" ||
-          error.code === "CYCLE_NOT_ACTIVE" ||
-          error.code === "CYCLE_REVISION_CONFLICT"))
-    );
-  if (error.status !== 409) return false;
-  if (command === "complete")
-    return (
-      error.code === "GOAL_STATE_CONFLICT" ||
-      error.code === "GOAL_VERSION_CONFLICT" ||
-      error.code === "CYCLE_NOT_ACTIVE"
-    );
-  if (command === "terminate")
-    return (
-      error.code === "GOAL_STATE_CONFLICT" ||
-      error.code === "GOAL_ALREADY_TERMINAL"
-    );
-  return error.code === "GOAL_DELETE_CONFLICT";
 }
 
 type WorkspaceConfirmation =
