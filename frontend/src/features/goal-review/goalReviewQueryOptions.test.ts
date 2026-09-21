@@ -144,6 +144,40 @@ describe("goalReviewQueryOptions", () => {
     ).toEqual(userQueryKeys.reviewTransport(userId, goalId, "entry-b"));
   });
 
+  it("hydrates only a startup-restored canonical Review", () => {
+    const cache = createCache();
+    const canonicalKey = userQueryKeys.review(userId, goalId);
+    cache.setQueryData(canonicalKey, reviewA, { updatedAt: 1 });
+    const restoredOptions = goalReviewQueryOptions(
+      userId,
+      goalId,
+      "entry-restored",
+      currentLease(),
+      runRequest,
+      cache,
+    );
+    const restoredInitialData = restoredOptions.initialData;
+    expect(typeof restoredInitialData).toBe("function");
+    if (typeof restoredInitialData !== "function")
+      throw new Error("expected initialData function");
+    expect(restoredInitialData()).toBe(reviewA);
+
+    cache.setQueryData(canonicalKey, reviewB, { updatedAt: 2 });
+    const liveOptions = goalReviewQueryOptions(
+      userId,
+      goalId,
+      "entry-live",
+      currentLease(),
+      runRequest,
+      cache,
+    );
+    const liveInitialData = liveOptions.initialData;
+    expect(typeof liveInitialData).toBe("function");
+    if (typeof liveInitialData !== "function")
+      throw new Error("expected initialData function");
+    expect(liveInitialData()).toBeUndefined();
+  });
+
   it("publishes and returns an accepted Review snapshot", async () => {
     vi.mocked(getReview).mockResolvedValueOnce(reviewA);
     const cache = createCache();

@@ -133,6 +133,30 @@ func TestRefreshReturnsStableCSRFAndConvergesStoredVerifier(t *testing.T) {
 	}
 }
 
+func TestRefreshAuthenticatedReusesMiddlewareRecordWithoutRepositoryLookupOrTouch(t *testing.T) {
+	t.Parallel()
+	repository := &fakeRepository{}
+	record := AuthenticatedSession{
+		ID:         "00000000-0000-7000-8000-000000000009",
+		UserID:     user.ID("00000000-0000-7000-8000-000000000001"),
+		LastSeenAt: testTime.Add(-time.Hour),
+	}
+
+	view, err := testService(repository).RefreshAuthenticated(context.Background(), record, "session-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.findCalls != 0 || repository.touchCalls != 0 {
+		t.Fatalf("repository find/touch calls = %d/%d, want 0/0", repository.findCalls, repository.touchCalls)
+	}
+	if view.UserID != record.UserID || view.SessionToken != "session-token" || view.CSRFToken == "" {
+		t.Fatalf("RefreshAuthenticated() view = %#v", view)
+	}
+	if len(repository.rotatedHash) == 0 {
+		t.Fatal("RefreshAuthenticated() did not converge the stored CSRF verifier")
+	}
+}
+
 func TestCSRFTokenMatchesEvaluatesStoredVerifierAfterStableMatch(t *testing.T) {
 	t.Parallel()
 
@@ -300,9 +324,11 @@ type fakeRepository struct {
 	touchErr     error
 	replayed     bool
 	replayUserID user.ID
+	findCalls    int
 }
 
 func (repository *fakeRepository) FindByTokenHash(context.Context, []byte, time.Time) (AuthenticatedSession, error) {
+	repository.findCalls++
 	if repository.found.ID == "" {
 		return AuthenticatedSession{}, errors.New("not found")
 	}

@@ -2,6 +2,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import type { Session } from "../../shared/api/schemas";
+import { RequestTimeoutError } from "../../shared/api/client";
 import { suppressFirstUseGuideUntilReconciliation } from "../../shared/preferences/firstUseGuidePreference";
 import type { AuthenticatedRequestLeaseOwner } from "./authenticatedRequestLeaseOwner";
 import type { PublishSessionIdentityAdvisory } from "./sessionIdentityAdvisory";
@@ -70,6 +71,7 @@ export function useInitialSessionDiscovery(
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
     retry: (failureCount, error) =>
+      !(error instanceof RequestTimeoutError) &&
       !isInitialSessionRateLimited(error) &&
       !isInitialSessionAnonymousCreationBlocked(error) &&
       !isSessionBoundaryOwnedError(error) &&

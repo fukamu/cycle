@@ -20,6 +20,7 @@ const sessionCookieName = "__Host-fukamu_cycle_session"
 type SessionService interface {
 	Authenticate(context.Context, string) (appsession.AuthenticatedSession, error)
 	Refresh(context.Context, string) (appsession.View, error)
+	RefreshAuthenticated(context.Context, appsession.AuthenticatedSession, string) (appsession.View, error)
 	CreateAnonymous(context.Context, appsession.CreateAnonymousInput) (appsession.View, error)
 	VerifyCSRF(appsession.AuthenticatedSession, string) error
 }

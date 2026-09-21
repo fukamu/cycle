@@ -1,6 +1,18 @@
+import {
+  cycleSchema,
+  goalSchema,
+  homeSchema,
+  reviewSchema,
+  type Cycle,
+  type Goal,
+  type GoalReview,
+  type Home,
+} from "../api/schemas";
+
 const databaseName = "fukamu-cycle-browser-drafts-v2";
-const databaseVersion = 3;
+const databaseVersion = 4;
 const storeName = "drafts";
+const serverSnapshotStoreName = "server-snapshots";
 const accountDeletionTombstoneStoreName = "account-deletion-tombstones";
 const goalDeletionTombstoneStoreName = "goal-deletion-tombstones";
 const goalDeletionOwnerDigestIndexName = "ownerDigest";
@@ -21,6 +33,21 @@ export type BrowserDraft = {
   readonly updatedAt: string;
 };
 type Stored = BrowserDraft & { readonly key: string };
+type ServerSnapshotKind = "home" | "goal" | "cycle" | "review";
+type StoredServerSnapshot = {
+  readonly key: string;
+  readonly userId: string;
+  readonly goalId: string | null;
+  readonly resourceKey: string;
+  readonly kind: ServerSnapshotKind;
+  readonly schemaVersion: 1;
+  readonly savedAt: string;
+  readonly data: unknown;
+};
+export type ServerSnapshot<Data> = {
+  readonly data: Data;
+  readonly savedAt: string;
+};
 type StoredAccountDeletionTombstone = { readonly digest: string };
 type StoredGoalDeletionTombstone = {
   readonly digest: string;
@@ -29,6 +56,229 @@ type StoredGoalDeletionTombstone = {
 type StoredMetadata = { readonly key: string; readonly value: string };
 const keyOf = (draft: Pick<BrowserDraft, "userId" | "subjectKey">) =>
   `${draft.userId}:${draft.subjectKey}`;
+const snapshotKeyOf = (userId: string, resourceKey: string) =>
+  `${userId}:${resourceKey}`;
+
+export async function putHomeServerSnapshot(
+  userId: string,
+  data: Home,
+): Promise<void> {
+  await putServerSnapshot({
+    userId,
+    goalId: null,
+    resourceKey: "home",
+    kind: "home",
+    data: homeSchema.parse(data),
+    guardedGoalIds: data.progressingGoals.map((goal) => goal.id),
+  });
+}
+
+export async function getHomeServerSnapshot(
+  userId: string,
+): Promise<ServerSnapshot<Home> | null> {
+  return getServerSnapshot(userId, "home", "home", (data) =>
+    homeSchema.parse(data),
+  );
+}
+
+export async function deleteHomeServerSnapshot(userId: string): Promise<void> {
+  await deleteServerSnapshotByResource(userId, "home");
+}
+
+export async function putGoalServerSnapshot(
+  userId: string,
+  goal: Goal,
+): Promise<void> {
+  await putServerSnapshot({
+    userId,
+    goalId: goal.id,
+    resourceKey: `goal:${goal.id}`,
+    kind: "goal",
+    data: goalSchema.parse(goal),
+    guardedGoalIds: [goal.id],
+  });
+}
+
+export async function getGoalServerSnapshot(
+  userId: string,
+  goalId: string,
+): Promise<ServerSnapshot<Goal> | null> {
+  return getServerSnapshot(userId, `goal:${goalId}`, "goal", (data) => {
+    const goal = goalSchema.parse(data);
+    if (goal.id !== goalId) throw new Error("server snapshot goal mismatch");
+    return goal;
+  });
+}
+
+export async function deleteGoalServerSnapshot(
+  userId: string,
+  goalId: string,
+): Promise<void> {
+  await deleteServerSnapshotByResource(userId, `goal:${goalId}`);
+}
+
+export async function putCycleServerSnapshot(
+  userId: string,
+  goalId: string,
+  cycle: Cycle,
+): Promise<void> {
+  if (cycle.goalId !== undefined && cycle.goalId !== goalId) {
+    throw new Error("server snapshot cycle owner mismatch");
+  }
+  await putServerSnapshot({
+    userId,
+    goalId,
+    resourceKey: `cycle:${goalId}:${cycle.id}`,
+    kind: "cycle",
+    data: cycleSchema.parse(cycle),
+    guardedGoalIds: [goalId],
+  });
+}
+
+export async function getCycleServerSnapshot(
+  userId: string,
+  goalId: string,
+  cycleId: string,
+): Promise<ServerSnapshot<Cycle> | null> {
+  return getServerSnapshot(
+    userId,
+    `cycle:${goalId}:${cycleId}`,
+    "cycle",
+    (data) => {
+      const cycle = cycleSchema.parse(data);
+      if (
+        cycle.id !== cycleId ||
+        (cycle.goalId !== undefined && cycle.goalId !== goalId)
+      ) {
+        throw new Error("server snapshot cycle mismatch");
+      }
+      return cycle;
+    },
+  );
+}
+
+export async function deleteCycleServerSnapshot(
+  userId: string,
+  goalId: string,
+  cycleId: string,
+): Promise<void> {
+  await deleteServerSnapshotByResource(userId, `cycle:${goalId}:${cycleId}`);
+}
+
+export async function putReviewServerSnapshot(
+  userId: string,
+  review: GoalReview,
+): Promise<void> {
+  await putServerSnapshot({
+    userId,
+    goalId: review.goal.id,
+    resourceKey: `review:${review.goal.id}`,
+    kind: "review",
+    data: reviewSchema.parse(review),
+    guardedGoalIds: [review.goal.id],
+  });
+}
+
+export async function getReviewServerSnapshot(
+  userId: string,
+  goalId: string,
+): Promise<ServerSnapshot<GoalReview> | null> {
+  return getServerSnapshot(userId, `review:${goalId}`, "review", (data) => {
+    const review = reviewSchema.parse(data);
+    if (review.goal.id !== goalId)
+      throw new Error("server snapshot review mismatch");
+    return review;
+  });
+}
+
+export async function deleteReviewServerSnapshot(
+  userId: string,
+  goalId: string,
+): Promise<void> {
+  await deleteServerSnapshotByResource(userId, `review:${goalId}`);
+}
+
+async function deleteServerSnapshotByResource(
+  userId: string,
+  resourceKey: string,
+): Promise<void> {
+  await withDatabase((db) =>
+    deleteServerSnapshot(db, snapshotKeyOf(userId, resourceKey)),
+  );
+}
+
+async function putServerSnapshot({
+  userId,
+  goalId,
+  resourceKey,
+  kind,
+  data,
+  guardedGoalIds,
+}: {
+  readonly userId: string;
+  readonly goalId: string | null;
+  readonly resourceKey: string;
+  readonly kind: ServerSnapshotKind;
+  readonly data: unknown;
+  readonly guardedGoalIds: readonly string[];
+}): Promise<void> {
+  const deletionDigests = await Promise.all([
+    deletionDigestsFor(userId, null),
+    ...guardedGoalIds.map((guardedGoalId) =>
+      deletionDigestsFor(userId, guardedGoalId),
+    ),
+  ]);
+  await withDatabase((db) =>
+    putServerSnapshotUnlessDeleted(
+      db,
+      deletionDigests[0].ownerDigest,
+      deletionDigests
+        .map(({ goalDigest }) => goalDigest)
+        .filter((digest): digest is string => digest !== null),
+      {
+        key: snapshotKeyOf(userId, resourceKey),
+        userId,
+        goalId,
+        resourceKey,
+        kind,
+        schemaVersion: 1,
+        savedAt: new Date().toISOString(),
+        data,
+      },
+    ),
+  );
+}
+
+async function getServerSnapshot<Data>(
+  userId: string,
+  resourceKey: string,
+  kind: ServerSnapshotKind,
+  parse: (data: unknown) => Data,
+): Promise<ServerSnapshot<Data> | null> {
+  return withDatabase(async (db) => {
+    const stored = await readServerSnapshotAndDeleteIfInvalid(
+      db,
+      snapshotKeyOf(userId, resourceKey),
+      Date.now() - ttl,
+    );
+    if (
+      stored === undefined ||
+      stored.userId !== userId ||
+      stored.resourceKey !== resourceKey ||
+      stored.kind !== kind ||
+      stored.schemaVersion !== 1
+    ) {
+      if (stored !== undefined) await deleteServerSnapshot(db, stored.key);
+      return null;
+    }
+    try {
+      return { data: parse(stored.data), savedAt: stored.savedAt };
+    } catch {
+      await deleteServerSnapshot(db, stored.key);
+      return null;
+    }
+  });
+}
 
 export async function putBrowserDraft(draft: BrowserDraft): Promise<void> {
   const deletionDigests = await deletionDigestsFor(draft.userId, draft.goalId);
@@ -101,7 +351,10 @@ export async function deleteBrowserDraftIfUnchanged(
 }
 export async function cleanupExpiredBrowserDrafts(): Promise<void> {
   const expiresBefore = Date.now() - ttl;
-  await clearDrafts((item) => isExpired(item.updatedAt, expiresBefore));
+  await Promise.all([
+    clearDrafts((item) => isExpired(item.updatedAt, expiresBefore)),
+    clearServerSnapshots((item) => isExpired(item.savedAt, expiresBefore)),
+  ]);
 }
 export async function clearUserDrafts(userId: string): Promise<void> {
   const deletionDigest = await accountDeletionDigest(userId);
@@ -137,15 +390,28 @@ export async function clearCycleDrafts(
   cycleId: string,
 ): Promise<void> {
   const subjectPrefix = `cycle:${cycleId}:`;
-  await clearDrafts(
-    (item) =>
-      item.userId === userId &&
-      item.goalId === goalId &&
-      item.subjectKey.startsWith(subjectPrefix),
-  );
+  await Promise.all([
+    clearDrafts(
+      (item) =>
+        item.userId === userId &&
+        item.goalId === goalId &&
+        item.subjectKey.startsWith(subjectPrefix),
+    ),
+    clearServerSnapshots(
+      (item) =>
+        item.userId === userId &&
+        item.goalId === goalId &&
+        item.resourceKey === `cycle:${goalId}:${cycleId}`,
+    ),
+  ]);
 }
 async function clearDrafts(matches: (draft: Stored) => boolean): Promise<void> {
   await withDatabase((db) => deleteStoredMatching(db, matches));
+}
+async function clearServerSnapshots(
+  matches: (snapshot: StoredServerSnapshot) => boolean,
+): Promise<void> {
+  await withDatabase((db) => deleteServerSnapshotsMatching(db, matches));
 }
 function isExpired(updatedAt: string, expiresBefore: number): boolean {
   const timestamp = Date.parse(updatedAt);
@@ -169,6 +435,11 @@ function open(): Promise<IDBDatabase> {
       const database = request.result;
       if (!database.objectStoreNames.contains(storeName)) {
         database.createObjectStore(storeName, { keyPath: "key" });
+      }
+      if (!database.objectStoreNames.contains(serverSnapshotStoreName)) {
+        database.createObjectStore(serverSnapshotStoreName, {
+          keyPath: "key",
+        });
       }
       if (
         !database.objectStoreNames.contains(accountDeletionTombstoneStoreName)
@@ -392,6 +663,49 @@ function putStoredUnlessDeleted(
   });
 }
 
+function putServerSnapshotUnlessDeleted(
+  db: IDBDatabase,
+  ownerDigest: string,
+  goalDigests: readonly string[],
+  stored: StoredServerSnapshot,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(
+      [
+        serverSnapshotStoreName,
+        accountDeletionTombstoneStoreName,
+        goalDeletionTombstoneStoreName,
+      ],
+      "readwrite",
+    );
+    const accountRequest = transaction
+      .objectStore(accountDeletionTombstoneStoreName)
+      .get(ownerDigest);
+    accountRequest.onsuccess = () => {
+      if (accountRequest.result !== undefined) return;
+      const goalTombstones = transaction.objectStore(
+        goalDeletionTombstoneStoreName,
+      );
+      const checkGoal = (index: number) => {
+        if (index >= goalDigests.length) {
+          transaction.objectStore(serverSnapshotStoreName).put(stored);
+          return;
+        }
+        const goalRequest = goalTombstones.get(goalDigests[index]!);
+        goalRequest.onsuccess = () => {
+          if (goalRequest.result === undefined) checkGoal(index + 1);
+        };
+      };
+      checkGoal(0);
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () =>
+      reject(transaction.error ?? new Error(privacyGuardUnavailable));
+    transaction.onabort = () =>
+      reject(transaction.error ?? new Error(privacyGuardUnavailable));
+  });
+}
+
 function tombstoneAndDeleteStoredMatching(
   db: IDBDatabase,
   deletionDigest: string,
@@ -401,6 +715,7 @@ function tombstoneAndDeleteStoredMatching(
     const transaction = db.transaction(
       [
         storeName,
+        serverSnapshotStoreName,
         accountDeletionTombstoneStoreName,
         goalDeletionTombstoneStoreName,
       ],
@@ -415,6 +730,13 @@ function tombstoneAndDeleteStoredMatching(
       draftsRequest.onsuccess = () => {
         for (const stored of draftsRequest.result as readonly Stored[]) {
           if (stored.userId === userId) drafts.delete(stored.key);
+        }
+      };
+      const snapshots = transaction.objectStore(serverSnapshotStoreName);
+      const snapshotsRequest = snapshots.getAll();
+      snapshotsRequest.onsuccess = () => {
+        for (const stored of snapshotsRequest.result as readonly StoredServerSnapshot[]) {
+          if (stored.userId === userId) snapshots.delete(stored.key);
         }
       };
       const goalTombstones = transaction.objectStore(
@@ -449,6 +771,7 @@ function tombstoneGoalAndDeleteStoredMatching(
     const transaction = db.transaction(
       [
         storeName,
+        serverSnapshotStoreName,
         accountDeletionTombstoneStoreName,
         goalDeletionTombstoneStoreName,
       ],
@@ -470,6 +793,18 @@ function tombstoneGoalAndDeleteStoredMatching(
         for (const stored of draftsRequest.result as readonly Stored[]) {
           if (stored.userId === userId && stored.goalId === goalId) {
             drafts.delete(stored.key);
+          }
+        }
+      };
+      const snapshots = transaction.objectStore(serverSnapshotStoreName);
+      const snapshotsRequest = snapshots.getAll();
+      snapshotsRequest.onsuccess = () => {
+        for (const stored of snapshotsRequest.result as readonly StoredServerSnapshot[]) {
+          if (
+            stored.userId === userId &&
+            (stored.goalId === goalId || stored.kind === "home")
+          ) {
+            snapshots.delete(stored.key);
           }
         }
       };
@@ -562,6 +897,70 @@ function deleteStoredMatching(
     const request = store.getAll();
     request.onsuccess = () => {
       for (const stored of request.result as readonly Stored[]) {
+        if (matches(stored)) store.delete(stored.key);
+      }
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+function readServerSnapshotAndDeleteIfInvalid(
+  db: IDBDatabase,
+  key: string,
+  expiresBefore: number,
+): Promise<StoredServerSnapshot | undefined> {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(serverSnapshotStoreName, "readwrite");
+    const store = transaction.objectStore(serverSnapshotStoreName);
+    const request = store.get(key);
+    let selected: StoredServerSnapshot | undefined;
+    let requestError: DOMException | null = null;
+    request.onerror = () => {
+      requestError = request.error;
+    };
+    request.onsuccess = () => {
+      const stored = request.result as StoredServerSnapshot | undefined;
+      if (stored && isExpired(stored.savedAt, expiresBefore)) {
+        const deletion = store.delete(key);
+        deletion.onerror = () => {
+          requestError = deletion.error;
+        };
+        return;
+      }
+      selected = stored;
+    };
+    transaction.oncomplete = () => resolve(selected);
+    transaction.onabort = () =>
+      reject(
+        transaction.error ??
+          requestError ??
+          new Error("server snapshot read transaction aborted"),
+      );
+  });
+}
+
+function deleteServerSnapshot(db: IDBDatabase, key: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(serverSnapshotStoreName, "readwrite");
+    transaction.objectStore(serverSnapshotStoreName).delete(key);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+function deleteServerSnapshotsMatching(
+  db: IDBDatabase,
+  matches: (snapshot: StoredServerSnapshot) => boolean,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(serverSnapshotStoreName, "readwrite");
+    const store = transaction.objectStore(serverSnapshotStoreName);
+    const request = store.getAll();
+    request.onsuccess = () => {
+      for (const stored of request.result as readonly StoredServerSnapshot[]) {
         if (matches(stored)) store.delete(stored.key);
       }
     };

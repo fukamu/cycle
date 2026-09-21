@@ -167,6 +167,7 @@ function GoalReviewRoute({ goalId }: { readonly goalId: string }) {
   const session = useSession();
   const sessionLease = useAuthenticatedRequestLease();
   const runGoalDeletionFencedRequest = useRunGoalDeletionFencedRequest();
+  const cache = useQueryClient();
   const userId = session.user.id;
   const entryId = useId();
   const query = useQuery(
@@ -176,6 +177,7 @@ function GoalReviewRoute({ goalId }: { readonly goalId: string }) {
       entryId,
       sessionLease,
       runGoalDeletionFencedRequest,
+      cache,
     ),
   );
   if (query.isPending) return <PageLoading />;
