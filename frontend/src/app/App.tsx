@@ -4,44 +4,21 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { HomePage } from "../pages/HomePage";
 import { PageLoading } from "../shared/components/AsyncState";
 import { AppLayout } from "./AppLayout";
-import { loadRouteModule } from "./routeModuleLoader";
+import {
+  loadGoalHistoryPage,
+  loadGoalReviewPage,
+  loadGoalTimelinePage,
+  loadGoalWorkspacePage,
+  loadNewGoalPage,
+  loadSettingsPage,
+} from "./routeModules";
 
-const GoalHistoryPage = lazy(() =>
-  loadRouteModule(
-    () => import("../pages/GoalHistoryPage"),
-    (module) => module.GoalHistoryPage,
-  ),
-);
-const GoalReviewPage = lazy(() =>
-  loadRouteModule(
-    () => import("../pages/GoalReviewPage"),
-    (module) => module.GoalReviewPage,
-  ),
-);
-const GoalTimelinePage = lazy(() =>
-  loadRouteModule(
-    () => import("../pages/GoalTimelinePage"),
-    (module) => module.GoalTimelinePage,
-  ),
-);
-const GoalWorkspacePage = lazy(() =>
-  loadRouteModule(
-    () => import("../pages/GoalWorkspacePage"),
-    (module) => module.GoalWorkspacePage,
-  ),
-);
-const NewGoalPage = lazy(() =>
-  loadRouteModule(
-    () => import("../pages/NewGoalPage"),
-    (module) => module.NewGoalPage,
-  ),
-);
-const SettingsPage = lazy(() =>
-  loadRouteModule(
-    () => import("../pages/SettingsPage"),
-    (module) => module.SettingsPage,
-  ),
-);
+const GoalHistoryPage = lazy(loadGoalHistoryPage);
+const GoalReviewPage = lazy(loadGoalReviewPage);
+const GoalTimelinePage = lazy(loadGoalTimelinePage);
+const GoalWorkspacePage = lazy(loadGoalWorkspacePage);
+const NewGoalPage = lazy(loadNewGoalPage);
+const SettingsPage = lazy(loadSettingsPage);
 
 function LazyPage({ children }: { readonly children: ReactNode }) {
   return <Suspense fallback={<PageLoading />}>{children}</Suspense>;

@@ -28,6 +28,10 @@ func (sessions *anonymousMetricSessions) Refresh(ctx context.Context, token stri
 	return sessions.refresh(ctx, token)
 }
 
+func (*anonymousMetricSessions) RefreshAuthenticated(context.Context, appsession.AuthenticatedSession, string) (appsession.View, error) {
+	panic("unexpected RefreshAuthenticated call")
+}
+
 func (sessions *anonymousMetricSessions) CreateAnonymous(ctx context.Context, input appsession.CreateAnonymousInput) (appsession.View, error) {
 	if sessions.create == nil {
 		panic("unexpected CreateAnonymous call")

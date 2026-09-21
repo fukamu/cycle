@@ -119,6 +119,14 @@ func (service *Service) Refresh(ctx context.Context, sessionToken string) (View,
 	if err != nil {
 		return View{}, err
 	}
+	return service.RefreshAuthenticated(ctx, record, sessionToken)
+}
+
+// RefreshAuthenticated publishes a session that the HTTP authentication
+// middleware already resolved. Keeping this separate from Refresh avoids a
+// second repository lookup on GET /session while preserving Refresh for
+// callers that only have the opaque cookie token.
+func (service *Service) RefreshAuthenticated(ctx context.Context, record AuthenticatedSession, sessionToken string) (View, error) {
 	csrfToken, err := csrftoken.Derive(service.settings.CSRFHashKey, record.ID)
 	if err != nil {
 		return View{}, err

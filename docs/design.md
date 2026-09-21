@@ -224,6 +224,7 @@ MVPへ含める機能は上記ownerが現在形で定義するものに限る。
 | Draft Revision | Goal Draft本文の単調増加revision。Auto SaveとAI提案採用の競合防止に使う。 |
 | AI Snapshot | AI処理開始時点でDBから読み取ったGoal / Draft / Cycle Context。 |
 | Draft Cache | 未保存入力のみをBrowser IndexedDBへ一時保持する回復用データ。 |
+| Server Snapshot Cache | Serverが確定して返したHome / Goal / Cycle / Goal ReviewのDTOを、次の認証済み再表示までBrowser IndexedDBへ一時保持する表示高速化用データ。認証証明や未同期入力ではない。 |
 | Goal Aggregate Delete | Goal、Versions、Draft、Cycles、AI contentを一括削除する破壊的Use Case。 |
 | Anonymous Account Upgrade | User IDを変えずGoogle AuthIdentityを追加する処理。 |
 
@@ -351,6 +352,8 @@ flowchart TD
 4. Cycleは作成しない。
 5. HomeはProgressing GoalsをCollectionとして取得する。
 6. Open Creation Draftがなければ、Progressing Goalの有無にかかわらず「新しい目標を設定」導線を表示できる。Creation DraftはProgressing Goal上限へ算入しない。
+
+同一Browserでの再訪またはreloadでは、route moduleの取得をSession discoveryと並行してよい。UIへUser Contentを公開するのはauthoritativeな`GET /api/v1/session`成功後に限り、そのUserにpartitionされた§29.4のServer Snapshot Cacheがあれば先に表示し、同じqueryをbackgroundで再検証する。Snapshot不在の初回アクセスは従来どおりServer取得を待つ。Snapshot、Draft CacheまたはService WorkerをSession認証・認可の代替にしない。
 
 ## 6.2 Goal開始
 
@@ -2447,6 +2450,7 @@ Base path: `/api/v1`
 - Unsafe method (`POST/PATCH/PUT/DELETE`)は§27.2のCSRF contract必須。ただしanonymous bootstrapはSession前のためOrigin検証 + Turnstile + rate limitで保護する。
 - 全Responseに`X-Request-ID`を付与する。
 - `/api/v1`の全Responseに`Cache-Control: no-store`を付与し、Browser HTTP cacheから認証済みResponseを再利用しない。
+- FrontendのSession discovery、anonymous bootstrapおよび通常GETは30秒でtransportを中断する。Backendの通常read timeout 20秒より長いclient envelopeとして固定し、deadline到達を自動で繰り返さず明示Retryへ移す。AIを含む長時間mutationへこのdeadlineを流用しない。
 - FrontendはResponseを`unknown`としてZodでparseする。
 - BackendはJSON unknown fieldを原則拒否する。
 - 通常Request body上限64 KiB。Google token endpoint 16 KiB。
@@ -4283,6 +4287,7 @@ Google Upgrade / Login成功時はSession tokenを必ずrotateし、更新前Ses
 同一originのtabはSession Cookieを共有するため、Cookieを書き換え得るanonymous bootstrap、Google Upgrade / Login、Account Deleteを固定名`fukamu-session-cookie-writer-v1`のorigin-wide exclusive Web Lockで直列化する。§11.6の初回Guide `shown` / `skipped`永続書込みも、Cookie自体は変更しないが、captured Userとlock内のauthoritative Sessionを照合してこれらのCookie writerと順序付けるために同じlockを再利用する。
 
 - Request dispatch前にlockを取得し、取得後にcaptured ownership / generationを再確認する。待機中のAbortSignalはlock requestへ伝播する。
+- Fresh Anonymous bootstrap全体は§20.1と同じ30秒deadlineで、Bootstrap ID read、Web Lock待機、Turnstile script/widget、lock内Session再確認、POST、Bootstrap ID cleanupをboundedにする。Owner abortを優先し、deadline到達後はCookie変更Requestを追加で自動再送せずSession boundaryの明示Retryへ移る。POST成功後のresponse lossはlock内の次回`GET /session`で既存Sessionへ収束し、新しいAnonymous Userを推測して作らない。
 - Web Locks APIが存在しない、壊れている、またはcallbackを実行せず完了するBrowserではCookie変更Requestをdispatchせずfail-closedにする。Web Locksは本Applicationの必須Browser capabilityとする。
 - Anonymous bootstrapはlock取得後にcaptured ownership / generationを再確認し、同じlock内で`GET /api/v1/session`を再実行する。再実行が有効な既存Sessionを返した場合はPOSTせず、そのSessionをpublishし、§11.6の初回Guide stateを作成・変更・削除しない。
 - 再実行でもSessionが利用不能な場合だけ`POST /api/v1/session/anonymous`をdispatchする。Session DTO検証とrequest ownership確認に成功したresponseについて、lock解放前に初回Guideのversioned booleanをresetして`eligible=true`を保存し、その後にauthoritativeなApplication Sessionとしてpublishする。POSTがBackend上の有効なbootstrapをidempotentに再開した場合も、このBrowserのfresh anonymous bootstrap attemptとして同じ扱いにする。
@@ -4449,11 +4454,13 @@ Rules:
 
 ## 28.6 Recovery
 
-Server resource取得後:
+Session認証成功後、Server responseまたは§29.4の検証済みServer Snapshot Cacheからresourceをmaterializeした後:
 
 - `baseRevision == serverRevision`: Goal Creation / Reviewは本文と`successSignal`のlocal tupleを復元しdirtyとしてsaveする。Cycle Frameは従来どおり単一本文を復元する。
 - mismatch: 自動送信しない。Goal Creation / Reviewはlocal tuple全体を保持し、競合案内を表示する。restore / discardはtuple全体へ適用し、片方だけをmergeしない。
 - 高度なmergeは行わない。
+
+Server Snapshotから先にeditorが開いた場合も、Browser Draftのlocal保存済みとServer同期済みを混同しない。Snapshot revisionをbaseに既存Recoveryを復元できるが、background再検証またはsaveが新しいServer revisionを見つけた場合は本節と§40.5の既存conflict処理へ入り、Server responseで未同期入力を上書きしない。
 
 ## 28.7 Operation gating
 
@@ -4548,6 +4555,31 @@ TanStack Query key例:
 ```
 
 Create / Continue / Terminate / Deleteに加え、Frame/Draft Auto SaveとAI提案Adoptを含むserver mutation成功時は、responseを関連collection/detail cacheへ明示反映するかinvalidateする。保存済みserver stateをeditor local stateだけに保持せず、route往復でfreshな旧cacheを再表示しない。未保存入力はeditor local stateとBrowser Draft Cache、保存済みserver stateはTanStack Queryを正とする。Goalを単一global variableとして保持しない。
+
+### 29.4.1 認証後のServer Snapshot Cache
+
+再訪・reload時の内容表示と編集開始をnetwork再取得から切り離すため、FrontendはZod検証済みの次のServer確定DTOだけをversioned IndexedDBへ保存してよい。
+
+- Home
+- Goal detail
+- full Cycle
+- Goal Review
+
+保存recordは`schemaVersion=1`、`userId`、resource種別、Goalに属する場合の`goalId`、resource key、`savedAt`、DTO payloadを持つ。CSRF token、Session token、Session ID、Google token、Email、AI raw data、未保存入力を含めない。Server Snapshot Cacheは表示用copyであり、Server DBとTanStack Queryのserver-confirmed stateがcanonical、Browser Draft Cacheが未同期入力のcanonical recovery copyである。
+
+起動・再訪の順序は次とする。
+
+1. `GET /api/v1/session`とresponse identity contractを完了し、active request leaseを発行する。認証前はSnapshotをreadしてもUIへ公開しない。
+2. exact User IDと現在routeから必要resourceだけをIndexedDBで読む。record、schema、DTO、TTLのいずれかが不正なら削除してcache missとして扱う。
+3. network queryが未完了の場合だけTanStack Queryへstale dataとしてpublishし、Home / editorを操作可能にする。
+4. 同じauthenticated leaseでbackground GETを行う。成功responseまたはserver mutation成功でQuery cacheとSnapshotを更新する。新しいnetwork dataが先に到着済みなら遅いSnapshotで上書きしない。
+5. Snapshot read/write失敗はnetwork queryを止めない。容量不足や破損は表示高速化を失うだけとし、Browser Draft write失敗の既存警告をSnapshot成功で隠さない。
+
+保存期間はDraft Cacheと同じ最大24時間とし、起動時cleanup、read時のlazy expiryを行う。Userごとにkeyをpartitionし、User切替時に別UserのSnapshotをpublishまたは送信しない。Account Deleteでは同UserのDraftとSnapshotをdurable account tombstoneと同じtransactionで削除し、late writeを拒否する。Goal Deleteまたはownerを秘匿した厳密な`GOAL_NOT_FOUND`では、同GoalのSnapshotとそのGoalを含み得るHome Snapshotをdurable Goal tombstoneと同じtransactionで削除する。Home保存時は含まれる全Goalのtombstoneを同じwrite transactionで確認し、削除後のstale Homeを復活させない。
+
+複数tab・複数端末間でSnapshot自体をmergeしない。Background GET、revision CAS、既存のcanonical cache publication、Browser Draft Recoveryにより収束し、CRDTまたは汎用outboxは導入しない。「local保存済み」はBrowser DraftのIndexedDB commit完了、「Server同期済み」は対応mutationの成功responseを同じUser / resource世代で受理した時点とする。
+
+この段階ではService Worker / app shell cacheを導入しないため、offlineでのfresh起動、Session再認証、未取得route moduleの読込みは保証しない。すでに起動して認証済みのdocumentでは、Goal Creation / Goal Review / Active Cycleの本文編集を既存Browser Draft Cacheへ永続化し、online復帰後に既存Retry / revision conflict処理で同期できる。Command、AI、削除、state transitionはonline専用のままとする。
 
 ## 29.5 Goal workspace resolver
 

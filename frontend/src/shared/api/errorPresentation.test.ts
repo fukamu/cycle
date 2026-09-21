@@ -1,4 +1,4 @@
-import { APIError, type APIErrorCode } from "./client";
+import { APIError, RequestTimeoutError, type APIErrorCode } from "./client";
 import type { StableAPIErrorCode } from "./errorCodes";
 import { isStableAPIError, toErrorPresentation } from "./errorPresentation";
 import { NetworkError } from "./networkError";
@@ -192,6 +192,12 @@ describe("toErrorPresentation", () => {
       kind: "network",
       code: "NETWORK_ERROR",
       message: "通信できませんでした。接続を確認して、もう一度お試しください。",
+    });
+    expect(toErrorPresentation(new RequestTimeoutError())).toEqual({
+      kind: "network",
+      code: "NETWORK_ERROR",
+      message:
+        "通信が時間内に完了しませんでした。接続を確認して、もう一度お試しください。",
     });
 
     const runtimeTypeError = toErrorPresentation(

@@ -1,5 +1,5 @@
 import { isUUIDv7 } from "../id/uuid";
-import { APIError } from "./client";
+import { APIError, RequestTimeoutError } from "./client";
 import { isStableAPIErrorCode, type StableAPIErrorCode } from "./errorCodes";
 import { NetworkError } from "./networkError";
 
@@ -167,6 +167,14 @@ export function toErrorPresentation(error: unknown): ErrorPresentation {
       kind: "network",
       code: "NETWORK_ERROR",
       message: "通信できませんでした。接続を確認して、もう一度お試しください。",
+    };
+  }
+  if (error instanceof RequestTimeoutError) {
+    return {
+      kind: "network",
+      code: "NETWORK_ERROR",
+      message:
+        "通信が時間内に完了しませんでした。接続を確認して、もう一度お試しください。",
     };
   }
   return {

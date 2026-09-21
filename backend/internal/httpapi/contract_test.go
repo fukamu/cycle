@@ -42,10 +42,11 @@ const (
 )
 
 type contractSessionStub struct {
-	authenticate    func(context.Context, string) (appsession.AuthenticatedSession, error)
-	refresh         func(context.Context, string) (appsession.View, error)
-	createAnonymous func(context.Context, appsession.CreateAnonymousInput) (appsession.View, error)
-	verifyCSRF      func(appsession.AuthenticatedSession, string) error
+	authenticate         func(context.Context, string) (appsession.AuthenticatedSession, error)
+	refresh              func(context.Context, string) (appsession.View, error)
+	refreshAuthenticated func(context.Context, appsession.AuthenticatedSession, string) (appsession.View, error)
+	createAnonymous      func(context.Context, appsession.CreateAnonymousInput) (appsession.View, error)
+	verifyCSRF           func(appsession.AuthenticatedSession, string) error
 }
 
 func (stub *contractSessionStub) Authenticate(ctx context.Context, token string) (appsession.AuthenticatedSession, error) {
@@ -60,6 +61,13 @@ func (stub *contractSessionStub) Refresh(ctx context.Context, token string) (app
 		panic("unexpected Refresh call")
 	}
 	return stub.refresh(ctx, token)
+}
+
+func (stub *contractSessionStub) RefreshAuthenticated(ctx context.Context, record appsession.AuthenticatedSession, token string) (appsession.View, error) {
+	if stub.refreshAuthenticated == nil {
+		panic("unexpected RefreshAuthenticated call")
+	}
+	return stub.refreshAuthenticated(ctx, record, token)
 }
 
 func (stub *contractSessionStub) CreateAnonymous(ctx context.Context, input appsession.CreateAnonymousInput) (appsession.View, error) {
@@ -1686,9 +1694,12 @@ func TestGoalTerminationDiscriminatedUnionHTTPContract(t *testing.T) {
 func TestSessionAndAccountCookieContract(t *testing.T) {
 	t.Run("session refresh", func(t *testing.T) {
 		sessions := authenticatedContractSessions()
-		sessions.refresh = func(_ context.Context, token string) (appsession.View, error) {
+		sessions.refreshAuthenticated = func(_ context.Context, record appsession.AuthenticatedSession, token string) (appsession.View, error) {
 			if token != contractSessionToken {
-				t.Fatalf("Refresh token = %q", token)
+				t.Fatalf("RefreshAuthenticated token = %q", token)
+			}
+			if record.ID != contractSessionID || string(record.UserID) != contractUserID {
+				t.Fatalf("RefreshAuthenticated record = %#v", record)
 			}
 			return appsession.View{UserID: user.ID(contractUserID), CSRFToken: "rotated-csrf"}, nil
 		}
@@ -1831,7 +1842,7 @@ func TestAuthenticatedUserResponseHeaderContract(t *testing.T) {
 
 	t.Run("session refresh identifies the authenticated user", func(t *testing.T) {
 		sessions := authenticatedContractSessions()
-		sessions.refresh = func(context.Context, string) (appsession.View, error) {
+		sessions.refreshAuthenticated = func(context.Context, appsession.AuthenticatedSession, string) (appsession.View, error) {
 			return appsession.View{
 				UserID:    contractUserID,
 				CSRFToken: "rotated-csrf",

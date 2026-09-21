@@ -34,6 +34,7 @@ import { App } from "./App";
 import { AppErrorBoundary } from "./AppErrorBoundary";
 import { RouteHeadingFocusProvider } from "./AppLayout";
 import { queryClient } from "./queryClient";
+import { SessionLocalDataBoundary } from "./SessionLocalDataBoundary";
 
 type AppRootProps = {
   readonly reloadApplication?: () => void;
@@ -55,15 +56,17 @@ export function AppRoot({
               <RouteHeadingFocusProvider>
                 <SessionPostCommitCleanupBoundary>
                   <SessionIdentityBoundary>
-                    <SessionBoundFirstUseGuideProvider>
-                      <AccountDeletionProvider>
-                        <AppErrorBoundary
-                          onRouteModuleRetry={reloadApplication}
-                        >
-                          <App />
-                        </AppErrorBoundary>
-                      </AccountDeletionProvider>
-                    </SessionBoundFirstUseGuideProvider>
+                    <SessionLocalDataBoundary>
+                      <SessionBoundFirstUseGuideProvider>
+                        <AccountDeletionProvider>
+                          <AppErrorBoundary
+                            onRouteModuleRetry={reloadApplication}
+                          >
+                            <App />
+                          </AppErrorBoundary>
+                        </AccountDeletionProvider>
+                      </SessionBoundFirstUseGuideProvider>
+                    </SessionLocalDataBoundary>
                   </SessionIdentityBoundary>
                 </SessionPostCommitCleanupBoundary>
               </RouteHeadingFocusProvider>

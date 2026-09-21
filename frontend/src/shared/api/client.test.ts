@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   APIError,
+  RequestTimeoutError,
   requestAnonymousSessionBootstrapJSON,
   requestAuthenticatedJSON,
   requestCurrentSessionJSON,
@@ -81,6 +82,33 @@ describe("requestJSON transport failures", () => {
 
     expect(failure).toMatchObject({ name: "AbortError" });
     expect(failure).not.toBeInstanceOf(NetworkError);
+  });
+
+  it("bounds startup transport waits without treating the timeout as a caller abort", async () => {
+    const timeout = new AbortController();
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(timeout.signal);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation((_input, init) => {
+        const signal = init?.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        });
+      }),
+    );
+    try {
+      const request = requestCurrentSessionJSON(responseSchema, {
+        timeoutMs: 10,
+      });
+      timeout.abort(new DOMException("deadline reached", "TimeoutError"));
+      await expect(request).rejects.toBeInstanceOf(RequestTimeoutError);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });
 

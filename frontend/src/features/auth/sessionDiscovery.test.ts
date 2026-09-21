@@ -11,6 +11,7 @@ import {
 } from "../../shared/preferences/firstUseGuidePreference";
 import { createAnonymousSession, loadInitialSession } from "./sessionDiscovery";
 import { getAnonymousBootstrapToken } from "./turnstile";
+import { RequestTimeoutError } from "../../shared/api/client";
 
 vi.mock("./bootstrapRepository", () => ({
   clearBootstrapID: vi.fn(),
@@ -57,6 +58,21 @@ describe("anonymous session discovery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("leaves the preparation state when browser-local bootstrap work exceeds its deadline", async () => {
+    const timeout = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+    getOrCreateBootstrapIDMock.mockReturnValue(new Promise(() => undefined));
+
+    const discovery = createAnonymousSession();
+    const rejected =
+      expect(discovery).rejects.toBeInstanceOf(RequestTimeoutError);
+    timeout.abort(new DOMException("deadline reached", "TimeoutError"));
+
+    await rejected;
+    expect(getAnonymousBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(clearBootstrapIDMock).not.toHaveBeenCalled();
   });
 
   it("does not acquire an external token after ownership is lost while reading the bootstrap ID", async () => {
@@ -144,7 +160,7 @@ describe("anonymous session discovery", () => {
     });
   });
 
-  it("forwards the owner abort signal to the anonymous bootstrap request", async () => {
+  it("forwards owner aborts through the bounded anonymous bootstrap signal", async () => {
     getOrCreateBootstrapIDMock.mockResolvedValue(
       "00000000-0000-7000-8000-000000000001",
     );
@@ -173,11 +189,13 @@ describe("anonymous session discovery", () => {
       controller.signal,
     );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    expect(observedSignal).toBe(controller.signal);
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(false);
 
     controller.abort();
 
     await expect(discovery).rejects.toMatchObject({ name: "AbortError" });
+    expect(observedSignal?.aborted).toBe(true);
     expect(clearBootstrapIDMock).not.toHaveBeenCalled();
   });
 

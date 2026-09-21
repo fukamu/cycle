@@ -22,8 +22,17 @@ type createAnonymousRequest struct {
 }
 
 func (server *api) getSession(writer http.ResponseWriter, request *http.Request) {
-	cookie, _ := request.Cookie(sessionCookieName)
-	view, err := server.dependencies.Sessions.Refresh(request.Context(), cookie.Value)
+	record, ok := authenticatedSession(request.Context())
+	if !ok {
+		server.writeError(writer, request, appsession.ErrSessionMissing, nil)
+		return
+	}
+	cookie, err := request.Cookie(sessionCookieName)
+	if err != nil {
+		server.writeError(writer, request, appsession.ErrSessionMissing, nil)
+		return
+	}
+	view, err := server.dependencies.Sessions.RefreshAuthenticated(request.Context(), record, cookie.Value)
 	if err != nil {
 		server.writeError(writer, request, err, nil)
 		return

@@ -38,7 +38,17 @@ type RequestOptions = {
   readonly csrfToken?: string;
   readonly idempotencyKey?: string;
   readonly signal?: AbortSignal | undefined;
+  readonly timeoutMs?: number;
 };
+
+export const startupReadRequestTimeoutMs = 30_000;
+
+export class RequestTimeoutError extends TypeError {
+  constructor() {
+    super("request timed out");
+    this.name = "RequestTimeoutError";
+  }
+}
 
 export type AuthenticatedRequestLease = {
   readonly expectedUserId: string;
@@ -84,14 +94,17 @@ export function requestAuthenticatedJSON<T>(
   schema: z.ZodType<T>,
   options: RequestOptions = {},
 ): Promise<T> {
-  return requestJSON(path, schema, options, { kind: "authenticated", lease });
+  return requestJSON(path, schema, withDefaultReadTimeout(options), {
+    kind: "authenticated",
+    lease,
+  });
 }
 
 export function requestCurrentSessionJSON<T>(
   schema: z.ZodType<T>,
   options: RequestOptions = {},
 ): Promise<T> {
-  return requestJSON("/api/v1/session", schema, options, {
+  return requestJSON("/api/v1/session", schema, withStartupTimeout(options), {
     kind: "session-discovery",
   });
 }
@@ -100,9 +113,12 @@ export function requestAnonymousSessionBootstrapJSON<T>(
   schema: z.ZodType<T>,
   options: RequestOptions = {},
 ): Promise<T> {
-  return requestJSON("/api/v1/session/anonymous", schema, options, {
-    kind: "public",
-  });
+  return requestJSON(
+    "/api/v1/session/anonymous",
+    schema,
+    withStartupTimeout(options),
+    { kind: "public" },
+  );
 }
 
 async function requestJSON<T>(
@@ -122,10 +138,15 @@ async function requestJSON<T>(
     policy.kind === "authenticated"
       ? sessionRecoveryEvents.capturePublisher()
       : undefined;
-  const requestSignal =
-    policy.kind === "authenticated"
-      ? combineSignals(policy.lease.signal, options.signal)
-      : options.signal;
+  const timeoutSignal =
+    options.timeoutMs === undefined
+      ? undefined
+      : AbortSignal.timeout(options.timeoutMs);
+  const requestSignal = combineSignals(
+    policy.kind === "authenticated" ? policy.lease.signal : undefined,
+    options.signal,
+    timeoutSignal,
+  );
   const init = createRequestInit(
     options,
     requestSignal,
@@ -145,8 +166,11 @@ async function requestJSON<T>(
     if (policy.kind === "authenticated" && policy.lease.signal.aborted) {
       throw staleIdentityError();
     }
+    if (timeoutSignal?.aborted) throw new RequestTimeoutError();
     throw new NetworkError();
   }
+
+  if (timeoutSignal?.aborted) throw new RequestTimeoutError();
 
   if (policy.kind === "authenticated") {
     assertLeaseCurrent(policy.lease);
@@ -180,6 +204,7 @@ async function requestJSON<T>(
     if (isSignalAborted(options.signal)) {
       throwCallerAbort(options.signal, error);
     }
+    if (timeoutSignal?.aborted) throw new RequestTimeoutError();
     payload = undefined;
   }
 
@@ -189,6 +214,7 @@ async function requestJSON<T>(
   if (isSignalAborted(options.signal)) {
     throwCallerAbort(options.signal, undefined);
   }
+  if (timeoutSignal?.aborted) throw new RequestTimeoutError();
 
   const apiError = response.ok
     ? undefined
@@ -358,13 +384,26 @@ function isSignalAborted(signal: AbortSignal | undefined): boolean {
 }
 
 function combineSignals(
-  leaseSignal: AbortSignal,
-  callerSignal: AbortSignal | undefined,
-): AbortSignal {
-  if (callerSignal === undefined || callerSignal === leaseSignal) {
-    return leaseSignal;
-  }
-  return AbortSignal.any([leaseSignal, callerSignal]);
+  ...signals: readonly (AbortSignal | undefined)[]
+): AbortSignal | undefined {
+  const active = signals.filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  if (active.length === 0) return undefined;
+  if (active.length === 1) return active[0];
+  return AbortSignal.any(active);
+}
+
+function withDefaultReadTimeout(options: RequestOptions): RequestOptions {
+  return (options.method ?? "GET") === "GET"
+    ? withStartupTimeout(options)
+    : options;
+}
+
+function withStartupTimeout(options: RequestOptions): RequestOptions {
+  return options.timeoutMs === undefined
+    ? { ...options, timeoutMs: startupReadRequestTimeoutMs }
+    : options;
 }
 
 function isLeaseCurrent(lease: AuthenticatedRequestLease): boolean {

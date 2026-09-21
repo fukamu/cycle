@@ -26,10 +26,13 @@ declare global {
 
 let scriptPromise: Promise<void> | undefined;
 
-export async function getAnonymousBootstrapToken(): Promise<string> {
+export async function getAnonymousBootstrapToken(
+  signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
   const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined;
   if (!siteKey) return "";
-  await loadScript();
+  await waitForSignal(loadScript(), signal);
   const turnstile = window.turnstile;
   if (turnstile === undefined) {
     throw new Error("Cloudflare Turnstileを読み込めませんでした。");
@@ -41,6 +44,7 @@ export async function getAnonymousBootstrapToken(): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const widget: { id?: string } = {};
     const cleanup = () => {
+      signal?.removeEventListener("abort", abort);
       if (widget.id !== undefined) turnstile.remove(widget.id);
       container.remove();
     };
@@ -49,6 +53,17 @@ export async function getAnonymousBootstrapToken(): Promise<string> {
       reject(new Error(message));
       return true;
     };
+    const abort = () => {
+      cleanup();
+      reject(
+        signal?.reason ?? new DOMException("request aborted", "AbortError"),
+      );
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
     widget.id = turnstile.render(container, {
       sitekey: siteKey,
       action,
@@ -64,6 +79,28 @@ export async function getAnonymousBootstrapToken(): Promise<string> {
       "timeout-callback": () => fail("Turnstile verification timed out"),
     });
     turnstile.execute(widget.id);
+  });
+}
+
+function waitForSignal<Value>(
+  operation: Promise<Value>,
+  signal: AbortSignal | undefined,
+): Promise<Value> {
+  if (signal === undefined) return operation;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
   });
 }
 

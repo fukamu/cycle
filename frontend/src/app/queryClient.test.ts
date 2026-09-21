@@ -1,9 +1,17 @@
-import { APIError, SessionIdentityError } from "../shared/api/client";
+import {
+  APIError,
+  RequestTimeoutError,
+  SessionIdentityError,
+} from "../shared/api/client";
 import { shouldRetryQuery } from "./queryClient";
 
 const requestId = "00000000-0000-7000-8000-000000000001";
 
 describe("query retry policy", () => {
+  it("hands a bounded timeout to the explicit retry control", () => {
+    expect(shouldRetryQuery(0, new RequestTimeoutError())).toBe(false);
+  });
+
   it.each([
     "SESSION_IDENTITY_STALE",
     "SESSION_IDENTITY_DRIFT",

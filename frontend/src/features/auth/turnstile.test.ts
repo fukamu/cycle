@@ -54,6 +54,32 @@ describe("getAnonymousBootstrapToken", () => {
     expect(remove).toHaveBeenCalledWith("widget-id");
   });
 
+  it("removes a pending widget when session preparation is aborted", async () => {
+    vi.stubEnv("VITE_TURNSTILE_SITE_KEY", "site-key");
+    const remove = vi.fn();
+    const render = vi.fn(() => "widget-id");
+    const execute = vi.fn();
+    window.turnstile = { render, execute, remove };
+    const { getAnonymousBootstrapToken } = await import("./turnstile");
+    const controller = new AbortController();
+
+    const token = getAnonymousBootstrapToken(controller.signal);
+    document
+      .querySelector<HTMLScriptElement>(
+        'script[data-fukamu-cycle-turnstile="true"]',
+      )
+      ?.dispatchEvent(new Event("load"));
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    const rejected = expect(token).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    controller.abort();
+
+    await rejected;
+    expect(remove).toHaveBeenCalledWith("widget-id");
+    expect(document.querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
   it("shares a failed script attempt and retries once on the next call", async () => {
     vi.stubEnv("VITE_TURNSTILE_SITE_KEY", "site-key");
     const { getAnonymousBootstrapToken } = await import("./turnstile");

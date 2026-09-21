@@ -5,7 +5,9 @@ import {
   clearUserDrafts,
   deleteBrowserDraftIfUnchanged,
   getBrowserDraft,
+  getHomeServerSnapshot,
   putBrowserDraft,
+  putHomeServerSnapshot,
   tombstoneDeletedGoalAndClearDrafts,
 } from "./browserDraftCache";
 
@@ -38,12 +40,13 @@ describe("browser draft cache", () => {
 
     const schema = await readDraftDatabaseSchema();
     expect(schema).toEqual({
-      version: 3,
+      version: 4,
       stores: [
         "account-deletion-tombstones",
         "drafts",
         "goal-deletion-tombstones",
         "metadata",
+        "server-snapshots",
       ],
       goalDeletionIndexes: ["ownerDigest"],
     });
@@ -125,6 +128,56 @@ describe("browser draft cache", () => {
       );
     },
   );
+
+  it("restores a validated user-scoped Home snapshot", async () => {
+    const userId = "00000000-0000-7000-8000-000000000201";
+    const home = homeSnapshotFixture(
+      "00000000-0000-7000-8000-000000000202",
+      "00000000-0000-7000-8000-000000000203",
+      "00000000-0000-7000-8000-000000000204",
+    );
+
+    await putHomeServerSnapshot(userId, home);
+
+    await expect(getHomeServerSnapshot(userId)).resolves.toMatchObject({
+      data: home,
+      savedAt: expect.any(String),
+    });
+    await expect(
+      getHomeServerSnapshot("00000000-0000-7000-8000-000000000205"),
+    ).resolves.toBeNull();
+  });
+
+  it("removes and permanently fences a Home snapshot that contains a deleted Goal", async () => {
+    const userId = "00000000-0000-7000-8000-000000000211";
+    const goalId = "00000000-0000-7000-8000-000000000212";
+    const home = homeSnapshotFixture(
+      goalId,
+      "00000000-0000-7000-8000-000000000213",
+      "00000000-0000-7000-8000-000000000214",
+    );
+    await putHomeServerSnapshot(userId, home);
+
+    await tombstoneDeletedGoalAndClearDrafts(userId, goalId);
+    await putHomeServerSnapshot(userId, home);
+
+    await expect(getHomeServerSnapshot(userId)).resolves.toBeNull();
+  });
+
+  it("removes and permanently fences server snapshots after Account Delete", async () => {
+    const userId = "00000000-0000-7000-8000-000000000221";
+    const home = homeSnapshotFixture(
+      "00000000-0000-7000-8000-000000000222",
+      "00000000-0000-7000-8000-000000000223",
+      "00000000-0000-7000-8000-000000000224",
+    );
+    await putHomeServerSnapshot(userId, home);
+
+    await clearUserDrafts(userId);
+    await putHomeServerSnapshot(userId, home);
+
+    await expect(getHomeServerSnapshot(userId)).resolves.toBeNull();
+  });
 
   it("blocks a put that started before Goal Delete but reaches its transaction afterward", async () => {
     const userId = "in-flight-before-goal-delete-owner";
@@ -1057,7 +1110,7 @@ function readAccountDeletionPrivacyRecords(): Promise<{
   readonly metadata: readonly Record<string, unknown>[];
 }> {
   return new Promise((resolve, reject) => {
-    const openRequest = indexedDB.open("fukamu-cycle-browser-drafts-v2", 3);
+    const openRequest = indexedDB.open("fukamu-cycle-browser-drafts-v2", 4);
     openRequest.onerror = () => reject(openRequest.error);
     openRequest.onsuccess = () => {
       const database = openRequest.result;
@@ -1093,7 +1146,7 @@ function readAccountDeletionPrivacyRecords(): Promise<{
 }
 
 const browserDraftDatabaseName = "fukamu-cycle-browser-drafts-v2";
-const browserDraftDatabaseVersion = 3;
+const browserDraftDatabaseVersion = 4;
 const browserDraftStoreName = "drafts";
 const accountDeletionTombstoneStoreName = "account-deletion-tombstones";
 const goalDeletionTombstoneStoreName = "goal-deletion-tombstones";
@@ -1143,6 +1196,46 @@ type BrowserDraftFixture = {
   readonly baseRevision: number;
   readonly updatedAt: string;
 };
+
+function homeSnapshotFixture(
+  goalId: string,
+  goalVersionId: string,
+  cycleId: string,
+) {
+  return {
+    progressingGoals: [
+      {
+        id: goalId,
+        status: "active_cycle" as const,
+        revision: 1,
+        currentVersion: {
+          id: goalVersionId,
+          versionNumber: 1,
+          body: "snapshot goal",
+          successSignal: "snapshot success",
+          createdAt: "2026-09-21T00:00:00.000Z",
+        },
+        currentWork: {
+          kind: "active_cycle" as const,
+          cycleId,
+          cycleSequenceNumber: 1,
+          reviewSchedule: {
+            reviewDate: null,
+            reviewScheduleRevision: 0,
+          },
+        },
+        nextCycleSequenceNumber: 2,
+        cycleCount: 1,
+        createdAt: "2026-09-21T00:00:00.000Z",
+        terminalAt: null,
+      },
+    ],
+    creationDraft: null,
+    canCreateGoalDraft: true,
+    progressingGoalLimit: 5,
+    canStartProgressingGoal: true,
+  };
+}
 
 function draftFixture(
   userId: string,
