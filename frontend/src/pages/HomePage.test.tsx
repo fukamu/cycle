@@ -132,6 +132,30 @@ describe("HomePage progressing goal collection", () => {
     vi.mocked(getHome).mockReset();
   });
 
+  it("starts with the progressing Goals instead of an introductory hero", async () => {
+    vi.mocked(getHome).mockResolvedValue({
+      progressingGoals: [],
+      creationDraft: null,
+      canCreateGoalDraft: true,
+      progressingGoalLimit: 2,
+      canStartProgressingGoal: true,
+    });
+
+    renderHome();
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "取り組んでいる目標",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.queryByText("G-PDCA WORKSPACE")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("目標から、次の一歩へ。"),
+    ).not.toBeInTheDocument();
+  });
+
   it.each(progressingGoalCountCases)(
     "labels the Goal count for $caseName",
     async ({ progressingGoals, limit, visible, accessible }) => {
@@ -177,6 +201,48 @@ describe("HomePage progressing goal collection", () => {
     expect(
       readSelectedCycleFrame(thirdGoal.currentWork.cycleId, "active"),
     ).toBe("plan");
+  });
+
+  it("does not reconcile selected Frames from a snapshot during revalidation", async () => {
+    const staleHome: Home = {
+      progressingGoals: [],
+      creationDraft: null,
+      canCreateGoalDraft: true,
+      progressingGoalLimit: 2,
+      canStartProgressingGoal: true,
+    };
+    const freshHome: Home = {
+      ...staleHome,
+      progressingGoals: [firstGoal],
+    };
+    const network = deferred<Home>();
+    const cache = createCache();
+    cache.setQueryData(userQueryKeys.home(session.user.id), staleHome, {
+      updatedAt: 1,
+    });
+    rememberSelectedCycleFrame(firstGoal.currentWork.cycleId, "do");
+    vi.mocked(getHome).mockReturnValue(network.promise);
+
+    renderHome(cache);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "取り組んでいる目標",
+      }),
+    ).toBeInTheDocument();
+    await act(async () => undefined);
+    expect(
+      readSelectedCycleFrame(firstGoal.currentWork.cycleId, "active"),
+    ).toBe("do");
+
+    await act(async () => network.resolve(freshHome));
+    expect(
+      await screen.findByRole("link", { name: "Cycle 1を続ける" }),
+    ).toBeInTheDocument();
+    expect(
+      readSelectedCycleFrame(firstGoal.currentWork.cycleId, "active"),
+    ).toBe("do");
   });
 
   it("renders two independently routed goal cards at the free limit", async () => {

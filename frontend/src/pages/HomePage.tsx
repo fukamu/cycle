@@ -43,7 +43,7 @@ export function HomePage() {
   );
   const create = useGoalCreationDraftCommand(openCreationDraft);
   useEffect(() => {
-    if (query.data && progressingGoalsAreValid) {
+    if (query.data && !query.isFetching && progressingGoalsAreValid) {
       cacheGoals(
         cache,
         userId,
@@ -64,6 +64,7 @@ export function HomePage() {
     progressingGoalsAreValid,
     query.data,
     query.dataUpdatedAt,
+    query.isFetching,
     userId,
   ]);
   if (query.isPending) return <PageLoading />;
@@ -73,17 +74,12 @@ export function HomePage() {
     return <PageError retry={() => void query.refetch()} />;
   return (
     <main className="page home-page">
-      <header className="page-heading">
-        <p className="eyebrow">G-PDCA WORKSPACE</p>
-        <h1>目標から、次の一歩へ。</h1>
-        <p>目標ごとに小さなサイクルを回し、学びながら前へ進みます。</p>
-      </header>
       <section
         className="goal-collection"
         aria-labelledby="progressing-heading"
       >
         <div className="section-heading">
-          <h2 id="progressing-heading">取り組んでいる目標</h2>
+          <h1 id="progressing-heading">取り組んでいる目標</h1>
           <span
             className="progressing-goal-count"
             role="status"

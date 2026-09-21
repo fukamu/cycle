@@ -11,9 +11,9 @@ export function ProgressingGoalCard({
   return (
     <article className="goal-card" aria-labelledby={headingId}>
       <span className="goal-card__kicker">あなたの目標</span>
-      <h3 id={headingId} className="goal-card__goal">
+      <h2 id={headingId} className="goal-card__goal">
         {view.goalBody}
-      </h3>
+      </h2>
       <div className="goal-card__progress">
         <p className="goal-card__status">{view.currentPlace}</p>
         <p className="goal-card__helper">{view.helper}</p>
