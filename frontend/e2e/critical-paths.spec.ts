@@ -2551,7 +2551,7 @@ test("Home presents one clear next action for an active Cycle without horizontal
   const card = page.getByRole("article", { name: goalText });
   await expect(card).toBeVisible();
   await expect(
-    card.getByRole("heading", { level: 3, name: goalText }),
+    card.getByRole("heading", { level: 2, name: goalText }),
   ).toBeVisible();
   await expect(card.getByText("Cycle 1 実行中")).toBeVisible();
   await expect(card.getByText("P/D/C/Aの記録を続けましょう。")).toBeVisible();

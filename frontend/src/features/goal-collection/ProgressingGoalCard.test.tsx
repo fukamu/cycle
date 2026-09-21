@@ -62,7 +62,7 @@ describe("ProgressingGoalCard", () => {
     });
     expect(
       within(card).getByRole("heading", {
-        level: 3,
+        level: 2,
         name: activeGoal.currentVersion.body,
       }),
     ).toBeInTheDocument();

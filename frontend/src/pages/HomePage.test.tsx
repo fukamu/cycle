@@ -203,6 +203,48 @@ describe("HomePage progressing goal collection", () => {
     ).toBe("plan");
   });
 
+  it("does not reconcile selected Frames from a snapshot during revalidation", async () => {
+    const staleHome: Home = {
+      progressingGoals: [],
+      creationDraft: null,
+      canCreateGoalDraft: true,
+      progressingGoalLimit: 2,
+      canStartProgressingGoal: true,
+    };
+    const freshHome: Home = {
+      ...staleHome,
+      progressingGoals: [firstGoal],
+    };
+    const network = deferred<Home>();
+    const cache = createCache();
+    cache.setQueryData(userQueryKeys.home(session.user.id), staleHome, {
+      updatedAt: 1,
+    });
+    rememberSelectedCycleFrame(firstGoal.currentWork.cycleId, "do");
+    vi.mocked(getHome).mockReturnValue(network.promise);
+
+    renderHome(cache);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "取り組んでいる目標",
+      }),
+    ).toBeInTheDocument();
+    await act(async () => undefined);
+    expect(
+      readSelectedCycleFrame(firstGoal.currentWork.cycleId, "active"),
+    ).toBe("do");
+
+    await act(async () => network.resolve(freshHome));
+    expect(
+      await screen.findByRole("link", { name: "Cycle 1を続ける" }),
+    ).toBeInTheDocument();
+    expect(
+      readSelectedCycleFrame(firstGoal.currentWork.cycleId, "active"),
+    ).toBe("do");
+  });
+
   it("renders two independently routed goal cards at the free limit", async () => {
     const user = userEvent.setup();
     const home: Home = {

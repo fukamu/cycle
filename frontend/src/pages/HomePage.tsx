@@ -43,7 +43,7 @@ export function HomePage() {
   );
   const create = useGoalCreationDraftCommand(openCreationDraft);
   useEffect(() => {
-    if (query.data && progressingGoalsAreValid) {
+    if (query.data && !query.isFetching && progressingGoalsAreValid) {
       cacheGoals(
         cache,
         userId,
@@ -64,6 +64,7 @@ export function HomePage() {
     progressingGoalsAreValid,
     query.data,
     query.dataUpdatedAt,
+    query.isFetching,
     userId,
   ]);
   if (query.isPending) return <PageLoading />;
