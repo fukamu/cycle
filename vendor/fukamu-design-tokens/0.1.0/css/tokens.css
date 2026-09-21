@@ -1,0 +1,97 @@
+/* Generated from tokens/fukamu.tokens.json. DO NOT EDIT. */
+/* Contract version: 0.1.0 */
+/* Canonical source revision: b57d1531f26c14e2f1f82440b9f150a3a185bd16 */
+:root {
+  /* Private implementation primitives. Use public aliases below. */
+  --fukamu-primitive-border-width-default: 1px;
+  --fukamu-primitive-color-amber-200: #EAD99E;
+  --fukamu-primitive-color-amber-50: #FFF7DB;
+  --fukamu-primitive-color-amber-800: #71510A;
+  --fukamu-primitive-color-blue-200: #CCDAEC;
+  --fukamu-primitive-color-blue-300: #9EBCE1;
+  --fukamu-primitive-color-blue-50: #EDF6FF;
+  --fukamu-primitive-color-blue-500: #4A90E2;
+  --fukamu-primitive-color-blue-800: #0D3B8E;
+  --fukamu-primitive-color-blue-900: #082B69;
+  --fukamu-primitive-color-neutral-0: #FFFFFF;
+  --fukamu-primitive-color-red-200: #F2BAC4;
+  --fukamu-primitive-color-red-50: #FFF0F3;
+  --fukamu-primitive-color-red-700: #B4233A;
+  --fukamu-primitive-color-red-800: #85172A;
+  --fukamu-primitive-color-slate-600: #52657F;
+  --fukamu-primitive-color-slate-900: #10233F;
+  --fukamu-primitive-color-teal-50: #D9F3EF;
+  --fukamu-primitive-color-teal-800: #075D55;
+  --fukamu-primitive-duration-short: 160ms;
+  --fukamu-primitive-font-family-ja-sans: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", Meiryo, "Noto Sans JP", "Noto Sans CJK JP", system-ui, sans-serif;
+  --fukamu-primitive-font-size-base: 1rem;
+  --fukamu-primitive-font-size-small: 0.875rem;
+  --fukamu-primitive-font-weight-bold: 700;
+  --fukamu-primitive-font-weight-medium: 500;
+  --fukamu-primitive-font-weight-regular: 400;
+  --fukamu-primitive-font-weight-semibold: 600;
+  --fukamu-primitive-interaction-target-min: 2.75rem;
+  --fukamu-primitive-line-height-body-ja: 1.7;
+  --fukamu-primitive-line-height-editor: 1.75;
+  --fukamu-primitive-line-height-ui: 1.45;
+  --fukamu-primitive-radius-lg: 0.75rem;
+  --fukamu-primitive-radius-md: 0.625rem;
+  --fukamu-primitive-radius-pill: 9999px;
+  --fukamu-primitive-radius-sm: 0.5rem;
+  --fukamu-primitive-radius-xl: 1rem;
+  --fukamu-primitive-spacing-1: 0.25rem;
+  --fukamu-primitive-spacing-2: 0.5rem;
+  --fukamu-primitive-spacing-3: 0.75rem;
+  --fukamu-primitive-spacing-4: 1rem;
+  --fukamu-primitive-spacing-5: 1.25rem;
+  --fukamu-primitive-spacing-6: 1.5rem;
+  --fukamu-primitive-spacing-8: 2rem;
+
+  /* Public contract. */
+  --fukamu-border-width-default: var(--fukamu-primitive-border-width-default);
+  --fukamu-color-accent: var(--fukamu-primitive-color-blue-500);
+  --fukamu-color-action-on-primary: var(--fukamu-primitive-color-neutral-0);
+  --fukamu-color-action-primary: var(--fukamu-primitive-color-blue-800);
+  --fukamu-color-action-primary-hover: var(--fukamu-primitive-color-blue-900);
+  --fukamu-color-border-default: var(--fukamu-primitive-color-blue-200);
+  --fukamu-color-border-strong: var(--fukamu-primitive-color-blue-300);
+  --fukamu-color-focus-ring: var(--fukamu-primitive-color-blue-500);
+  --fukamu-color-status-danger-border: var(--fukamu-primitive-color-red-200);
+  --fukamu-color-status-danger-foreground: var(--fukamu-primitive-color-red-700);
+  --fukamu-color-status-danger-strong: var(--fukamu-primitive-color-red-800);
+  --fukamu-color-status-danger-surface: var(--fukamu-primitive-color-red-50);
+  --fukamu-color-status-success-foreground: var(--fukamu-primitive-color-teal-800);
+  --fukamu-color-status-success-surface: var(--fukamu-primitive-color-teal-50);
+  --fukamu-color-status-warning-border: var(--fukamu-primitive-color-amber-200);
+  --fukamu-color-status-warning-foreground: var(--fukamu-primitive-color-amber-800);
+  --fukamu-color-status-warning-surface: var(--fukamu-primitive-color-amber-50);
+  --fukamu-color-surface-default: var(--fukamu-primitive-color-neutral-0);
+  --fukamu-color-surface-subtle: var(--fukamu-primitive-color-blue-50);
+  --fukamu-color-text-primary: var(--fukamu-primitive-color-slate-900);
+  --fukamu-color-text-secondary: var(--fukamu-primitive-color-slate-600);
+  --fukamu-font-family-body-ja: var(--fukamu-primitive-font-family-ja-sans);
+  --fukamu-font-line-height-body-ja: var(--fukamu-primitive-line-height-body-ja);
+  --fukamu-font-line-height-editor: var(--fukamu-primitive-line-height-editor);
+  --fukamu-font-line-height-ui: var(--fukamu-primitive-line-height-ui);
+  --fukamu-font-size-body: var(--fukamu-primitive-font-size-base);
+  --fukamu-font-size-editor: var(--fukamu-primitive-font-size-base);
+  --fukamu-font-size-small: var(--fukamu-primitive-font-size-small);
+  --fukamu-font-weight-bold: var(--fukamu-primitive-font-weight-bold);
+  --fukamu-font-weight-medium: var(--fukamu-primitive-font-weight-medium);
+  --fukamu-font-weight-regular: var(--fukamu-primitive-font-weight-regular);
+  --fukamu-font-weight-semibold: var(--fukamu-primitive-font-weight-semibold);
+  --fukamu-interaction-target-min: var(--fukamu-primitive-interaction-target-min);
+  --fukamu-motion-duration-short: var(--fukamu-primitive-duration-short);
+  --fukamu-radius-lg: var(--fukamu-primitive-radius-lg);
+  --fukamu-radius-md: var(--fukamu-primitive-radius-md);
+  --fukamu-radius-pill: var(--fukamu-primitive-radius-pill);
+  --fukamu-radius-sm: var(--fukamu-primitive-radius-sm);
+  --fukamu-radius-xl: var(--fukamu-primitive-radius-xl);
+  --fukamu-spacing-1: var(--fukamu-primitive-spacing-1);
+  --fukamu-spacing-2: var(--fukamu-primitive-spacing-2);
+  --fukamu-spacing-3: var(--fukamu-primitive-spacing-3);
+  --fukamu-spacing-4: var(--fukamu-primitive-spacing-4);
+  --fukamu-spacing-5: var(--fukamu-primitive-spacing-5);
+  --fukamu-spacing-6: var(--fukamu-primitive-spacing-6);
+  --fukamu-spacing-8: var(--fukamu-primitive-spacing-8);
+}

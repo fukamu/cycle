@@ -6176,19 +6176,14 @@ Thresholdは運用Configurationとする。
 
 **[設計判断]\[MVP]** 日本語本文の可読性、初期表示速度、Font File Size、FOIT/FOUT、CLS、OS最適化を総合し、MVPは**日本語System Font優先のFont Stack**を採用し、日本語Web Fontを必須downloadにしない。
 
+共通値のcanonical ownerは`fukamu/design-tokens`であり、Cycleはcontract `0.1.0`、canonical source `b57d1531f26c14e2f1f82440b9f150a3a185bd16`から生成された完全なtext bundleを`vendor/fukamu-design-tokens/0.1.0/`へ固定する。Generated bundleは手編集せず、`manifest.json`のsource revisionと全artifact SHA-256を検証する。Shared CSSをCycle mappingより先に読み、Componentは移行中のCycle aliasだけを参照する。
+
 ```css
+@import "../../vendor/fukamu-design-tokens/0.1.0/css/tokens.css";
+
 :root,
 :root:lang(ja) {
-  --font-family-body-ja:
-    "Hiragino Sans",
-    "Hiragino Kaku Gothic ProN",
-    "Yu Gothic UI",
-    "Yu Gothic",
-    Meiryo,
-    "Noto Sans JP",
-    "Noto Sans CJK JP",
-    system-ui,
-    sans-serif;
+  --font-family-body-ja: var(--fukamu-font-family-body-ja);
 
   --font-family-ui: var(--font-family-body-ja);
   --font-family-body: var(--font-family-body-ja);
@@ -6224,18 +6219,19 @@ Trade-offは、OS間で字形・文字幅・weightが異なり、Brand上の完�
 
 ```css
 :root {
-  --font-size-body: 1rem;             /* 16px at default browser setting */
-  --font-size-editor: 1rem;           /* Mobile Safari zoom防止も考慮 */
-  --font-size-small: 0.875rem;
+  --font-size-body: var(--fukamu-font-size-body);
+  --font-size-editor: var(--fukamu-font-size-editor);
+  --font-size-small: var(--fukamu-font-size-small);
   --font-size-title: clamp(1.25rem, 4vw, 1.75rem);
 
-  --font-weight-regular: 400;
-  --font-weight-medium: 600;
-  --font-weight-bold: 700;
+  --font-weight-regular: var(--fukamu-font-weight-regular);
+  /* Legacy名はmediumだが既存値600の意味を維持してsemiboldへ接続する。 */
+  --font-weight-medium: var(--fukamu-font-weight-semibold);
+  --font-weight-bold: var(--fukamu-font-weight-bold);
 
-  --line-height-ui: 1.45;
-  --line-height-body-ja: 1.7;
-  --line-height-editor-ja: 1.75;
+  --line-height-ui: var(--fukamu-font-line-height-ui);
+  --line-height-body-ja: var(--fukamu-font-line-height-body-ja);
+  --line-height-editor-ja: var(--fukamu-font-line-height-editor);
   --letter-spacing-ui-ja: 0;
   --letter-spacing-body-ja: 0;
 }
@@ -6325,6 +6321,14 @@ MVP UIは日本語のみだが、将来次のように差し替え可能にす�
 - Logo conceptの環状Symbolを装飾として再描画せず、3層の視覚表現をP/D/C/Aや特定Domain概念へ対応付けない。
 - AuthoritativeなLogo/Favicon/Icon assetが存在しない間は、Raster Logo、SVG Logo、Favicon、App Icon、PWA Icon、OG ImageをRepositoryへ生成・設定しない。
 - Motionは操作理解に必要な短いtransitionだけとし、`prefers-reduced-motion`で実質無効化する。
+
+### Shared foundation ownership / residual
+
+共通contractへ接続するのはtext primary/secondary、default/subtle surface、default/strong border、accent、primary action/hover/on-primary、focus、danger/warning/success、body Japanese system font、small/body/editor size、regular/semibold/bold、UI/body/editor line-heightだけとする。同じ色値でも意味が異なるroleを統合しない。
+
+`--canvas: #F7FAFF`、`--brand-light: #D6E9FF`、見出し・文字Wordmark用の`--brand-text: #0D3B8E`と`--brand-deep: #082B69`、P/D/C/AとGoal/Cycle domain state、Timelineのcomponent semanticとgeometry、layout・業務寸法、letter spacing、title scale、Drawer/Dialog overlayとshadowはCycleが所有する。値が同じでも文字Brand roleをcommon `color.action.primary`へ接続せず、legacy `--brand-dark` aliasは真のaction consumerだけが参照する。Dark ModeとWeb Font/CDNは導入しない。Action hoverだけをcommon `color.action.primary-hover`へ分離し、見出し用途の`--brand-deep`はCycleに残す。既存の44px target、`px`寸法、pill radiusを近いcommon `rem`/`9999px`へ無差分の機械置換として扱わない。
+
+Contract更新は新しいversion、40桁source revision、完全なbundle、manifest hash、全artifact hashをreviewし、Cycle mapping・test・本sectionを同じatomic PRで更新する。同じversionのbytesを上書きしない。Rollbackは採用PR全体をrevertして直前のlegacy mapping/importへ戻し、異なるsource revisionのfileを混在させない。
 
 ## 43.9 初回Guide copy / responsive behavior
 

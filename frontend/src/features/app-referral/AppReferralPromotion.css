@@ -19,7 +19,7 @@
 
 .app-referral__status {
   margin: 12px 0 0;
-  color: var(--brand-dark);
+  color: var(--brand-text);
 }
 
 .app-referral__error {

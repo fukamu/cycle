@@ -1,0 +1,2187 @@
+{
+  "contractVersion": "0.1.0",
+  "sourceRevision": "b57d1531f26c14e2f1f82440b9f150a3a185bd16",
+  "file": "FUKAMU Foundations",
+  "collections": [
+    {
+      "name": "Primitives",
+      "mode": "Value",
+      "variableCount": 43,
+      "hiddenFromPublishing": true
+    },
+    {
+      "name": "Color",
+      "mode": "Light",
+      "variableCount": 20,
+      "hiddenFromPublishing": false
+    },
+    {
+      "name": "Typography",
+      "mode": "Value",
+      "variableCount": 11,
+      "hiddenFromPublishing": false
+    },
+    {
+      "name": "Spacing",
+      "mode": "Value",
+      "variableCount": 7,
+      "hiddenFromPublishing": false
+    },
+    {
+      "name": "Radius",
+      "mode": "Value",
+      "variableCount": 5,
+      "hiddenFromPublishing": false
+    },
+    {
+      "name": "Border",
+      "mode": "Value",
+      "variableCount": 1,
+      "hiddenFromPublishing": false
+    },
+    {
+      "name": "Interaction",
+      "mode": "Value",
+      "variableCount": 1,
+      "hiddenFromPublishing": false
+    },
+    {
+      "name": "Motion",
+      "mode": "Value",
+      "variableCount": 1,
+      "hiddenFromPublishing": false
+    }
+  ],
+  "remBasePx": 16,
+  "counts": {
+    "primitiveVariables": 43,
+    "primitiveColors": 18,
+    "publicVariables": 46,
+    "totalVariables": 89,
+    "explicitScopeVariables": 87,
+    "figmaNativeScopeVariables": 2,
+    "referenceOnlyVariables": 6,
+    "textStyleCandidates": 7,
+    "creatableTextStyles": 5,
+    "effectStyles": 0,
+    "components": 0
+  },
+  "notes": [
+    "Git is canonical; Figma must not become an independent value source.",
+    "The Primitives collection is hidden from Library publishing; published semantic Variables remain aliases to these same-file sources.",
+    "Scopes are explicit for COLOR, FLOAT, and STRING Variables. TIMING scope is Figma-native and is not assigned by the projection.",
+    "Unitless line-height Variables are percent references only; Text Styles apply direct PERCENT line height and must not bind these Variables.",
+    "Noto Sans JP represents the Git fallback stack in Figma only: Hiragino Sans, Hiragino Kaku Gothic ProN, Yu Gothic UI, Yu Gothic, Meiryo, Noto Sans JP, Noto Sans CJK JP, system-ui, sans-serif.",
+    "Notes dark mode and shadows are outside contract 0.1.0."
+  ],
+  "lossyTypographyConversions": [
+    "The Git font fallback stack is represented by Noto Sans JP in Figma.",
+    "rem dimensions are converted with 1rem = 16px.",
+    "Unitless line heights are represented as PERCENT at value × 100.",
+    "Noto Sans JP has no 600 style in the connected environment; Semibold Text Style candidates are unsupported and must not be approximated."
+  ],
+  "variables": [
+    {
+      "tokenPath": "primitive.border-width.default",
+      "figmaName": "primitive/border-width/default",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-border-width-default)"
+      },
+      "value": 1,
+      "sourceValue": {
+        "value": 1,
+        "unit": "px"
+      },
+      "unit": "px",
+      "description": "Default border width."
+    },
+    {
+      "tokenPath": "primitive.color.amber-200",
+      "figmaName": "primitive/color/amber-200",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-amber-200)"
+      },
+      "value": "#EAD99E",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.917647059,
+          0.850980392,
+          0.619607843
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Warning border."
+    },
+    {
+      "tokenPath": "primitive.color.amber-50",
+      "figmaName": "primitive/color/amber-50",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-amber-50)"
+      },
+      "value": "#FFF7DB",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          1,
+          0.968627451,
+          0.858823529
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Warning surface."
+    },
+    {
+      "tokenPath": "primitive.color.amber-800",
+      "figmaName": "primitive/color/amber-800",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-amber-800)"
+      },
+      "value": "#71510A",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.443137255,
+          0.317647059,
+          0.039215686
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Warning foreground."
+    },
+    {
+      "tokenPath": "primitive.color.blue-200",
+      "figmaName": "primitive/color/blue-200",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-blue-200)"
+      },
+      "value": "#CCDAEC",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.8,
+          0.854901961,
+          0.925490196
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Default blue-gray border."
+    },
+    {
+      "tokenPath": "primitive.color.blue-300",
+      "figmaName": "primitive/color/blue-300",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-blue-300)"
+      },
+      "value": "#9EBCE1",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.619607843,
+          0.737254902,
+          0.882352941
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Strong blue-gray border."
+    },
+    {
+      "tokenPath": "primitive.color.blue-50",
+      "figmaName": "primitive/color/blue-50",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-blue-50)"
+      },
+      "value": "#EDF6FF",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.929411765,
+          0.964705882,
+          1
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Subtle blue surface."
+    },
+    {
+      "tokenPath": "primitive.color.blue-500",
+      "figmaName": "primitive/color/blue-500",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-blue-500)"
+      },
+      "value": "#4A90E2",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.290196078,
+          0.564705882,
+          0.88627451
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Shared accent blue."
+    },
+    {
+      "tokenPath": "primitive.color.blue-800",
+      "figmaName": "primitive/color/blue-800",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-blue-800)"
+      },
+      "value": "#0D3B8E",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.050980392,
+          0.231372549,
+          0.556862745
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Primary action blue."
+    },
+    {
+      "tokenPath": "primitive.color.blue-900",
+      "figmaName": "primitive/color/blue-900",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-blue-900)"
+      },
+      "value": "#082B69",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.031372549,
+          0.168627451,
+          0.411764706
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Primary action hover blue."
+    },
+    {
+      "tokenPath": "primitive.color.neutral-0",
+      "figmaName": "primitive/color/neutral-0",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-neutral-0)"
+      },
+      "value": "#FFFFFF",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          1,
+          1,
+          1
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "White."
+    },
+    {
+      "tokenPath": "primitive.color.red-200",
+      "figmaName": "primitive/color/red-200",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-red-200)"
+      },
+      "value": "#F2BAC4",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.949019608,
+          0.729411765,
+          0.768627451
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Danger border."
+    },
+    {
+      "tokenPath": "primitive.color.red-50",
+      "figmaName": "primitive/color/red-50",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-red-50)"
+      },
+      "value": "#FFF0F3",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          1,
+          0.941176471,
+          0.952941176
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Danger surface."
+    },
+    {
+      "tokenPath": "primitive.color.red-700",
+      "figmaName": "primitive/color/red-700",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-red-700)"
+      },
+      "value": "#B4233A",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.705882353,
+          0.137254902,
+          0.22745098
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Danger foreground."
+    },
+    {
+      "tokenPath": "primitive.color.red-800",
+      "figmaName": "primitive/color/red-800",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-red-800)"
+      },
+      "value": "#85172A",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.521568627,
+          0.090196078,
+          0.164705882
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Strong danger foreground."
+    },
+    {
+      "tokenPath": "primitive.color.slate-600",
+      "figmaName": "primitive/color/slate-600",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-slate-600)"
+      },
+      "value": "#52657F",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.321568627,
+          0.396078431,
+          0.498039216
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Secondary blue-gray ink."
+    },
+    {
+      "tokenPath": "primitive.color.slate-900",
+      "figmaName": "primitive/color/slate-900",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-slate-900)"
+      },
+      "value": "#10233F",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.062745098,
+          0.137254902,
+          0.247058824
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Primary blue-black ink."
+    },
+    {
+      "tokenPath": "primitive.color.teal-50",
+      "figmaName": "primitive/color/teal-50",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-teal-50)"
+      },
+      "value": "#D9F3EF",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.850980392,
+          0.952941176,
+          0.937254902
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Success surface."
+    },
+    {
+      "tokenPath": "primitive.color.teal-800",
+      "figmaName": "primitive/color/teal-800",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-color-teal-800)"
+      },
+      "value": "#075D55",
+      "sourceValue": {
+        "colorSpace": "srgb",
+        "components": [
+          0.02745098,
+          0.364705882,
+          0.333333333
+        ],
+        "alpha": 1
+      },
+      "unit": null,
+      "description": "Success foreground."
+    },
+    {
+      "tokenPath": "primitive.duration.short",
+      "figmaName": "primitive/duration/short",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "TIMING",
+      "scopePolicy": "figma-native",
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-duration-short)"
+      },
+      "value": 0.16,
+      "sourceValue": {
+        "value": 160,
+        "unit": "ms"
+      },
+      "unit": "seconds",
+      "description": "Short motion duration."
+    },
+    {
+      "tokenPath": "primitive.font-family.ja-sans",
+      "figmaName": "primitive/font-family/ja-sans",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "STRING",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-font-family-ja-sans)"
+      },
+      "value": "Noto Sans JP",
+      "sourceValue": [
+        "Hiragino Sans",
+        "Hiragino Kaku Gothic ProN",
+        "Yu Gothic UI",
+        "Yu Gothic",
+        "Meiryo",
+        "Noto Sans JP",
+        "Noto Sans CJK JP",
+        "system-ui",
+        "sans-serif"
+      ],
+      "unit": null,
+      "description": "Japanese system-font-first sans-serif stack."
+    },
+    {
+      "tokenPath": "primitive.font-size.base",
+      "figmaName": "primitive/font-size/base",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-font-size-base)"
+      },
+      "value": 16,
+      "sourceValue": {
+        "value": 1,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Default body and editor text size."
+    },
+    {
+      "tokenPath": "primitive.font-size.small",
+      "figmaName": "primitive/font-size/small",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-font-size-small)"
+      },
+      "value": 14,
+      "sourceValue": {
+        "value": 0.875,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Small text size."
+    },
+    {
+      "tokenPath": "primitive.font-weight.bold",
+      "figmaName": "primitive/font-weight/bold",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-font-weight-bold)"
+      },
+      "value": 700,
+      "sourceValue": 700,
+      "unit": null,
+      "description": "Bold weight."
+    },
+    {
+      "tokenPath": "primitive.font-weight.medium",
+      "figmaName": "primitive/font-weight/medium",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-font-weight-medium)"
+      },
+      "value": 500,
+      "sourceValue": 500,
+      "unit": null,
+      "description": "Medium weight."
+    },
+    {
+      "tokenPath": "primitive.font-weight.regular",
+      "figmaName": "primitive/font-weight/regular",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-font-weight-regular)"
+      },
+      "value": 400,
+      "sourceValue": 400,
+      "unit": null,
+      "description": "Regular weight."
+    },
+    {
+      "tokenPath": "primitive.font-weight.semibold",
+      "figmaName": "primitive/font-weight/semibold",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-font-weight-semibold)"
+      },
+      "value": 600,
+      "sourceValue": 600,
+      "unit": null,
+      "description": "Semibold weight."
+    },
+    {
+      "tokenPath": "primitive.interaction-target.min",
+      "figmaName": "primitive/interaction-target/min",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-interaction-target-min)"
+      },
+      "value": 44,
+      "sourceValue": {
+        "value": 2.75,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Minimum interaction target size."
+    },
+    {
+      "tokenPath": "primitive.line-height.body-ja",
+      "figmaName": "primitive/line-height/body-ja",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "bindingPolicy": "reference-only",
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-line-height-body-ja)"
+      },
+      "value": 170,
+      "sourceValue": 1.7,
+      "unit": "percent",
+      "description": "Japanese body line height."
+    },
+    {
+      "tokenPath": "primitive.line-height.editor",
+      "figmaName": "primitive/line-height/editor",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "bindingPolicy": "reference-only",
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-line-height-editor)"
+      },
+      "value": 175,
+      "sourceValue": 1.75,
+      "unit": "percent",
+      "description": "Editor line height."
+    },
+    {
+      "tokenPath": "primitive.line-height.ui",
+      "figmaName": "primitive/line-height/ui",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "bindingPolicy": "reference-only",
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-line-height-ui)"
+      },
+      "value": 145,
+      "sourceValue": 1.45,
+      "unit": "percent",
+      "description": "Compact UI line height."
+    },
+    {
+      "tokenPath": "primitive.radius.lg",
+      "figmaName": "primitive/radius/lg",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-radius-lg)"
+      },
+      "value": 12,
+      "sourceValue": {
+        "value": 0.75,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Large radius."
+    },
+    {
+      "tokenPath": "primitive.radius.md",
+      "figmaName": "primitive/radius/md",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-radius-md)"
+      },
+      "value": 10,
+      "sourceValue": {
+        "value": 0.625,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Medium radius."
+    },
+    {
+      "tokenPath": "primitive.radius.pill",
+      "figmaName": "primitive/radius/pill",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-radius-pill)"
+      },
+      "value": 9999,
+      "sourceValue": {
+        "value": 9999,
+        "unit": "px"
+      },
+      "unit": "px",
+      "description": "Pill radius."
+    },
+    {
+      "tokenPath": "primitive.radius.sm",
+      "figmaName": "primitive/radius/sm",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-radius-sm)"
+      },
+      "value": 8,
+      "sourceValue": {
+        "value": 0.5,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Small radius."
+    },
+    {
+      "tokenPath": "primitive.radius.xl",
+      "figmaName": "primitive/radius/xl",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-radius-xl)"
+      },
+      "value": 16,
+      "sourceValue": {
+        "value": 1,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Extra-large radius."
+    },
+    {
+      "tokenPath": "primitive.spacing.1",
+      "figmaName": "primitive/spacing/1",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-spacing-1)"
+      },
+      "value": 4,
+      "sourceValue": {
+        "value": 0.25,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Spacing step 1."
+    },
+    {
+      "tokenPath": "primitive.spacing.2",
+      "figmaName": "primitive/spacing/2",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-spacing-2)"
+      },
+      "value": 8,
+      "sourceValue": {
+        "value": 0.5,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Spacing step 2."
+    },
+    {
+      "tokenPath": "primitive.spacing.3",
+      "figmaName": "primitive/spacing/3",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-spacing-3)"
+      },
+      "value": 12,
+      "sourceValue": {
+        "value": 0.75,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Spacing step 3."
+    },
+    {
+      "tokenPath": "primitive.spacing.4",
+      "figmaName": "primitive/spacing/4",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-spacing-4)"
+      },
+      "value": 16,
+      "sourceValue": {
+        "value": 1,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Spacing step 4."
+    },
+    {
+      "tokenPath": "primitive.spacing.5",
+      "figmaName": "primitive/spacing/5",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-spacing-5)"
+      },
+      "value": 20,
+      "sourceValue": {
+        "value": 1.25,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Spacing step 5."
+    },
+    {
+      "tokenPath": "primitive.spacing.6",
+      "figmaName": "primitive/spacing/6",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-spacing-6)"
+      },
+      "value": 24,
+      "sourceValue": {
+        "value": 1.5,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Spacing step 6."
+    },
+    {
+      "tokenPath": "primitive.spacing.8",
+      "figmaName": "primitive/spacing/8",
+      "collection": "Primitives",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-primitive-spacing-8)"
+      },
+      "value": 32,
+      "sourceValue": {
+        "value": 2,
+        "unit": "rem"
+      },
+      "unit": "px",
+      "description": "Spacing step 8."
+    },
+    {
+      "tokenPath": "border.width.default",
+      "figmaName": "border/width/default",
+      "collection": "Border",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "STROKE_FLOAT"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-border-width-default)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.border-width.default",
+        "figmaName": "primitive/border-width/default"
+      },
+      "unit": "px",
+      "description": "Default border width."
+    },
+    {
+      "tokenPath": "color.accent",
+      "figmaName": "color/accent",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FRAME_FILL",
+        "SHAPE_FILL",
+        "TEXT_FILL",
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-accent)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.blue-500",
+        "figmaName": "primitive/color/blue-500"
+      },
+      "unit": null,
+      "description": "Shared accent."
+    },
+    {
+      "tokenPath": "color.action.on-primary",
+      "figmaName": "color/action/on-primary",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "TEXT_FILL",
+        "SHAPE_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-action-on-primary)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.neutral-0",
+        "figmaName": "primitive/color/neutral-0"
+      },
+      "unit": null,
+      "description": "Foreground on a primary action."
+    },
+    {
+      "tokenPath": "color.action.primary",
+      "figmaName": "color/action/primary",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FRAME_FILL",
+        "SHAPE_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-action-primary)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.blue-800",
+        "figmaName": "primitive/color/blue-800"
+      },
+      "unit": null,
+      "description": "Primary action."
+    },
+    {
+      "tokenPath": "color.action.primary-hover",
+      "figmaName": "color/action/primary-hover",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FRAME_FILL",
+        "SHAPE_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-action-primary-hover)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.blue-900",
+        "figmaName": "primitive/color/blue-900"
+      },
+      "unit": null,
+      "description": "Primary action hover or pressed state."
+    },
+    {
+      "tokenPath": "color.border.default",
+      "figmaName": "color/border/default",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-border-default)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.blue-200",
+        "figmaName": "primitive/color/blue-200"
+      },
+      "unit": null,
+      "description": "Default border."
+    },
+    {
+      "tokenPath": "color.border.strong",
+      "figmaName": "color/border/strong",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-border-strong)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.blue-300",
+        "figmaName": "primitive/color/blue-300"
+      },
+      "unit": null,
+      "description": "Strong border."
+    },
+    {
+      "tokenPath": "color.focus.ring",
+      "figmaName": "color/focus/ring",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-focus-ring)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.blue-500",
+        "figmaName": "primitive/color/blue-500"
+      },
+      "unit": null,
+      "description": "Focus ring."
+    },
+    {
+      "tokenPath": "color.status.danger.border",
+      "figmaName": "color/status/danger/border",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-status-danger-border)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.red-200",
+        "figmaName": "primitive/color/red-200"
+      },
+      "unit": null,
+      "description": "Danger border."
+    },
+    {
+      "tokenPath": "color.status.danger.foreground",
+      "figmaName": "color/status/danger/foreground",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "TEXT_FILL",
+        "SHAPE_FILL",
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-status-danger-foreground)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.red-700",
+        "figmaName": "primitive/color/red-700"
+      },
+      "unit": null,
+      "description": "Danger foreground."
+    },
+    {
+      "tokenPath": "color.status.danger.strong",
+      "figmaName": "color/status/danger/strong",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "TEXT_FILL",
+        "SHAPE_FILL",
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-status-danger-strong)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.red-800",
+        "figmaName": "primitive/color/red-800"
+      },
+      "unit": null,
+      "description": "Strong danger foreground."
+    },
+    {
+      "tokenPath": "color.status.danger.surface",
+      "figmaName": "color/status/danger/surface",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FRAME_FILL",
+        "SHAPE_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-status-danger-surface)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.red-50",
+        "figmaName": "primitive/color/red-50"
+      },
+      "unit": null,
+      "description": "Danger surface."
+    },
+    {
+      "tokenPath": "color.status.success.foreground",
+      "figmaName": "color/status/success/foreground",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "TEXT_FILL",
+        "SHAPE_FILL",
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-status-success-foreground)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.teal-800",
+        "figmaName": "primitive/color/teal-800"
+      },
+      "unit": null,
+      "description": "Success foreground."
+    },
+    {
+      "tokenPath": "color.status.success.surface",
+      "figmaName": "color/status/success/surface",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FRAME_FILL",
+        "SHAPE_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-status-success-surface)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.teal-50",
+        "figmaName": "primitive/color/teal-50"
+      },
+      "unit": null,
+      "description": "Success surface."
+    },
+    {
+      "tokenPath": "color.status.warning.border",
+      "figmaName": "color/status/warning/border",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-status-warning-border)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.amber-200",
+        "figmaName": "primitive/color/amber-200"
+      },
+      "unit": null,
+      "description": "Warning border."
+    },
+    {
+      "tokenPath": "color.status.warning.foreground",
+      "figmaName": "color/status/warning/foreground",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "TEXT_FILL",
+        "SHAPE_FILL",
+        "STROKE_COLOR"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-status-warning-foreground)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.amber-800",
+        "figmaName": "primitive/color/amber-800"
+      },
+      "unit": null,
+      "description": "Warning foreground."
+    },
+    {
+      "tokenPath": "color.status.warning.surface",
+      "figmaName": "color/status/warning/surface",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FRAME_FILL",
+        "SHAPE_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-status-warning-surface)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.amber-50",
+        "figmaName": "primitive/color/amber-50"
+      },
+      "unit": null,
+      "description": "Warning surface."
+    },
+    {
+      "tokenPath": "color.surface.default",
+      "figmaName": "color/surface/default",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FRAME_FILL",
+        "SHAPE_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-surface-default)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.neutral-0",
+        "figmaName": "primitive/color/neutral-0"
+      },
+      "unit": null,
+      "description": "Default content surface."
+    },
+    {
+      "tokenPath": "color.surface.subtle",
+      "figmaName": "color/surface/subtle",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FRAME_FILL",
+        "SHAPE_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-surface-subtle)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.blue-50",
+        "figmaName": "primitive/color/blue-50"
+      },
+      "unit": null,
+      "description": "Subtle shared surface."
+    },
+    {
+      "tokenPath": "color.text.primary",
+      "figmaName": "color/text/primary",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "TEXT_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-text-primary)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.slate-900",
+        "figmaName": "primitive/color/slate-900"
+      },
+      "unit": null,
+      "description": "Primary text."
+    },
+    {
+      "tokenPath": "color.text.secondary",
+      "figmaName": "color/text/secondary",
+      "collection": "Color",
+      "mode": "Light",
+      "figmaType": "COLOR",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "TEXT_FILL"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-color-text-secondary)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.color.slate-600",
+        "figmaName": "primitive/color/slate-600"
+      },
+      "unit": null,
+      "description": "Secondary text."
+    },
+    {
+      "tokenPath": "font.family.body.ja",
+      "figmaName": "font/family/body/ja",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "STRING",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FONT_FAMILY"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-family-body-ja)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.font-family.ja-sans",
+        "figmaName": "primitive/font-family/ja-sans"
+      },
+      "unit": null,
+      "description": "Japanese body, UI, and editor font stack."
+    },
+    {
+      "tokenPath": "font.line-height.body.ja",
+      "figmaName": "font/line-height/body/ja",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "bindingPolicy": "reference-only",
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-line-height-body-ja)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.line-height.body-ja",
+        "figmaName": "primitive/line-height/body-ja"
+      },
+      "unit": "percent",
+      "description": "Japanese body line height."
+    },
+    {
+      "tokenPath": "font.line-height.editor",
+      "figmaName": "font/line-height/editor",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "bindingPolicy": "reference-only",
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-line-height-editor)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.line-height.editor",
+        "figmaName": "primitive/line-height/editor"
+      },
+      "unit": "percent",
+      "description": "Editor line height."
+    },
+    {
+      "tokenPath": "font.line-height.ui",
+      "figmaName": "font/line-height/ui",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [],
+      "bindingPolicy": "reference-only",
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-line-height-ui)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.line-height.ui",
+        "figmaName": "primitive/line-height/ui"
+      },
+      "unit": "percent",
+      "description": "UI line height."
+    },
+    {
+      "tokenPath": "font.size.body",
+      "figmaName": "font/size/body",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FONT_SIZE"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-size-body)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.font-size.base",
+        "figmaName": "primitive/font-size/base"
+      },
+      "unit": "px",
+      "description": "Body text."
+    },
+    {
+      "tokenPath": "font.size.editor",
+      "figmaName": "font/size/editor",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FONT_SIZE"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-size-editor)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.font-size.base",
+        "figmaName": "primitive/font-size/base"
+      },
+      "unit": "px",
+      "description": "Editor text."
+    },
+    {
+      "tokenPath": "font.size.small",
+      "figmaName": "font/size/small",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FONT_SIZE"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-size-small)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.font-size.small",
+        "figmaName": "primitive/font-size/small"
+      },
+      "unit": "px",
+      "description": "Small text."
+    },
+    {
+      "tokenPath": "font.weight.bold",
+      "figmaName": "font/weight/bold",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FONT_WEIGHT"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-weight-bold)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.font-weight.bold",
+        "figmaName": "primitive/font-weight/bold"
+      },
+      "unit": null,
+      "description": "Bold text."
+    },
+    {
+      "tokenPath": "font.weight.medium",
+      "figmaName": "font/weight/medium",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FONT_WEIGHT"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-weight-medium)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.font-weight.medium",
+        "figmaName": "primitive/font-weight/medium"
+      },
+      "unit": null,
+      "description": "Medium text."
+    },
+    {
+      "tokenPath": "font.weight.regular",
+      "figmaName": "font/weight/regular",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FONT_WEIGHT"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-weight-regular)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.font-weight.regular",
+        "figmaName": "primitive/font-weight/regular"
+      },
+      "unit": null,
+      "description": "Regular text."
+    },
+    {
+      "tokenPath": "font.weight.semibold",
+      "figmaName": "font/weight/semibold",
+      "collection": "Typography",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "FONT_WEIGHT"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-font-weight-semibold)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.font-weight.semibold",
+        "figmaName": "primitive/font-weight/semibold"
+      },
+      "unit": null,
+      "description": "Semibold text."
+    },
+    {
+      "tokenPath": "interaction.target.min",
+      "figmaName": "interaction/target/min",
+      "collection": "Interaction",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "WIDTH_HEIGHT"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-interaction-target-min)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.interaction-target.min",
+        "figmaName": "primitive/interaction-target/min"
+      },
+      "unit": "px",
+      "description": "Minimum interaction target size."
+    },
+    {
+      "tokenPath": "motion.duration.short",
+      "figmaName": "motion/duration/short",
+      "collection": "Motion",
+      "mode": "Value",
+      "figmaType": "TIMING",
+      "scopePolicy": "figma-native",
+      "codeSyntax": {
+        "WEB": "var(--fukamu-motion-duration-short)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.duration.short",
+        "figmaName": "primitive/duration/short"
+      },
+      "unit": "seconds",
+      "description": "Short motion duration. Reduced motion is a consumer policy."
+    },
+    {
+      "tokenPath": "radius.lg",
+      "figmaName": "radius/lg",
+      "collection": "Radius",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "CORNER_RADIUS"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-radius-lg)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.radius.lg",
+        "figmaName": "primitive/radius/lg"
+      },
+      "unit": "px",
+      "description": "Large radius."
+    },
+    {
+      "tokenPath": "radius.md",
+      "figmaName": "radius/md",
+      "collection": "Radius",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "CORNER_RADIUS"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-radius-md)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.radius.md",
+        "figmaName": "primitive/radius/md"
+      },
+      "unit": "px",
+      "description": "Medium radius."
+    },
+    {
+      "tokenPath": "radius.pill",
+      "figmaName": "radius/pill",
+      "collection": "Radius",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "CORNER_RADIUS"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-radius-pill)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.radius.pill",
+        "figmaName": "primitive/radius/pill"
+      },
+      "unit": "px",
+      "description": "Pill radius."
+    },
+    {
+      "tokenPath": "radius.sm",
+      "figmaName": "radius/sm",
+      "collection": "Radius",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "CORNER_RADIUS"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-radius-sm)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.radius.sm",
+        "figmaName": "primitive/radius/sm"
+      },
+      "unit": "px",
+      "description": "Small radius."
+    },
+    {
+      "tokenPath": "radius.xl",
+      "figmaName": "radius/xl",
+      "collection": "Radius",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "CORNER_RADIUS"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-radius-xl)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.radius.xl",
+        "figmaName": "primitive/radius/xl"
+      },
+      "unit": "px",
+      "description": "Extra-large radius."
+    },
+    {
+      "tokenPath": "spacing.1",
+      "figmaName": "spacing/1",
+      "collection": "Spacing",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "GAP"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-spacing-1)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.spacing.1",
+        "figmaName": "primitive/spacing/1"
+      },
+      "unit": "px",
+      "description": "Spacing step 1."
+    },
+    {
+      "tokenPath": "spacing.2",
+      "figmaName": "spacing/2",
+      "collection": "Spacing",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "GAP"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-spacing-2)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.spacing.2",
+        "figmaName": "primitive/spacing/2"
+      },
+      "unit": "px",
+      "description": "Spacing step 2."
+    },
+    {
+      "tokenPath": "spacing.3",
+      "figmaName": "spacing/3",
+      "collection": "Spacing",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "GAP"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-spacing-3)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.spacing.3",
+        "figmaName": "primitive/spacing/3"
+      },
+      "unit": "px",
+      "description": "Spacing step 3."
+    },
+    {
+      "tokenPath": "spacing.4",
+      "figmaName": "spacing/4",
+      "collection": "Spacing",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "GAP"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-spacing-4)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.spacing.4",
+        "figmaName": "primitive/spacing/4"
+      },
+      "unit": "px",
+      "description": "Spacing step 4."
+    },
+    {
+      "tokenPath": "spacing.5",
+      "figmaName": "spacing/5",
+      "collection": "Spacing",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "GAP"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-spacing-5)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.spacing.5",
+        "figmaName": "primitive/spacing/5"
+      },
+      "unit": "px",
+      "description": "Spacing step 5."
+    },
+    {
+      "tokenPath": "spacing.6",
+      "figmaName": "spacing/6",
+      "collection": "Spacing",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "GAP"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-spacing-6)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.spacing.6",
+        "figmaName": "primitive/spacing/6"
+      },
+      "unit": "px",
+      "description": "Spacing step 6."
+    },
+    {
+      "tokenPath": "spacing.8",
+      "figmaName": "spacing/8",
+      "collection": "Spacing",
+      "mode": "Value",
+      "figmaType": "FLOAT",
+      "scopePolicy": "explicit",
+      "scopes": [
+        "GAP"
+      ],
+      "codeSyntax": {
+        "WEB": "var(--fukamu-spacing-8)"
+      },
+      "value": {
+        "kind": "VARIABLE_ALIAS",
+        "tokenPath": "primitive.spacing.8",
+        "figmaName": "primitive/spacing/8"
+      },
+      "unit": "px",
+      "description": "Spacing step 8."
+    }
+  ],
+  "textStyleCandidates": [
+    {
+      "name": "Text/UI Small/Regular",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Regular",
+      "requestedWeight": 400,
+      "fontSizePx": 14,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 145
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.small",
+        "font.weight.regular",
+        "font.line-height.ui"
+      ]
+    },
+    {
+      "name": "Text/UI Small/Medium",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Medium",
+      "requestedWeight": 500,
+      "fontSizePx": 14,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 145
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.small",
+        "font.weight.medium",
+        "font.line-height.ui"
+      ]
+    },
+    {
+      "name": "Text/Body/Regular",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Regular",
+      "requestedWeight": 400,
+      "fontSizePx": 16,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 170
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.body",
+        "font.weight.regular",
+        "font.line-height.body.ja"
+      ]
+    },
+    {
+      "name": "Text/Body/Bold",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Bold",
+      "requestedWeight": 700,
+      "fontSizePx": 16,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 170
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.body",
+        "font.weight.bold",
+        "font.line-height.body.ja"
+      ]
+    },
+    {
+      "name": "Text/Editor/Regular",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Regular",
+      "requestedWeight": 400,
+      "fontSizePx": 16,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 175
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.editor",
+        "font.weight.regular",
+        "font.line-height.editor"
+      ]
+    },
+    {
+      "name": "Text/UI Small/Semibold",
+      "status": "unsupported",
+      "requestedWeight": 600,
+      "reason": "Noto Sans JP 600 style is unavailable in the connected Figma environment.",
+      "options": [
+        "Do not create this Text Style",
+        "Approve a different representative font with an exact 600 style"
+      ],
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.small",
+        "font.weight.semibold",
+        "font.line-height.ui"
+      ]
+    },
+    {
+      "name": "Text/Body/Semibold",
+      "status": "unsupported",
+      "requestedWeight": 600,
+      "reason": "Noto Sans JP 600 style is unavailable in the connected Figma environment.",
+      "options": [
+        "Do not create this Text Style",
+        "Approve a different representative font with an exact 600 style"
+      ],
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.body",
+        "font.weight.semibold",
+        "font.line-height.body.ja"
+      ]
+    }
+  ],
+  "textStyles": [
+    {
+      "name": "Text/UI Small/Regular",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Regular",
+      "requestedWeight": 400,
+      "fontSizePx": 14,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 145
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.small",
+        "font.weight.regular",
+        "font.line-height.ui"
+      ]
+    },
+    {
+      "name": "Text/UI Small/Medium",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Medium",
+      "requestedWeight": 500,
+      "fontSizePx": 14,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 145
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.small",
+        "font.weight.medium",
+        "font.line-height.ui"
+      ]
+    },
+    {
+      "name": "Text/Body/Regular",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Regular",
+      "requestedWeight": 400,
+      "fontSizePx": 16,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 170
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.body",
+        "font.weight.regular",
+        "font.line-height.body.ja"
+      ]
+    },
+    {
+      "name": "Text/Body/Bold",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Bold",
+      "requestedWeight": 700,
+      "fontSizePx": 16,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 170
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.body",
+        "font.weight.bold",
+        "font.line-height.body.ja"
+      ]
+    },
+    {
+      "name": "Text/Editor/Regular",
+      "status": "supported",
+      "fontFamily": "Noto Sans JP",
+      "fontStyle": "Regular",
+      "requestedWeight": 400,
+      "fontSizePx": 16,
+      "lineHeight": {
+        "unit": "PERCENT",
+        "value": 175
+      },
+      "lineHeightApplication": "DIRECT_PERCENT",
+      "tokenPaths": [
+        "font.family.body.ja",
+        "font.size.editor",
+        "font.weight.regular",
+        "font.line-height.editor"
+      ]
+    }
+  ],
+  "effectStyles": [],
+  "components": []
+}
