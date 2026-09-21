@@ -393,6 +393,7 @@ security_validate_text_inventory() {
         const exactPaths = new Set([
           ".fukamu/playbook/validate.py",
           "scripts/classify-change-profile.py",
+          "vendor/fukamu-design-tokens/0.1.0/js/index.cjs",
         ]);
         const approvedSuffixes = [
           ".css",
@@ -1054,7 +1055,18 @@ security_require_temporary_image_tag_absent() {
 
 security_write_gitleaks_config() {
   local config_path="$1"
-  printf '%s\n' '[extend]' 'useDefault = true' >"${config_path}"
+  # Figma token mappings use the public canonical paths below as structured
+  # metadata values. Limit the exception to the generic-api-key rule's exact
+  # captured secret; do not exempt a file, path, rule, or token-path prefix.
+  printf '%s\n' \
+    '[extend]' \
+    'useDefault = true' \
+    '[[allowlists]]' \
+    'description = "Exact public FUKAMU spacing-token paths"' \
+    'targetRules = ["generic-api-key"]' \
+    'regexTarget = "secret"' \
+    "regexes = ['''^primitive\\.spacing\\.(?:1|2|3|4|5|6|8)$''']" \
+    >"${config_path}"
 }
 
 security_validate_gitleaks_log() {

@@ -1,0 +1,603 @@
+// Generated from tokens/fukamu.tokens.json. DO NOT EDIT.
+// Contract version: 0.1.0
+// Canonical source revision: b57d1531f26c14e2f1f82440b9f150a3a185bd16
+"use strict";
+
+const contractVersion = "0.1.0";
+const sourceRevision = "b57d1531f26c14e2f1f82440b9f150a3a185bd16";
+const tokens = Object.freeze({
+  "border.width.default": {
+    "type": "dimension",
+    "value": {
+      "value": 1,
+      "unit": "px"
+    },
+    "cssValue": "1px",
+    "cssVariable": "--fukamu-border-width-default",
+    "description": "Default border width.",
+    "sourcePath": "primitive.border-width.default"
+  },
+  "color.accent": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.290196078,
+        0.564705882,
+        0.88627451
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#4A90E2",
+    "cssVariable": "--fukamu-color-accent",
+    "description": "Shared accent.",
+    "sourcePath": "primitive.color.blue-500"
+  },
+  "color.action.on-primary": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        1,
+        1,
+        1
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#FFFFFF",
+    "cssVariable": "--fukamu-color-action-on-primary",
+    "description": "Foreground on a primary action.",
+    "sourcePath": "primitive.color.neutral-0"
+  },
+  "color.action.primary": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.050980392,
+        0.231372549,
+        0.556862745
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#0D3B8E",
+    "cssVariable": "--fukamu-color-action-primary",
+    "description": "Primary action.",
+    "sourcePath": "primitive.color.blue-800"
+  },
+  "color.action.primary-hover": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.031372549,
+        0.168627451,
+        0.411764706
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#082B69",
+    "cssVariable": "--fukamu-color-action-primary-hover",
+    "description": "Primary action hover or pressed state.",
+    "sourcePath": "primitive.color.blue-900"
+  },
+  "color.border.default": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.8,
+        0.854901961,
+        0.925490196
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#CCDAEC",
+    "cssVariable": "--fukamu-color-border-default",
+    "description": "Default border.",
+    "sourcePath": "primitive.color.blue-200"
+  },
+  "color.border.strong": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.619607843,
+        0.737254902,
+        0.882352941
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#9EBCE1",
+    "cssVariable": "--fukamu-color-border-strong",
+    "description": "Strong border.",
+    "sourcePath": "primitive.color.blue-300"
+  },
+  "color.focus.ring": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.290196078,
+        0.564705882,
+        0.88627451
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#4A90E2",
+    "cssVariable": "--fukamu-color-focus-ring",
+    "description": "Focus ring.",
+    "sourcePath": "primitive.color.blue-500"
+  },
+  "color.status.danger.border": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.949019608,
+        0.729411765,
+        0.768627451
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#F2BAC4",
+    "cssVariable": "--fukamu-color-status-danger-border",
+    "description": "Danger border.",
+    "sourcePath": "primitive.color.red-200"
+  },
+  "color.status.danger.foreground": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.705882353,
+        0.137254902,
+        0.22745098
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#B4233A",
+    "cssVariable": "--fukamu-color-status-danger-foreground",
+    "description": "Danger foreground.",
+    "sourcePath": "primitive.color.red-700"
+  },
+  "color.status.danger.strong": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.521568627,
+        0.090196078,
+        0.164705882
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#85172A",
+    "cssVariable": "--fukamu-color-status-danger-strong",
+    "description": "Strong danger foreground.",
+    "sourcePath": "primitive.color.red-800"
+  },
+  "color.status.danger.surface": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        1,
+        0.941176471,
+        0.952941176
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#FFF0F3",
+    "cssVariable": "--fukamu-color-status-danger-surface",
+    "description": "Danger surface.",
+    "sourcePath": "primitive.color.red-50"
+  },
+  "color.status.success.foreground": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.02745098,
+        0.364705882,
+        0.333333333
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#075D55",
+    "cssVariable": "--fukamu-color-status-success-foreground",
+    "description": "Success foreground.",
+    "sourcePath": "primitive.color.teal-800"
+  },
+  "color.status.success.surface": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.850980392,
+        0.952941176,
+        0.937254902
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#D9F3EF",
+    "cssVariable": "--fukamu-color-status-success-surface",
+    "description": "Success surface.",
+    "sourcePath": "primitive.color.teal-50"
+  },
+  "color.status.warning.border": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.917647059,
+        0.850980392,
+        0.619607843
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#EAD99E",
+    "cssVariable": "--fukamu-color-status-warning-border",
+    "description": "Warning border.",
+    "sourcePath": "primitive.color.amber-200"
+  },
+  "color.status.warning.foreground": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.443137255,
+        0.317647059,
+        0.039215686
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#71510A",
+    "cssVariable": "--fukamu-color-status-warning-foreground",
+    "description": "Warning foreground.",
+    "sourcePath": "primitive.color.amber-800"
+  },
+  "color.status.warning.surface": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        1,
+        0.968627451,
+        0.858823529
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#FFF7DB",
+    "cssVariable": "--fukamu-color-status-warning-surface",
+    "description": "Warning surface.",
+    "sourcePath": "primitive.color.amber-50"
+  },
+  "color.surface.default": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        1,
+        1,
+        1
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#FFFFFF",
+    "cssVariable": "--fukamu-color-surface-default",
+    "description": "Default content surface.",
+    "sourcePath": "primitive.color.neutral-0"
+  },
+  "color.surface.subtle": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.929411765,
+        0.964705882,
+        1
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#EDF6FF",
+    "cssVariable": "--fukamu-color-surface-subtle",
+    "description": "Subtle shared surface.",
+    "sourcePath": "primitive.color.blue-50"
+  },
+  "color.text.primary": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.062745098,
+        0.137254902,
+        0.247058824
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#10233F",
+    "cssVariable": "--fukamu-color-text-primary",
+    "description": "Primary text.",
+    "sourcePath": "primitive.color.slate-900"
+  },
+  "color.text.secondary": {
+    "type": "color",
+    "value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.321568627,
+        0.396078431,
+        0.498039216
+      ],
+      "alpha": 1
+    },
+    "cssValue": "#52657F",
+    "cssVariable": "--fukamu-color-text-secondary",
+    "description": "Secondary text.",
+    "sourcePath": "primitive.color.slate-600"
+  },
+  "font.family.body.ja": {
+    "type": "fontFamily",
+    "value": [
+      "Hiragino Sans",
+      "Hiragino Kaku Gothic ProN",
+      "Yu Gothic UI",
+      "Yu Gothic",
+      "Meiryo",
+      "Noto Sans JP",
+      "Noto Sans CJK JP",
+      "system-ui",
+      "sans-serif"
+    ],
+    "cssValue": "\"Hiragino Sans\", \"Hiragino Kaku Gothic ProN\", \"Yu Gothic UI\", \"Yu Gothic\", Meiryo, \"Noto Sans JP\", \"Noto Sans CJK JP\", system-ui, sans-serif",
+    "cssVariable": "--fukamu-font-family-body-ja",
+    "description": "Japanese body, UI, and editor font stack.",
+    "sourcePath": "primitive.font-family.ja-sans"
+  },
+  "font.line-height.body.ja": {
+    "type": "number",
+    "value": 1.7,
+    "cssValue": "1.7",
+    "cssVariable": "--fukamu-font-line-height-body-ja",
+    "description": "Japanese body line height.",
+    "sourcePath": "primitive.line-height.body-ja"
+  },
+  "font.line-height.editor": {
+    "type": "number",
+    "value": 1.75,
+    "cssValue": "1.75",
+    "cssVariable": "--fukamu-font-line-height-editor",
+    "description": "Editor line height.",
+    "sourcePath": "primitive.line-height.editor"
+  },
+  "font.line-height.ui": {
+    "type": "number",
+    "value": 1.45,
+    "cssValue": "1.45",
+    "cssVariable": "--fukamu-font-line-height-ui",
+    "description": "UI line height.",
+    "sourcePath": "primitive.line-height.ui"
+  },
+  "font.size.body": {
+    "type": "dimension",
+    "value": {
+      "value": 1,
+      "unit": "rem"
+    },
+    "cssValue": "1rem",
+    "cssVariable": "--fukamu-font-size-body",
+    "description": "Body text.",
+    "sourcePath": "primitive.font-size.base"
+  },
+  "font.size.editor": {
+    "type": "dimension",
+    "value": {
+      "value": 1,
+      "unit": "rem"
+    },
+    "cssValue": "1rem",
+    "cssVariable": "--fukamu-font-size-editor",
+    "description": "Editor text.",
+    "sourcePath": "primitive.font-size.base"
+  },
+  "font.size.small": {
+    "type": "dimension",
+    "value": {
+      "value": 0.875,
+      "unit": "rem"
+    },
+    "cssValue": "0.875rem",
+    "cssVariable": "--fukamu-font-size-small",
+    "description": "Small text.",
+    "sourcePath": "primitive.font-size.small"
+  },
+  "font.weight.bold": {
+    "type": "fontWeight",
+    "value": 700,
+    "cssValue": "700",
+    "cssVariable": "--fukamu-font-weight-bold",
+    "description": "Bold text.",
+    "sourcePath": "primitive.font-weight.bold"
+  },
+  "font.weight.medium": {
+    "type": "fontWeight",
+    "value": 500,
+    "cssValue": "500",
+    "cssVariable": "--fukamu-font-weight-medium",
+    "description": "Medium text.",
+    "sourcePath": "primitive.font-weight.medium"
+  },
+  "font.weight.regular": {
+    "type": "fontWeight",
+    "value": 400,
+    "cssValue": "400",
+    "cssVariable": "--fukamu-font-weight-regular",
+    "description": "Regular text.",
+    "sourcePath": "primitive.font-weight.regular"
+  },
+  "font.weight.semibold": {
+    "type": "fontWeight",
+    "value": 600,
+    "cssValue": "600",
+    "cssVariable": "--fukamu-font-weight-semibold",
+    "description": "Semibold text.",
+    "sourcePath": "primitive.font-weight.semibold"
+  },
+  "interaction.target.min": {
+    "type": "dimension",
+    "value": {
+      "value": 2.75,
+      "unit": "rem"
+    },
+    "cssValue": "2.75rem",
+    "cssVariable": "--fukamu-interaction-target-min",
+    "description": "Minimum interaction target size.",
+    "sourcePath": "primitive.interaction-target.min"
+  },
+  "motion.duration.short": {
+    "type": "duration",
+    "value": {
+      "value": 160,
+      "unit": "ms"
+    },
+    "cssValue": "160ms",
+    "cssVariable": "--fukamu-motion-duration-short",
+    "description": "Short motion duration. Reduced motion is a consumer policy.",
+    "sourcePath": "primitive.duration.short"
+  },
+  "radius.lg": {
+    "type": "dimension",
+    "value": {
+      "value": 0.75,
+      "unit": "rem"
+    },
+    "cssValue": "0.75rem",
+    "cssVariable": "--fukamu-radius-lg",
+    "description": "Large radius.",
+    "sourcePath": "primitive.radius.lg"
+  },
+  "radius.md": {
+    "type": "dimension",
+    "value": {
+      "value": 0.625,
+      "unit": "rem"
+    },
+    "cssValue": "0.625rem",
+    "cssVariable": "--fukamu-radius-md",
+    "description": "Medium radius.",
+    "sourcePath": "primitive.radius.md"
+  },
+  "radius.pill": {
+    "type": "dimension",
+    "value": {
+      "value": 9999,
+      "unit": "px"
+    },
+    "cssValue": "9999px",
+    "cssVariable": "--fukamu-radius-pill",
+    "description": "Pill radius.",
+    "sourcePath": "primitive.radius.pill"
+  },
+  "radius.sm": {
+    "type": "dimension",
+    "value": {
+      "value": 0.5,
+      "unit": "rem"
+    },
+    "cssValue": "0.5rem",
+    "cssVariable": "--fukamu-radius-sm",
+    "description": "Small radius.",
+    "sourcePath": "primitive.radius.sm"
+  },
+  "radius.xl": {
+    "type": "dimension",
+    "value": {
+      "value": 1,
+      "unit": "rem"
+    },
+    "cssValue": "1rem",
+    "cssVariable": "--fukamu-radius-xl",
+    "description": "Extra-large radius.",
+    "sourcePath": "primitive.radius.xl"
+  },
+  "spacing.1": {
+    "type": "dimension",
+    "value": {
+      "value": 0.25,
+      "unit": "rem"
+    },
+    "cssValue": "0.25rem",
+    "cssVariable": "--fukamu-spacing-1",
+    "description": "Spacing step 1.",
+    "sourcePath": "primitive.spacing.1"
+  },
+  "spacing.2": {
+    "type": "dimension",
+    "value": {
+      "value": 0.5,
+      "unit": "rem"
+    },
+    "cssValue": "0.5rem",
+    "cssVariable": "--fukamu-spacing-2",
+    "description": "Spacing step 2.",
+    "sourcePath": "primitive.spacing.2"
+  },
+  "spacing.3": {
+    "type": "dimension",
+    "value": {
+      "value": 0.75,
+      "unit": "rem"
+    },
+    "cssValue": "0.75rem",
+    "cssVariable": "--fukamu-spacing-3",
+    "description": "Spacing step 3.",
+    "sourcePath": "primitive.spacing.3"
+  },
+  "spacing.4": {
+    "type": "dimension",
+    "value": {
+      "value": 1,
+      "unit": "rem"
+    },
+    "cssValue": "1rem",
+    "cssVariable": "--fukamu-spacing-4",
+    "description": "Spacing step 4.",
+    "sourcePath": "primitive.spacing.4"
+  },
+  "spacing.5": {
+    "type": "dimension",
+    "value": {
+      "value": 1.25,
+      "unit": "rem"
+    },
+    "cssValue": "1.25rem",
+    "cssVariable": "--fukamu-spacing-5",
+    "description": "Spacing step 5.",
+    "sourcePath": "primitive.spacing.5"
+  },
+  "spacing.6": {
+    "type": "dimension",
+    "value": {
+      "value": 1.5,
+      "unit": "rem"
+    },
+    "cssValue": "1.5rem",
+    "cssVariable": "--fukamu-spacing-6",
+    "description": "Spacing step 6.",
+    "sourcePath": "primitive.spacing.6"
+  },
+  "spacing.8": {
+    "type": "dimension",
+    "value": {
+      "value": 2,
+      "unit": "rem"
+    },
+    "cssValue": "2rem",
+    "cssVariable": "--fukamu-spacing-8",
+    "description": "Spacing step 8.",
+    "sourcePath": "primitive.spacing.8"
+  }
+});
+
+module.exports = Object.freeze({ contractVersion, sourceRevision, tokens });

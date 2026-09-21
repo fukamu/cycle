@@ -50,6 +50,26 @@ git clone https://github.com/fukamu/product-engineering-playbook.git /tmp/fukamu
 
 更新PRでは、中央diffとrule IDの追加・変更・削除をreviewし、vendored bundle、validator、lock、overrides、config trace、影響するCycle consumerを同じ変更へ含めます。中央`main`、floating tag、短縮SHAをlockへ入れません。共通方法とCycle固有contractのowner境界またはrequired verificationが変わる場合は、先に[`design.md` §52](design.md#52-change-control--operational-decisions)の仕様変更手順へ戻ります。
 
+## Shared design-token bundleの検証・更新
+
+共通Foundationのcanonical owner、Cycle固有residual、現在のcontract revisionは[`design.md` §43](design.md#43-typography--font-selection--i18n-readiness)が所有します。Cycleは`fukamu/design-tokens`のversioned text bundleを`vendor/fukamu-design-tokens/<contract-version>/`へ完全なdirectory単位で固定し、generated fileを手編集しません。`file:`/`link:` dependency、archive、floating branch/tag、CDNは使いません。Frontendはshared `css/tokens.css`、Cycle typography/color alias、Cycle component/theme ruleの順で読みます。`Dockerfile.local`のFrontend build inputにも同じversioned bundleを含めます。
+
+0.1.0の更新候補では、artifact commitから完全なdirectoryを取り込み、focused contract testでmanifest自身の固定SHA-256、canonical source revision、artifact inventory、全artifact SHA-256、CSS import順序、legacy alias、Cycle固有residualを確認します。CommonJS artifactはcandidate securityのapproved-text policyでこのversioned exact pathだけを許可し、別versionや別pathの`.cjs`を拡張子だけで許可しません。Contract versionまたはbundle pathを更新するときは、exact allowlistと正負fixtureも同じPRで更新します。
+
+```bash
+pnpm --filter fukamu-cycle-frontend --fail-if-no-match exec vitest run vite/designTokensStyles.test.ts
+```
+
+Computed-style回帰はrepository-pinned Playwright Chromium、light mode、`lang=ja`、1280×720 viewport、system-font fallback stackで固定し、canvas、body type、primary action/hover/focus、danger/warning/success、Timeline past/currentを確認します。Ubuntuで次を実行し、全体のE2E gateと同じbackend/test double境界を使います。
+
+```bash
+export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable'
+pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
+CI=true pnpm --filter fukamu-cycle-frontend --fail-if-no-match exec playwright test e2e/design-tokens.spec.ts
+```
+
+Versionまたはsource revisionを更新するときは、中央diffとHANDOFFをreviewし、complete bundle、import/mapping、focused test、本手順、[`design.md` §43](design.md#43-typography--font-selection--i18n-readiness)を同じatomic PRで更新してからCommit前gateを完走します。同じversionのbytesを上書きせず、rollbackは採用PR全体のrevertとします。
+
 ## Dockerによるローカル実機確認
 
 Docker Desktop、Bash 5、curlだけで、Frontend、Backend、Migration、PostgreSQLを隔離環境へbuildし、ブラウザから操作できます。Repositoryの`.env`、`frontend/.env.local`、`node_modules`、`frontend/dist`、`.tmp`、既存の`fukamu-cycle-postgres`は使用・変更しません。
@@ -434,7 +454,7 @@ Security profileだけを実行する場合は、次を使います。
 
 既定の`full`は`candidate`と`extended`を順に実行します。`candidate`は全PRと全Commit candidateで、candidate tree / stage済みindexのpath・file type・secret、正規化secret view、Action / image pin、Node / Go immutable input policyを検査します。`extended`は`full` change、main release candidate、scheduled / manual auditで、candidateのexact `HEAD`から到達できる全履歴inventoryと正規化secret view、Node advisory、到達可能なGo脆弱性、GoのHIGH/high-confidence静的所見、Terraform / production Dockerfile、実際にbuildしたproduction container imageを検査します。Profileを分けてもscanner errorやfindingを成功へ補正せず、main release securityはPR CI再利用時も省略しません。
 
-Scannerはpnpm 11.22.0、Gitleaks 8.30.0、Trivy 0.73.0、Terraform 1.15.8のimageをdigestで固定し、`govulncheck` 1.7.0と`gosec` 2.29.0を固定します。Candidate snapshotはtrackedと非ignoreの通常fileだけから作成し、tracked+ignored path、symlink、special fileを拒否します。Candidate・index・exact `HEAD`の到達履歴はapproved ASCII path/type、UTF-8、control byte、1 objectあたり16 MiB、entry/manifest sizeの上限をfail-closedに検証し、全merge historyのblobに加えてcommit本文、到達commitへ付いたannotated tag本文、candidate/index/history pathもpath/MIME skipを受けない正規化viewでscanします。Candidateの`HEAD`から到達しない他branchのobjectとRepository全体のref名はrelease candidateの内容ではないため除外し、そのbranch自身のPR candidateで同じ検査を行います。履歴pathは到達する全commit treeの各entryについてmode、type、OID、pathとraw inventory上限を検証してから、同じpath文字列だけを一意化してname manifestへ渡し、同一名の反復によるscanner負荷を検知範囲を変えずに抑えます。既知の旧`backend/server.exe`はexact object/path/size、正規化viewのreview済み履歴blobはexact OID、Gitleaks例外はexact commit/path/rule/line fingerprintだけを許可し、globやrule単位の例外を拒否します。Gitleaks本体は`--max-target-megabytes=0`でfile size skipを無効化しますが、前段のapproved-text inventoryには前述の16 MiB/object境界があります。
+Scannerはpnpm 11.22.0、Gitleaks 8.30.0、Trivy 0.73.0、Terraform 1.15.8のimageをdigestで固定し、`govulncheck` 1.7.0と`gosec` 2.29.0を固定します。Candidate snapshotはtrackedと非ignoreの通常fileだけから作成し、tracked+ignored path、symlink、special fileを拒否します。Candidate・index・exact `HEAD`の到達履歴はapproved ASCII path/type、UTF-8、control byte、1 objectあたり16 MiB、entry/manifest sizeの上限をfail-closedに検証し、全merge historyのblobに加えてcommit本文、到達commitへ付いたannotated tag本文、candidate/index/history pathもpath/MIME skipを受けない正規化viewでscanします。Candidateの`HEAD`から到達しない他branchのobjectとRepository全体のref名はrelease candidateの内容ではないため除外し、そのbranch自身のPR candidateで同じ検査を行います。履歴pathは到達する全commit treeの各entryについてmode、type、OID、pathとraw inventory上限を検証してから、同じpath文字列だけを一意化してname manifestへ渡し、同一名の反復によるscanner負荷を検知範囲を変えずに抑えます。既知の旧`backend/server.exe`はexact object/path/size、正規化viewのreview済み履歴blobはexact OID、Gitleaks例外はexact commit/path/rule/line fingerprintだけを許可し、globやrule単位の例外を拒否します。Generated Figma mappingに入る公開spacing token pathは、`generic-api-key`のsecret targetがexact `primitive.spacing.1/2/3/4/5/6/8`のいずれかである場合だけ非secret vocabularyとして除外し、file、path、rule全体やprefixは除外しません。Gitleaks本体は`--max-target-megabytes=0`でfile size skipを無効化しますが、前段のapproved-text inventoryには前述の16 MiB/object境界があります。
 
 Repositoryへ追加できるbinary assetは`frontend/src/assets/`直下以下の、stemを持つlowercase `.png`だけです。通常file・非実行mode、1 file 2 MiB以下、幅と高さが各4096以下、総pixel数16,777,216以下で、PNG signature / CRC / chunk順序 / compressed scanline、filter復元後のindexed pixelとpaletteの整合をnetworklessに検証します。1 inventoryでは検証済みunique PNG blobを512件、圧縮後合計64 MiB、展開後合計128 MiBまでに制限し、同じOIDの構造parseを繰り返しません。許可するancillary chunkは`cHRM` / `gAMA` / `sRGB` / `pHYs` / `tRNS`に限定し、サイズ・bit depthに応じたsample値・PLTE / IDATとの順序を検証します。Textual metadata、EXIF / ICC profile、APNG、未知chunk、末尾data、拡張子と内容の不一致、archive、実行file、credential-like fileは拒否します。検証済みPNG blobだけを正規化secret viewから除外し、同じOIDでない内容を拡張子だけでskipしません。新しいasset形式または配置先が必要な場合はallowlistと負例をreview付きで同時に更新します。
 
