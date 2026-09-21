@@ -9,6 +9,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY frontend/package.json frontend/package.json
 COPY cloudflare/package.json cloudflare/package.json
 RUN node /opt/pnpm/dist/pnpm.mjs install --frozen-lockfile --filter fukamu-cycle-frontend
+COPY vendor/fukamu-design-tokens/0.1.0/ vendor/fukamu-design-tokens/0.1.0/
 COPY frontend/ frontend/
 RUN node /opt/pnpm/dist/pnpm.mjs --filter fukamu-cycle-frontend run build
 

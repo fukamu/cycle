@@ -254,6 +254,34 @@ assert_snapshot_scanner_wiring() {
 security_write_gitleaks_config "${gitleaks_config}" || fail "could not create the script-owned Gitleaks test configuration"
 security_write_trivy_config "${trivy_config}" || fail "could not create the script-owned Trivy test configuration"
 
+public_token_path_fixture="${test_root}/public-token-path"
+mkdir -p -- "${public_token_path_fixture}"
+for public_spacing_token in 1 2 3 4 5 6 8; do
+  printf '{"tokenPath":"primitive.spacing.%s"}\n' "${public_spacing_token}" >>"${public_token_path_fixture}/mapping.json"
+done
+security_run_gitleaks_directory \
+  "${public_token_path_fixture}" \
+  "${gitleaks_config}" \
+  '' \
+  "${output_root}/gitleaks-public-token-path.log" \
+  || fail "exact public spacing-token paths were not accepted"
+public_token_path_near_miss="$(printf '%s%s' 'primitive.spacing.1-' 'A1b2C3d4E5f6G7h8I9j0K1l2')"
+printf '{"tokenPath":"%s"}\n' "${public_token_path_near_miss}" >"${public_token_path_fixture}/mapping.json"
+expect_failure \
+  "near-miss public token path" \
+  security_run_gitleaks_directory \
+  "${public_token_path_fixture}" \
+  "${gitleaks_config}" \
+  '' \
+  "${output_root}/gitleaks-public-token-path-negative.log"
+grep -Fq -- 'leaks found' "${output_root}/gitleaks-public-token-path-negative.log" \
+  || fail "near-miss public token path did not retain a Gitleaks finding"
+if grep -Fq -- "${public_token_path_near_miss}" "${output_root}/gitleaks-public-token-path-negative.log"; then
+  fail "near-miss public token path output exposed the detected value"
+fi
+unset public_spacing_token public_token_path_near_miss
+pass "Gitleaks allows only the exact public spacing-token vocabulary"
+
 ignore_fixture="${test_root}/ignore-policy"
 mkdir -p -- "${ignore_fixture}"
 printf '%s\n' '# exact synthetic fingerprint' '0000000000000000000000000000000000000000:path/to/test.txt:generic-api-key:1' >"${ignore_fixture}/valid"
@@ -459,6 +487,19 @@ printf '%s\n' '#!/usr/bin/env python3' \
   >"${text_policy_fixture}/candidate/scripts/classify-change-profile.py"
 security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
   || fail "exact change classifier path was rejected"
+approved_design_token_cjs="${text_policy_fixture}/candidate/vendor/fukamu-design-tokens/0.1.0/js/index.cjs"
+mkdir -p -- "$(dirname -- "${approved_design_token_cjs}")"
+printf '%s\n' "'use strict';" >"${approved_design_token_cjs}"
+security_validate_candidate_text_files "${text_policy_fixture}/candidate" \
+  || fail "exact shared design-token CommonJS path was rejected"
+unapproved_design_token_cjs="${text_policy_fixture}/candidate/vendor/fukamu-design-tokens/0.1.1/js/index.cjs"
+mkdir -p -- "$(dirname -- "${unapproved_design_token_cjs}")"
+cp -- "${approved_design_token_cjs}" "${unapproved_design_token_cjs}"
+expect_failure \
+  "unapproved shared design-token CommonJS version path fixture" \
+  security_validate_candidate_text_files \
+  "${text_policy_fixture}/candidate"
+unlink -- "${unapproved_design_token_cjs}"
 printf '%s\n' '#!/usr/bin/env python3' \
   >"${text_policy_fixture}/candidate/other.py"
 expect_failure \
