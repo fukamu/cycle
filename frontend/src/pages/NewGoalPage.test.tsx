@@ -1222,7 +1222,7 @@ describe("NewGoalPage", () => {
 
     fireEvent.click(resolver);
     expect(
-      await screen.findByRole("heading", { name: "目標から、次の一歩へ。" }),
+      await screen.findByRole("heading", { name: "取り組んでいる目標" }),
     ).toBeInTheDocument();
     expect(getHome).toHaveBeenCalledTimes(2);
     for (const [lease, signal] of vi.mocked(getHome).mock.calls) {

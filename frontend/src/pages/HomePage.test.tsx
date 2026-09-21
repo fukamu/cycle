@@ -132,6 +132,30 @@ describe("HomePage progressing goal collection", () => {
     vi.mocked(getHome).mockReset();
   });
 
+  it("starts with the progressing Goals instead of an introductory hero", async () => {
+    vi.mocked(getHome).mockResolvedValue({
+      progressingGoals: [],
+      creationDraft: null,
+      canCreateGoalDraft: true,
+      progressingGoalLimit: 2,
+      canStartProgressingGoal: true,
+    });
+
+    renderHome();
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "取り組んでいる目標",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.queryByText("G-PDCA WORKSPACE")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("目標から、次の一歩へ。"),
+    ).not.toBeInTheDocument();
+  });
+
   it.each(progressingGoalCountCases)(
     "labels the Goal count for $caseName",
     async ({ progressingGoals, limit, visible, accessible }) => {
