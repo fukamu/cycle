@@ -459,7 +459,34 @@ func (q *Queries) LockAccountCycleIDs(ctx context.Context, userID pgtype.UUID) (
 }
 
 const lockCycleForTransition = `-- name: LockCycleForTransition :one
-SELECT c.id, c.user_id, c.goal_id, c.goal_version_id, c.sequence_number, c.status, c.started_at, c.completed_at, c.canceled_at, c.cancellation_reason, c.plan, c.do_text, c.check_text, c.action, c.content_revision, c.plan_revision, c.do_revision, c.check_revision, c.action_revision, c.action_last_ai_applied_content_revision, c.action_user_modified_after_ai, c.start_operation_id, c.start_request_hash, c.completion_operation_id, c.completion_request_hash, c.created_at, c.updated_at
+SELECT
+    c.id,
+    c.user_id,
+    c.goal_id,
+    c.goal_version_id,
+    c.sequence_number,
+    c.status,
+    c.started_at,
+    c.completed_at,
+    c.canceled_at,
+    c.cancellation_reason,
+    c.plan,
+    c.do_text,
+    c.check_text,
+    c.action,
+    c.content_revision,
+    c.plan_revision,
+    c.do_revision,
+    c.check_revision,
+    c.action_revision,
+    c.action_last_ai_applied_content_revision,
+    c.action_user_modified_after_ai,
+    c.start_operation_id,
+    c.start_request_hash,
+    c.completion_operation_id,
+    c.completion_request_hash,
+    c.created_at,
+    c.updated_at
 FROM pdca_cycles AS c
 WHERE c.id = $1::uuid
   AND c.goal_id = $2::uuid

@@ -354,7 +354,19 @@ WHERE table_schema='public' AND table_name='pdca_cycles'`).Scan(&cycleColumnCoun
 		CycleID: mustUUID(fixture.cycleID), GoalID: mustUUID(fixture.goalID), UserID: mustUUID(userID),
 	})
 	if err != nil || uuidString(locked.ID) != fixture.cycleID {
-		t.Fatalf("old SELECT c.* scan = %#v, error = %v", locked, err)
+		t.Fatalf("baseline explicit-column scan = %#v, error = %v", locked, err)
+	}
+	if _, err = pool.Exec(t.Context(), `ALTER TABLE public.pdca_cycles ADD COLUMN compatibility_probe TEXT`); err != nil {
+		t.Fatal(err)
+	}
+	locked, err = db.New(pool).LockCycleForTransition(t.Context(), db.LockCycleForTransitionParams{
+		CycleID: mustUUID(fixture.cycleID), GoalID: mustUUID(fixture.goalID), UserID: mustUUID(userID),
+	})
+	if err != nil || uuidString(locked.ID) != fixture.cycleID {
+		t.Fatalf("explicit-column scan after additive schema expansion = %#v, error = %v", locked, err)
+	}
+	if _, err = pool.Exec(t.Context(), `ALTER TABLE public.pdca_cycles DROP COLUMN compatibility_probe`); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, err = pool.Exec(t.Context(), `INSERT INTO public.pdca_cycle_review_schedules
