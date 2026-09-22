@@ -20,6 +20,11 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	contentEncryptionDown, err := os.ReadFile(filepath.Join(directory, "000010_user_content_encryption_expand.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, contentEncryptionDown)
 	goalSuccessSignalDown, err := os.ReadFile(filepath.Join(directory, "000009_goal_success_signal.down.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -71,13 +76,14 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 9 {
-		t.Fatalf("applied migrations = %v, want 9", result.Applied)
+	if len(result.Applied) != 10 {
+		t.Fatalf("applied migrations = %v, want 10", result.Applied)
 	}
 	baseline, retention, exposure := result.Applied[0], result.Applied[1], result.Applied[2]
 	hashSplit, cleanupIndex, guard, reviewSchedule := result.Applied[3], result.Applied[4], result.Applied[5], result.Applied[6]
 	replanCancellation := result.Applied[7]
 	goalSuccessSignal := result.Applied[8]
+	contentEncryption := result.Applied[9]
 	if baseline.Version != 1 || baseline.Direction != "up" || baseline.File != "000001_fukamu_cycle_baseline.up.sql" ||
 		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" ||
 		exposure.Version != 3 || exposure.Direction != "up" || exposure.File != "000003_ai_usage_settlement_exposure.up.sql" ||
@@ -86,7 +92,8 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 		guard.Version != 6 || guard.Direction != "up" || guard.File != "000006_anonymous_rate_limit_guard.up.sql" ||
 		reviewSchedule.Version != 7 || reviewSchedule.Direction != "up" || reviewSchedule.File != "000007_cycle_review_schedule.up.sql" ||
 		replanCancellation.Version != 8 || replanCancellation.Direction != "up" || replanCancellation.File != "000008_cycle_replan_cancellation_reason.up.sql" ||
-		goalSuccessSignal.Version != 9 || goalSuccessSignal.Direction != "up" || goalSuccessSignal.File != "000009_goal_success_signal.up.sql" {
+		goalSuccessSignal.Version != 9 || goalSuccessSignal.Direction != "up" || goalSuccessSignal.File != "000009_goal_success_signal.up.sql" ||
+		contentEncryption.Version != 10 || contentEncryption.Direction != "up" || contentEncryption.File != "000010_user_content_encryption_expand.up.sql" {
 		t.Fatalf("applied migrations = %+v", result.Applied)
 	}
 	result, err = Migrate(databaseURL, directory)
@@ -99,7 +106,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 9 || users != 0 {
+	if version != 10 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
@@ -121,6 +128,16 @@ func TestGoalSuccessSignalMigrationPreservesOldRowsAndRefusesUnsafeDown(t *testi
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	contentEncryptionUp, err := os.ReadFile(filepath.Join(directory, "000010_user_content_encryption_expand.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentEncryptionDown, err := os.ReadFile(filepath.Join(directory, "000010_user_content_encryption_expand.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, contentEncryptionDown)
+	t.Cleanup(func() { executeMigrationScript(t, pool, contentEncryptionUp) })
 	up, err := os.ReadFile(filepath.Join(directory, "000009_goal_success_signal.up.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -317,7 +334,7 @@ VALUES ('anonymous_ip',$1,clock_timestamp() + INTERVAL '25 hours')`, []byte("mig
 	assertAnonymousRateLimitGuardObjects(t, pool, true)
 }
 
-func TestCycleReviewScheduleMigrationPreservesOldCycleShapeAndSupportsDownAndReUp(t *testing.T) {
+func TestCycleReviewScheduleMigrationPreservesCurrentCycleShapeAndSupportsDownAndReUp(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
@@ -347,8 +364,8 @@ func TestCycleReviewScheduleMigrationPreservesOldCycleShapeAndSupportsDownAndReU
 WHERE table_schema='public' AND table_name='pdca_cycles'`).Scan(&cycleColumnCount); err != nil {
 		t.Fatal(err)
 	}
-	if cycleColumnCount != 27 {
-		t.Fatalf("pdca_cycles columns = %d, want old-image-compatible 27", cycleColumnCount)
+	if cycleColumnCount != 44 {
+		t.Fatalf("pdca_cycles columns = %d, want current encrypted-schema 44", cycleColumnCount)
 	}
 	locked, err := db.New(pool).LockCycleForTransition(t.Context(), db.LockCycleForTransitionParams{
 		CycleID: mustUUID(fixture.cycleID), GoalID: mustUUID(fixture.goalID), UserID: mustUUID(userID),
@@ -441,7 +458,7 @@ INSERT INTO migration_runner_shadow.schema_migrations(version, dirty) VALUES(999
 	); err != nil {
 		t.Fatal(err)
 	}
-	if publicVersion != 9 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
+	if publicVersion != 10 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
 		t.Fatalf("migration schemas = public:%d/%t shadow:%d/%t tables:%d",
 			publicVersion, publicDirty, shadowVersion, shadowDirty, shadowTables)
 	}
@@ -783,6 +800,16 @@ func TestAIGenerationHashSplitMigrationBackfillsAndSupportsRollingWriters(t *tes
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	contentEncryptionUp, err := os.ReadFile(filepath.Join(directory, "000010_user_content_encryption_expand.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentEncryptionDown, err := os.ReadFile(filepath.Join(directory, "000010_user_content_encryption_expand.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, contentEncryptionDown)
+	t.Cleanup(func() { executeMigrationScript(t, pool, contentEncryptionUp) })
 	up, err := os.ReadFile(filepath.Join(directory, "000004_ai_generation_hash_split.up.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -939,6 +966,16 @@ func TestAIGenerationHashSplitMigrationRejectsInvalidLegacyHashesAtomically(t *t
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	contentEncryptionUp, err := os.ReadFile(filepath.Join(directory, "000010_user_content_encryption_expand.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentEncryptionDown, err := os.ReadFile(filepath.Join(directory, "000010_user_content_encryption_expand.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, contentEncryptionDown)
+	t.Cleanup(func() { executeMigrationScript(t, pool, contentEncryptionUp) })
 	up, err := os.ReadFile(filepath.Join(directory, "000004_ai_generation_hash_split.up.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -1087,12 +1124,28 @@ func invalidAIGenerationHashes() []invalidAIGenerationHash {
 
 func assertUUIDv7Constraints(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	var count int
-	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_constraint WHERE conname LIKE '%\_uuid\_v7' ESCAPE '\'`).Scan(&count); err != nil {
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 17 {
-		t.Fatalf("UUID v7 constraint count = %d, want 17", count)
+	defer rollback(t.Context(), tx)
+	if _, err = tx.Exec(t.Context(), `SET LOCAL search_path = ''`); err != nil {
+		t.Fatal(err)
+	}
+	var restoreSafe bool
+	if err = tx.QueryRow(t.Context(), `SELECT public.fukamu_cycle_uuid_array_is_v7(
+ARRAY['0198c20b-7b95-7000-8000-000000000001'::uuid])`).Scan(&restoreSafe); err != nil {
+		t.Fatalf("UUID array validation under pg_restore search_path: %v", err)
+	}
+	if !restoreSafe {
+		t.Fatal("UUID array validation rejected a valid UUIDv7 under pg_restore search_path")
+	}
+	var count int
+	if err = pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_constraint WHERE conname LIKE '%\_uuid\_v7' ESCAPE '\'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 18 {
+		t.Fatalf("UUID v7 constraint count = %d, want 18", count)
 	}
 	var validArray, rejectsV4Array, rejectsNullElement bool
 	if err := pool.QueryRow(context.Background(), `SELECT
@@ -1113,14 +1166,15 @@ VALUES('123e4567-e89b-42d3-a456-426614174000',now(),now(),now())`); err == nil {
 func assertTightContentConstraints(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	expected := map[string][]string{
-		"goal_versions_body_max_80":              {"char_length(body)", "<= 80"},
-		"goal_drafts_body_max_80":                {"char_length(body)", "<= 80"},
-		"pdca_cycles_plan_max_200":               {"char_length(plan)", "<= 200"},
-		"pdca_cycles_do_max_200":                 {"char_length(do_text)", "<= 200"},
-		"pdca_cycles_check_max_200":              {"char_length(check_text)", "<= 200"},
-		"pdca_cycles_action_max_200":             {"char_length(action)", "<= 200"},
+		"goal_versions_body_storage":             {"content_storage_format", "body_ciphertext"},
+		"goal_drafts_body_storage":               {"content_storage_format", "body_ciphertext"},
+		"goal_version_success_signals_storage":   {"content_storage_format", "success_signal_ciphertext"},
+		"goal_draft_success_signals_storage":     {"content_storage_format", "success_signal_ciphertext"},
+		"pdca_cycles_content_storage":            {"content_storage_format", "plan_ciphertext", "action_ciphertext"},
+		"ai_generations_content_storage":         {"content_storage_format", "canonical_provider_input_hash_ciphertext"},
 		"ai_generations_source_text_tight_limit": {"char_length(source_text) <= 80", "char_length(source_text) <= 200"},
 		"ai_generations_output_tight_limit":      {"char_length(output) <= 80", "char_length(output) <= 200"},
+		"ai_generations_output_state_storage":    {"status", "output_ciphertext"},
 	}
 	names := make([]string, 0, len(expected))
 	for name := range expected {

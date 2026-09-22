@@ -1,6 +1,15 @@
 -- name: FindCreationDraft :one
 SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
-       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+       public.fukamu_cycle_content_read_text(
+         d.content_storage_format, d.body, d.body_dek_version,
+         d.body_crypto_revision, d.body_nonce, d.body_ciphertext
+       ) AS body,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           signal.content_storage_format, signal.success_signal,
+           signal.success_signal_dek_version, signal.success_signal_crypto_revision,
+           signal.success_signal_nonce, signal.success_signal_ciphertext
+       ), '')::text AS success_signal,
+       d.revision, d.created_at, d.updated_at
 FROM goal_drafts d
 LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE user_id = sqlc.arg(user_id)::uuid
@@ -8,7 +17,16 @@ WHERE user_id = sqlc.arg(user_id)::uuid
 
 -- name: LockDraftByID :one
 SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
-       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+       public.fukamu_cycle_content_read_text(
+         d.content_storage_format, d.body, d.body_dek_version,
+         d.body_crypto_revision, d.body_nonce, d.body_ciphertext
+       ) AS body,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           signal.content_storage_format, signal.success_signal,
+           signal.success_signal_dek_version, signal.success_signal_crypto_revision,
+           signal.success_signal_nonce, signal.success_signal_ciphertext
+       ), '')::text AS success_signal,
+       d.revision, d.created_at, d.updated_at
 FROM goal_drafts d
 LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE id = sqlc.arg(draft_id)::uuid
@@ -17,7 +35,16 @@ FOR UPDATE OF d;
 
 -- name: LockReviewDraftByGoal :one
 SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
-       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+       public.fukamu_cycle_content_read_text(
+         d.content_storage_format, d.body, d.body_dek_version,
+         d.body_crypto_revision, d.body_nonce, d.body_ciphertext
+       ) AS body,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           signal.content_storage_format, signal.success_signal,
+           signal.success_signal_dek_version, signal.success_signal_crypto_revision,
+           signal.success_signal_nonce, signal.success_signal_ciphertext
+       ), '')::text AS success_signal,
+       d.revision, d.created_at, d.updated_at
 FROM goal_drafts d
 LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE goal_id = sqlc.arg(goal_id)::uuid
@@ -101,7 +128,10 @@ VALUES (sqlc.arg(goal_version_id)::uuid, sqlc.arg(success_signal)::text);
 SELECT g.status,
        g.revision,
        gv.id AS current_version_id,
-       gv.body
+       public.fukamu_cycle_content_read_text(
+         gv.content_storage_format, gv.body, gv.body_dek_version,
+         gv.body_crypto_revision, gv.body_nonce, gv.body_ciphertext
+       ) AS body
 FROM goals g
 JOIN goal_versions gv
   ON gv.user_id = g.user_id

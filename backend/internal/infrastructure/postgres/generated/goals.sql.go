@@ -25,8 +25,17 @@ func (q *Queries) CountProgressingGoals(ctx context.Context, userID pgtype.UUID)
 }
 
 const getGoalDraftByID = `-- name: GetGoalDraftByID :one
-SELECT d.id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id, d.body,
-       signal.success_signal, d.revision, d.updated_at
+SELECT d.id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       public.fukamu_cycle_content_read_text(
+         d.content_storage_format, d.body, d.body_dek_version,
+         d.body_crypto_revision, d.body_nonce, d.body_ciphertext
+       ) AS body,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           signal.content_storage_format, signal.success_signal,
+           signal.success_signal_dek_version, signal.success_signal_crypto_revision,
+           signal.success_signal_nonce, signal.success_signal_ciphertext
+       ), '')::text AS success_signal,
+       d.revision, d.updated_at
 FROM goal_drafts d
 LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE d.id = $1::uuid AND d.user_id = $2::uuid
@@ -44,7 +53,7 @@ type GetGoalDraftByIDRow struct {
 	BaseGoalVersionID pgtype.UUID
 	ReviewCycleID     pgtype.UUID
 	Body              string
-	SuccessSignal     *string
+	SuccessSignal     string
 	Revision          int64
 	UpdatedAt         pgtype.Timestamptz
 }
@@ -68,7 +77,16 @@ func (q *Queries) GetGoalDraftByID(ctx context.Context, arg GetGoalDraftByIDPara
 
 const getGoalReviewDraft = `-- name: GetGoalReviewDraft :one
 SELECT d.id, d.user_id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
-       d.body, signal.success_signal, d.revision, d.created_at, d.updated_at
+       public.fukamu_cycle_content_read_text(
+         d.content_storage_format, d.body, d.body_dek_version,
+         d.body_crypto_revision, d.body_nonce, d.body_ciphertext
+       ) AS body,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           signal.content_storage_format, signal.success_signal,
+           signal.success_signal_dek_version, signal.success_signal_crypto_revision,
+           signal.success_signal_nonce, signal.success_signal_ciphertext
+       ), '')::text AS success_signal,
+       d.revision, d.created_at, d.updated_at
 FROM goal_drafts d
 LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE d.goal_id = $1 AND d.user_id = $2 AND d.draft_type = 'review'
@@ -87,7 +105,7 @@ type GetGoalReviewDraftRow struct {
 	BaseGoalVersionID pgtype.UUID
 	ReviewCycleID     pgtype.UUID
 	Body              string
-	SuccessSignal     *string
+	SuccessSignal     string
 	Revision          int64
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
@@ -122,8 +140,15 @@ SELECT
     g.terminal_at AS goal_terminal_at,
     gv.id AS current_version_id,
     gv.version_number AS current_version_number,
-    gv.body AS current_version_body,
-    gv_signal.success_signal AS current_version_success_signal,
+    COALESCE(public.fukamu_cycle_content_read_text(
+      gv.content_storage_format, gv.body, gv.body_dek_version,
+      gv.body_crypto_revision, gv.body_nonce, gv.body_ciphertext
+    ), '')::text AS current_version_body,
+    COALESCE(public.fukamu_cycle_content_read_text(
+        gv_signal.content_storage_format, gv_signal.success_signal,
+        gv_signal.success_signal_dek_version, gv_signal.success_signal_crypto_revision,
+        gv_signal.success_signal_nonce, gv_signal.success_signal_ciphertext
+    ), '')::text AS current_version_success_signal,
     gv.created_at AS current_version_created_at,
     (
         SELECT count(*)
@@ -185,8 +210,8 @@ type GetGoalViewRow struct {
 	GoalTerminalAt                    pgtype.Timestamptz
 	CurrentVersionID                  pgtype.UUID
 	CurrentVersionNumber              *int32
-	CurrentVersionBody                *string
-	CurrentVersionSuccessSignal       *string
+	CurrentVersionBody                string
+	CurrentVersionSuccessSignal       string
 	CurrentVersionCreatedAt           pgtype.Timestamptz
 	CycleCount                        int32
 	ActiveCycleID                     pgtype.UUID
@@ -230,8 +255,17 @@ func (q *Queries) GetGoalView(ctx context.Context, arg GetGoalViewParams) (*GetG
 }
 
 const getHomeCreationGoalDraft = `-- name: GetHomeCreationGoalDraft :one
-SELECT d.id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id, d.body,
-       signal.success_signal, d.revision, d.updated_at
+SELECT d.id, d.draft_type, d.goal_id, d.base_goal_version_id, d.review_cycle_id,
+       public.fukamu_cycle_content_read_text(
+         d.content_storage_format, d.body, d.body_dek_version,
+         d.body_crypto_revision, d.body_nonce, d.body_ciphertext
+       ) AS body,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           signal.content_storage_format, signal.success_signal,
+           signal.success_signal_dek_version, signal.success_signal_crypto_revision,
+           signal.success_signal_nonce, signal.success_signal_ciphertext
+       ), '')::text AS success_signal,
+       d.revision, d.updated_at
 FROM goal_drafts d
 LEFT JOIN goal_draft_success_signals signal ON signal.goal_draft_id = d.id
 WHERE d.user_id = $1::uuid AND d.draft_type = 'creation'
@@ -244,7 +278,7 @@ type GetHomeCreationGoalDraftRow struct {
 	BaseGoalVersionID pgtype.UUID
 	ReviewCycleID     pgtype.UUID
 	Body              string
-	SuccessSignal     *string
+	SuccessSignal     string
 	Revision          int64
 	UpdatedAt         pgtype.Timestamptz
 }
@@ -276,8 +310,15 @@ SELECT
     g.terminal_at AS goal_terminal_at,
     gv.id AS current_version_id,
     gv.version_number AS current_version_number,
-    gv.body AS current_version_body,
-    gv_signal.success_signal AS current_version_success_signal,
+    COALESCE(public.fukamu_cycle_content_read_text(
+      gv.content_storage_format, gv.body, gv.body_dek_version,
+      gv.body_crypto_revision, gv.body_nonce, gv.body_ciphertext
+    ), '')::text AS current_version_body,
+    COALESCE(public.fukamu_cycle_content_read_text(
+        gv_signal.content_storage_format, gv_signal.success_signal,
+        gv_signal.success_signal_dek_version, gv_signal.success_signal_crypto_revision,
+        gv_signal.success_signal_nonce, gv_signal.success_signal_ciphertext
+    ), '')::text AS current_version_success_signal,
     gv.created_at AS current_version_created_at,
     (
         SELECT count(*)
@@ -368,8 +409,8 @@ type ListGoalViewsRow struct {
 	GoalTerminalAt                    pgtype.Timestamptz
 	CurrentVersionID                  pgtype.UUID
 	CurrentVersionNumber              *int32
-	CurrentVersionBody                *string
-	CurrentVersionSuccessSignal       *string
+	CurrentVersionBody                string
+	CurrentVersionSuccessSignal       string
 	CurrentVersionCreatedAt           pgtype.Timestamptz
 	CycleCount                        int32
 	ActiveCycleID                     pgtype.UUID
@@ -442,8 +483,15 @@ SELECT
     g.terminal_at AS goal_terminal_at,
     gv.id AS current_version_id,
     gv.version_number AS current_version_number,
-    gv.body AS current_version_body,
-    gv_signal.success_signal AS current_version_success_signal,
+    COALESCE(public.fukamu_cycle_content_read_text(
+      gv.content_storage_format, gv.body, gv.body_dek_version,
+      gv.body_crypto_revision, gv.body_nonce, gv.body_ciphertext
+    ), '')::text AS current_version_body,
+    COALESCE(public.fukamu_cycle_content_read_text(
+        gv_signal.content_storage_format, gv_signal.success_signal,
+        gv_signal.success_signal_dek_version, gv_signal.success_signal_crypto_revision,
+        gv_signal.success_signal_nonce, gv_signal.success_signal_ciphertext
+    ), '')::text AS current_version_success_signal,
     gv.created_at AS current_version_created_at,
     (
         SELECT count(*)
@@ -501,8 +549,8 @@ type ListHomeGoalViewsRow struct {
 	GoalTerminalAt                    pgtype.Timestamptz
 	CurrentVersionID                  pgtype.UUID
 	CurrentVersionNumber              *int32
-	CurrentVersionBody                *string
-	CurrentVersionSuccessSignal       *string
+	CurrentVersionBody                string
+	CurrentVersionSuccessSignal       string
 	CurrentVersionCreatedAt           pgtype.Timestamptz
 	CycleCount                        int32
 	ActiveCycleID                     pgtype.UUID

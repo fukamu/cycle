@@ -362,6 +362,25 @@ source ./scripts/import-env.sh
 
 Survivor funnel KPI queryを開発・確認する場合は、保持不要なsynthetic dataだけを入れたlocal `*_test` DBを使用し、[`database.md`の専用手順](database.md#survivor-funnel-kpi-report)に従います。Report commandはmigrationやseedを行わず、Production / Staging、通常の開発DB、`DATABASE_URL`へ自動接続しません。境界fixtureは`TEST_DATABASE_URL`を設定したBackend integration testで検証します。
 
+### User Content encryption local verification
+
+Development / Testの`CONTENT_ENCRYPTION_KMS_PROVIDER=fixture`はRepository固定のtest-only KEKを使い、外部KMSへ接続しません。この値で暗号化したdataをStaging / Productionへ持ち込まず、fixture成功を実GCP KMS / IAM / backup recoveryの証拠にしません。通常のserver起動と`cmd/contentcrypto`は同じtyped configとPostgreSQL adapterを使います。
+
+暗号化codec、AAD、改ざん、nonce衝突、key bootstrap / rotationはBackend unit test、全6 tableのlegacy backfill、平文消去、dual-read、strict、旧writer拒否、job進捗、User削除cascadeは実PostgreSQL integration testで確認します。Migration testは`pg_restore`と同じ空`search_path`でもUUID配列CHECKが評価できることを確認します。
+
+```bash
+export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable'
+(
+  cd backend
+  go test ./internal/infrastructure/contentcrypto
+  go test ./internal/infrastructure/postgres \
+    -run '^(TestMigrateIsTransactionalAndIdempotent|TestContentEncryptionLegacyBackfillStrictAndFailClosed)$' \
+    -count=1
+)
+```
+
+`TEST_DATABASE_URL`は保持不要な`*_test` DBだけを指定します。Migration integration testはschemaのdown / upを行うため開発DBへ向けません。Local backup / restore drillを行う場合も、通常DBとは別名の使い捨てDBへrestoreし、[`operations.md`](operations.md#database-restore-drill-and-recovery)の隔離、verify、fresh DEK、cleanup境界を守ります。Repositoryのtest / scriptはProduction DB、実KMS、secret登録、外部resource作成を自動実行しません。
+
 ## 開発サーバー
 
 Terminal 1でBackendを起動します。

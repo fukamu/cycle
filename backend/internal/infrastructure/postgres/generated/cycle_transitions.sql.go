@@ -60,6 +60,65 @@ func (q *Queries) ApplyActionAICAS(ctx context.Context, arg ApplyActionAICASPara
 	return result.RowsAffected(), nil
 }
 
+const applyActionAIMigrateLegacyCAS = `-- name: ApplyActionAIMigrateLegacyCAS :execrows
+UPDATE pdca_cycles
+SET plan = $1::text,
+    do_text = $2::text,
+    check_text = $3::text,
+    action = $4::text,
+    content_revision = $5::bigint,
+    action_revision = $6::bigint,
+    action_last_ai_applied_content_revision = $5::bigint,
+    action_user_modified_after_ai = FALSE,
+    updated_at = $7::timestamptz
+WHERE id = $8::uuid
+  AND user_id = $9::uuid
+  AND goal_id = $10::uuid
+  AND goal_version_id = $11::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
+  AND content_revision = $12::bigint
+  AND action_revision = $13::bigint
+`
+
+type ApplyActionAIMigrateLegacyCASParams struct {
+	Plan                    string
+	DoText                  string
+	CheckText               string
+	Action                  string
+	NewContentRevision      int64
+	NewActionRevision       int64
+	UpdatedAt               pgtype.Timestamptz
+	CycleID                 pgtype.UUID
+	UserID                  pgtype.UUID
+	GoalID                  pgtype.UUID
+	GoalVersionID           pgtype.UUID
+	ExpectedContentRevision int64
+	ExpectedActionRevision  int64
+}
+
+func (q *Queries) ApplyActionAIMigrateLegacyCAS(ctx context.Context, arg ApplyActionAIMigrateLegacyCASParams) (int64, error) {
+	result, err := q.db.Exec(ctx, applyActionAIMigrateLegacyCAS,
+		arg.Plan,
+		arg.DoText,
+		arg.CheckText,
+		arg.Action,
+		arg.NewContentRevision,
+		arg.NewActionRevision,
+		arg.UpdatedAt,
+		arg.CycleID,
+		arg.UserID,
+		arg.GoalID,
+		arg.GoalVersionID,
+		arg.ExpectedContentRevision,
+		arg.ExpectedActionRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const cancelCycleCAS = `-- name: CancelCycleCAS :execrows
 UPDATE pdca_cycles
 SET status = $1::text,
@@ -356,11 +415,27 @@ SELECT
     c.goal_id,
     c.sequence_number,
     c.status,
-    gv.body AS goal_body,
-    c.plan,
-    c.do_text,
-    c.check_text,
-    c.action
+    gv.id AS goal_version_id,
+    public.fukamu_cycle_content_read_text(
+      gv.content_storage_format, gv.body, gv.body_dek_version,
+      gv.body_crypto_revision, gv.body_nonce, gv.body_ciphertext
+    ) AS goal_body,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.plan, c.plan_dek_version,
+      c.plan_crypto_revision, c.plan_nonce, c.plan_ciphertext
+    ) AS plan,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.do_text, c.do_text_dek_version,
+      c.do_text_crypto_revision, c.do_text_nonce, c.do_text_ciphertext
+    ) AS do_text,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.check_text, c.check_text_dek_version,
+      c.check_text_crypto_revision, c.check_text_nonce, c.check_text_ciphertext
+    ) AS check_text,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.action, c.action_dek_version,
+      c.action_crypto_revision, c.action_nonce, c.action_ciphertext
+    ) AS action
 FROM pdca_cycles AS c
 JOIN goal_versions AS gv
   ON gv.goal_id = c.goal_id
@@ -388,6 +463,7 @@ type ListAIContextCyclesRow struct {
 	GoalID         pgtype.UUID
 	SequenceNumber int32
 	Status         string
+	GoalVersionID  pgtype.UUID
 	GoalBody       string
 	Plan           string
 	DoText         string
@@ -414,6 +490,7 @@ func (q *Queries) ListAIContextCycles(ctx context.Context, arg ListAIContextCycl
 			&i.GoalID,
 			&i.SequenceNumber,
 			&i.Status,
+			&i.GoalVersionID,
 			&i.GoalBody,
 			&i.Plan,
 			&i.DoText,
@@ -470,10 +547,22 @@ SELECT
     c.completed_at,
     c.canceled_at,
     c.cancellation_reason,
-    c.plan,
-    c.do_text,
-    c.check_text,
-    c.action,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.plan, c.plan_dek_version,
+      c.plan_crypto_revision, c.plan_nonce, c.plan_ciphertext
+    ) AS plan,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.do_text, c.do_text_dek_version,
+      c.do_text_crypto_revision, c.do_text_nonce, c.do_text_ciphertext
+    ) AS do_text,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.check_text, c.check_text_dek_version,
+      c.check_text_crypto_revision, c.check_text_nonce, c.check_text_ciphertext
+    ) AS check_text,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.action, c.action_dek_version,
+      c.action_crypto_revision, c.action_nonce, c.action_ciphertext
+    ) AS action,
     c.content_revision,
     c.plan_revision,
     c.do_revision,
@@ -481,6 +570,7 @@ SELECT
     c.action_revision,
     c.action_last_ai_applied_content_revision,
     c.action_user_modified_after_ai,
+    c.content_storage_format,
     c.start_operation_id,
     c.start_request_hash,
     c.completion_operation_id,
@@ -500,9 +590,40 @@ type LockCycleForTransitionParams struct {
 	UserID  pgtype.UUID
 }
 
-func (q *Queries) LockCycleForTransition(ctx context.Context, arg LockCycleForTransitionParams) (*PdcaCycle, error) {
+type LockCycleForTransitionRow struct {
+	ID                                 pgtype.UUID
+	UserID                             pgtype.UUID
+	GoalID                             pgtype.UUID
+	GoalVersionID                      pgtype.UUID
+	SequenceNumber                     int32
+	Status                             string
+	StartedAt                          pgtype.Timestamptz
+	CompletedAt                        pgtype.Timestamptz
+	CanceledAt                         pgtype.Timestamptz
+	CancellationReason                 *string
+	Plan                               string
+	DoText                             string
+	CheckText                          string
+	Action                             string
+	ContentRevision                    int64
+	PlanRevision                       int64
+	DoRevision                         int64
+	CheckRevision                      int64
+	ActionRevision                     int64
+	ActionLastAiAppliedContentRevision *int64
+	ActionUserModifiedAfterAi          bool
+	ContentStorageFormat               string
+	StartOperationID                   pgtype.UUID
+	StartRequestHash                   string
+	CompletionOperationID              pgtype.UUID
+	CompletionRequestHash              *string
+	CreatedAt                          pgtype.Timestamptz
+	UpdatedAt                          pgtype.Timestamptz
+}
+
+func (q *Queries) LockCycleForTransition(ctx context.Context, arg LockCycleForTransitionParams) (*LockCycleForTransitionRow, error) {
 	row := q.db.QueryRow(ctx, lockCycleForTransition, arg.CycleID, arg.GoalID, arg.UserID)
-	var i PdcaCycle
+	var i LockCycleForTransitionRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -525,6 +646,7 @@ func (q *Queries) LockCycleForTransition(ctx context.Context, arg LockCycleForTr
 		&i.ActionRevision,
 		&i.ActionLastAiAppliedContentRevision,
 		&i.ActionUserModifiedAfterAi,
+		&i.ContentStorageFormat,
 		&i.StartOperationID,
 		&i.StartRequestHash,
 		&i.CompletionOperationID,
@@ -567,6 +689,213 @@ func (q *Queries) LockGoalCycleIDs(ctx context.Context, arg LockGoalCycleIDsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const migrateLegacyCycleActionCAS = `-- name: MigrateLegacyCycleActionCAS :execrows
+UPDATE pdca_cycles
+SET plan = $1::text,
+    do_text = $2::text,
+    check_text = $3::text,
+    action = $4::text,
+    action_revision = $5::bigint,
+    content_revision = $6::bigint,
+    action_user_modified_after_ai = $7::boolean,
+    updated_at = $8::timestamptz
+WHERE id = $9::uuid
+  AND user_id = $10::uuid
+  AND goal_id = $11::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
+  AND action_revision = $12::bigint
+`
+
+type MigrateLegacyCycleActionCASParams struct {
+	Plan                      string
+	DoText                    string
+	CheckText                 string
+	Action                    string
+	FrameRevision             int64
+	ContentRevision           int64
+	ActionUserModifiedAfterAi bool
+	UpdatedAt                 pgtype.Timestamptz
+	CycleID                   pgtype.UUID
+	UserID                    pgtype.UUID
+	GoalID                    pgtype.UUID
+	ExpectedFrameRevision     int64
+}
+
+func (q *Queries) MigrateLegacyCycleActionCAS(ctx context.Context, arg MigrateLegacyCycleActionCASParams) (int64, error) {
+	result, err := q.db.Exec(ctx, migrateLegacyCycleActionCAS,
+		arg.Plan,
+		arg.DoText,
+		arg.CheckText,
+		arg.Action,
+		arg.FrameRevision,
+		arg.ContentRevision,
+		arg.ActionUserModifiedAfterAi,
+		arg.UpdatedAt,
+		arg.CycleID,
+		arg.UserID,
+		arg.GoalID,
+		arg.ExpectedFrameRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const migrateLegacyCycleCheckCAS = `-- name: MigrateLegacyCycleCheckCAS :execrows
+UPDATE pdca_cycles
+SET plan = $1::text,
+    do_text = $2::text,
+    check_text = $3::text,
+    action = $4::text,
+    check_revision = $5::bigint,
+    content_revision = $6::bigint,
+    updated_at = $7::timestamptz
+WHERE id = $8::uuid
+  AND user_id = $9::uuid
+  AND goal_id = $10::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
+  AND check_revision = $11::bigint
+`
+
+type MigrateLegacyCycleCheckCASParams struct {
+	Plan                  string
+	DoText                string
+	CheckText             string
+	Action                string
+	FrameRevision         int64
+	ContentRevision       int64
+	UpdatedAt             pgtype.Timestamptz
+	CycleID               pgtype.UUID
+	UserID                pgtype.UUID
+	GoalID                pgtype.UUID
+	ExpectedFrameRevision int64
+}
+
+func (q *Queries) MigrateLegacyCycleCheckCAS(ctx context.Context, arg MigrateLegacyCycleCheckCASParams) (int64, error) {
+	result, err := q.db.Exec(ctx, migrateLegacyCycleCheckCAS,
+		arg.Plan,
+		arg.DoText,
+		arg.CheckText,
+		arg.Action,
+		arg.FrameRevision,
+		arg.ContentRevision,
+		arg.UpdatedAt,
+		arg.CycleID,
+		arg.UserID,
+		arg.GoalID,
+		arg.ExpectedFrameRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const migrateLegacyCycleDoCAS = `-- name: MigrateLegacyCycleDoCAS :execrows
+UPDATE pdca_cycles
+SET plan = $1::text,
+    do_text = $2::text,
+    check_text = $3::text,
+    action = $4::text,
+    do_revision = $5::bigint,
+    content_revision = $6::bigint,
+    updated_at = $7::timestamptz
+WHERE id = $8::uuid
+  AND user_id = $9::uuid
+  AND goal_id = $10::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
+  AND do_revision = $11::bigint
+`
+
+type MigrateLegacyCycleDoCASParams struct {
+	Plan                  string
+	DoText                string
+	CheckText             string
+	Action                string
+	FrameRevision         int64
+	ContentRevision       int64
+	UpdatedAt             pgtype.Timestamptz
+	CycleID               pgtype.UUID
+	UserID                pgtype.UUID
+	GoalID                pgtype.UUID
+	ExpectedFrameRevision int64
+}
+
+func (q *Queries) MigrateLegacyCycleDoCAS(ctx context.Context, arg MigrateLegacyCycleDoCASParams) (int64, error) {
+	result, err := q.db.Exec(ctx, migrateLegacyCycleDoCAS,
+		arg.Plan,
+		arg.DoText,
+		arg.CheckText,
+		arg.Action,
+		arg.FrameRevision,
+		arg.ContentRevision,
+		arg.UpdatedAt,
+		arg.CycleID,
+		arg.UserID,
+		arg.GoalID,
+		arg.ExpectedFrameRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const migrateLegacyCyclePlanCAS = `-- name: MigrateLegacyCyclePlanCAS :execrows
+UPDATE pdca_cycles
+SET plan = $1::text,
+    do_text = $2::text,
+    check_text = $3::text,
+    action = $4::text,
+    plan_revision = $5::bigint,
+    content_revision = $6::bigint,
+    updated_at = $7::timestamptz
+WHERE id = $8::uuid
+  AND user_id = $9::uuid
+  AND goal_id = $10::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
+  AND plan_revision = $11::bigint
+`
+
+type MigrateLegacyCyclePlanCASParams struct {
+	Plan                  string
+	DoText                string
+	CheckText             string
+	Action                string
+	FrameRevision         int64
+	ContentRevision       int64
+	UpdatedAt             pgtype.Timestamptz
+	CycleID               pgtype.UUID
+	UserID                pgtype.UUID
+	GoalID                pgtype.UUID
+	ExpectedFrameRevision int64
+}
+
+func (q *Queries) MigrateLegacyCyclePlanCAS(ctx context.Context, arg MigrateLegacyCyclePlanCASParams) (int64, error) {
+	result, err := q.db.Exec(ctx, migrateLegacyCyclePlanCAS,
+		arg.Plan,
+		arg.DoText,
+		arg.CheckText,
+		arg.Action,
+		arg.FrameRevision,
+		arg.ContentRevision,
+		arg.UpdatedAt,
+		arg.CycleID,
+		arg.UserID,
+		arg.GoalID,
+		arg.ExpectedFrameRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const replanGoalCAS = `-- name: ReplanGoalCAS :execrows
@@ -625,7 +954,7 @@ WHERE id = $6::uuid
 `
 
 type SaveCycleActionCASParams struct {
-	Content                   string
+	Action                    string
 	FrameRevision             int64
 	ContentRevision           int64
 	ActionUserModifiedAfterAi bool
@@ -638,7 +967,7 @@ type SaveCycleActionCASParams struct {
 
 func (q *Queries) SaveCycleActionCAS(ctx context.Context, arg SaveCycleActionCASParams) (int64, error) {
 	result, err := q.db.Exec(ctx, saveCycleActionCAS,
-		arg.Content,
+		arg.Action,
 		arg.FrameRevision,
 		arg.ContentRevision,
 		arg.ActionUserModifiedAfterAi,
@@ -668,7 +997,7 @@ WHERE id = $5::uuid
 `
 
 type SaveCycleCheckCASParams struct {
-	Content               string
+	CheckText             string
 	FrameRevision         int64
 	ContentRevision       int64
 	UpdatedAt             pgtype.Timestamptz
@@ -680,7 +1009,7 @@ type SaveCycleCheckCASParams struct {
 
 func (q *Queries) SaveCycleCheckCAS(ctx context.Context, arg SaveCycleCheckCASParams) (int64, error) {
 	result, err := q.db.Exec(ctx, saveCycleCheckCAS,
-		arg.Content,
+		arg.CheckText,
 		arg.FrameRevision,
 		arg.ContentRevision,
 		arg.UpdatedAt,
@@ -709,7 +1038,7 @@ WHERE id = $5::uuid
 `
 
 type SaveCycleDoCASParams struct {
-	Content               string
+	DoText                string
 	FrameRevision         int64
 	ContentRevision       int64
 	UpdatedAt             pgtype.Timestamptz
@@ -721,7 +1050,7 @@ type SaveCycleDoCASParams struct {
 
 func (q *Queries) SaveCycleDoCAS(ctx context.Context, arg SaveCycleDoCASParams) (int64, error) {
 	result, err := q.db.Exec(ctx, saveCycleDoCAS,
-		arg.Content,
+		arg.DoText,
 		arg.FrameRevision,
 		arg.ContentRevision,
 		arg.UpdatedAt,
@@ -750,7 +1079,7 @@ WHERE id = $5::uuid
 `
 
 type SaveCyclePlanCASParams struct {
-	Content               string
+	Plan                  string
 	FrameRevision         int64
 	ContentRevision       int64
 	UpdatedAt             pgtype.Timestamptz
@@ -762,7 +1091,7 @@ type SaveCyclePlanCASParams struct {
 
 func (q *Queries) SaveCyclePlanCAS(ctx context.Context, arg SaveCyclePlanCASParams) (int64, error) {
 	result, err := q.db.Exec(ctx, saveCyclePlanCAS,
-		arg.Content,
+		arg.Plan,
 		arg.FrameRevision,
 		arg.ContentRevision,
 		arg.UpdatedAt,
@@ -831,6 +1160,10 @@ INSERT INTO pdca_cycles (
     sequence_number,
     status,
     started_at,
+    plan,
+    do_text,
+    check_text,
+    action,
     start_operation_id,
     start_request_hash,
     created_at,
@@ -844,10 +1177,14 @@ VALUES (
     $5::integer,
     $6::text,
     $7::timestamptz,
-    $8::uuid,
+    $8::text,
     $9::text,
-    $10::timestamptz,
-    $11::timestamptz
+    $10::text,
+    $11::text,
+    $12::uuid,
+    $13::text,
+    $14::timestamptz,
+    $15::timestamptz
 )
 ON CONFLICT (user_id, start_operation_id) DO NOTHING
 `
@@ -860,6 +1197,10 @@ type TryInsertCycleClaimParams struct {
 	SequenceNumber   int32
 	Status           string
 	StartedAt        pgtype.Timestamptz
+	Plan             string
+	DoText           string
+	CheckText        string
+	Action           string
 	StartOperationID pgtype.UUID
 	StartRequestHash string
 	CreatedAt        pgtype.Timestamptz
@@ -875,6 +1216,10 @@ func (q *Queries) TryInsertCycleClaim(ctx context.Context, arg TryInsertCycleCla
 		arg.SequenceNumber,
 		arg.Status,
 		arg.StartedAt,
+		arg.Plan,
+		arg.DoText,
+		arg.CheckText,
+		arg.Action,
 		arg.StartOperationID,
 		arg.StartRequestHash,
 		arg.CreatedAt,

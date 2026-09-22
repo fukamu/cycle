@@ -30,6 +30,9 @@ Stagingではdefaultを承認済み運用値とみなさず、[`operations.md`�
 | `DB_MAX_OPEN_CONNS` | pool max、`10` | positive | server only、GitHub variable |
 | `DB_MAX_IDLE_CONNS` | idle max、`5` | 0以上かつopen以下 | server only、GitHub variable |
 | `DB_CONN_MAX_LIFETIME_MINUTES` | lifetime、`30` | positive | server only、GitHub variable |
+| `CONTENT_ENCRYPTION_KMS_PROVIDER` | User ContentのDEK wrap / unwrap provider、`fixture` | Development / Testは`fixture`可。Production profileは`gcp`固定 | Container code固定 |
+| `CONTENT_ENCRYPTION_GCP_KEY_VERSION` | KEKのexact GCP KMS CryptoKeyVersion resource | `gcp`では`projects/.../locations/.../keyRings/.../cryptoKeys/.../cryptoKeyVersions/...`を必須とし、aliasやCryptoKey親だけを拒否 | server / operator only、GitHub variable |
+| `CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON` | GCP KMS wrap / unwrap用service account credential JSON | `gcp`ではnon-empty。DDL migration、Frontend、Terraformへ渡さない | **secret**、GitHub secret |
 | `SESSION_TOKEN_PEPPER` | session hash | 24文字以上 | **secret**、GitHub secret |
 | `CSRF_TOKEN_PEPPER` | Session-bound stable CSRF token導出とverifier HMAC | Backendが使うbyte列で32 bytes以上。CSPRNG由来256-bit相当、single active key。Production deploy前に値を開示せず由来を確認 | **secret**、GitHub secret |
 | `BOOTSTRAP_ID_PEPPER` | bootstrap hash | 24文字以上 | **secret**、GitHub secret |
@@ -44,6 +47,8 @@ Stagingではdefaultを承認済み運用値とみなさず、[`operations.md`�
 Stable CSRF v1のbyte contractとdual-validationは[`design.md` §27.2](design.md#272-csrf)が所有します。Backendはtrim済みの`CSRF_TOKEN_PEPPER`をdecodeせず、そのbyte列をHMAC keyとして使い、32 bytes以上であることだけを機械検証します。CSPRNG由来と256-bit相当のentropyは値から自動判定せず、deployment ownerが値を開示しない手順で確認します。Version / scopeは固定値であり、keyring、active epoch、issuance flag用の環境変数を初版へ追加しません。`CSRF_TOKEN_PEPPER`のplannedな無停止rotationは未対応であり、maintenance / old-instance drainを含む唯一の手順は[`operations.md`](operations.md#csrf_token_pepper-rotation)に従います。
 
 OTLP endpoint、header credential ownerと実値は未決です。使用するpinned SDK defaultのsampler / export volumeをStagingで受入確認するまでStaging deployを行いません。Stagingは`APP_ENV=production`のため両方を必須とし、未設定または不正ならdeploy workflowのBackend config検証がmigration前に停止します。Collectorの到達可否はstartup、`/readyz`、Application requestの成否へ含めません。
+
+KMS provider、runtime identity / IAM、KEKのproject / location / key ownerとexact versionは環境ごとに決定します。`CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON`には対象CryptoKeyVersionの`cloudkms.cryptoKeyVersions.useToEncrypt` / `useToDecrypt`相当だけを持つ専用identityを使い、値、private key、raw / wrapped DEK、ciphertextをIssue、log、artifactへ出しません。Runtimeと`cmd/contentcrypto`は同じ暗号文を読むため同じ必要KEK version群へ到達できる必要がありますが、migration runnerはschemaだけを適用するためこのcredentialを受け取りません。旧KEK versionを無効化・破棄する前に、対応するwrapped DEKのinventoryと隔離restore検証を別途承認します。
 
 ## AI / authentication / abuse prevention
 
@@ -214,6 +219,7 @@ CSRF_TOKEN_PEPPER
 BOOTSTRAP_ID_PEPPER
 RATE_LIMIT_HMAC_SECRET
 CURSOR_SIGNING_SECRET
+CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON
 TURNSTILE_SECRET_KEY
 ```
 
@@ -229,6 +235,7 @@ TURNSTILE_SITE_KEY
 DB_MAX_OPEN_CONNS
 DB_MAX_IDLE_CONNS
 DB_CONN_MAX_LIFETIME_MINUTES
+CONTENT_ENCRYPTION_GCP_KEY_VERSION
 SESSION_IDLE_DAYS
 SESSION_ABSOLUTE_DAYS
 SESSION_ACTIVITY_TOUCH_MINUTES
@@ -264,5 +271,7 @@ RATE_AI_PER_IP_MINUTE
 ```
 
 Stagingの`OTEL_EXPORTER_OTLP_ENDPOINT`と`OTEL_EXPORTER_OTLP_HEADERS`は、Operations ownerがcollector、credential ownerとpinned SDK defaultのsampler / export volumeを承認するまで設定せず、live deployを行いません。この2変数以外の`OTEL_*`は未承認のSDK overrideとして全profileで拒否します。Headerはephemeral secrets fileだけを経由してWorker Secretへ渡し、endpoint、workflow log、errorへcredentialを混在させません。Retention、dashboard、alert、notification、on-callの決定はProduction release blockerとして[`operations.md`](operations.md)で管理します。
+
+StagingのKMS key / identity / IAMは未登録であるため、この変更をmergeしただけではdeployできません。Operations ownerとSecurity ownerがStaging専用CryptoKeyVersion、runtime credentialの保管元、旧version保持、restore時の到達性を承認し、上記variable / secretを値を表示せず登録した後にだけ暗号化release手順へ進みます。ProductionへStagingのkey、credential、wrapped DEKまたはDBを転用しません。
 
 Production Environmentは未構築です。公開domainは`cycle.fukamu.com`とし、Production専用resourceと値を追加するときはStagingのsecret、DB、provider値を転用しません。Production専用`CSRF_TOKEN_PEPPER`がCSPRNG由来256-bit相当であることをsecret値なしで確認できない間はdeployせず、[`operations.md`](operations.md#session-bound-stable-csrf-v1-release)に従ってmaintenance rotationの要否を先に判断します。

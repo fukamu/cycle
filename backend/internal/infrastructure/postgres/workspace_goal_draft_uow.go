@@ -18,8 +18,11 @@ import (
 )
 
 type workspaceGoalDraftTx struct {
-	tx      pgx.Tx
-	queries *db.Queries
+	tx                     pgx.Tx
+	queries                *db.Queries
+	content                contentBoundary
+	lockedGenerationUserID string
+	lockedGenerationID     string
 }
 
 var (
@@ -36,7 +39,12 @@ func (store *WorkspaceStore) WithinGoalDraftTransaction(
 		return err
 	}
 	defer rollback(ctx, tx)
-	if err = callback(&workspaceGoalDraftTx{tx: tx, queries: store.queries.WithTx(tx)}); err != nil {
+	queries := store.queries.WithTx(tx)
+	content, err := prepareContentBoundary(ctx, queries, store.content)
+	if err != nil {
+		return err
+	}
+	if err = callback(&workspaceGoalDraftTx{tx: tx, queries: queries, content: content}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -56,6 +64,11 @@ func (transaction *workspaceGoalDraftTx) FindCreationDraft(ctx context.Context, 
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err = transaction.content.decodeDraft(
+		ctx, userID, uuidString(row.ID), &row.Body, &row.SuccessSignal,
+	); err != nil {
 		return nil, err
 	}
 	draft, err := goalDraftFromFindCreationRow(row)
@@ -80,6 +93,11 @@ func (transaction *workspaceGoalDraftTx) LockDraftByID(
 	if err != nil {
 		return goal.Draft{}, err
 	}
+	if err = transaction.content.decodeDraft(
+		ctx, userID, uuidString(row.ID), &row.Body, &row.SuccessSignal,
+	); err != nil {
+		return goal.Draft{}, err
+	}
 	return goalDraftFromLockDraftRow(row)
 }
 
@@ -98,14 +116,23 @@ func (transaction *workspaceGoalDraftTx) LockReviewDraftByGoal(
 	if err != nil {
 		return goal.Draft{}, err
 	}
+	if err = transaction.content.decodeDraft(
+		ctx, userID, uuidString(row.ID), &row.Body, &row.SuccessSignal,
+	); err != nil {
+		return goal.Draft{}, err
+	}
 	return goalDraftFromLockReviewDraftRow(row)
 }
 
 func (transaction *workspaceGoalDraftTx) InsertCreationDraft(ctx context.Context, draft goal.Draft) (int64, error) {
+	body, err := transaction.content.encode(ctx, draft.UserID, "goal_drafts", draft.ID, "body", draft.Revision+1, draft.Body)
+	if err != nil {
+		return 0, err
+	}
 	rows, err := transaction.queries.InsertCreationDraft(ctx, db.InsertCreationDraftParams{
 		DraftID:   mustUUID(draft.ID),
 		UserID:    mustUUID(draft.UserID),
-		Body:      draft.Body,
+		Body:      body,
 		Revision:  draft.Revision,
 		CreatedAt: timestamptz(draft.CreatedAt),
 		UpdatedAt: timestamptz(draft.UpdatedAt),
@@ -124,8 +151,12 @@ func (transaction *workspaceGoalDraftTx) SaveDraftCAS(
 	draft goal.Draft,
 	expectedRevision int64,
 ) (int64, error) {
+	body, err := transaction.content.encode(ctx, draft.UserID, "goal_drafts", draft.ID, "body", draft.Revision+1, draft.Body)
+	if err != nil {
+		return 0, err
+	}
 	rows, err := transaction.queries.SaveDraftCAS(ctx, db.SaveDraftCASParams{
-		Body:             draft.Body,
+		Body:             body,
 		NewRevision:      draft.Revision,
 		UpdatedAt:        timestamptz(draft.UpdatedAt),
 		DraftID:          mustUUID(draft.ID),
@@ -140,8 +171,14 @@ func (transaction *workspaceGoalDraftTx) SaveDraftCAS(
 		_, err = transaction.queries.DeleteGoalDraftSuccessSignal(ctx, mustUUID(draft.ID))
 		return rows, err
 	}
+	signal, err := transaction.content.encode(
+		ctx, draft.UserID, "goal_draft_success_signals", draft.ID, "success_signal", draft.Revision+1, *draft.SuccessSignal,
+	)
+	if err != nil {
+		return 0, err
+	}
 	signalRows, err := transaction.queries.UpsertGoalDraftSuccessSignal(ctx, db.UpsertGoalDraftSuccessSignalParams{
-		GoalDraftID: mustUUID(draft.ID), SuccessSignal: *draft.SuccessSignal,
+		GoalDraftID: mustUUID(draft.ID), SuccessSignal: signal,
 	})
 	if err != nil {
 		return 0, err
@@ -284,20 +321,30 @@ func (transaction *workspaceGoalDraftTx) InsertInitialGoal(ctx context.Context, 
 }
 
 func (transaction *workspaceGoalDraftTx) InsertInitialVersion(ctx context.Context, version goal.Version) (int64, error) {
+	body, err := transaction.content.encode(ctx, version.UserID, "goal_versions", version.ID, "body", 1, version.Body)
+	if err != nil {
+		return 0, err
+	}
 	rows, err := transaction.queries.InsertGoalVersion(ctx, db.InsertGoalVersionParams{
 		VersionID:            mustUUID(version.ID),
 		UserID:               mustUUID(version.UserID),
 		GoalID:               mustUUID(version.GoalID),
 		VersionNumber:        version.VersionNumber,
-		Body:                 version.Body,
+		Body:                 body,
 		CreatedByOperationID: mustUUID(version.CreatedByOperationID),
 		CreatedAt:            timestamptz(version.CreatedAt),
 	})
 	if err != nil || rows != 1 || version.SuccessSignal == nil {
 		return rows, err
 	}
+	signal, err := transaction.content.encode(
+		ctx, version.UserID, "goal_version_success_signals", version.ID, "success_signal", 1, *version.SuccessSignal,
+	)
+	if err != nil {
+		return 0, err
+	}
 	signalRows, err := transaction.queries.InsertGoalVersionSuccessSignal(ctx, db.InsertGoalVersionSuccessSignalParams{
-		GoalVersionID: mustUUID(version.ID), SuccessSignal: *version.SuccessSignal,
+		GoalVersionID: mustUUID(version.ID), SuccessSignal: signal,
 	})
 	if err != nil {
 		return 0, err
@@ -361,7 +408,7 @@ func (transaction *workspaceGoalDraftTx) AttachUsageToGoal(
 }
 
 func (transaction *workspaceGoalDraftTx) LoadGoalView(ctx context.Context, userID, goalID string) (workspace.GoalView, error) {
-	return getGoalView(ctx, transaction.tx, userID, goalID)
+	return getGoalView(ctx, transaction.tx, transaction.content, userID, goalID)
 }
 
 func (transaction *workspaceGoalDraftTx) LoadCycleView(
@@ -370,7 +417,7 @@ func (transaction *workspaceGoalDraftTx) LoadCycleView(
 	goalID string,
 	cycleID string,
 ) (workspace.CycleView, error) {
-	return getCycleView(ctx, transaction.tx, userID, goalID, cycleID)
+	return getCycleView(ctx, transaction.tx, transaction.content, userID, goalID, cycleID)
 }
 
 func (transaction *workspaceGoalDraftTx) LockGoalWithCurrentVersion(
@@ -395,6 +442,9 @@ func (transaction *workspaceGoalDraftTx) LockGoalWithCurrentVersion(
 			workspace.ErrGoalPersistenceInvariant,
 		)
 	}
+	if err = transaction.content.decodeGoalVersion(ctx, userID, currentVersionID, &row.Body, nil); err != nil {
+		return workspace.GoalTargetState{}, err
+	}
 	return workspace.GoalTargetState{
 		Status:           goal.Status(row.Status),
 		Revision:         row.Revision,
@@ -418,6 +468,11 @@ func (transaction *workspaceGoalDraftTx) FindGoalRefineReplay(
 	if err != nil {
 		return nil, err
 	}
+	if err = transaction.content.decodeAIField(
+		ctx, userID, uuidString(row.GenerationID), "output", &row.Output,
+	); err != nil {
+		return nil, err
+	}
 	return goalRefineReplayFromSQLC(row)
 }
 
@@ -439,6 +494,29 @@ func (transaction *workspaceGoalDraftTx) ListAIContextCycles(
 	}
 	items := make([]workspace.AIContextCycle, 0, len(rows))
 	for _, row := range rows {
+		if err = transaction.content.decodeGoalVersion(
+			ctx, userID, uuidString(row.GoalVersionID), &row.GoalBody, nil,
+		); err != nil {
+			return nil, err
+		}
+		cycleID := uuidString(row.CycleID)
+		for _, field := range []struct {
+			name  string
+			value *string
+		}{
+			{name: "plan", value: &row.Plan},
+			{name: "do_text", value: &row.DoText},
+			{name: "check_text", value: &row.CheckText},
+			{name: "action", value: &row.Action},
+		} {
+			decoded, decodeErr := transaction.content.decode(
+				ctx, userID, "pdca_cycles", cycleID, field.name, *field.value,
+			)
+			if decodeErr != nil {
+				return nil, decodeErr
+			}
+			*field.value = decoded
+		}
 		item, mapErr := aiContextCycleFromSQLC(row)
 		if mapErr != nil {
 			return nil, mapErr
@@ -580,6 +658,18 @@ func (transaction *workspaceGoalDraftTx) InsertGoalRefineGeneration(
 	ctx context.Context,
 	record workspace.GoalRefineGenerationRecord,
 ) (int64, error) {
+	canonicalHash, err := transaction.content.encode(
+		ctx, record.UserID, "ai_generations", record.ID, "canonical_provider_input_hash", 1, record.CanonicalProviderInputHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	sourceText, err := transaction.content.encode(
+		ctx, record.UserID, "ai_generations", record.ID, "source_text", 1, record.SourceText,
+	)
+	if err != nil {
+		return 0, err
+	}
 	rows, err := transaction.queries.InsertGoalRefineGeneration(ctx, db.InsertGoalRefineGenerationParams{
 		GenerationID:               mustUUID(record.ID),
 		UserID:                     mustUUID(record.UserID),
@@ -589,8 +679,8 @@ func (transaction *workspaceGoalDraftTx) InsertGoalRefineGeneration(
 		TargetRevision:             record.TargetRevision,
 		IdempotencyKey:             mustUUID(record.IdempotencyKey),
 		IdempotencyRequestHash:     record.IdempotencyRequestHash,
-		CanonicalProviderInputHash: record.CanonicalProviderInputHash,
-		SourceText:                 record.SourceText,
+		CanonicalProviderInputHash: canonicalHash,
+		SourceText:                 sourceText,
 		Provider:                   record.Provider,
 		Model:                      record.Model,
 		PromptVersion:              record.PromptVersion,
@@ -657,6 +747,8 @@ func (transaction *workspaceGoalDraftTx) LockGoalRefineGeneration(
 	if err != nil {
 		return workspace.GoalRefineSettlementState{}, err
 	}
+	transaction.lockedGenerationUserID = key.UserID
+	transaction.lockedGenerationID = key.GenerationID
 	return goalRefineSettlementFromSQLC(row)
 }
 
@@ -664,9 +756,22 @@ func (transaction *workspaceGoalDraftTx) TerminalizeGenerationCAS(
 	ctx context.Context,
 	settlement workspace.AIGenerationSettlement,
 ) (int64, error) {
+	output := settlement.Output
+	if transaction.content.encryptWrites {
+		if transaction.lockedGenerationUserID == "" || transaction.lockedGenerationID != settlement.GenerationID {
+			return 0, fmt.Errorf("%w: Generation was not locked before settlement", workspace.ErrGoalPersistenceInvariant)
+		}
+		var err error
+		output, err = transaction.content.encodeOptional(
+			ctx, transaction.lockedGenerationUserID, "ai_generations", settlement.GenerationID, "output", 1, settlement.Output,
+		)
+		if err != nil {
+			return 0, err
+		}
+	}
 	return transaction.queries.TerminalizeGenerationCAS(ctx, db.TerminalizeGenerationCASParams{
 		Status:                 settlement.Status,
-		Output:                 settlement.Output,
+		Output:                 output,
 		InputTokens:            settlement.InputTokens,
 		OutputTokens:           settlement.OutputTokens,
 		EstimatedCostUsd:       settlement.EstimatedCostUSD,
@@ -792,6 +897,12 @@ func (transaction *workspaceGoalDraftTx) LockSucceededGoalRefineGeneration(
 	if err != nil {
 		return workspace.GoalSuggestionState{}, err
 	}
+	if err = transaction.content.decodeAIField(ctx, userID, generationID, "source_text", &row.SourceText); err != nil {
+		return workspace.GoalSuggestionState{}, err
+	}
+	if err = transaction.content.decodeAIField(ctx, userID, generationID, "output", &row.Output); err != nil {
+		return workspace.GoalSuggestionState{}, err
+	}
 	return goalSuggestionStateFromSQLC(row)
 }
 
@@ -799,8 +910,14 @@ func (transaction *workspaceGoalDraftTx) AdoptDraftCAS(
 	ctx context.Context,
 	record workspace.AdoptDraftRecord,
 ) (int64, error) {
+	body, err := transaction.content.encode(
+		ctx, record.UserID, "goal_drafts", record.DraftID, "body", record.NewRevision+1, record.Body,
+	)
+	if err != nil {
+		return 0, err
+	}
 	return transaction.queries.AdoptDraftCAS(ctx, db.AdoptDraftCASParams{
-		Body:             record.Body,
+		Body:             body,
 		NewRevision:      record.NewRevision,
 		UpdatedAt:        timestamptz(record.UpdatedAt),
 		DraftID:          mustUUID(record.DraftID),
@@ -877,7 +994,7 @@ func goalRefineReplayFromSQLC(row *db.FindGoalRefineReplayRow) (*workspace.GoalR
 		IdempotencyRequestHash: row.IdempotencyRequestHash,
 		Status:                 row.Status,
 		TargetRevision:         row.TargetRevision,
-		Output:                 row.Output,
+		Output:                 optionalNonEmptyText(row.Output),
 		FailureCode:            row.FailureCode,
 		ContextChanged:         row.ContextChanged,
 	}, nil
@@ -1016,7 +1133,7 @@ func aiUsageStateFromSQLC(row *db.LockUsageRow) (workspace.AIUsageState, error) 
 func goalSuggestionStateFromSQLC(
 	row *db.LockSucceededGoalRefineGenerationRow,
 ) (workspace.GoalSuggestionState, error) {
-	if row == nil || row.TargetRevision < 0 || row.SourceText == nil || row.Output == nil {
+	if row == nil || row.TargetRevision < 0 || row.SourceText == "" || row.Output == "" {
 		return workspace.GoalSuggestionState{}, aiAdapterPersistenceError("Goal suggestion state is invalid")
 	}
 	adoptedAt, err := optionalAITimestamptz(row.AdoptedAt)
@@ -1028,7 +1145,7 @@ func goalSuggestionStateFromSQLC(
 		return workspace.GoalSuggestionState{}, aiAdapterPersistenceError("Goal suggestion adoption state is invalid")
 	}
 	return workspace.GoalSuggestionState{
-		TargetRevision: row.TargetRevision, SourceText: *row.SourceText, Output: *row.Output,
+		TargetRevision: row.TargetRevision, SourceText: row.SourceText, Output: row.Output,
 		AdoptedAt: adoptedAt, AdoptedDraftRevision: row.AdoptedDraftRevision,
 	}, nil
 }
@@ -1074,13 +1191,13 @@ func aiAdapterPersistenceError(detail string) error {
 }
 
 func goalDraftFromSQLC(row *db.GoalDraft) (goal.Draft, error) {
-	if row == nil {
+	if row == nil || row.Body == nil {
 		return goal.Draft{}, goalDraftPersistenceError("Draft row is missing")
 	}
 	return goalDraftFromColumns(goalDraftColumns{
 		id: row.ID, userID: row.UserID, draftType: row.DraftType, goalID: row.GoalID,
 		baseGoalVersionID: row.BaseGoalVersionID, reviewCycleID: row.ReviewCycleID,
-		body: row.Body, revision: row.Revision, createdAt: row.CreatedAt, updatedAt: row.UpdatedAt,
+		body: *row.Body, revision: row.Revision, createdAt: row.CreatedAt, updatedAt: row.UpdatedAt,
 	})
 }
 
@@ -1088,7 +1205,7 @@ type goalDraftColumns struct {
 	id, userID, goalID, baseGoalVersionID, reviewCycleID pgtype.UUID
 	draftType                                            string
 	body                                                 string
-	successSignal                                        *string
+	successSignal                                        string
 	revision                                             int64
 	createdAt, updatedAt                                 pgtype.Timestamptz
 }
@@ -1166,7 +1283,7 @@ func goalDraftFromColumns(row goalDraftColumns) (goal.Draft, error) {
 		BaseGoalVersionID: baseVersionID,
 		ReviewCycleID:     reviewCycleID,
 		Body:              row.body,
-		SuccessSignal:     row.successSignal,
+		SuccessSignal:     optionalNonEmptyText(row.successSignal),
 		Revision:          row.revision,
 		CreatedAt:         row.createdAt.Time.UTC(),
 		UpdatedAt:         row.updatedAt.Time.UTC(),

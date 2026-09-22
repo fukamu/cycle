@@ -17,6 +17,8 @@ import (
 
 type workspaceActionAITx struct {
 	*workspaceGoalDraftTx
+	lockedActionCycle              *cycle.PDCACycle
+	lockedActionCycleStorageFormat string
 }
 
 var (
@@ -33,9 +35,15 @@ func (store *WorkspaceStore) WithinActionAITransaction(
 		return err
 	}
 	defer rollback(ctx, tx)
+	queries := store.queries.WithTx(tx)
+	content, err := prepareContentBoundary(ctx, queries, store.content)
+	if err != nil {
+		return err
+	}
 	port := &workspaceActionAITx{workspaceGoalDraftTx: &workspaceGoalDraftTx{
 		tx:      tx,
-		queries: store.queries.WithTx(tx),
+		queries: queries,
+		content: content,
 	}}
 	if err = callback(port); err != nil {
 		return err
@@ -60,7 +68,16 @@ func (transaction *workspaceActionAITx) LockActionCycle(
 	if err != nil {
 		return cycle.PDCACycle{}, err
 	}
-	return cycleFromSQLC(row)
+	current, err := cycleFromTransitionRow(row)
+	if err != nil {
+		return cycle.PDCACycle{}, err
+	}
+	if err = transaction.content.decodeCycle(ctx, &current); err != nil {
+		return cycle.PDCACycle{}, err
+	}
+	transaction.lockedActionCycle = &current
+	transaction.lockedActionCycleStorageFormat = row.ContentStorageFormat
+	return current, nil
 }
 
 func (transaction *workspaceActionAITx) FindActionAIReplay(
@@ -81,6 +98,11 @@ func (transaction *workspaceActionAITx) FindActionAIReplay(
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err = transaction.content.decodeAIField(
+		ctx, userID, uuidString(row.GenerationID), "output", &row.Output,
+	); err != nil {
 		return nil, err
 	}
 	return actionAIReplayFromSQLC(row)
@@ -106,6 +128,18 @@ func (transaction *workspaceActionAITx) InsertActionAIGeneration(
 	if err := requireActionOperation(record.Operation); err != nil {
 		return 0, err
 	}
+	canonicalHash, err := transaction.content.encode(
+		ctx, record.UserID, "ai_generations", record.ID, "canonical_provider_input_hash", 1, record.CanonicalProviderInputHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	sourceText, err := transaction.content.encodeOptional(
+		ctx, record.UserID, "ai_generations", record.ID, "source_text", 1, record.SourceText,
+	)
+	if err != nil {
+		return 0, err
+	}
 	rows, err := transaction.queries.InsertActionAIGeneration(ctx, db.InsertActionAIGenerationParams{
 		GenerationID:               mustUUID(record.ID),
 		UserID:                     mustUUID(record.UserID),
@@ -116,8 +150,8 @@ func (transaction *workspaceActionAITx) InsertActionAIGeneration(
 		TargetRevision:             record.TargetRevision,
 		IdempotencyKey:             mustUUID(record.IdempotencyKey),
 		IdempotencyRequestHash:     record.IdempotencyRequestHash,
-		CanonicalProviderInputHash: record.CanonicalProviderInputHash,
-		SourceText:                 record.SourceText,
+		CanonicalProviderInputHash: canonicalHash,
+		SourceText:                 sourceText,
 		Provider:                   record.Provider,
 		Model:                      record.Model,
 		PromptVersion:              record.PromptVersion,
@@ -156,6 +190,8 @@ func (transaction *workspaceActionAITx) LockActionAIGeneration(
 	if err != nil {
 		return workspace.ActionAISettlementState{}, err
 	}
+	transaction.lockedGenerationUserID = key.UserID
+	transaction.lockedGenerationID = key.GenerationID
 	return actionAISettlementFromSQLC(row)
 }
 
@@ -170,8 +206,41 @@ func (transaction *workspaceActionAITx) ApplyActionAICAS(
 		record.NewActionRevision != record.ExpectedActionRevision+1 {
 		return 0, fmt.Errorf("%w: invalid Action AI revision transition", workspace.ErrActionAIPersistenceInvariant)
 	}
+	if transaction.lockedActionCycle == nil || transaction.lockedActionCycle.ID != record.CycleID {
+		return 0, fmt.Errorf("%w: Action Cycle was not locked before apply", workspace.ErrActionAIPersistenceInvariant)
+	}
+	current := *transaction.lockedActionCycle
+	current.Action = record.Action
+	current.Revisions.Content = record.NewContentRevision
+	current.Revisions.Action = record.NewActionRevision
+	currentContent := cycleContent{
+		userID: current.UserID, cycleID: current.ID,
+		plan: current.Plan, doText: current.Do, checkText: current.Check, action: current.Action,
+		planRevision: current.Revisions.Plan, doRevision: current.Revisions.Do,
+		checkRevision: current.Revisions.Check, actionRevision: current.Revisions.Action,
+	}
+	if transaction.content.encryptWrites && transaction.lockedActionCycleStorageFormat == contentStorageLegacy {
+		content, err := transaction.content.encodeCycleFields(ctx, currentContent)
+		if err != nil {
+			return 0, err
+		}
+		return transaction.queries.ApplyActionAIMigrateLegacyCAS(ctx, db.ApplyActionAIMigrateLegacyCASParams{
+			Plan: content.plan, DoText: content.doText, CheckText: content.checkText, Action: content.action,
+			NewContentRevision: record.NewContentRevision, NewActionRevision: record.NewActionRevision,
+			UpdatedAt: timestamptz(record.UpdatedAt), CycleID: mustUUID(record.CycleID),
+			UserID: mustUUID(record.UserID), GoalID: mustUUID(record.GoalID), GoalVersionID: mustUUID(record.GoalVersionID),
+			ExpectedContentRevision: record.ExpectedContentRevision, ExpectedActionRevision: record.ExpectedActionRevision,
+		})
+	}
+	if transaction.content.encryptWrites && transaction.lockedActionCycleStorageFormat != contentStorageV1 {
+		return 0, fmt.Errorf("%w: invalid Action Cycle content storage format", workspace.ErrActionAIPersistenceInvariant)
+	}
+	action, err := transaction.content.encodeCycleField(ctx, currentContent, cycle.FrameAction)
+	if err != nil {
+		return 0, err
+	}
 	return transaction.queries.ApplyActionAICAS(ctx, db.ApplyActionAICASParams{
-		Action:                  record.Action,
+		Action:                  action,
 		NewContentRevision:      record.NewContentRevision,
 		NewActionRevision:       record.NewActionRevision,
 		UpdatedAt:               timestamptz(record.UpdatedAt),
@@ -191,11 +260,24 @@ func (transaction *workspaceActionAITx) TerminalizeActionAIGenerationCAS(
 	if err := requireActionOperation(settlement.Operation); err != nil {
 		return 0, err
 	}
+	output := settlement.Output
+	if transaction.content.encryptWrites {
+		if transaction.lockedGenerationUserID == "" || transaction.lockedGenerationID != settlement.GenerationID {
+			return 0, fmt.Errorf("%w: Generation was not locked before settlement", workspace.ErrActionAIPersistenceInvariant)
+		}
+		var err error
+		output, err = transaction.content.encodeOptional(
+			ctx, transaction.lockedGenerationUserID, "ai_generations", settlement.GenerationID, "output", 1, settlement.Output,
+		)
+		if err != nil {
+			return 0, err
+		}
+	}
 	return transaction.queries.TerminalizeActionAIGenerationCAS(
 		ctx,
 		db.TerminalizeActionAIGenerationCASParams{
 			Status:                 settlement.Status,
-			Output:                 settlement.Output,
+			Output:                 output,
 			InputTokens:            settlement.InputTokens,
 			OutputTokens:           settlement.OutputTokens,
 			EstimatedCostUsd:       settlement.EstimatedCostUSD,
@@ -234,7 +316,7 @@ func actionAIReplayFromSQLC(row *db.FindActionAIReplayRow) (*workspace.ActionAIR
 		IdempotencyRequestHash: row.IdempotencyRequestHash,
 		Status:                 row.Status,
 		TargetRevision:         row.TargetRevision,
-		Output:                 row.Output,
+		Output:                 optionalNonEmptyText(row.Output),
 		FailureCode:            row.FailureCode,
 		ContextChanged:         row.ContextChanged,
 		LeaseExpiresAt:         leaseExpiresAt,

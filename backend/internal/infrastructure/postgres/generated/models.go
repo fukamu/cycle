@@ -61,7 +61,20 @@ type AiGeneration struct {
 	// Immutable request replay identity.
 	IdempotencyRequestHash string
 	// Immutable canonical provider input identity; NULL only for pre-split records and rollback-window legacy-writer inserts.
-	CanonicalProviderInputHash *string
+	CanonicalProviderInputHash               *string
+	ContentStorageFormat                     string
+	SourceTextDekVersion                     *int32
+	SourceTextCryptoRevision                 *int64
+	SourceTextNonce                          []byte
+	SourceTextCiphertext                     []byte
+	OutputDekVersion                         *int32
+	OutputCryptoRevision                     *int64
+	OutputNonce                              []byte
+	OutputCiphertext                         []byte
+	CanonicalProviderInputHashDekVersion     *int32
+	CanonicalProviderInputHashCryptoRevision *int64
+	CanonicalProviderInputHashNonce          []byte
+	CanonicalProviderInputHashCiphertext     []byte
 }
 
 type AiUsageEvent struct {
@@ -107,6 +120,26 @@ type AuthIdentity struct {
 	CreatedAt           pgtype.Timestamptz
 }
 
+type ContentEncryptionControl struct {
+	Singleton  bool
+	Mode       string
+	Generation int64
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type ContentEncryptionJob struct {
+	ID             pgtype.UUID
+	Operation      string
+	Status         string
+	Phase          string
+	ProcessedCount int64
+	ConflictCount  int64
+	FailureCount   int64
+	StartedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	CompletedAt    pgtype.Timestamptz
+}
+
 type Goal struct {
 	ID                      pgtype.UUID
 	UserID                  pgtype.UUID
@@ -131,21 +164,31 @@ type GoalDeleteReceipt struct {
 }
 
 type GoalDraft struct {
-	ID                pgtype.UUID
-	UserID            pgtype.UUID
-	DraftType         string
-	GoalID            pgtype.UUID
-	BaseGoalVersionID pgtype.UUID
-	ReviewCycleID     pgtype.UUID
-	Body              string
-	Revision          int64
-	CreatedAt         pgtype.Timestamptz
-	UpdatedAt         pgtype.Timestamptz
+	ID                   pgtype.UUID
+	UserID               pgtype.UUID
+	DraftType            string
+	GoalID               pgtype.UUID
+	BaseGoalVersionID    pgtype.UUID
+	ReviewCycleID        pgtype.UUID
+	Body                 *string
+	Revision             int64
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+	ContentStorageFormat string
+	BodyDekVersion       *int32
+	BodyCryptoRevision   *int64
+	BodyNonce            []byte
+	BodyCiphertext       []byte
 }
 
 type GoalDraftSuccessSignal struct {
-	GoalDraftID   pgtype.UUID
-	SuccessSignal string
+	GoalDraftID                 pgtype.UUID
+	SuccessSignal               *string
+	ContentStorageFormat        string
+	SuccessSignalDekVersion     *int32
+	SuccessSignalCryptoRevision *int64
+	SuccessSignalNonce          []byte
+	SuccessSignalCiphertext     []byte
 }
 
 type GoalVersion struct {
@@ -153,14 +196,24 @@ type GoalVersion struct {
 	UserID               pgtype.UUID
 	GoalID               pgtype.UUID
 	VersionNumber        int32
-	Body                 string
+	Body                 *string
 	CreatedByOperationID pgtype.UUID
 	CreatedAt            pgtype.Timestamptz
+	ContentStorageFormat string
+	BodyDekVersion       *int32
+	BodyCryptoRevision   *int64
+	BodyNonce            []byte
+	BodyCiphertext       []byte
 }
 
 type GoalVersionSuccessSignal struct {
-	GoalVersionID pgtype.UUID
-	SuccessSignal string
+	GoalVersionID               pgtype.UUID
+	SuccessSignal               *string
+	ContentStorageFormat        string
+	SuccessSignalDekVersion     *int32
+	SuccessSignalCryptoRevision *int64
+	SuccessSignalNonce          []byte
+	SuccessSignalCiphertext     []byte
 }
 
 type PdcaCycle struct {
@@ -174,10 +227,10 @@ type PdcaCycle struct {
 	CompletedAt                        pgtype.Timestamptz
 	CanceledAt                         pgtype.Timestamptz
 	CancellationReason                 *string
-	Plan                               string
-	DoText                             string
-	CheckText                          string
-	Action                             string
+	Plan                               *string
+	DoText                             *string
+	CheckText                          *string
+	Action                             *string
 	ContentRevision                    int64
 	PlanRevision                       int64
 	DoRevision                         int64
@@ -191,6 +244,23 @@ type PdcaCycle struct {
 	CompletionRequestHash              *string
 	CreatedAt                          pgtype.Timestamptz
 	UpdatedAt                          pgtype.Timestamptz
+	ContentStorageFormat               string
+	PlanDekVersion                     *int32
+	PlanCryptoRevision                 *int64
+	PlanNonce                          []byte
+	PlanCiphertext                     []byte
+	DoTextDekVersion                   *int32
+	DoTextCryptoRevision               *int64
+	DoTextNonce                        []byte
+	DoTextCiphertext                   []byte
+	CheckTextDekVersion                *int32
+	CheckTextCryptoRevision            *int64
+	CheckTextNonce                     []byte
+	CheckTextCiphertext                []byte
+	ActionDekVersion                   *int32
+	ActionCryptoRevision               *int64
+	ActionNonce                        []byte
+	ActionCiphertext                   []byte
 }
 
 type PdcaCycleReviewSchedule struct {
@@ -216,4 +286,20 @@ type User struct {
 	LastActiveAt pgtype.Timestamptz
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+}
+
+type UserContentDek struct {
+	UserID        pgtype.UUID
+	DekVersion    int32
+	KekKeyVersion string
+	WrappedDek    []byte
+	IsWriteKey    bool
+	CreatedAt     pgtype.Timestamptz
+}
+
+type UserContentNonceReservation struct {
+	UserID     pgtype.UUID
+	DekVersion int32
+	Nonce      []byte
+	CreatedAt  pgtype.Timestamptz
 }

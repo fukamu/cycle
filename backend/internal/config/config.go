@@ -27,15 +27,16 @@ const (
 type LookupEnv func(string) (string, bool)
 
 type Config struct {
-	App       AppConfig
-	Telemetry TelemetryConfig
-	Database  DatabaseConfig
-	Session   SessionConfig
-	Goals     GoalConfig
-	AI        AIConfig
-	RateLimit RateLimitConfig
-	Turnstile TurnstileConfig
-	Google    GoogleConfig
+	App               AppConfig
+	Telemetry         TelemetryConfig
+	Database          DatabaseConfig
+	Session           SessionConfig
+	Goals             GoalConfig
+	AI                AIConfig
+	ContentEncryption ContentEncryptionConfig
+	RateLimit         RateLimitConfig
+	Turnstile         TurnstileConfig
+	Google            GoogleConfig
 }
 
 type AppConfig struct {
@@ -101,6 +102,12 @@ type AIPricingConfig struct {
 	Model                     string
 	InputUSDPerMillionTokens  float64
 	OutputUSDPerMillionTokens float64
+}
+
+type ContentEncryptionConfig struct {
+	KMSProvider        string
+	GCPKeyVersion      string
+	GCPCredentialsJSON string
 }
 
 type RateLimitConfig struct {
@@ -187,6 +194,11 @@ func Load(lookup LookupEnv) (Config, error) {
 				OutputUSDPerMillionTokens: reader.floatValue("AI_PRICE_OUTPUT_USD_PER_MILLION", 0),
 			},
 		},
+		ContentEncryption: ContentEncryptionConfig{
+			KMSProvider:        reader.stringValue("CONTENT_ENCRYPTION_KMS_PROVIDER", "fixture"),
+			GCPKeyVersion:      reader.stringValue("CONTENT_ENCRYPTION_GCP_KEY_VERSION", ""),
+			GCPCredentialsJSON: reader.stringValue("CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON", ""),
+		},
 		RateLimit: RateLimitConfig{
 			AnonymousCreatePerIPHour:  reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_HOUR", 5),
 			AnonymousCreatePerIP24h:   reader.intValue("RATE_ANONYMOUS_CREATE_PER_IP_24H", 20),
@@ -256,6 +268,21 @@ func (config Config) Validate() error {
 	}
 	if config.Goals.MaxProgressingGoals <= 0 {
 		problems = append(problems, "MAX_PROGRESSING_GOALS must be positive")
+	}
+	if config.ContentEncryption.KMSProvider != "fixture" && config.ContentEncryption.KMSProvider != "gcp" {
+		problems = append(problems, "CONTENT_ENCRYPTION_KMS_PROVIDER must be fixture or gcp")
+	}
+	if config.ContentEncryption.KMSProvider == "gcp" {
+		keyVersion := config.ContentEncryption.GCPKeyVersion
+		if !validGCPKMSKeyVersion(keyVersion) {
+			problems = append(problems, "CONTENT_ENCRYPTION_GCP_KEY_VERSION must be an exact GCP KMS CryptoKeyVersion resource")
+		}
+		if config.ContentEncryption.GCPCredentialsJSON == "" {
+			problems = append(problems, "CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON is required for gcp KMS")
+		}
+	}
+	if config.App.Environment == "production" && config.ContentEncryption.KMSProvider != "gcp" {
+		problems = append(problems, "CONTENT_ENCRYPTION_KMS_PROVIDER must be gcp in production")
 	}
 	if config.AI.Provider != "openai" {
 		problems = append(problems, "AI_PROVIDER must be openai")
@@ -343,6 +370,20 @@ func (config Config) Validate() error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func validGCPKMSKeyVersion(value string) bool {
+	parts := strings.Split(value, "/")
+	if len(parts) != 10 || parts[0] != "projects" || parts[2] != "locations" ||
+		parts[4] != "keyRings" || parts[6] != "cryptoKeys" || parts[8] != "cryptoKeyVersions" {
+		return false
+	}
+	for _, index := range []int{1, 3, 5, 7, 9} {
+		if parts[index] == "" || strings.TrimSpace(parts[index]) != parts[index] {
+			return false
+		}
+	}
+	return true
 }
 
 type envReader struct {

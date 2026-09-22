@@ -5813,8 +5813,14 @@ Goal、Goal Draft、Goal Version、P/D/C/A、Goal Refine source/outputは、仕�
 - HSTSをcustom domainで有効化。
 - PostgreSQL connectionはTLS必須。
 - Managed PostgreSQL / backupのprovider-managed encryption at restを利用する。
-- App-level field encryptionはMVPでは導入しない。Key managementと全文取得を複雑化するためであり、最小権限、TLS、provider encryption、削除設計を優先する。
-- 将来、法務・Enterprise要件が生じた場合は本書のSecurity / Privacy設計を更新して検討する。
+- PostgreSQLへ保存するUser Contentは、認証・owner scopeを確定したRepository境界でserver-side Envelope Encryptionする。Domain、Application、HTTP DTOは従来の平文文字列contractを維持し、Browserへ暗号文や鍵metadataを返さない。
+- 対象はGoal Version本文、Goal Draft本文、両Success Signal、CycleのP/D/C/A、AI Generationのsource / output / canonical provider input hashである。`encrypted-v1` rowでは対応する旧平文列を`NULL`にし、平文との二重保存を禁止する。
+- 方式はUserごとの32-byte DEKとAES-256-GCM、12-byte CSPRNG nonce、128-bit tagを使う。AADはnamespace、認証済みUser ID、table / object / field、record ID、format、DEK version、field固有crypto revisionを順序固定で束縛する。nonceはUser＋DEK version＋nonceでPostgreSQLへ永続予約し、同一DEKでの再利用を拒否する。
+- DEKはrawのまま保存せず、exactなGCP KMS CryptoKeyVersionのKEKでwrapしてUser / DEK versionごとに保存する。新しいwrite DEKへ切り替えても旧versionはread用に残し、既存暗号文の一括再暗号化や旧鍵の自動破棄は行わない。KEK version破棄は、対応する全wrapped DEKが不要と別途検証されるまで禁止する。
+- ID、FK、state、sequence、業務revision、日時、Review schedule、quota / 課金 / usage、暗号形式、DEK version等の検索・認可・復旧に必要なmetadataは平文で保持する。このmetadataから件数、関係、状態、利用時刻を推測できる。
+- `legacy → encrypting → strict`のdurableな単方向stateを使う。`encrypting`以降は暗号対応writerだけを許可し、bounded / restartableなbackfillと全暗号文の認証復号が完了してlegacy残数が0になった場合だけ`strict`へ進む。暗号化失敗をlegacy writeへfallbackせず、strictではlegacy read / writeを拒否する。
+- 鍵未取得、未知format / version、metadata欠損、scope不一致、tag / ciphertext / wrapped key破損はfail-closedとし、空文字、`null`、not-foundへ変換しない。復号不能な既存値をBrowserの古いsnapshotで上書きしない。
+- この境界はDB、snapshotまたはbackup単体の流出に対する保護でありE2EE / zero-knowledgeではない。復号権限を持つruntimeと同等権限の運営者、Browser上の平文、XSS、AI Providerへ必要に応じて送る本文は保護範囲外である。IndexedDBのDraft / Server Snapshotは§§28.5、41.11のTTL・identity fenceを維持し、今回暗号化しない。
 
 ## 41.4 XSS / rendering
 
@@ -5859,6 +5865,7 @@ BOOTSTRAP_ID_PEPPER
 RATE_LIMIT_HMAC_SECRET
 CURSOR_SIGNING_SECRET
 TURNSTILE_SECRET_KEY
+CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON
 ```
 
 - Gitへcommitしない。
@@ -5869,6 +5876,7 @@ TURNSTILE_SECRET_KEY
 - Rotationは各secretのcanonical contractと運用手順に従う。特にsingle-keyの`CSRF_TOKEN_PEPPER`は§41.5のmaintenance / drain制約を外れてrotateしない。
 
 Google Web Client IDは公開識別子だがenvironment-specific configurationとして管理する。
+GCP KMS CryptoKeyVersion resource名は秘密値ではないがenvironment-specific configurationであり、exact versionを固定する。Runtime / content migration operatorだけにwrap / unwrap権限とcredentialを与え、DDL migrationへ復号credentialを渡さない。
 
 ## 41.8 AI provider data minimization
 
@@ -6038,6 +6046,13 @@ migration_file
 migration_duration_ms
 migration_applied_count
 migration_no_change
+content_encryption_operation
+content_encryption_mode
+content_encryption_processed_count
+content_encryption_conflict_count
+content_encryption_failure_count
+content_encryption_remaining_count
+content_encryption_dek_version
 ```
 
 禁止:
@@ -6052,6 +6067,8 @@ Turnstile token
 OpenAI key
 OTLP export header / credential
 Database URL
+raw DEK / wrapped DEK / nonce / ciphertext
+KMS credential / KMS response detail
 raw IP
 long-lived raw User ID
 ```
@@ -6483,6 +6500,8 @@ Cycle ReplanもBackend-firstの2 candidateで有効化する。Expand candidate�
 
 Goal success signalもBackend-firstの2 candidateで有効化する。Expand candidateは`000009` companion tables、Backendのtri-state Draft save、required nullable read field、Version / Cycle pinningだけを含み、Frontendの入力・表示を公開しない。Base tableへcolumnを追加せず、既存rowはcompanion row不在=`null`、旧Backendの`SELECT *`とwriterは従来shapeのまま動作し、旧Frontendはunknown response fieldを無視できる。Migration適用、Backend expand deploy、authoritative old-image drain、全Goal Version / Draft / full Cycle surfaceのcontract確認後だけ、別Frontend activation candidateを有効化する。旧BackendがPATCHを処理し得る間は新Frontendが`successSignal`を送信してはならない。Rollbackではcompanion tablesを残し、Staging / Productionで`000009` downを実行しない。
 
+User Content暗号化は互換release、`000010` expand＋dual-read Application、暗号化write activation / backfill / verify / strictの順に分離する。互換releaseは追加column後も壊れない明示列queryを先行させる。`000010`は鍵・nonce・管理state・暗号列だけを追加し、KMS callやdata backfillをmigrationへ埋め込まない。全旧instanceとAI finalizerをdrainしてから短いwrite停止下で`encrypting`へ切り替え、その後online backfillを行う。暗号文が1件でも作成された後は旧平文専用Applicationへrollbackせず、暗号対応Applicationへのrollbackまたはforward fixだけを許可し、Productionで`000010` downを実行しない。Exact手順と復旧判定は[`operations.md`](operations.md#user-content-encryption-release--recovery)を正本とする。
+
 ## 44.5 Health endpoints
 
 - `GET /healthz`: process到達確認。DB external call不要。
@@ -6527,6 +6546,7 @@ Goal success signalもBackend-firstの2 candidateで有効化する。Expand can
 | Rate limit / Turnstile | §39 | `docs/environment.md`、Worker/Backend config |
 | Database pool | §44.6 | `docs/environment.md`、typed Backend config |
 | Observability exporter | §§42、44.2 | `docs/environment.md`、deployment contract |
+| User Content encryption / KMS | §§41.1–41.3 | `docs/environment.md`、typed Backend config、deployment contract |
 
 Semantic ownerがProduct上の意味と許容関係を定め、運用inventoryがexact key、source、Environment別設定を定める。両者を一つの表へ混在させない。
 
@@ -6547,6 +6567,7 @@ Processを起動しない条件は次である。
 - AI model、pricing、prompt registry、tokenizer、lease contractが不整合。
 - Session/HMAC/signing secretが用途分離・entropy要件を満たさない。
 - Production security profileでTurnstile、Provider credential、Database、observabilityの必須入力が不足。
+- Production security profileでGCP KMS provider、exact CryptoKeyVersion、KMS credentialが不足または不正。
 - Database pool、timeout、lifetimeが内部矛盾または§44.6の接続budgetを満たさない。
 
 Exact validation shapeはtyped configとdeployment contractで同一にし、`./scripts/check-config-parity.sh`でdriftを拒否する。
@@ -6653,6 +6674,7 @@ Governance / Policyの大規模negative fixture suiteは、gate / CI control-pla
 | AI quota、cost、abuse | §§38–39 | real-DB quota/rate/budget/settlement/cleanup concurrency、failure and replay |
 | API / stable error / text semantics | §§19–26、40 | decoder/DTO/error unit、actual HTTP、real-DB text constraint、Frontend Zod/error presentation |
 | Privacy / security / observability / Product KPI | §§27、41–42 | cross-user matrix、safe-log/attribute allowlist、metric/span export、survivor-only aggregateの実DB boundary / delete / privacy、security gate |
+| User Content encryption / migration / recovery | §41.3 | canonical AAD / AES-GCM、persistent nonce、key bootstrap / rotation、全6 table dual-read / encrypted write / backfill / strict、tamper / missing key fail-closed、delete cascade、isolated restore drill |
 | Typography / accessibility | §43 | token/lint、component/A11y、responsive browser journey |
 | Configuration / infrastructure | §§44–45、50–51 | config parity、negative fixtures、Terraform/Worker/container static checks、migration smoke |
 | Shared engineering methods / adoption integrity | vendored Product Engineering Playbook | offline hash/validator、empty override、rule trace、workflow/security positive + negative fixtures、導入・更新時source-backed verification |

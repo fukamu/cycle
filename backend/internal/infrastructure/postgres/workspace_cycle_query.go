@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/infrastructure/contentcrypto"
 	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
 
@@ -55,7 +56,11 @@ func (store *WorkspaceStore) QueryCycleRows(
 		return nil, err
 	}
 	found = make([]workspace.CycleSummary, 0, len(rows))
+	content := contentBoundary{service: store.content}
 	for _, row := range rows {
+		if err = decodeCycleSummaryRow(ctx, content, query.UserID, row); err != nil {
+			return nil, err
+		}
 		item, mapErr := cycleSummaryFromReadRow(row)
 		if mapErr != nil {
 			return nil, mapErr
@@ -92,7 +97,7 @@ func (store *WorkspaceStore) QueryCycle(
 	if !goalExists {
 		return workspace.CycleView{}, workspace.ErrGoalNotFound
 	}
-	view, err = queryCycleView(ctx, tx, userID, goalID, cycleID)
+	view, err = queryCycleView(ctx, tx, contentBoundary{service: store.content}, userID, goalID, cycleID)
 	if err != nil {
 		return workspace.CycleView{}, err
 	}
@@ -105,6 +110,7 @@ func (store *WorkspaceStore) QueryCycle(
 func queryCycleView(
 	ctx context.Context,
 	query db.DBTX,
+	content contentBoundary,
 	userID, goalID, cycleID string,
 ) (workspace.CycleView, error) {
 	row, err := db.New(query).GetCycleView(ctx, db.GetCycleViewParams{
@@ -118,5 +124,98 @@ func queryCycleView(
 	if err != nil {
 		return workspace.CycleView{}, err
 	}
+	if err = decodeCycleViewRow(ctx, content, userID, row); err != nil {
+		return workspace.CycleView{}, err
+	}
 	return cycleViewFromReadRow(row)
+}
+
+func decodeCycleSummaryRow(
+	ctx context.Context,
+	content contentBoundary,
+	userID string,
+	row *db.ListCycleSummariesRow,
+) error {
+	if err := content.decodeGoalVersion(
+		ctx, userID, uuidString(row.GoalVersionID),
+		&row.GoalVersionBody, &row.GoalVersionSuccessSignal,
+	); err != nil {
+		return err
+	}
+	cycleID := uuidString(row.CycleID)
+	if contentcrypto.IsEncryptedStorage(row.PlanPreview) {
+		plain, err := content.decode(ctx, userID, "pdca_cycles", cycleID, "plan", row.PlanPreview)
+		if err != nil {
+			return err
+		}
+		row.PlanPreview, _ = cycleSummaryPreview(plain, true)
+	}
+	if contentcrypto.IsEncryptedStorage(row.CheckPreview) {
+		plain, err := content.decode(ctx, userID, "pdca_cycles", cycleID, "check_text", row.CheckPreview)
+		if err != nil {
+			return err
+		}
+		row.CheckPreview, row.CheckPreviewTruncated = cycleSummaryPreview(plain, false)
+	}
+	if contentcrypto.IsEncryptedStorage(row.ActionPreview) {
+		plain, err := content.decode(ctx, userID, "pdca_cycles", cycleID, "action", row.ActionPreview)
+		if err != nil {
+			return err
+		}
+		row.ActionPreview, row.ActionPreviewTruncated = cycleSummaryPreview(plain, false)
+	}
+	return nil
+}
+
+func decodeCycleViewRow(
+	ctx context.Context,
+	content contentBoundary,
+	userID string,
+	row *db.GetCycleViewRow,
+) error {
+	cycleID := uuidString(row.CycleID)
+	fields := []struct {
+		name  string
+		value *string
+	}{
+		{name: "plan", value: &row.Plan},
+		{name: "do_text", value: &row.DoText},
+		{name: "check_text", value: &row.CheckText},
+		{name: "action", value: &row.Action},
+	}
+	for _, field := range fields {
+		decoded, err := content.decode(ctx, userID, "pdca_cycles", cycleID, field.name, *field.value)
+		if err != nil {
+			return err
+		}
+		*field.value = decoded
+	}
+	if err := content.decodeGoalVersion(
+		ctx, userID, uuidString(row.GoalVersionID),
+		&row.GoalVersionBody, &row.GoalVersionSuccessSignal,
+	); err != nil {
+		return err
+	}
+	if row.PreviousCycleAction != "" {
+		decoded, err := content.decode(
+			ctx, userID, "pdca_cycles", uuidString(row.PreviousCycleID), "action", row.PreviousCycleAction,
+		)
+		if err != nil {
+			return err
+		}
+		row.PreviousCycleAction = decoded
+	}
+	return nil
+}
+
+func cycleSummaryPreview(value string, ellipsis bool) (string, bool) {
+	runes := []rune(value)
+	maximum := workspace.CycleSummaryPreviewMaxCodePoints
+	if len(runes) <= maximum {
+		return value, false
+	}
+	if ellipsis {
+		return string(runes[:maximum-1]) + "…", true
+	}
+	return string(runes[:maximum]), true
 }

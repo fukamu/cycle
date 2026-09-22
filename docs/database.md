@@ -9,7 +9,22 @@
 - Migration files: `backend/migrations/<6桁連番>_<name>.up.sql` と `.down.sql`
 - Query/code generation: `backend/internal/infrastructure/postgres/queries` とsqlc 1.31.1
 - Baseline schema: `000001_fukamu_cycle_baseline.up.sql`。未リリース・空DB・既存環境互換不要という明示承認に基づき、初期Schemaの80/200文字制約とUUID v7制約を直接含む1 migrationへrebaseline済みであり、今後編集しません。
-- 現在のschema head: `000009_goal_success_signal.up.sql`。Goal VersionとGoal Draftの任意のsuccess signalを1:0..1のcompanion tableへ追加します。`000008_cycle_replan_cancellation_reason.up.sql`は`pdca_cycles.cancellation_reason`の既存CHECKを`replanned`までwidenします。`000007_cycle_review_schedule.up.sql`はCycleの任意の見直す日と独立revisionを1:0..1の`pdca_cycle_review_schedules`へ追加します。`000006_anonymous_rate_limit_guard.up.sql`はAnonymous createをIP-HMACごとに直列化する`anonymous_rate_limit_guards`と、期限cleanup用の`(expires_at, scope, key_hash)` indexを追加します。`000005_retention_cleanup_index.up.sql`は確定・content削除済みAI Usageとabuse rate bucketの順序付きbatch scan indexを所有します。保持条件や期限は変更しません。`000004_ai_generation_hash_split.up.sql`はAI request replay identityとcanonical provider input identityを別columnへ保存し、旧`input_hash`は直前Application rollback専用aliasとして一時保持します。`000003_ai_usage_settlement_exposure.up.sql`の未確定settlement metadataと、`000002_ai_usage_retention_margin.up.sql`の24時間15分物理保持期限・24時間Quota windowは変更しません。
+- 現在のschema head: `000010_user_content_encryption_expand.up.sql`。User ContentのEnvelope Encryption用storage列、per-User wrapped DEK、永続nonce予約、移行state / jobを追加します。`000009_goal_success_signal.up.sql`はGoal VersionとGoal Draftの任意のsuccess signalを1:0..1のcompanion tableへ追加します。`000008_cycle_replan_cancellation_reason.up.sql`は`pdca_cycles.cancellation_reason`の既存CHECKを`replanned`までwidenします。`000007_cycle_review_schedule.up.sql`はCycleの任意の見直す日と独立revisionを1:0..1の`pdca_cycle_review_schedules`へ追加します。`000006_anonymous_rate_limit_guard.up.sql`はAnonymous createをIP-HMACごとに直列化する`anonymous_rate_limit_guards`と、期限cleanup用の`(expires_at, scope, key_hash)` indexを追加します。`000005_retention_cleanup_index.up.sql`は確定・content削除済みAI Usageとabuse rate bucketの順序付きbatch scan indexを所有します。保持条件や期限は変更しません。`000004_ai_generation_hash_split.up.sql`はAI request replay identityとcanonical provider input identityを別columnへ保存し、旧`input_hash`は直前Application rollback専用aliasとして一時保持します。`000003_ai_usage_settlement_exposure.up.sql`の未確定settlement metadataと、`000002_ai_usage_retention_margin.up.sql`の24時間15分物理保持期限・24時間Quota windowは変更しません。
+
+`000010`は次をtransactionalにexpandします。
+
+- `content_encryption_control`: `legacy → encrypting → strict`の単方向durable stateとgeneration。
+- `user_content_deks`: User＋DEK versionごとのexact KEK version、wrapped DEK、単一active write key。User削除でcascadeする。
+- `user_content_nonce_reservations`: User＋DEK version＋12-byte nonceの一意予約。対応DEK削除でcascadeし、通常cleanupで再利用しない。
+- `content_encryption_jobs`: backfill / verify / DEK rotation / restore drillの本文を含まないphase・処理・競合・失敗件数。
+- `goal_versions.body`、`goal_drafts.body`、両success signal、`pdca_cycles`のP/D/C/A、`ai_generations`のsource / output / canonical provider input hashへ、row storage formatとfield別DEK version / crypto revision / nonce / ciphertextを追加する。
+- `pg_dump` / `pg_restore`の空`search_path`でも`ai_generations.context_cycle_ids`のUUIDv7 CHECKを評価できるよう、既存UUID配列helper内のscalar helper参照を`public.`修飾する。
+
+`legacy` rowは従来の文字数、NULL、AI status制約を保ちます。`encrypted-v1` rowは旧平文列を`NULL`にし、field metadataとciphertext＋tagの完全な組だけを許可します。DB triggerは暗号化Serviceだけが生成できる内部write markerを短いtransaction-local flagと組み合わせてstorage列へ展開し、`encrypting`以降の旧writer / 直接SQLによる平文write、暗号列の直接更新、暗号文からlegacyへのdowngradeを拒否します。Read helperはdual-read期間だけlegacyを返し、strictではlegacy readをSQLSTATE `23514`で拒否します。
+
+Migration自体はKMS call、DEK作成、既存本文の暗号化を行いません。既存rowは`legacy`のまま保持し、暗号対応Applicationの配備と全writer drain後に[`cmd/contentcrypto`](#user-content-encryption-operator)で別途移行します。`000004`のrequest hash alias / immutabilityは維持し、legacyで`NULL`だったcanonical provider input hashは推測で生成しません。
+
+`000010` downは破棄可能なlocal test DB専用です。stateが`legacy`でない、DEK / jobが存在する、または1件でも`encrypted-v1` rowが存在する場合はSQLSTATE `23514`で全体を拒否します。暗号文作成後のStaging / Productionではdown、平文への一括復号、旧Application rollbackを行いません。
 
 `000009`は既存`goal_versions` / `goal_drafts`のcolumn shapeを変えず、`goal_version_success_signals` / `goal_draft_success_signals`だけを追加するadditive migrationです。Row不在をlogical `successSignal=null`とし、既存rowのbackfillを行いません。Companion rowは1〜120 Unicode code pointsのnonblankな正規化済み値だけを保持し、parent削除時にcascadeします。Migration-first期間も旧Applicationの`SELECT *` scanとwriterは従来shapeのまま動作し、旧Applicationは新tableを無視できます。新ApplicationだけがLEFT JOINと同一Transactionのcompanion writeを使います。Schema-compatibleなApplication rollbackではtablesを残し、Productionでdownを実行しません。
 
@@ -64,6 +79,32 @@ PostgreSQL 18以降の公式imageは`PGDATA=/var/lib/postgresql/18/docker`を使
 Goal success signal migration testは、既存rowのlogical `null`、旧`SELECT *` shape、companion CHECK / cascade、data存在時のatomic down refusal、両tableが空の破棄可能DBだけでのdown / re-upを検証します。AI Usage settlement migration testは、exact backfill、復元不能rowの全体rollback、旧writer補完、旧finalizer clear、CHECK/immutability違反、旧Account Delete guard、新Account Delete後のUser削除を検証します。AI Generation hash split migration testは、legacy backfill、復元不能canonical hashの`NULL`維持、旧・新writerのrolling互換、hash不変性、形式不正なlegacy/new hashでのatomic failure、破棄可能DBだけでのdown/re-upを検証します。Retention cleanup migration testは既存2つのscan indexのpredicate・column順、Anonymous rate-limit guard migration testはtable / PK / expiry indexを検証します。Cycle Replan cancellation reason migration testは、up後の旧reason / `replanned` writer互換、unknown reason拒否、`replanned` row存在時のatomic down refusal、該当rowがない破棄可能DBだけでのdown / re-upを検証します。
 
 この完了済みrebaselineを再実行・再編集してはいけません。今後はMigration番号の変更、適用済みfileの書き換え、別branchで同じ番号を使うことを禁止し、適用済みmigrationの訂正は新しいmigrationで行います。
+
+## User Content encryption operator
+
+`backend/cmd/contentcrypto`は`000010`適用済みDBで使う明示実行のoperatorです。接続先は`DATABASE_URL`、KMSは[`environment.md`](environment.md)の`CONTENT_ENCRYPTION_*`だけから取得し、`.env`を暗黙loadしません。本文、row ID、User ID、鍵、nonce、ciphertext、raw DB / KMS errorを出力せず、stateと件数だけをJSONへ出します。
+
+```bash
+source ./scripts/import-env.sh
+(
+  cd backend
+  go run ./cmd/contentcrypto --status
+)
+```
+
+State-changing operationはexactly oneを選び`--execute`を必須とします。`--backfill`は1〜1000のbounded batchでlegacy rowを対象に、暗号化前の値とstorage stateをCASし、競合したrowを未完了のlegacyとして残します。中断時は完了済み`encrypted-v1` rowを二重暗号化せず、同じcommandの再実行で収束します。各runのphase / processed / conflict / failureは`content_encryption_jobs`へ永続化されます。
+
+```bash
+go run ./cmd/contentcrypto --activate-writes --execute
+go run ./cmd/contentcrypto --backfill --batch-size=APPROVED_INTEGER_1_TO_1000 --execute
+go run ./cmd/contentcrypto --verify --batch-size=APPROVED_INTEGER_1_TO_1000
+go run ./cmd/contentcrypto --strict --execute
+go run ./cmd/contentcrypto --rotate-user-dek=APPROVED_USER_UUID --execute
+```
+
+`--activate-writes`はrunning AI Generationが0の場合だけ`legacy`から`encrypting`へ進めます。`--strict`は全対象tableのlegacy残数が0の場合だけ進めます。`--verify`は暗号化fieldをbounded pageで全件認証復号し、最初の欠損鍵、unknown format、AAD不一致、tag / ciphertext / wrapped DEK破損でfail-closedに停止します。`--rotate-user-dek`は新versionをwrap・保存してからactive write keyへ昇格し、旧versionをread用に保持します。既存暗号文の再暗号化や旧DEK / KEKの破棄は行いません。
+
+Production / Stagingでの順序、write停止、drain、完了判定、rollback / restoreは[`operations.md`](operations.md#user-content-encryption-release--recovery)だけを正本とします。上記command例を、その環境への実行承認またはProduction data migrationの許可として扱いません。
 
 ## Retention cleanup command
 
@@ -201,12 +242,15 @@ Cycle Replanでは、`000008`適用後にBackend expandを先行deployし、旧w
 
 Goal success signalでは、`000009`適用後にBackend expandを先行deployし、旧Backendのbase-table scan / write互換と、新BackendのDraft / Version / full Cycle required nullable read/write contractを確認します。Authoritativeなold Backend image drain証跡を得るまでFrontendから`successSignal`を送信・必須parse・表示しません。Drain後に別candidateでFrontendを有効化し、Application rollback時もcompanion tablesは残します。Staging / Productionで`000009` downをrelease rollbackとして使いません。詳細は[`design.md`](design.md) §§14.2、20.1、22.3、23.6、44.4を参照してください。
 
+User Content暗号化は互換release、`000010`＋dual-read暗号対応Application、明示的なwrite activation / backfill / verify / strictを別checkpointとして進めます。通常のdeploy workflowは`000010`適用と暗号対応Application deployまでであり、`cmd/contentcrypto`を自動実行しません。暗号化state変更と実data移行は別の明示承認を必要とします。互換releaseの旧Applicationを`000010`へ同時接続する検証が完了するまでmigrationを適用せず、暗号対応Applicationの全instance / AI finalizer drainが完了するまでactivationしません。
+
 手動再実行が必要なincidentでは通常deployを止め、対象Neon project/branch、head SHA、現在のschema version、失敗原因を確認した個別runbookを作ります。URLをlocalへ取り出したり、確認なしにworkflowを繰り返したりしません。Production pipelineは確定済みの`cycle.fukamu.com`向けに、Production専用resourceと運用値が確定した後で別Environmentとして設計します。
 
 ## Destructive migration・rollback・backup
 
 - column/table削除、型の縮小、既存データ変換などは、同じreleaseでapplication rollbackを不可能にし得ます。expand/contractを使い、backupと復旧確認なしに実行しません。
 - Deploy失敗時にdown migrationを自動実行しません。application image/revisionのrollbackとDB schema rollbackは別判断です。
+- `000010`適用後でも暗号文がまだ0件なら、互換確認済みの旧Applicationへ戻してschemaを残せます。暗号文が1件でも存在する場合は暗号対応Applicationだけへrollbackし、downや平文write再開で迂回しません。
 - dirty versionを強制的に書き換える操作やproductionでのreset/drop/truncateを、汎用scriptとして提供しません。
 - production restore windowと追加backup設定の環境固有値・未決状態は [`design.md` §52.2](design.md#522-operational-values)と[`operations.md` Production readiness・data](operations.md#production-readinessdata)が所有します。Backup / restoreで削除済みAccount / Goal dataを通常環境へ個別復元しない契約は[`design.md` §41.10](design.md#4110-account-delete)と[§44.7](design.md#447-rollback)に従います。初回production deploy前にNeon plan/compute、restore window、保持期間、復元演習方法を決定する必要があります。
 - destructive migration前は、その決定済みpolicyに基づくbackupが成功しており、別instanceへのrestore手順が確認済みであることをrelease記録へ残します。

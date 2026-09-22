@@ -152,9 +152,11 @@ run_child() {
     RATE_LIMIT_HMAC_SECRET=rate-private-value \
     CURSOR_SIGNING_SECRET=cursor-private-value \
     OPENAI_API_KEY=openai-private-value \
+    CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON=kms-credentials-private-value \
     TURNSTILE_SECRET_KEY=turnstile-private-value \
     AI_MODEL=model \
     OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example.invalid \
+    CONTENT_ENCRYPTION_GCP_KEY_VERSION=projects/example/locations/global/keyRings/cycle/cryptoKeys/content/cryptoKeyVersions/1 \
     DB_MAX_OPEN_CONNS=1 DB_MAX_IDLE_CONNS=1 DB_CONN_MAX_LIFETIME_MINUTES=1 \
     SESSION_IDLE_DAYS=1 SESSION_ABSOLUTE_DAYS=1 SESSION_ACTIVITY_TOUCH_MINUTES=1 \
     ANONYMOUS_BOOTSTRAP_TTL_MINUTES=1 MAX_PROGRESSING_GOALS=1 AI_REASONING_EFFORT=low \
@@ -181,7 +183,7 @@ run_child "${commit_sha}" 0 >"${output}" 2>&1 \
   || fail "candidate deploy/drain left the Worker secret file"
 [[ -f "${runner_temp}/fukamu-cycle-stable-csrf-rollout-drained.json" ]] \
   || fail "candidate deploy/drain did not create release evidence"
-for private_value in github-private-value migration-private-value runtime-database-private-value cloudflare-private-value worker-private-value; do
+for private_value in github-private-value migration-private-value runtime-database-private-value cloudflare-private-value worker-private-value kms-credentials-private-value; do
   if grep -Fq -- "${private_value}" "${output}" "${log}" "${summary}"; then
     fail "candidate deploy/drain exposed a private value"
   fi

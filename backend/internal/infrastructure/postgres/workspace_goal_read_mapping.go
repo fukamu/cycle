@@ -29,8 +29,8 @@ type goalViewColumns struct {
 	goalTerminalAt              pgtype.Timestamptz
 	currentVersionID            pgtype.UUID
 	currentVersionNumber        *int32
-	currentVersionBody          *string
-	currentVersionSuccessSignal *string
+	currentVersionBody          string
+	currentVersionSuccessSignal string
 	currentVersionCreatedAt     pgtype.Timestamptz
 	cycleCount                  int32
 	activeCycleID               pgtype.UUID
@@ -44,7 +44,12 @@ type goalViewColumns struct {
 	sortTime                    pgtype.Timestamptz
 }
 
-func getGoalView(ctx context.Context, query db.DBTX, userID, goalID string) (workspace.GoalView, error) {
+func getGoalView(
+	ctx context.Context,
+	query db.DBTX,
+	content contentBoundary,
+	userID, goalID string,
+) (workspace.GoalView, error) {
 	row, err := db.New(query).GetGoalView(ctx, db.GetGoalViewParams{
 		GoalID: mustUUID(goalID),
 		UserID: mustUUID(userID),
@@ -53,6 +58,12 @@ func getGoalView(ctx context.Context, query db.DBTX, userID, goalID string) (wor
 		return workspace.GoalView{}, workspace.ErrNotFound
 	}
 	if err != nil {
+		return workspace.GoalView{}, err
+	}
+	if err = content.decodeGoalVersion(
+		ctx, userID, uuidString(row.CurrentVersionID),
+		&row.CurrentVersionBody, &row.CurrentVersionSuccessSignal,
+	); err != nil {
 		return workspace.GoalView{}, err
 	}
 	result, err := goalViewFromGetRow(row)
@@ -113,7 +124,7 @@ func mapGoalView(columns goalViewColumns) (goalViewRow, error) {
 		return goalViewRow{}, fmt.Errorf("%w: Goal identity or timestamps are missing", workspace.ErrGoalPersistenceInvariant)
 	}
 	if !columns.currentVersionID.Valid || columns.currentVersionNumber == nil ||
-		columns.currentVersionBody == nil || !isFiniteGoalTimestamptz(columns.currentVersionCreatedAt) {
+		columns.currentVersionBody == "" || !isFiniteGoalTimestamptz(columns.currentVersionCreatedAt) {
 		return goalViewRow{}, fmt.Errorf("%w: Goal current Version is missing", workspace.ErrGoalPersistenceInvariant)
 	}
 	currentVersionID := uuidString(columns.currentVersionID)
@@ -136,8 +147,8 @@ func mapGoalView(columns goalViewColumns) (goalViewRow, error) {
 			CurrentVersion: workspace.GoalVersionView{
 				ID:            currentVersionID,
 				VersionNumber: *columns.currentVersionNumber,
-				Body:          *columns.currentVersionBody,
-				SuccessSignal: columns.currentVersionSuccessSignal,
+				Body:          columns.currentVersionBody,
+				SuccessSignal: optionalNonEmptyText(columns.currentVersionSuccessSignal),
 				CreatedAt:     columns.currentVersionCreatedAt.Time,
 			},
 		},
@@ -208,7 +219,7 @@ type draftViewColumns struct {
 	baseGoalVersionID pgtype.UUID
 	reviewCycleID     pgtype.UUID
 	body              string
-	successSignal     *string
+	successSignal     string
 	revision          int64
 	updatedAt         pgtype.Timestamptz
 }
@@ -264,7 +275,7 @@ func mapDraftView(columns draftViewColumns) (workspace.DraftView, error) {
 		BaseGoalVersionID: baseGoalVersionID,
 		ReviewCycleID:     reviewCycleID,
 		Body:              columns.body,
-		SuccessSignal:     columns.successSignal,
+		SuccessSignal:     optionalNonEmptyText(columns.successSignal),
 		Revision:          columns.revision,
 		UpdatedAt:         columns.updatedAt.Time,
 	}, nil

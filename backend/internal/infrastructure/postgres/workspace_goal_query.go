@@ -29,7 +29,14 @@ func (store *WorkspaceStore) QueryGoalRows(
 		return nil, err
 	}
 	found := make([]workspace.GoalQueryRow, 0, len(rows))
+	content := contentBoundary{service: store.content}
 	for _, row := range rows {
+		if err = content.decodeGoalVersion(
+			ctx, query.UserID, uuidString(row.CurrentVersionID),
+			&row.CurrentVersionBody, &row.CurrentVersionSuccessSignal,
+		); err != nil {
+			return nil, err
+		}
 		item, mapErr := goalViewFromListRow(row)
 		if mapErr != nil {
 			return nil, mapErr
@@ -44,5 +51,5 @@ func (store *WorkspaceStore) QueryGoalRows(
 }
 
 func (store *WorkspaceStore) QueryGoal(ctx context.Context, userID, goalID string) (workspace.GoalView, error) {
-	return getGoalView(ctx, store.pool, userID, goalID)
+	return getGoalView(ctx, store.pool, contentBoundary{service: store.content}, userID, goalID)
 }
