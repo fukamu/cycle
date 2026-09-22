@@ -146,8 +146,15 @@ SELECT
     d.goal_id,
     d.base_goal_version_id,
     d.review_cycle_id,
-    d.body,
-    signal.success_signal,
+    public.fukamu_cycle_content_read_text(
+      d.content_storage_format, d.body, d.body_dek_version,
+      d.body_crypto_revision, d.body_nonce, d.body_ciphertext
+    ) AS body,
+    COALESCE(public.fukamu_cycle_content_read_text(
+        signal.content_storage_format, signal.success_signal,
+        signal.success_signal_dek_version, signal.success_signal_crypto_revision,
+        signal.success_signal_nonce, signal.success_signal_ciphertext
+    ), '')::text AS success_signal,
     d.revision,
     d.updated_at
 FROM goal_drafts d
@@ -171,7 +178,7 @@ type FindReviewDraftByCycleRow struct {
 	BaseGoalVersionID pgtype.UUID
 	ReviewCycleID     pgtype.UUID
 	Body              string
-	SuccessSignal     *string
+	SuccessSignal     string
 	Revision          int64
 	UpdatedAt         pgtype.Timestamptz
 }
@@ -274,8 +281,15 @@ SELECT
     gv.user_id,
     gv.goal_id,
     gv.version_number,
-    gv.body,
-    signal.success_signal,
+    COALESCE(public.fukamu_cycle_content_read_text(
+      gv.content_storage_format, gv.body, gv.body_dek_version,
+      gv.body_crypto_revision, gv.body_nonce, gv.body_ciphertext
+    ), '')::text AS body,
+    COALESCE(public.fukamu_cycle_content_read_text(
+        signal.content_storage_format, signal.success_signal,
+        signal.success_signal_dek_version, signal.success_signal_crypto_revision,
+        signal.success_signal_nonce, signal.success_signal_ciphertext
+    ), '')::text AS success_signal,
     gv.created_by_operation_id,
     gv.created_at
 FROM goals g
@@ -300,8 +314,8 @@ type LoadCurrentGoalVersionForTransitionRow struct {
 	UserID               pgtype.UUID
 	GoalID               pgtype.UUID
 	VersionNumber        *int32
-	Body                 *string
-	SuccessSignal        *string
+	Body                 string
+	SuccessSignal        string
 	CreatedByOperationID pgtype.UUID
 	CreatedAt            pgtype.Timestamptz
 }

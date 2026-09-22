@@ -34,6 +34,7 @@ test("materializes only the exact Worker secret allowlist", () => {
     RATE_LIMIT_HMAC_SECRET: "rate-private",
     CURSOR_SIGNING_SECRET: "cursor-private",
     OPENAI_API_KEY: "openai-private",
+    CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON: "kms-credentials-private",
     TURNSTILE_SECRET_KEY: "turnstile-private",
   };
   materializeStagingWorkerSecrets({
@@ -50,6 +51,7 @@ test("materializes only the exact Worker secret allowlist", () => {
   });
   assert.deepEqual(Object.keys(JSON.parse(writes[0][1])).sort(), [
     "BOOTSTRAP_ID_PEPPER",
+    "CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON",
     "CSRF_TOKEN_PEPPER",
     "CURSOR_SIGNING_SECRET",
     "DATABASE_URL",

@@ -98,7 +98,10 @@ SELECT id AS generation_id,
        idempotency_request_hash,
        status,
        target_revision,
-       output,
+       COALESCE(public.fukamu_cycle_content_read_text(
+         content_storage_format, output, output_dek_version,
+         output_crypto_revision, output_nonce, output_ciphertext
+       ), '')::text AS output,
        COALESCE(failure_code, '')::text AS failure_code,
        context_changed,
        lease_expires_at
@@ -121,7 +124,7 @@ type FindActionAIReplayRow struct {
 	IdempotencyRequestHash string
 	Status                 string
 	TargetRevision         int64
-	Output                 *string
+	Output                 string
 	FailureCode            string
 	ContextChanged         bool
 	LeaseExpiresAt         pgtype.Timestamptz
@@ -184,7 +187,10 @@ SELECT id AS generation_id,
        idempotency_request_hash,
        status,
        target_revision,
-       output,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           content_storage_format, output, output_dek_version,
+           output_crypto_revision, output_nonce, output_ciphertext
+       ), '')::text AS output,
        COALESCE(failure_code, '')::text AS failure_code,
        context_changed
 FROM ai_generations
@@ -203,7 +209,7 @@ type FindGoalRefineReplayRow struct {
 	IdempotencyRequestHash string
 	Status                 string
 	TargetRevision         int64
-	Output                 *string
+	Output                 string
 	FailureCode            string
 	ContextChanged         bool
 }
@@ -617,8 +623,14 @@ func (q *Queries) LockGoalRefineGeneration(ctx context.Context, arg LockGoalRefi
 
 const lockSucceededGoalRefineGeneration = `-- name: LockSucceededGoalRefineGeneration :one
 SELECT target_revision,
-       source_text,
-       output,
+       public.fukamu_cycle_content_read_text(
+         content_storage_format, source_text, source_text_dek_version,
+         source_text_crypto_revision, source_text_nonce, source_text_ciphertext
+       ) AS source_text,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           content_storage_format, output, output_dek_version,
+           output_crypto_revision, output_nonce, output_ciphertext
+       ), '')::text AS output,
        adopted_at,
        adopted_draft_revision
 FROM ai_generations
@@ -638,8 +650,8 @@ type LockSucceededGoalRefineGenerationParams struct {
 
 type LockSucceededGoalRefineGenerationRow struct {
 	TargetRevision       int64
-	SourceText           *string
-	Output               *string
+	SourceText           string
+	Output               string
 	AdoptedAt            pgtype.Timestamptz
 	AdoptedDraftRevision *int64
 }

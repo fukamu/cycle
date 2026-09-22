@@ -23,8 +23,8 @@ Ready後に`http://localhost:8080`を開き、終了時はterminalでEnterを押
 | Product behavior / API / architecture / invariants | [`docs/design.md`](docs/design.md) |
 | Local setup / development / checks / codegen / AI evaluation / usability research / local troubleshooting | [`docs/development.md`](docs/development.md) |
 | Environment variables / scope / secret-public classification | [`docs/environment.md`](docs/environment.md) |
-| Database / Migration / reset / data safety / DB troubleshooting | [`docs/database.md`](docs/database.md) |
-| Terraform / deployment / monitoring / incident / rollback / production troubleshooting | [`docs/operations.md`](docs/operations.md) |
+| Database / Migration / User Content encryption operator / reset / data safety / DB troubleshooting | [`docs/database.md`](docs/database.md) |
+| Terraform / deployment / encryption rollout・restore / monitoring / incident / rollback / production troubleshooting | [`docs/operations.md`](docs/operations.md) |
 | Coding-agent repository governance | [`AGENTS.md`](AGENTS.md) |
 
 通常の開発・Staging運用では上の専門文書を入口にしてください。

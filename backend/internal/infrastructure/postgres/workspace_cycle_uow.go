@@ -19,8 +19,10 @@ var _ workspace.CycleUnitOfWork = (*WorkspaceStore)(nil)
 var _ workspace.CycleTx = (*workspaceCycleTx)(nil)
 
 type workspaceCycleTx struct {
-	tx      pgx.Tx
-	queries *db.Queries
+	tx                       pgx.Tx
+	queries                  *db.Queries
+	content                  contentBoundary
+	lockedCycleStorageFormat map[string]string
 }
 
 func (store *WorkspaceStore) WithinCycleTransaction(
@@ -32,7 +34,15 @@ func (store *WorkspaceStore) WithinCycleTransaction(
 		return err
 	}
 	defer rollback(ctx, tx)
-	if err = operation(&workspaceCycleTx{tx: tx, queries: store.queries.WithTx(tx)}); err != nil {
+	queries := store.queries.WithTx(tx)
+	content, err := prepareContentBoundary(ctx, queries, store.content)
+	if err != nil {
+		return err
+	}
+	if err = operation(&workspaceCycleTx{
+		tx: tx, queries: queries, content: content,
+		lockedCycleStorageFormat: make(map[string]string),
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -112,10 +122,14 @@ func (transaction *workspaceCycleTx) LockCycle(
 	if err != nil {
 		return cycle.PDCACycle{}, err
 	}
-	current, err := cycleFromSQLC(row)
+	current, err := cycleFromTransitionRow(row)
 	if err != nil {
 		return cycle.PDCACycle{}, err
 	}
+	if err = transaction.content.decodeCycle(ctx, &current); err != nil {
+		return cycle.PDCACycle{}, err
+	}
+	transaction.lockedCycleStorageFormat[current.ID] = row.ContentStorageFormat
 	schedule, err := transaction.queries.GetCycleReviewSchedule(ctx, mustUUID(cycleID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return current, nil
@@ -152,12 +166,17 @@ func (transaction *workspaceCycleTx) LoadCurrentGoalVersion(
 	if err != nil {
 		return goal.Version{}, err
 	}
+	if err = transaction.content.decodeGoalVersion(
+		ctx, userID, uuidString(row.ID), &row.Body, &row.SuccessSignal,
+	); err != nil {
+		return goal.Version{}, err
+	}
 	return goalVersionFromTransitionRow(row)
 }
 
 func goalVersionFromTransitionRow(row *db.LoadCurrentGoalVersionForTransitionRow) (goal.Version, error) {
 	if row == nil || !row.ID.Valid || !row.UserID.Valid || !row.GoalID.Valid || row.VersionNumber == nil ||
-		row.Body == nil || !row.CreatedByOperationID.Valid || !isFiniteGoalTimestamptz(row.CreatedAt) {
+		row.Body == "" || !row.CreatedByOperationID.Valid || !isFiniteGoalTimestamptz(row.CreatedAt) {
 		return goal.Version{}, workspace.ErrGoalVersionConflict
 	}
 	versionID := uuidString(row.ID)
@@ -172,8 +191,8 @@ func goalVersionFromTransitionRow(row *db.LoadCurrentGoalVersionForTransitionRow
 		UserID:               versionUserID,
 		GoalID:               versionGoalID,
 		VersionNumber:        *row.VersionNumber,
-		Body:                 *row.Body,
-		SuccessSignal:        row.SuccessSignal,
+		Body:                 row.Body,
+		SuccessSignal:        optionalNonEmptyText(row.SuccessSignal),
 		CreatedByOperationID: createdByOperationID,
 		CreatedAt:            row.CreatedAt.Time.UTC(),
 	}, nil
@@ -202,12 +221,37 @@ func (transaction *workspaceCycleTx) SaveCycleFrameCAS(
 	if current.Revisions.Content <= 0 || current.FrameRevision(frame) != expectedFrameRevision+1 {
 		return 0, fmt.Errorf("%w: saved Cycle revision is inconsistent", workspace.ErrCyclePersistenceInvariant)
 	}
+	currentContent := cycleContent{
+		userID: current.UserID, cycleID: current.ID,
+		plan: current.Plan, doText: current.Do, checkText: current.Check, action: current.Action,
+		planRevision: current.Revisions.Plan, doRevision: current.Revisions.Do,
+		checkRevision: current.Revisions.Check, actionRevision: current.Revisions.Action,
+	}
+	storageFormat, locked := transaction.lockedCycleStorageFormat[current.ID]
+	if !locked {
+		return 0, fmt.Errorf("%w: Cycle was not locked before save", workspace.ErrCyclePersistenceInvariant)
+	}
+	migrateLegacy := transaction.content.encryptWrites && storageFormat == contentStorageLegacy
+	if transaction.content.encryptWrites && storageFormat != contentStorageLegacy && storageFormat != contentStorageV1 {
+		return 0, fmt.Errorf("%w: invalid Cycle content storage format", workspace.ErrCyclePersistenceInvariant)
+	}
+	if migrateLegacy {
+		content, err := transaction.content.encodeCycleFields(ctx, currentContent)
+		if err != nil {
+			return 0, err
+		}
+		return transaction.saveLegacyCycleFrameCAS(ctx, current, frame, expectedFrameRevision, content)
+	}
+	encodedField, err := transaction.content.encodeCycleField(ctx, currentContent, frame)
+	if err != nil {
+		return 0, err
+	}
 	switch frame {
 	case cycle.FramePlan:
 		return transaction.queries.SaveCyclePlanCAS(
 			ctx,
 			db.SaveCyclePlanCASParams{
-				Content:               current.Plan,
+				Plan:                  encodedField,
 				FrameRevision:         current.FrameRevision(frame),
 				ContentRevision:       current.Revisions.Content,
 				UpdatedAt:             timestamptz(current.UpdatedAt),
@@ -221,7 +265,7 @@ func (transaction *workspaceCycleTx) SaveCycleFrameCAS(
 		return transaction.queries.SaveCycleDoCAS(
 			ctx,
 			db.SaveCycleDoCASParams{
-				Content:               current.Do,
+				DoText:                encodedField,
 				FrameRevision:         current.FrameRevision(frame),
 				ContentRevision:       current.Revisions.Content,
 				UpdatedAt:             timestamptz(current.UpdatedAt),
@@ -235,7 +279,7 @@ func (transaction *workspaceCycleTx) SaveCycleFrameCAS(
 		return transaction.queries.SaveCycleCheckCAS(
 			ctx,
 			db.SaveCycleCheckCASParams{
-				Content:               current.Check,
+				CheckText:             encodedField,
 				FrameRevision:         current.FrameRevision(frame),
 				ContentRevision:       current.Revisions.Content,
 				UpdatedAt:             timestamptz(current.UpdatedAt),
@@ -249,7 +293,7 @@ func (transaction *workspaceCycleTx) SaveCycleFrameCAS(
 		return transaction.queries.SaveCycleActionCAS(
 			ctx,
 			db.SaveCycleActionCASParams{
-				Content:                   current.Action,
+				Action:                    encodedField,
 				FrameRevision:             current.FrameRevision(frame),
 				ContentRevision:           current.Revisions.Content,
 				ActionUserModifiedAfterAi: current.ActionModifiedAfterAI,
@@ -260,6 +304,51 @@ func (transaction *workspaceCycleTx) SaveCycleFrameCAS(
 				ExpectedFrameRevision:     expectedFrameRevision,
 			},
 		)
+	default:
+		return 0, cycle.ErrInvalidFrame
+	}
+}
+
+func (transaction *workspaceCycleTx) saveLegacyCycleFrameCAS(
+	ctx context.Context,
+	current cycle.PDCACycle,
+	frame cycle.Frame,
+	expectedFrameRevision int64,
+	content encryptedCycleFields,
+) (int64, error) {
+	base := struct {
+		plan, doText, checkText, action string
+	}{content.plan, content.doText, content.checkText, content.action}
+	switch frame {
+	case cycle.FramePlan:
+		return transaction.queries.MigrateLegacyCyclePlanCAS(ctx, db.MigrateLegacyCyclePlanCASParams{
+			Plan: base.plan, DoText: base.doText, CheckText: base.checkText, Action: base.action,
+			FrameRevision: current.Revisions.Plan, ContentRevision: current.Revisions.Content,
+			UpdatedAt: timestamptz(current.UpdatedAt), CycleID: mustUUID(current.ID), UserID: mustUUID(current.UserID),
+			GoalID: mustUUID(current.GoalID), ExpectedFrameRevision: expectedFrameRevision,
+		})
+	case cycle.FrameDo:
+		return transaction.queries.MigrateLegacyCycleDoCAS(ctx, db.MigrateLegacyCycleDoCASParams{
+			Plan: base.plan, DoText: base.doText, CheckText: base.checkText, Action: base.action,
+			FrameRevision: current.Revisions.Do, ContentRevision: current.Revisions.Content,
+			UpdatedAt: timestamptz(current.UpdatedAt), CycleID: mustUUID(current.ID), UserID: mustUUID(current.UserID),
+			GoalID: mustUUID(current.GoalID), ExpectedFrameRevision: expectedFrameRevision,
+		})
+	case cycle.FrameCheck:
+		return transaction.queries.MigrateLegacyCycleCheckCAS(ctx, db.MigrateLegacyCycleCheckCASParams{
+			Plan: base.plan, DoText: base.doText, CheckText: base.checkText, Action: base.action,
+			FrameRevision: current.Revisions.Check, ContentRevision: current.Revisions.Content,
+			UpdatedAt: timestamptz(current.UpdatedAt), CycleID: mustUUID(current.ID), UserID: mustUUID(current.UserID),
+			GoalID: mustUUID(current.GoalID), ExpectedFrameRevision: expectedFrameRevision,
+		})
+	case cycle.FrameAction:
+		return transaction.queries.MigrateLegacyCycleActionCAS(ctx, db.MigrateLegacyCycleActionCASParams{
+			Plan: base.plan, DoText: base.doText, CheckText: base.checkText, Action: base.action,
+			FrameRevision: current.Revisions.Action, ContentRevision: current.Revisions.Content,
+			ActionUserModifiedAfterAi: current.ActionModifiedAfterAI,
+			UpdatedAt:                 timestamptz(current.UpdatedAt), CycleID: mustUUID(current.ID), UserID: mustUUID(current.UserID),
+			GoalID: mustUUID(current.GoalID), ExpectedFrameRevision: expectedFrameRevision,
+		})
 	default:
 		return 0, cycle.ErrInvalidFrame
 	}
@@ -333,6 +422,15 @@ func (transaction *workspaceCycleTx) TryInsertCycleClaim(
 	ctx context.Context,
 	current cycle.PDCACycle,
 ) (int64, error) {
+	content, err := transaction.content.encodeCycleFields(ctx, cycleContent{
+		userID: current.UserID, cycleID: current.ID,
+		plan: current.Plan, doText: current.Do, checkText: current.Check, action: current.Action,
+		planRevision: current.Revisions.Plan, doRevision: current.Revisions.Do,
+		checkRevision: current.Revisions.Check, actionRevision: current.Revisions.Action,
+	})
+	if err != nil {
+		return 0, err
+	}
 	return transaction.queries.TryInsertCycleClaim(ctx, db.TryInsertCycleClaimParams{
 		CycleID:          mustUUID(current.ID),
 		UserID:           mustUUID(current.UserID),
@@ -341,6 +439,10 @@ func (transaction *workspaceCycleTx) TryInsertCycleClaim(
 		SequenceNumber:   current.SequenceNumber,
 		Status:           string(current.Status),
 		StartedAt:        timestamptz(current.StartedAt),
+		Plan:             content.plan,
+		DoText:           content.doText,
+		CheckText:        content.checkText,
+		Action:           content.action,
 		StartOperationID: mustUUID(current.StartOperationID),
 		StartRequestHash: current.StartRequestHash,
 		CreatedAt:        timestamptz(current.CreatedAt),
@@ -376,13 +478,17 @@ func (transaction *workspaceCycleTx) InsertReviewDraft(
 	if draft.Type != goal.DraftReview || draft.GoalID == nil || draft.BaseGoalVersionID == nil || draft.ReviewCycleID == nil {
 		return 0, fmt.Errorf("%w: Cycle Review Draft state is incomplete", workspace.ErrCyclePersistenceInvariant)
 	}
+	body, err := transaction.content.encode(ctx, draft.UserID, "goal_drafts", draft.ID, "body", draft.Revision+1, draft.Body)
+	if err != nil {
+		return 0, err
+	}
 	rows, err := transaction.queries.InsertReviewDraftForTransition(ctx, db.InsertReviewDraftForTransitionParams{
 		DraftID:           mustUUID(draft.ID),
 		UserID:            mustUUID(draft.UserID),
 		GoalID:            mustUUID(*draft.GoalID),
 		BaseGoalVersionID: mustUUID(*draft.BaseGoalVersionID),
 		ReviewCycleID:     mustUUID(*draft.ReviewCycleID),
-		Body:              draft.Body,
+		Body:              body,
 		Revision:          draft.Revision,
 		CreatedAt:         timestamptz(draft.CreatedAt),
 		UpdatedAt:         timestamptz(draft.UpdatedAt),
@@ -390,8 +496,14 @@ func (transaction *workspaceCycleTx) InsertReviewDraft(
 	if err != nil || rows != 1 || draft.SuccessSignal == nil {
 		return rows, err
 	}
+	signal, err := transaction.content.encode(
+		ctx, draft.UserID, "goal_draft_success_signals", draft.ID, "success_signal", draft.Revision+1, *draft.SuccessSignal,
+	)
+	if err != nil {
+		return 0, err
+	}
 	signalRows, err := transaction.queries.InsertReviewDraftSuccessSignalForTransition(ctx, db.InsertReviewDraftSuccessSignalForTransitionParams{
-		GoalDraftID: mustUUID(draft.ID), SuccessSignal: *draft.SuccessSignal,
+		GoalDraftID: mustUUID(draft.ID), SuccessSignal: signal,
 	})
 	if err != nil {
 		return 0, err
@@ -425,14 +537,14 @@ func (transaction *workspaceCycleTx) LoadGoalView(
 	ctx context.Context,
 	userID, goalID string,
 ) (workspace.GoalView, error) {
-	return getGoalView(ctx, transaction.tx, userID, goalID)
+	return getGoalView(ctx, transaction.tx, transaction.content, userID, goalID)
 }
 
 func (transaction *workspaceCycleTx) LoadCycleView(
 	ctx context.Context,
 	userID, goalID, cycleID string,
 ) (workspace.CycleView, error) {
-	return queryCycleView(ctx, transaction.tx, userID, goalID, cycleID)
+	return queryCycleView(ctx, transaction.tx, transaction.content, userID, goalID, cycleID)
 }
 
 func (transaction *workspaceCycleTx) FindReviewDraftByCycle(
@@ -448,6 +560,11 @@ func (transaction *workspaceCycleTx) FindReviewDraftByCycle(
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err = transaction.content.decodeDraft(
+		ctx, userID, uuidString(row.ID), &row.Body, &row.SuccessSignal,
+	); err != nil {
 		return nil, err
 	}
 	view, err := reviewDraftViewFromTransitionRow(row)
@@ -526,7 +643,7 @@ func reviewDraftViewFromTransitionRow(row *db.FindReviewDraftByCycleRow) (worksp
 		BaseGoalVersionID: &baseGoalVersionID,
 		ReviewCycleID:     &reviewCycleID,
 		Body:              row.Body,
-		SuccessSignal:     row.SuccessSignal,
+		SuccessSignal:     optionalNonEmptyText(row.SuccessSignal),
 		Revision:          row.Revision,
 		UpdatedAt:         row.UpdatedAt.Time.UTC(),
 	}, nil

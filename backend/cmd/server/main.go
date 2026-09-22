@@ -19,12 +19,14 @@ import (
 	"github.com/fukamu/cycle/backend/internal/config"
 	"github.com/fukamu/cycle/backend/internal/httpapi"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/aiprovider"
+	"github.com/fukamu/cycle/backend/internal/infrastructure/contentcrypto"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/googleidentity"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/observability"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/postgres"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/safelog"
 	"github.com/fukamu/cycle/backend/internal/infrastructure/system"
 	turnstileinfra "github.com/fukamu/cycle/backend/internal/infrastructure/turnstile"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func maximumAIReservationUSD(maxInputTokens, maxOutputTokens, maxProviderAttempts int, inputUSDPerMillionTokens, outputUSDPerMillionTokens float64) float64 {
@@ -39,6 +41,18 @@ func buildTurnstileSettings(settings config.Config, observer turnstileinfra.Obse
 		TestProfile:  settings.Turnstile.CredentialProfile == config.TurnstileCredentialProfileStagingTest,
 		RateHashKey:  []byte(settings.Session.RateLimitHMACSecret), Observer: observer,
 	}
+}
+
+func newContentEncryptionService(
+	ctx context.Context,
+	settings config.Config,
+	pool *pgxpool.Pool,
+) (*contentcrypto.Service, error) {
+	keyManagement, err := contentcrypto.NewConfiguredKeyManagement(ctx, settings.ContentEncryption)
+	if err != nil {
+		return nil, err
+	}
+	return contentcrypto.NewService(postgres.NewContentKeyRepository(pool), keyManagement), nil
 }
 
 type telemetryShutdowner interface {
@@ -116,6 +130,14 @@ func run() (exitCode int) {
 	defer func() {
 		cleanupServerResources(shutdownTelemetry, pool.Close, closePool)
 	}()
+	contentStartupContext, cancelContentStartup := context.WithTimeout(context.Background(), 10*time.Second)
+	contentService, err := newContentEncryptionService(contentStartupContext, settings, pool)
+	cancelContentStartup()
+	if err != nil {
+		logger.Error("content encryption unavailable", "error_class", "content_encryption_startup_failed")
+		return 1
+	}
+	defer contentService.Close()
 
 	random := system.RandomGenerator{}
 	var antiAbuse ports.AntiAbuseVerifier = system.AllowAnonymous{}
@@ -153,7 +175,7 @@ func run() (exitCode int) {
 		settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
 	goalRefineReservationUSD := maximumAIReservationUSD(settings.AI.MaxInputTokens, settings.AI.GoalRefineMaxOutputTokens, settings.AI.MaxProviderAttempts,
 		settings.AI.Pricing.InputUSDPerMillionTokens, settings.AI.Pricing.OutputUSDPerMillionTokens)
-	workspaceStore := postgres.NewWorkspaceStore(pool)
+	workspaceStore := postgres.NewEncryptedWorkspaceStore(pool, contentService)
 	workspaceService := workspace.NewService(workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore, workspaceStore,
 		workspaceStore, goalRefiner, actionGenerator, system.Clock{}, random, workspace.Settings{
 			MaxProgressingGoals: settings.Goals.MaxProgressingGoals, Provider: settings.AI.Provider,

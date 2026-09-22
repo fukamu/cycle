@@ -128,6 +128,7 @@ const productionFrontendEnvironmentAccessAllowlist = [
 ];
 const productionBackendEnvironmentAccessAllowlist = [
   "backend/cmd/cleanup/main.go:os.LookupEnv:consumer=os.Exit(runCleanupCommand(ctx, os.Args[1:], os.LookupEnv, os.Stdout, dependencies))",
+  "backend/cmd/contentcrypto/main.go:os.LookupEnv:consumer=settings, err := config.Load(os.LookupEnv)",
   "backend/cmd/configcheck/main.go:os.LookupEnv:consumer=return checkConfigurationWithLookup(os.LookupEnv)",
   "backend/cmd/kpireport/main.go:os.LookupEnv:consumer=lookupEnvironment := os.LookupEnv",
   "backend/cmd/migrate/main.go:os.Getenv:DATABASE_URL",
@@ -618,11 +619,11 @@ test("deployment contract is the exact repository handoff classification", () =>
     /^    (?:if|continue-on-error):/m,
     "deployment job execution controls",
   );
-  assert.equal(backend.fixed.length, 6);
+  assert.equal(backend.fixed.length, 7);
   assert.deepEqual(backend.omitted, ["STATIC_DIR"]);
-  assert.equal(backend.githubVariables.length, 38);
+  assert.equal(backend.githubVariables.length, 39);
   assert.deepEqual(backend.derived, { AI_PRICING_MODEL: "AI_MODEL" });
-  assert.equal(backend.secrets.length, 9);
+  assert.equal(backend.secrets.length, 10);
   assert.equal(
     backend.githubVariables.includes("OTEL_EXPORTER_OTLP_ENDPOINT"),
     true,
@@ -1661,6 +1662,7 @@ test("deployment contract is the exact repository handoff classification", () =>
       HTTP_ADDRESS: { kind: "literal", value: ":8080" },
       STATIC_DIR: { kind: "literal", value: "" },
       AI_PROVIDER: { kind: "literal", value: "openai" },
+      CONTENT_ENCRYPTION_KMS_PROVIDER: { kind: "literal", value: "gcp" },
       AI_PRICING_MODEL: {
         kind: "environment",
         value: backend.derived.AI_PRICING_MODEL,
@@ -3936,6 +3938,7 @@ function assertApprovedProductionBackendEnvironmentConsumers() {
     [
       "backend/cmd/cleanup/main.go:os.LookupEnv:consumer=os.Exit(runCleanupCommand(ctx, os.Args[1:], os.LookupEnv, os.Stdout, dependencies))",
       "backend/cmd/configcheck/main.go:os.LookupEnv:consumer=return checkConfigurationWithLookup(os.LookupEnv)",
+      "backend/cmd/contentcrypto/main.go:os.LookupEnv:consumer=settings, err := config.Load(os.LookupEnv)",
       "backend/cmd/kpireport/main.go:os.LookupEnv:consumer=lookupEnvironment := os.LookupEnv",
       'backend/cmd/migrate/main.go:os.Getenv:consumer=databaseURL := os.Getenv("DATABASE_URL")',
       'backend/cmd/migrate/main.go:os.Getenv:consumer=directory := os.Getenv("MIGRATIONS_DIR")',

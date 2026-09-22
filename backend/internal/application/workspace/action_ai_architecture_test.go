@@ -220,7 +220,7 @@ func assertCompositionDoesNotInjectPostgresAIPolicy(t *testing.T, server parsedG
 				return true
 			}
 			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || selector.Sel.Name != "NewWorkspaceStore" {
+			if !ok || selector.Sel.Name != "NewEncryptedWorkspaceStore" {
 				return true
 			}
 			qualifier, ok := selector.X.(*ast.Ident)
@@ -228,16 +228,16 @@ func assertCompositionDoesNotInjectPostgresAIPolicy(t *testing.T, server parsedG
 				return true
 			}
 			constructorCalls++
-			if len(call.Args) != 1 {
+			if len(call.Args) != 2 {
 				position := server.fileSet.Position(call.Pos())
-				t.Errorf("composition root passes %d arguments to postgres.NewWorkspaceStore in %s:%d; want only the database pool",
+				t.Errorf("composition root passes %d arguments to postgres.NewEncryptedWorkspaceStore in %s:%d; want database pool and content boundary",
 					len(call.Args), path, position.Line)
 			}
 			return true
 		})
 	}
 	if constructorCalls != 1 {
-		t.Errorf("composition root postgres.NewWorkspaceStore calls = %d, want exactly 1", constructorCalls)
+		t.Errorf("composition root postgres.NewEncryptedWorkspaceStore calls = %d, want exactly 1", constructorCalls)
 	}
 }
 

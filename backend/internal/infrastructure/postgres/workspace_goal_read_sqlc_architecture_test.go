@@ -69,9 +69,9 @@ func TestGetReviewKeepsReadOnlyRepeatableReadSnapshot(t *testing.T) {
 		"AccessMode: pgx.ReadOnly",
 		"defer rollback(ctx, tx)",
 		"queries := store.queries.WithTx(tx)",
-		"getGoalView(ctx, tx, userID, goalID)",
+		"getGoalView(ctx, tx, content, userID, goalID)",
 		"queries.GetGoalReviewDraft(ctx",
-		"getCycleView(ctx, tx, userID, goalID",
+		"getCycleView(ctx, tx, content, userID, goalID",
 		"tx.Commit(ctx)",
 	} {
 		if !strings.Contains(source, fragment) {

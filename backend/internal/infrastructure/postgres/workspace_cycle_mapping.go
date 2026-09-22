@@ -126,20 +126,20 @@ func cycleCancellationReasonFromSQLC(
 func cycleGoalVersionViewFromSQLC(
 	id pgtype.UUID,
 	versionNumber *int32,
-	body *string,
-	successSignal *string,
+	body string,
+	successSignal string,
 	createdValue pgtype.Timestamptz,
 ) (workspace.GoalVersionView, error) {
 	createdAt, createdValid := finiteCycleTimestamp(createdValue)
 	versionID := uuidString(id)
-	if versionID == "" || versionNumber == nil || *versionNumber <= 0 || body == nil || *body == "" || !createdValid {
+	if versionID == "" || versionNumber == nil || *versionNumber <= 0 || body == "" || !createdValid {
 		return workspace.GoalVersionView{}, cyclePersistenceError("Cycle Goal Version is missing or invalid")
 	}
 	return workspace.GoalVersionView{
 		ID:            versionID,
 		VersionNumber: *versionNumber,
-		Body:          *body,
-		SuccessSignal: successSignal,
+		Body:          body,
+		SuccessSignal: optionalNonEmptyText(successSignal),
 		CreatedAt:     createdAt,
 	}, nil
 }
@@ -299,7 +299,7 @@ func previousCompletedCycleActionFromSQLC(
 	}
 	if row.SequenceNumber == 1 {
 		if row.PreviousCycleID.Valid || row.PreviousCycleSequenceNumber != nil || row.PreviousCycleStatus != nil ||
-			row.PreviousCycleCancellationReason != nil || row.PreviousCycleAction != nil || row.PreviousGoalVersionNumber != nil {
+			row.PreviousCycleCancellationReason != nil || row.PreviousCycleAction != "" || row.PreviousGoalVersionNumber != nil {
 			return nil, nil, cyclePersistenceError("first Cycle unexpectedly has a predecessor")
 		}
 		return nil, nil, nil
@@ -332,15 +332,15 @@ func previousCompletedCycleActionFromSQLC(
 	}
 	switch previousStatus {
 	case cycle.StatusCompleted:
-		if row.PreviousCycleAction == nil || cycle.IsBlank(*row.PreviousCycleAction) ||
-			utf8.RuneCountInString(*row.PreviousCycleAction) > cycle.MaxFrameCodePoints {
+		if cycle.IsBlank(row.PreviousCycleAction) ||
+			utf8.RuneCountInString(row.PreviousCycleAction) > cycle.MaxFrameCodePoints {
 			return nil, nil, cyclePersistenceError("active Cycle predecessor Action is blank")
 		}
 		return &workspace.PreviousCompletedCycleActionView{
 			CycleID:             cycleID,
 			CycleSequenceNumber: *row.PreviousCycleSequenceNumber,
 			GoalVersionNumber:   *row.PreviousGoalVersionNumber,
-			Action:              *row.PreviousCycleAction,
+			Action:              row.PreviousCycleAction,
 		}, predecessor, nil
 	case cycle.StatusCanceled:
 		if previousReason == nil || *previousReason != cycle.CancellationReplanned ||
@@ -353,9 +353,19 @@ func previousCompletedCycleActionFromSQLC(
 	}
 }
 
+func optionalNonEmptyText(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
 func cycleFromSQLC(row *db.PdcaCycle) (cycle.PDCACycle, error) {
 	if row == nil {
 		return cycle.PDCACycle{}, cyclePersistenceError("locked Cycle row is nil")
+	}
+	if row.Plan == nil || row.DoText == nil || row.CheckText == nil || row.Action == nil {
+		return cycle.PDCACycle{}, cyclePersistenceError("locked Cycle content is missing")
 	}
 	id := uuidString(row.ID)
 	userID := uuidString(row.UserID)
@@ -412,10 +422,10 @@ func cycleFromSQLC(row *db.PdcaCycle) (cycle.PDCACycle, error) {
 		CompletedAt:        completedAt,
 		CanceledAt:         canceledAt,
 		CancellationReason: cancellationReason,
-		Plan:               row.Plan,
-		Do:                 row.DoText,
-		Check:              row.CheckText,
-		Action:             row.Action,
+		Plan:               *row.Plan,
+		Do:                 *row.DoText,
+		Check:              *row.CheckText,
+		Action:             *row.Action,
 		Revisions: cycle.Revisions{
 			Content: row.ContentRevision,
 			Plan:    row.PlanRevision,
@@ -432,6 +442,25 @@ func cycleFromSQLC(row *db.PdcaCycle) (cycle.PDCACycle, error) {
 		CreatedAt:             createdAt,
 		UpdatedAt:             updatedAt,
 	}, nil
+}
+
+func cycleFromTransitionRow(row *db.LockCycleForTransitionRow) (cycle.PDCACycle, error) {
+	if row == nil {
+		return cycle.PDCACycle{}, cyclePersistenceError("locked Cycle row is nil")
+	}
+	return cycleFromSQLC(&db.PdcaCycle{
+		ID: row.ID, UserID: row.UserID, GoalID: row.GoalID, GoalVersionID: row.GoalVersionID,
+		SequenceNumber: row.SequenceNumber, Status: row.Status, StartedAt: row.StartedAt,
+		CompletedAt: row.CompletedAt, CanceledAt: row.CanceledAt, CancellationReason: row.CancellationReason,
+		Plan: &row.Plan, DoText: &row.DoText, CheckText: &row.CheckText, Action: &row.Action,
+		ContentRevision: row.ContentRevision, PlanRevision: row.PlanRevision, DoRevision: row.DoRevision,
+		CheckRevision: row.CheckRevision, ActionRevision: row.ActionRevision,
+		ActionLastAiAppliedContentRevision: row.ActionLastAiAppliedContentRevision,
+		ActionUserModifiedAfterAi:          row.ActionUserModifiedAfterAi,
+		StartOperationID:                   row.StartOperationID, StartRequestHash: row.StartRequestHash,
+		CompletionOperationID: row.CompletionOperationID, CompletionRequestHash: row.CompletionRequestHash,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	})
 }
 
 func completeCycleReceiptFromSQLC(

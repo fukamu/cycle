@@ -754,6 +754,7 @@ new_config_fixture() {
   mkdir -p -- \
     "${fixture}/backend/cmd/cleanup" \
     "${fixture}/backend/cmd/configcheck" \
+    "${fixture}/backend/cmd/contentcrypto" \
     "${fixture}/backend/cmd/kpireport" \
     "${fixture}/backend/cmd/migrate" \
     "${fixture}/backend/cmd/server" \
@@ -769,6 +770,7 @@ new_config_fixture() {
   cp -- "${repo_root}/.env.example" "${fixture}/.env.example"
   cp -- "${repo_root}/backend/cmd/cleanup/main.go" "${fixture}/backend/cmd/cleanup/main.go"
   cp -- "${repo_root}/backend/cmd/configcheck/main.go" "${fixture}/backend/cmd/configcheck/main.go"
+  cp -- "${repo_root}/backend/cmd/contentcrypto/main.go" "${fixture}/backend/cmd/contentcrypto/main.go"
   cp -- "${repo_root}/backend/cmd/kpireport/main.go" "${fixture}/backend/cmd/kpireport/main.go"
   cp -- "${repo_root}/backend/cmd/migrate/main.go" "${fixture}/backend/cmd/migrate/main.go"
   cp -- "${repo_root}/backend/cmd/server/main.go" "${fixture}/backend/cmd/server/main.go"

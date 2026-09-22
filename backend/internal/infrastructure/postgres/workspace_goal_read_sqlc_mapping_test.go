@@ -26,8 +26,8 @@ func TestMapGoalViewRejectsInfiniteTimestamps(t *testing.T) {
 		goalTerminalAt:              now,
 		currentVersionID:            mustUUID("13000000-0000-7000-8000-000000000001"),
 		currentVersionNumber:        &versionNumber,
-		currentVersionBody:          &versionBody,
-		currentVersionSuccessSignal: &versionSignal,
+		currentVersionBody:          versionBody,
+		currentVersionSuccessSignal: versionSignal,
 		currentVersionCreatedAt:     now,
 		sortTime:                    now,
 	}
@@ -82,7 +82,7 @@ func TestMapDraftViewRejectsInfiniteUpdatedTimestamp(t *testing.T) {
 	valid := draftViewColumns{
 		id:            mustUUID("11000000-0000-7000-8000-000000000001"),
 		draftType:     string(goal.DraftCreation),
-		successSignal: goalReviewStringPointer("確認できる"),
+		successSignal: "確認できる",
 		updatedAt:     timestamptz(time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)),
 	}
 	mapped, err := mapDraftView(valid)

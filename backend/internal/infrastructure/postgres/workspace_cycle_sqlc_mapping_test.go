@@ -78,8 +78,8 @@ func TestCycleReadMappersDistinguishNullFromInfiniteTimestamps(t *testing.T) {
 		StartedAt:                timestamptz(now),
 		GoalVersionID:            mustUUID("13000000-0000-7000-8000-000000000001"),
 		GoalVersionNumber:        &versionNumber,
-		GoalVersionBody:          &versionBody,
-		GoalVersionSuccessSignal: &versionSignal,
+		GoalVersionBody:          versionBody,
+		GoalVersionSuccessSignal: versionSignal,
 		GoalVersionCreatedAt:     timestamptz(now.Add(-time.Minute)),
 		PlanPreview:              "plan",
 	}
@@ -195,7 +195,7 @@ func TestCycleViewMapperBuildsExactPreviousCompletedActionAndFailsClosed(t *test
 	}
 	atLimit := valid
 	atLimitAction := strings.Repeat("🌱", cycle.MaxFrameCodePoints)
-	atLimit.PreviousCycleAction = &atLimitAction
+	atLimit.PreviousCycleAction = atLimitAction
 	if _, err = cycleViewFromReadRow(&atLimit); err != nil {
 		t.Fatalf("Action at code point limit: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestCycleViewMapperBuildsExactPreviousCompletedActionAndFailsClosed(t *test
 			row.PreviousCycleSequenceNumber = nil
 			row.PreviousCycleStatus = nil
 			row.PreviousCycleCancellationReason = nil
-			row.PreviousCycleAction = nil
+			row.PreviousCycleAction = ""
 			row.PreviousGoalVersionNumber = nil
 		},
 		"same Cycle ID": func(row *db.GetCycleViewRow) { row.PreviousCycleID = row.CycleID },
@@ -238,11 +238,11 @@ func TestCycleViewMapperBuildsExactPreviousCompletedActionAndFailsClosed(t *test
 		},
 		"blank Action": func(row *db.GetCycleViewRow) {
 			value := " \n\t"
-			row.PreviousCycleAction = &value
+			row.PreviousCycleAction = value
 		},
 		"oversize Action": func(row *db.GetCycleViewRow) {
 			value := strings.Repeat("🌱", cycle.MaxFrameCodePoints+1)
-			row.PreviousCycleAction = &value
+			row.PreviousCycleAction = value
 		},
 		"zero Goal Version": func(row *db.GetCycleViewRow) {
 			value := int32(0)
@@ -282,7 +282,7 @@ func TestCycleViewMapperKeepsExactReplannedPredecessorPrivateAndOmitsPreviousAct
 	row.PreviousCycleStatus = &status
 	row.PreviousCycleCancellationReason = &reason
 	row.PreviousGoalVersionNumber = &currentVersion
-	row.PreviousCycleAction = &blankAction
+	row.PreviousCycleAction = blankAction
 
 	view, err := cycleViewFromReadRow(&row)
 	if err != nil {
@@ -309,7 +309,7 @@ func TestCycleViewMapperReturnsNullPreviousActionForFirstAndTerminalCycles(t *te
 	first.PreviousCycleSequenceNumber = nil
 	first.PreviousCycleStatus = nil
 	first.PreviousCycleCancellationReason = nil
-	first.PreviousCycleAction = nil
+	first.PreviousCycleAction = ""
 	first.PreviousGoalVersionNumber = nil
 	view, err := cycleViewFromReadRow(&first)
 	if err != nil || view.PreviousCompletedCycleAction != nil || view.Predecessor != nil {
@@ -347,17 +347,18 @@ func validCycleViewSQLCRow(now time.Time) db.GetCycleViewRow {
 		StartedAt:                   timestamptz(now),
 		GoalVersionID:               mustUUID("13000000-0000-7000-8000-000000000002"),
 		GoalVersionNumber:           &currentVersion,
-		GoalVersionBody:             &goalBody,
+		GoalVersionBody:             goalBody,
 		GoalVersionCreatedAt:        timestamptz(now.Add(-time.Minute)),
 		PreviousCycleID:             mustUUID("14000000-0000-7000-8000-000000000001"),
 		PreviousCycleSequenceNumber: &previousSequence,
 		PreviousCycleStatus:         &previousStatus,
-		PreviousCycleAction:         &previousAction,
+		PreviousCycleAction:         previousAction,
 		PreviousGoalVersionNumber:   &previousVersion,
 	}
 }
 
 func validCycleSQLCRow(now time.Time) db.PdcaCycle {
+	empty := ""
 	return db.PdcaCycle{
 		ID:               mustUUID("14000000-0000-7000-8000-000000000001"),
 		UserID:           mustUUID("10000000-0000-7000-8000-000000000001"),
@@ -366,6 +367,10 @@ func validCycleSQLCRow(now time.Time) db.PdcaCycle {
 		SequenceNumber:   1,
 		Status:           string(cycle.StatusActive),
 		StartedAt:        timestamptz(now),
+		Plan:             &empty,
+		DoText:           &empty,
+		CheckText:        &empty,
+		Action:           &empty,
 		StartOperationID: mustUUID("70000000-0000-7000-8000-000000000001"),
 		StartRequestHash: "start-hash",
 		CreatedAt:        timestamptz(now),

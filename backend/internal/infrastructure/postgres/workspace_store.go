@@ -12,25 +12,38 @@ import (
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
 	"github.com/fukamu/cycle/backend/internal/domain/cycle"
 	"github.com/fukamu/cycle/backend/internal/domain/goal"
+	"github.com/fukamu/cycle/backend/internal/infrastructure/contentcrypto"
 	db "github.com/fukamu/cycle/backend/internal/infrastructure/postgres/generated"
 )
 
 type WorkspaceStore struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
+	content *contentcrypto.Service
 }
 
 func NewWorkspaceStore(pool *pgxpool.Pool) *WorkspaceStore {
 	return &WorkspaceStore{pool: pool, queries: db.New(pool)}
 }
 
+func NewEncryptedWorkspaceStore(pool *pgxpool.Pool, content *contentcrypto.Service) *WorkspaceStore {
+	return &WorkspaceStore{pool: pool, queries: db.New(pool), content: content}
+}
+
 func (store *WorkspaceStore) Home(ctx context.Context, userID string, limit int) (workspace.HomeView, error) {
 	view := workspace.HomeView{ProgressingGoals: []workspace.GoalView{}, ProgressingGoalLimit: limit}
+	content := contentBoundary{service: store.content}
 	rows, err := store.queries.ListHomeGoalViews(ctx, mustUUID(userID))
 	if err != nil {
 		return view, err
 	}
 	for _, row := range rows {
+		if err = content.decodeGoalVersion(
+			ctx, userID, uuidString(row.CurrentVersionID),
+			&row.CurrentVersionBody, &row.CurrentVersionSuccessSignal,
+		); err != nil {
+			return view, err
+		}
 		item, mapErr := goalViewFromHomeRow(row)
 		if mapErr != nil {
 			return view, mapErr
@@ -39,6 +52,11 @@ func (store *WorkspaceStore) Home(ctx context.Context, userID string, limit int)
 	}
 	draftRow, err := store.queries.GetHomeCreationGoalDraft(ctx, mustUUID(userID))
 	if err == nil {
+		if err = content.decodeDraft(
+			ctx, userID, uuidString(draftRow.ID), &draftRow.Body, &draftRow.SuccessSignal,
+		); err != nil {
+			return view, err
+		}
 		draft, mapErr := draftViewFromHomeRow(draftRow)
 		if mapErr != nil {
 			return view, mapErr
@@ -63,6 +81,11 @@ func (store *WorkspaceStore) GetDraft(ctx context.Context, userID, draftID strin
 	if err != nil {
 		return workspace.DraftView{}, err
 	}
+	if err = (contentBoundary{service: store.content}).decodeDraft(
+		ctx, userID, uuidString(row.ID), &row.Body, &row.SuccessSignal,
+	); err != nil {
+		return workspace.DraftView{}, err
+	}
 	view, err := draftViewFromIDRow(row)
 	if err != nil {
 		return workspace.DraftView{}, err
@@ -83,8 +106,9 @@ func (store *WorkspaceStore) GetReview(ctx context.Context, userID, goalID strin
 	}
 	defer rollback(ctx, tx)
 	queries := store.queries.WithTx(tx)
+	content := contentBoundary{service: store.content}
 
-	view, err := getGoalView(ctx, tx, userID, goalID)
+	view, err := getGoalView(ctx, tx, content, userID, goalID)
 	if err != nil {
 		return workspace.ReviewView{}, goalReviewMaterializationError(err)
 	}
@@ -101,6 +125,11 @@ func (store *WorkspaceStore) GetReview(ctx context.Context, userID, goalID strin
 	if err != nil {
 		return workspace.ReviewView{}, err
 	}
+	if err = content.decodeDraft(
+		ctx, userID, uuidString(draftRow.ID), &draftRow.Body, &draftRow.SuccessSignal,
+	); err != nil {
+		return workspace.ReviewView{}, goalReviewMaterializationError(err)
+	}
 	draft, err := draftViewFromGoalDraft(draftRow)
 	if err != nil {
 		return workspace.ReviewView{}, goalReviewMaterializationError(err)
@@ -108,7 +137,7 @@ func (store *WorkspaceStore) GetReview(ctx context.Context, userID, goalID strin
 	if draft.ReviewCycleID == nil {
 		return workspace.ReviewView{}, goalReviewInvariantError("Review Draft has no Trigger Cycle")
 	}
-	trigger, err := getCycleView(ctx, tx, userID, goalID, *draft.ReviewCycleID)
+	trigger, err := getCycleView(ctx, tx, content, userID, goalID, *draft.ReviewCycleID)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotFound) || errors.Is(err, workspace.ErrCycleNotFound) {
 			return workspace.ReviewView{}, goalReviewInvariantError("Trigger Cycle is missing")
@@ -184,8 +213,13 @@ func goalReviewInvariantError(detail string) error {
 	return fmt.Errorf("%w: %s", workspace.ErrGoalReviewInvariant, detail)
 }
 
-func getCycleView(ctx context.Context, query db.DBTX, userID, goalID, cycleID string) (workspace.CycleView, error) {
-	return queryCycleView(ctx, query, userID, goalID, cycleID)
+func getCycleView(
+	ctx context.Context,
+	query db.DBTX,
+	content contentBoundary,
+	userID, goalID, cycleID string,
+) (workspace.CycleView, error) {
+	return queryCycleView(ctx, query, content, userID, goalID, cycleID)
 }
 
 func scanDraft(row pgx.Row) (workspace.DraftView, error) {

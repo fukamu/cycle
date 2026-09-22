@@ -59,6 +59,7 @@ Worker / ContainerをTerraformとWranglerの両方で管理しません。Applic
 | Session / CSRF | Session TTL、`CSRF_TOKEN_PEPPER` owner、CSPRNG由来256-bit相当の確認方法、stable CSRF release / drain確認者 |
 | Google / Turnstile | Staging client / widget、authorized origin、hostname / action、secret owner |
 | OpenAI | project / key owner、model、確認日、正式token単価、provider spend / rate limit |
+| User Content KMS | 環境専用GCP project / location / CryptoKeyVersion、runtime / operator identity、最小IAM、key / credential owner、旧version保持・restore方針 |
 | Telemetry | OTLP collector、header credential owner、sampler / export volume受入、retention、dashboard、alert、notification、on-call |
 | App controls | AI budget、rolling / rate limit、tester、公開期間、紹介導線、post-deploy E2E用の非個人Invite owner |
 | Operations | Terraform Apply approver、logs / traces確認者、cost確認、teardown / 継続判断日 |
@@ -454,6 +455,71 @@ Initial single-key contractはplannedな無停止rotationをサポートしま�
 3. Secret storeを新しいCSPRNG由来256-bit相当keyへ更新し、その単一active keyを読むcandidateをdeployする。旧tokenは即時無効となり、一時的な`403 CSRF_INVALID`と`GET /session`再discoveryを受容する。
 4. 新imageのrollout / 旧image drainを確認してから、二tabのsession discovery、reload、unsafe command / autosave、旧token拒否、新token成功を検証する。Token値をlog、screenshot、recordへ残さない。
 5. Rollbackする場合もmaintenanceを維持し、新key instanceをdrainしてから安全に保持した切替前keyとcompatibleなApplicationへ戻す。切替前keyが保持されていない場合は推測・log・artifactから復元せず、forward recoveryを判断する。
+
+## User Content encryption release / recovery
+
+この手順は[`design.md` §41.3](design.md#413-data-in-transit--at-rest)と[`database.md`](database.md#user-content-encryption-operator)の運用projectionです。PR merge、KMS / IAM作成、secret登録、Staging / Production migration、実data backfill、deploy、鍵無効化はそれぞれ別の明示承認を必要とします。暗号化実装のreview完了をlive変更の承認として扱いません。
+
+### Release prerequisites and compatibility matrix
+
+開始前に次を値や本文を表示せずrelease recordへ固定します。
+
+- Release commit、`000010`未適用であること、対象DBのlegacy件数、running AI件数、現在の全Worker / Container / maintenance writer。
+- `SELECT c.*`を明示列へ変更した互換Applicationのcommitが、`000010`適用前後の両schemaでIntegration Testを通り、先行deploy済みであること。
+- 環境専用GCP KMS CryptoKeyVersion、credential owner、runtime / operator identityのwrap / unwrap最小IAM、旧KEK version保持owner。値、service-account private key、KMS response、wrapped DEKをrecordへ残さない。
+- DB backup / WAL / PITRの保持・復元能力、restore先、restore window、削除済みAccount / Goalを通常環境へ再導入しない判断者。未確認ならProduction releaseを停止する。
+- 承認済みmaintenance / write停止時間、batch size、latency許容、abort判断者。example値から推測しない。
+
+| Checkpoint | DB | Application | Allowed writes | Rollback |
+|---|---|---|---|---|
+| Compatibility | `000009` | explicit-column旧contract | legacy | 同じ互換Application |
+| Expand | `000010`, mode=`legacy` | dual-read / encrypted-capable | legacy | schemaを残し互換Applicationへ可。downしない |
+| Activation | mode=`encrypting` | 全instanceがencrypted-capable | encrypted-v1のみ | encrypted-capable Applicationのみ |
+| Backfill / verify | legacyとencrypted-v1混在→legacy 0 | encrypted-capable | encrypted-v1のみ | jobを再実行。平文へ戻さない |
+| Strict | mode=`strict` | encrypted-capable | encrypted-v1のみ、legacy read拒否 | strict対応Applicationまたはforward fix |
+
+### Expand and activation
+
+1. 互換releaseを先行deployし、authoritative Cloudflare metadataで旧image drainを確認する。追加columnがある使い捨てDBでGoal / Cycle / Review / AI replayを検証する。
+2. 通常のmigration-first deployで`000010`を適用する。この段階のmigration processへKMS credentialを渡さず、data backfillを行わない。
+3. `CONTENT_ENCRYPTION_KMS_PROVIDER=gcp`、exact key version、credential secretを値を表示しないdeploy input inventoryで確認し、暗号対応Applicationをdeployする。Candidate-only drain後、synthetic UserでHTTPから保存・読取を行い、DBの旧平文列が`NULL`、storageが`encrypted-v1`、削除cascadeが成立することを隔離環境で確認する。
+4. 全HTTP instance、AI finalizer、maintenance writerが暗号対応commitだけであることを確認する。`status`の`runningAI`を0へdrainし、短い承認済みwrite停止を開始する。Traffic切替だけをdrain完了とみなさない。
+5. Runtimeと同じpooled DB / KMS boundaryを持つaccess-controlled operatorで次を実行する。出力はmode、generation、table / format / DEK version別件数だけを保存し、User / row IDや本文を保存しない。
+
+```bash
+go run ./cmd/contentcrypto --status
+go run ./cmd/contentcrypto --activate-writes --execute
+go run ./cmd/contentcrypto --status
+```
+
+6. Modeが`encrypting`へ一度だけ進み、旧writerのsynthetic plaintext writeがSQLSTATE `23514`で拒否され、新Applicationのsynthetic write / readが成功することを確認してwrite停止を解除する。Activation失敗、state不明、KMS不通では停止を維持し、legacyへ書き戻して迂回しない。
+
+### Backfill, verification, and strict completion
+
+1. 承認済みbatch sizeで`--backfill --execute`を実行する。各batchはlegacy rowと現値をCASし、通常更新または削除との競合を未完了として残す。中断、process crash、timeout後は`--status`で`content_encryption_jobs`の安全な件数とtable / format inventoryを確認し、同じcommandを再実行する。`encrypted-v1` rowはbackfill対象にならない。
+2. Legacy残数が減らない、failureが1件以上、KMS不通、DB constraint error、latencyが承認範囲外の場合は新しいbatchを止める。Raw error / SQL / row内容をlogへ追加せず、固定`error_class`、job phase、件数、request / trace IDだけで調査する。
+3. Legacy残数0の同じencrypted-writer境界で`--verify`を実行する。全fieldをbounded pageで認証復号し、missing DEK / KEK version、unknown format、AAD / User / row / field swap、nonce / tag / ciphertext / wrapped key破損がないことを確認する。
+4. 完了判定は、全6 resourceのlegacy件数0、全`encrypted-v1`旧平文列NULL、storage shape制約有効、verify failure 0、running AI 0、通常HTTP save / read / AI replay / Goal・Account delete成功、jobに`running` / `failed`がないことの全てを満たすこと。単一のtotal countだけで完了としない。
+5. 完了確認から平文writerが入り込めない同じ境界で`--strict --execute`を実行し、再度`--status`と`--verify`を行う。Strict化後のlegacy read / write拒否と代表journeyを確認してrelease recordを閉じる。
+
+### Key rotation
+
+- DEK rotationは対象Userと理由をaccess-controlled recordで承認し、`--rotate-user-dek=APPROVED_USER_UUID --execute`を一度実行する。CommandはUser IDを出力せず、新しいDEKを永続化してからwrite keyへpromoteし、旧DEKをread用に残す。新旧versionのsynthetic ciphertextを両方読め、新規writeだけが新versionになることを確認する。
+- KEK version更新はDEK rotationと別である。Configのexact CryptoKeyVersion変更は新規DEKのwrap先だけを変え、旧KEKでwrap済みのDEKは旧versionへ到達して読み続ける。旧KEKをdisable / destroyせず、既存wrapped DEKのrewrapやretirementが必要なら別Issue、移行、restore drill、明示承認を用意する。
+- Missing /破損wrapped DEKや永続的に失われたKEKを、同じversion番号の新key生成で隠さない。Ciphertextだけからraw DEKは復元できない。
+
+### Database restore drill and recovery
+
+Fixture演習と実KMS環境演習を区別し、成功を相互代替しません。通常trafficと分離した使い捨てDB / private networkで次を行います。
+
+1. 暗号文、平文metadata、User / record / field / crypto revision、全wrapped DEK version、active key flag、nonce reservation、`content_encryption_control`、job stateを同じ整合点からrestoreする。DB backupだけでなく、その時点の全KEK versionとoperator identityが到達可能であることを値なしで確認する。
+2. Restore先のoutbound / inbound trafficを閉じ、Account / Goal delete済みdataが含まれる可能性を記録する。通常環境やAI Providerへ接続しない。
+3. `--status`と`--verify`を実行し、旧新DEK versionを含むsynthetic fixtureをAPI / Repository経由で読めることを確認する。本文、暗号文、User IDをdrill receiptへ残さず、backup point、release commit、schema version、KEK version inventory、件数、結果だけを記録する。
+4. Backup point以降に元環境で同じDEKのwriteがあった場合、restore済みnonce tableを完全な履歴とみなさない。元writerをfenceし、restoreした各active User keyを新しいrandom DEK versionへrotateしてから新規writeを許可する。全対象Userのrotation完了を証明できなければrestore先はread-only / isolatedのままとする。
+5. 新DEKでsynthetic update / readを行い、旧DEK暗号文も読めることを確認する。Production trafficへ戻す場合は、復元point以後の正本、重複write、削除data、quota / AI stateを別のdata recovery planで解決する。
+6. Drill DBと一時credentialを承認済み手順で破棄し、source backup、KMS key、nonce historyをdrill cleanupの都合で削除しない。
+
+KMS一時障害ではwrite / protected readをfail-closedに止め、鍵metadataとciphertextを変更せず、権限 / availability復旧後に同じjobを再開します。暗号文が1件でもあるDBへ旧平文専用binaryを向けません。Strict後のApplication rollbackはstrict / encrypted-v1対応imageだけ、schema問題はforward migrationだけを選び、`000010` down、平文復号一括rollback、KMS key破棄をincident対応に使いません。
 
 ## Rollback・recovery
 

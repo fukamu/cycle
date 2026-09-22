@@ -101,6 +101,7 @@ func TestLoadRequiresProductionTelemetryConfigurationWithoutExposingHeaders(t *t
 	environment["TURNSTILE_SECRET_KEY"] = "test-turnstile-secret"
 	environment["AI_PRICE_INPUT_USD_PER_MILLION"] = "1"
 	environment["AI_PRICE_OUTPUT_USD_PER_MILLION"] = "1"
+	setValidProductionContentEncryption(environment)
 	_, err := Load(mapLookup(environment))
 	if err == nil || !strings.Contains(err.Error(), "OTEL_EXPORTER_OTLP_ENDPOINT") || !strings.Contains(err.Error(), "OTEL_EXPORTER_OTLP_HEADERS") {
 		t.Fatalf("Load() error = %v", err)
@@ -193,6 +194,7 @@ func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
 	environment["AI_PRICE_OUTPUT_USD_PER_MILLION"] = "1"
 	environment["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://telemetry.example.test"
 	environment["OTEL_EXPORTER_OTLP_HEADERS"] = "authorization=Bearer%20test-only"
+	setValidProductionContentEncryption(environment)
 	config, err := Load(mapLookup(environment))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -202,6 +204,26 @@ func TestLoadAcceptsCompleteProductionTurnstileConfiguration(t *testing.T) {
 	}
 	if config.Turnstile.CredentialProfile != TurnstileCredentialProfileLive {
 		t.Fatalf("Turnstile credential profile = %q, want live default", config.Turnstile.CredentialProfile)
+	}
+}
+
+func TestLoadRejectsNonExactGCPKMSKeyVersionResource(t *testing.T) {
+	t.Parallel()
+
+	for _, keyVersion := range []string{
+		"projects/test/locations/global/keyRings/cycle/cryptoKeys/content",
+		"projects/test/locations/global/keyRings/cycle/cryptoKeys/content/cryptoKeyVersions/1/extra",
+		"projects/test/locations/global/keyRings/cycle/cryptoKeys/content/cryptoKeyVersions/ 1",
+	} {
+		t.Run(keyVersion, func(t *testing.T) {
+			t.Parallel()
+			environment := validProductionEnvironment()
+			environment["CONTENT_ENCRYPTION_GCP_KEY_VERSION"] = keyVersion
+			_, err := Load(mapLookup(environment))
+			if err == nil || !strings.Contains(err.Error(), "exact GCP KMS CryptoKeyVersion resource") {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -471,7 +493,14 @@ func validProductionEnvironment() map[string]string {
 	environment["AI_PRICE_OUTPUT_USD_PER_MILLION"] = "1"
 	environment["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://telemetry.example.test"
 	environment["OTEL_EXPORTER_OTLP_HEADERS"] = "authorization=Bearer%20test-only"
+	setValidProductionContentEncryption(environment)
 	return environment
+}
+
+func setValidProductionContentEncryption(environment map[string]string) {
+	environment["CONTENT_ENCRYPTION_KMS_PROVIDER"] = "gcp"
+	environment["CONTENT_ENCRYPTION_GCP_KEY_VERSION"] = "projects/test/locations/global/keyRings/cycle/cryptoKeys/content/cryptoKeyVersions/1"
+	environment["CONTENT_ENCRYPTION_GCP_CREDENTIALS_JSON"] = `{"type":"service_account"}`
 }
 
 func mapLookup(environment map[string]string) LookupEnv {

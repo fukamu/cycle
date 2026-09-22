@@ -59,10 +59,22 @@ SELECT
     c.completed_at,
     c.canceled_at,
     c.cancellation_reason,
-    c.plan,
-    c.do_text,
-    c.check_text,
-    c.action,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.plan, c.plan_dek_version,
+      c.plan_crypto_revision, c.plan_nonce, c.plan_ciphertext
+    ) AS plan,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.do_text, c.do_text_dek_version,
+      c.do_text_crypto_revision, c.do_text_nonce, c.do_text_ciphertext
+    ) AS do_text,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.check_text, c.check_text_dek_version,
+      c.check_text_crypto_revision, c.check_text_nonce, c.check_text_ciphertext
+    ) AS check_text,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.action, c.action_dek_version,
+      c.action_crypto_revision, c.action_nonce, c.action_ciphertext
+    ) AS action,
     c.content_revision,
     c.plan_revision,
     c.do_revision,
@@ -70,6 +82,7 @@ SELECT
     c.action_revision,
     c.action_last_ai_applied_content_revision,
     c.action_user_modified_after_ai,
+    c.content_storage_format,
     c.start_operation_id,
     c.start_request_hash,
     c.completion_operation_id,
@@ -117,6 +130,10 @@ INSERT INTO pdca_cycles (
     sequence_number,
     status,
     started_at,
+    plan,
+    do_text,
+    check_text,
+    action,
     start_operation_id,
     start_request_hash,
     created_at,
@@ -130,6 +147,10 @@ VALUES (
     sqlc.arg(sequence_number)::integer,
     sqlc.arg(status)::text,
     sqlc.arg(started_at)::timestamptz,
+    sqlc.arg(plan)::text,
+    sqlc.arg(do_text)::text,
+    sqlc.arg(check_text)::text,
+    sqlc.arg(action)::text,
     sqlc.arg(start_operation_id)::uuid,
     sqlc.arg(start_request_hash)::text,
     sqlc.arg(created_at)::timestamptz,
@@ -139,7 +160,7 @@ ON CONFLICT (user_id, start_operation_id) DO NOTHING;
 
 -- name: SaveCyclePlanCAS :execrows
 UPDATE pdca_cycles
-SET plan = sqlc.arg(content)::text,
+SET plan = sqlc.arg(plan)::text,
     plan_revision = sqlc.arg(frame_revision)::bigint,
     content_revision = sqlc.arg(content_revision)::bigint,
     updated_at = sqlc.arg(updated_at)::timestamptz
@@ -147,6 +168,22 @@ WHERE id = sqlc.arg(cycle_id)::uuid
   AND user_id = sqlc.arg(user_id)::uuid
   AND goal_id = sqlc.arg(goal_id)::uuid
   AND status = 'active'
+  AND plan_revision = sqlc.arg(expected_frame_revision)::bigint;
+
+-- name: MigrateLegacyCyclePlanCAS :execrows
+UPDATE pdca_cycles
+SET plan = sqlc.arg(plan)::text,
+    do_text = sqlc.arg(do_text)::text,
+    check_text = sqlc.arg(check_text)::text,
+    action = sqlc.arg(action)::text,
+    plan_revision = sqlc.arg(frame_revision)::bigint,
+    content_revision = sqlc.arg(content_revision)::bigint,
+    updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE id = sqlc.arg(cycle_id)::uuid
+  AND user_id = sqlc.arg(user_id)::uuid
+  AND goal_id = sqlc.arg(goal_id)::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
   AND plan_revision = sqlc.arg(expected_frame_revision)::bigint;
 
 -- name: SaveCycleReviewScheduleCAS :execrows
@@ -175,7 +212,7 @@ WHERE pdca_cycle_review_schedules.review_schedule_revision =
 
 -- name: SaveCycleDoCAS :execrows
 UPDATE pdca_cycles
-SET do_text = sqlc.arg(content)::text,
+SET do_text = sqlc.arg(do_text)::text,
     do_revision = sqlc.arg(frame_revision)::bigint,
     content_revision = sqlc.arg(content_revision)::bigint,
     updated_at = sqlc.arg(updated_at)::timestamptz
@@ -185,9 +222,25 @@ WHERE id = sqlc.arg(cycle_id)::uuid
   AND status = 'active'
   AND do_revision = sqlc.arg(expected_frame_revision)::bigint;
 
+-- name: MigrateLegacyCycleDoCAS :execrows
+UPDATE pdca_cycles
+SET plan = sqlc.arg(plan)::text,
+    do_text = sqlc.arg(do_text)::text,
+    check_text = sqlc.arg(check_text)::text,
+    action = sqlc.arg(action)::text,
+    do_revision = sqlc.arg(frame_revision)::bigint,
+    content_revision = sqlc.arg(content_revision)::bigint,
+    updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE id = sqlc.arg(cycle_id)::uuid
+  AND user_id = sqlc.arg(user_id)::uuid
+  AND goal_id = sqlc.arg(goal_id)::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
+  AND do_revision = sqlc.arg(expected_frame_revision)::bigint;
+
 -- name: SaveCycleCheckCAS :execrows
 UPDATE pdca_cycles
-SET check_text = sqlc.arg(content)::text,
+SET check_text = sqlc.arg(check_text)::text,
     check_revision = sqlc.arg(frame_revision)::bigint,
     content_revision = sqlc.arg(content_revision)::bigint,
     updated_at = sqlc.arg(updated_at)::timestamptz
@@ -197,9 +250,25 @@ WHERE id = sqlc.arg(cycle_id)::uuid
   AND status = 'active'
   AND check_revision = sqlc.arg(expected_frame_revision)::bigint;
 
+-- name: MigrateLegacyCycleCheckCAS :execrows
+UPDATE pdca_cycles
+SET plan = sqlc.arg(plan)::text,
+    do_text = sqlc.arg(do_text)::text,
+    check_text = sqlc.arg(check_text)::text,
+    action = sqlc.arg(action)::text,
+    check_revision = sqlc.arg(frame_revision)::bigint,
+    content_revision = sqlc.arg(content_revision)::bigint,
+    updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE id = sqlc.arg(cycle_id)::uuid
+  AND user_id = sqlc.arg(user_id)::uuid
+  AND goal_id = sqlc.arg(goal_id)::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
+  AND check_revision = sqlc.arg(expected_frame_revision)::bigint;
+
 -- name: SaveCycleActionCAS :execrows
 UPDATE pdca_cycles
-SET action = sqlc.arg(content)::text,
+SET action = sqlc.arg(action)::text,
     action_revision = sqlc.arg(frame_revision)::bigint,
     content_revision = sqlc.arg(content_revision)::bigint,
     action_user_modified_after_ai = sqlc.arg(action_user_modified_after_ai)::boolean,
@@ -208,6 +277,23 @@ WHERE id = sqlc.arg(cycle_id)::uuid
   AND user_id = sqlc.arg(user_id)::uuid
   AND goal_id = sqlc.arg(goal_id)::uuid
   AND status = 'active'
+  AND action_revision = sqlc.arg(expected_frame_revision)::bigint;
+
+-- name: MigrateLegacyCycleActionCAS :execrows
+UPDATE pdca_cycles
+SET plan = sqlc.arg(plan)::text,
+    do_text = sqlc.arg(do_text)::text,
+    check_text = sqlc.arg(check_text)::text,
+    action = sqlc.arg(action)::text,
+    action_revision = sqlc.arg(frame_revision)::bigint,
+    content_revision = sqlc.arg(content_revision)::bigint,
+    action_user_modified_after_ai = sqlc.arg(action_user_modified_after_ai)::boolean,
+    updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE id = sqlc.arg(cycle_id)::uuid
+  AND user_id = sqlc.arg(user_id)::uuid
+  AND goal_id = sqlc.arg(goal_id)::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
   AND action_revision = sqlc.arg(expected_frame_revision)::bigint;
 
 -- name: CompleteCycleCAS :execrows
@@ -253,6 +339,26 @@ WHERE id = sqlc.arg(cycle_id)::uuid
   AND content_revision = sqlc.arg(expected_content_revision)::bigint
   AND action_revision = sqlc.arg(expected_action_revision)::bigint;
 
+-- name: ApplyActionAIMigrateLegacyCAS :execrows
+UPDATE pdca_cycles
+SET plan = sqlc.arg(plan)::text,
+    do_text = sqlc.arg(do_text)::text,
+    check_text = sqlc.arg(check_text)::text,
+    action = sqlc.arg(action)::text,
+    content_revision = sqlc.arg(new_content_revision)::bigint,
+    action_revision = sqlc.arg(new_action_revision)::bigint,
+    action_last_ai_applied_content_revision = sqlc.arg(new_content_revision)::bigint,
+    action_user_modified_after_ai = FALSE,
+    updated_at = sqlc.arg(updated_at)::timestamptz
+WHERE id = sqlc.arg(cycle_id)::uuid
+  AND user_id = sqlc.arg(user_id)::uuid
+  AND goal_id = sqlc.arg(goal_id)::uuid
+  AND goal_version_id = sqlc.arg(goal_version_id)::uuid
+  AND status = 'active'
+  AND content_storage_format = 'legacy'
+  AND content_revision = sqlc.arg(expected_content_revision)::bigint
+  AND action_revision = sqlc.arg(expected_action_revision)::bigint;
+
 -- name: CancelCycleCAS :execrows
 UPDATE pdca_cycles
 SET status = sqlc.arg(status)::text,
@@ -271,11 +377,27 @@ SELECT
     c.goal_id,
     c.sequence_number,
     c.status,
-    gv.body AS goal_body,
-    c.plan,
-    c.do_text,
-    c.check_text,
-    c.action
+    gv.id AS goal_version_id,
+    public.fukamu_cycle_content_read_text(
+      gv.content_storage_format, gv.body, gv.body_dek_version,
+      gv.body_crypto_revision, gv.body_nonce, gv.body_ciphertext
+    ) AS goal_body,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.plan, c.plan_dek_version,
+      c.plan_crypto_revision, c.plan_nonce, c.plan_ciphertext
+    ) AS plan,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.do_text, c.do_text_dek_version,
+      c.do_text_crypto_revision, c.do_text_nonce, c.do_text_ciphertext
+    ) AS do_text,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.check_text, c.check_text_dek_version,
+      c.check_text_crypto_revision, c.check_text_nonce, c.check_text_ciphertext
+    ) AS check_text,
+    public.fukamu_cycle_content_read_text(
+      c.content_storage_format, c.action, c.action_dek_version,
+      c.action_crypto_revision, c.action_nonce, c.action_ciphertext
+    ) AS action
 FROM pdca_cycles AS c
 JOIN goal_versions AS gv
   ON gv.goal_id = c.goal_id

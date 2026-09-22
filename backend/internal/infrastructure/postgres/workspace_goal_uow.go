@@ -18,6 +18,7 @@ import (
 type workspaceGoalTx struct {
 	tx      pgx.Tx
 	queries *db.Queries
+	content contentBoundary
 }
 
 func (store *WorkspaceStore) WithinGoalTransaction(
@@ -29,7 +30,12 @@ func (store *WorkspaceStore) WithinGoalTransaction(
 		return err
 	}
 	defer rollback(ctx, tx)
-	if err = operation(&workspaceGoalTx{tx: tx, queries: store.queries.WithTx(tx)}); err != nil {
+	queries := store.queries.WithTx(tx)
+	content, err := prepareContentBoundary(ctx, queries, store.content)
+	if err != nil {
+		return err
+	}
+	if err = operation(&workspaceGoalTx{tx: tx, queries: queries, content: content}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

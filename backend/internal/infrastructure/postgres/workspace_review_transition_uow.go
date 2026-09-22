@@ -31,9 +31,16 @@ func (store *WorkspaceStore) WithinReviewTransitionTransaction(
 	}
 	defer rollback(ctx, tx)
 	queries := store.queries.WithTx(tx)
+	content, err := prepareContentBoundary(ctx, queries, store.content)
+	if err != nil {
+		return err
+	}
 	reviewTx := &workspaceReviewTransitionTx{
-		workspaceCycleTx:     &workspaceCycleTx{tx: tx, queries: queries},
-		workspaceGoalDraftTx: &workspaceGoalDraftTx{tx: tx, queries: queries},
+		workspaceCycleTx: &workspaceCycleTx{
+			tx: tx, queries: queries, content: content,
+			lockedCycleStorageFormat: make(map[string]string),
+		},
+		workspaceGoalDraftTx: &workspaceGoalDraftTx{tx: tx, queries: queries, content: content},
 	}
 	if err = operation(reviewTx); err != nil {
 		return err
@@ -138,19 +145,7 @@ func (transaction *workspaceReviewTransitionTx) TryInsertReviewCycleClaim(
 	ctx context.Context,
 	current cycle.PDCACycle,
 ) (int64, error) {
-	return transaction.workspaceCycleTx.queries.TryInsertCycleClaim(ctx, db.TryInsertCycleClaimParams{
-		CycleID:          mustUUID(current.ID),
-		UserID:           mustUUID(current.UserID),
-		GoalID:           mustUUID(current.GoalID),
-		GoalVersionID:    mustUUID(current.GoalVersionID),
-		SequenceNumber:   current.SequenceNumber,
-		Status:           string(current.Status),
-		StartedAt:        timestamptz(current.StartedAt),
-		StartOperationID: mustUUID(current.StartOperationID),
-		StartRequestHash: current.StartRequestHash,
-		CreatedAt:        timestamptz(current.CreatedAt),
-		UpdatedAt:        timestamptz(current.UpdatedAt),
-	})
+	return transaction.workspaceCycleTx.TryInsertCycleClaim(ctx, current)
 }
 
 func (transaction *workspaceReviewTransitionTx) ContinueGoalCAS(

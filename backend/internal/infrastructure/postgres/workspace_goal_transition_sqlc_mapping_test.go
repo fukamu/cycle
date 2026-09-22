@@ -24,7 +24,7 @@ func TestGoalVersionFromTransitionRowRequiresFiniteCreatedTimestamp(t *testing.T
 		UserID:               mustUUID("10000000-0000-7000-8000-000000000001"),
 		GoalID:               mustUUID("12000000-0000-7000-8000-000000000001"),
 		VersionNumber:        &versionNumber,
-		Body:                 &body,
+		Body:                 body,
 		CreatedByOperationID: mustUUID("71000000-0000-7000-8000-000000000001"),
 		CreatedAt:            pgtype.Timestamptz{Time: now, Valid: true},
 	}

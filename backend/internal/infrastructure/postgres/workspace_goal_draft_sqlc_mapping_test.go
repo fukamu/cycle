@@ -16,11 +16,12 @@ func TestGoalDraftFromSQLCPreservesCreationAndReviewTuples(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 8, 24, 12, 34, 56, 0, time.FixedZone("test", 9*60*60))
+	body := "body"
 	base := db.GoalDraft{
 		ID:        mustUUID("11000000-0000-7000-8000-000000000001"),
 		UserID:    mustUUID("10000000-0000-7000-8000-000000000001"),
 		DraftType: string(goal.DraftCreation),
-		Body:      "body",
+		Body:      &body,
 		Revision:  3,
 		CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 		UpdatedAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},

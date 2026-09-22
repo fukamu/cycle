@@ -149,8 +149,14 @@ WHERE id = sqlc.arg(generation_id)::uuid
 
 -- name: LockSucceededGoalRefineGeneration :one
 SELECT target_revision,
-       source_text,
-       output,
+       public.fukamu_cycle_content_read_text(
+         content_storage_format, source_text, source_text_dek_version,
+         source_text_crypto_revision, source_text_nonce, source_text_ciphertext
+       ) AS source_text,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           content_storage_format, output, output_dek_version,
+           output_crypto_revision, output_nonce, output_ciphertext
+       ), '')::text AS output,
        adopted_at,
        adopted_draft_revision
 FROM ai_generations
@@ -175,7 +181,10 @@ SELECT id AS generation_id,
        idempotency_request_hash,
        status,
        target_revision,
-       output,
+       COALESCE(public.fukamu_cycle_content_read_text(
+           content_storage_format, output, output_dek_version,
+           output_crypto_revision, output_nonce, output_ciphertext
+       ), '')::text AS output,
        COALESCE(failure_code, '')::text AS failure_code,
        context_changed
 FROM ai_generations
@@ -235,7 +244,10 @@ SELECT id AS generation_id,
        idempotency_request_hash,
        status,
        target_revision,
-       output,
+       COALESCE(public.fukamu_cycle_content_read_text(
+         content_storage_format, output, output_dek_version,
+         output_crypto_revision, output_nonce, output_ciphertext
+       ), '')::text AS output,
        COALESCE(failure_code, '')::text AS failure_code,
        context_changed,
        lease_expires_at
