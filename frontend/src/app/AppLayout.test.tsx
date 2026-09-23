@@ -30,7 +30,8 @@ import {
   readSelectedCycleFrame,
   rememberSelectedCycleFrame,
 } from "../shared/preferences/selectedFramePreference";
-import { AppLayout, RouteHeadingFocusProvider } from "./AppLayout";
+import { AppLayout } from "./AppLayout";
+import { RouteHeadingFocusProvider } from "./RouteHeadingFocus";
 
 function SamePathPage() {
   const [saved, setSaved] = useState(false);
@@ -381,6 +382,10 @@ describe("AppLayout", () => {
       "href",
       "/settings",
     );
+    const publicInformation = screen.getByRole("link", {
+      name: "データの取扱い・お問い合わせ",
+    });
+    expect(publicInformation).toHaveAttribute("href", "/legal/privacy");
     const firstUseHelp = screen.getByRole("button", {
       name: "はじめてガイドを表示",
     });
@@ -402,6 +407,8 @@ describe("AppLayout", () => {
     expect(history).toHaveFocus();
     await user.tab();
     expect(settings).toHaveFocus();
+    await user.tab();
+    expect(publicInformation).toHaveFocus();
     await user.tab();
     expect(firstUseHelp).toHaveFocus();
     await user.tab();

@@ -82,6 +82,45 @@ test("deployment-specific URL policies remain exact", () => {
     ),
     [{ code: "INVALID_INPUT", key: "APP_REFERRAL_URL" }],
   );
+  assert.deepEqual(
+    validateDeploymentInputs(
+      validEnvironment({ PRIVACY_CONTACT_URL: "http://support.example.test/" }),
+    ),
+    [{ code: "INVALID_INPUT", key: "PRIVACY_CONTACT_URL" }],
+  );
+  assert.deepEqual(
+    validateDeploymentInputs(
+      validEnvironment({
+        PRIVACY_CONTACT_URL: "https://user:secret@support.example.test/",
+      }),
+    ),
+    [{ code: "INVALID_INPUT", key: "PRIVACY_CONTACT_URL" }],
+  );
+  assert.deepEqual(
+    validateDeploymentInputs(
+      validEnvironment({
+        PRIVACY_CONTACT_URL: "https://support.example.test/#private",
+      }),
+    ),
+    [{ code: "INVALID_INPUT", key: "PRIVACY_CONTACT_URL" }],
+  );
+});
+
+test("deployment validator requires a positive backup retention maximum", () => {
+  for (const value of ["0", "-1", "1.5", "not-a-number"]) {
+    assert.deepEqual(
+      validateDeploymentInputs(
+        validEnvironment({ ACCOUNT_DELETION_BACKUP_MAX_DAYS: value }),
+      ),
+      [
+        {
+          code: "INVALID_INPUT",
+          key: "ACCOUNT_DELETION_BACKUP_MAX_DAYS",
+        },
+      ],
+      value,
+    );
+  }
 });
 
 test("deployment validator binds the official Turnstile test pair to staging", () => {
@@ -118,8 +157,11 @@ function validEnvironment(overrides = {}) {
   for (const name of requiredNames()) environment[name] = "fixture";
   return {
     ...environment,
+    ACCOUNT_DELETION_BACKUP_MAX_DAYS: "30",
     PUBLIC_ORIGIN: stagingOrigin,
     APP_REFERRAL_URL: "",
+    PRIVACY_CONTACT_URL: "https://support.example.test/cycle",
+    PRIVACY_OPERATOR_NAME: "Example Cycle Operator",
     TURNSTILE_SITE_KEY: stagingTurnstileSiteKey,
     TURNSTILE_SECRET_KEY: stagingTurnstileSecretKey,
     ...overrides,

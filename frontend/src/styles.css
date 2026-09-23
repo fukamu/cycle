@@ -1858,6 +1858,27 @@ textarea[readonly] {
   overflow-wrap: anywhere;
 }
 
+.settings-privacy-card {
+  margin-top: 22px;
+}
+
+.settings-privacy-card h2,
+.settings-privacy-card p {
+  margin: 0;
+}
+
+.settings-privacy-card h2 {
+  color: var(--brand-deep);
+  font-size: 1.08rem;
+}
+
+.settings-privacy-card a,
+.public-information-page a {
+  color: var(--brand-dark);
+  font-weight: var(--font-weight-medium);
+  text-underline-offset: 4px;
+}
+
 .settings-account-detail {
   overflow-wrap: anywhere;
   color: var(--ink) !important;
@@ -1908,6 +1929,116 @@ textarea[readonly] {
   margin-top: 0;
   color: var(--danger-dark);
   font-size: 1.08rem;
+}
+
+.account-deletion-disclosure {
+  display: grid;
+  gap: 10px;
+  padding-inline-start: 22px;
+}
+
+.public-information-shell {
+  min-height: 100vh;
+}
+
+.public-information-header {
+  position: sticky;
+}
+
+.public-information-app-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--brand-dark);
+  font-weight: var(--font-weight-medium);
+  text-underline-offset: 4px;
+}
+
+.public-information-page {
+  display: grid;
+  gap: 22px;
+}
+
+.public-information-page > .page-heading {
+  margin-bottom: 4px;
+}
+
+.public-information-block {
+  min-width: 0;
+  padding: clamp(20px, 4vw, 30px);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.public-information-block--warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.public-information-block h2 {
+  margin: 0 0 14px;
+  color: var(--brand-deep);
+  font-size: 1.12rem;
+}
+
+.public-information-block p:last-child,
+.public-information-block ul:last-child {
+  margin-bottom: 0;
+}
+
+.public-information-block li + li {
+  margin-top: 8px;
+}
+
+.public-information-definition-list {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+}
+
+.public-information-definition-list div {
+  display: grid;
+  gap: 4px;
+}
+
+.public-information-definition-list dt {
+  color: var(--muted);
+  font-size: var(--font-size-small);
+}
+
+.public-information-definition-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.public-information-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.public-information-page table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+}
+
+.public-information-page th,
+.public-information-page td {
+  padding: 13px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.public-information-page thead th {
+  color: var(--brand-deep);
+  background: var(--brand-soft);
+}
+
+.public-information-page tbody th {
+  width: 19%;
+  color: var(--brand-text);
 }
 
 .confirmation-dialog {

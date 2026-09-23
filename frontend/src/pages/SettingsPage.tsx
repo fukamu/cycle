@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { GoogleIdentityButton } from "../features/auth/GoogleIdentityButton";
 import { useDeleteCurrentAccount } from "../features/auth/accountDeletionContext";
@@ -17,6 +18,7 @@ import {
   toErrorPresentation,
   type ErrorPresentation,
 } from "../shared/api/errorPresentation";
+import { readPublicInformationConfiguration } from "../features/public-information/config";
 
 type SettingsConfirmation =
   | { readonly kind: "google-login"; readonly credential: string }
@@ -26,6 +28,7 @@ const accountSwitchMessage = "既存のFUKAMU Cycleアカウントへ切り替�
 
 export function SettingsPage() {
   const session = useSession();
+  const publicInformation = readPublicInformationConfiguration();
   const runSessionTransition = useRunSessionTransition();
   const deleteCurrentAccount = useDeleteCurrentAccount();
   const announceAccountSwitch = useAnnounceAccountSwitch();
@@ -135,9 +138,20 @@ export function SettingsPage() {
           <GoogleIdentityButton onCredential={connect} disabled={pending} />
         )}
       </section>
+      <section className="settings-card settings-privacy-card">
+        <h2>データの取扱い・お問い合わせ</h2>
+        <p>
+          保存する情報、任意のAI送信、削除後の保持例外、問い合わせ窓口を確認できます。
+        </p>
+        <Link className="touch-target touch-target--inline" to="/legal/privacy">
+          データの取扱いを確認
+        </Link>
+      </section>
       <section className="danger-zone">
         <h2>アカウントの削除</h2>
-        <p>PDCA履歴を含むすべてのデータを削除します。</p>
+        <p>
+          運用中のデータベースにある、アカウントに紐づく目標・PDCA履歴・Google連携・セッション等を削除します。削除後は取り出せません。バックアップ、匿名集計、端末データには下記の扱いがあります。
+        </p>
         <button
           type="button"
           disabled={pending}
@@ -174,9 +188,30 @@ export function SettingsPage() {
             void removeAccount();
           }}
         >
+          <ul className="account-deletion-disclosure">
+            <li>
+              運用中のデータベースにあるアカウント、Google連携、セッション、目標、Goal
+              Version、PDCA、下書き、AI処理内容・利用記録を削除します。
+            </li>
+            <li>
+              個人へ再関連付けできない月次の費用・運用集計は保持する場合があります。
+            </li>
+            <li>
+              入力本文・認証トークン・安定した利用者識別子を記録しない設計の運用・障害調査データは、個別削除の対象ではありません。
+            </li>
+            <li>
+              {publicInformation === undefined
+                ? "バックアップの最大保持期間は未設定です。この状態では外部利用を開始できません。"
+                : `バックアップには削除前の複製が最長${publicInformation.accountDeletionBackupMaxDays}日残る場合があります。`}
+            </li>
+            <li>
+              このブラウザの下書き・一時表示データは、サーバー削除成功後に消去します。別端末では24時間で利用対象外になりますが、その端末を次に開くまで物理削除されない場合があります。
+            </li>
+          </ul>
           <p>
-            目標・Goal
-            Version・PDCAサイクルを含むすべてのアカウントデータを削除します。この操作は取り消せません。
+            この操作は取り消せず、削除後はデータを取り出せません。詳しくは
+            <Link to="/legal/privacy#account-deletion">データの取扱い</Link>
+            を確認してください。
           </p>
         </ConfirmationDialog>
       )}

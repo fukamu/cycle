@@ -64,9 +64,14 @@ Computed-style回帰はrepository-pinned Playwright Chromium、light mode、`lan
 
 ```bash
 export TEST_DATABASE_URL='postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable'
+export VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS='1'
+export VITE_PRIVACY_CONTACT_URL='https://support.example.test/cycle'
+export VITE_PRIVACY_OPERATOR_NAME='FUKAMU Cycle isolated E2E fixture'
 pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
 CI=true pnpm --filter fukamu-cycle-frontend --fail-if-no-match exec playwright test e2e/design-tokens.spec.ts
 ```
+
+上の3つの公開情報は外部へ配信しない隔離E2E build専用fixtureです。Staging / Productionの運用値へ流用せず、通常の外部公開では[`environment.md`のFrontend build-time contract](environment.md#frontend-build-time)と[`operations.md`のDeployment input sheet](operations.md#deployment-input-sheet)で確認した実値だけを使います。
 
 Versionまたはsource revisionを更新するときは、中央diffとHANDOFFをreviewし、complete bundle、import/mapping、focused test、本手順、[`design.md` §43](design.md#43-typography--font-selection--i18n-readiness)を同じatomic PRで更新してからCommit前gateを完走します。同じversionのbytesを上書きせず、rollbackは採用PR全体のrevertとします。
 

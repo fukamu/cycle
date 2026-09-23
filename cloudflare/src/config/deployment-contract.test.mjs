@@ -125,6 +125,9 @@ const productionFrontendEnvironmentAccessAllowlist = [
   "frontend/src/features/app-referral/config.ts:VITE_APP_REFERRAL_URL",
   "frontend/src/features/auth/GoogleIdentityButton.tsx:VITE_GOOGLE_WEB_CLIENT_ID",
   "frontend/src/features/auth/turnstile.ts:VITE_TURNSTILE_SITE_KEY",
+  "frontend/src/features/public-information/config.ts:VITE_PRIVACY_OPERATOR_NAME",
+  "frontend/src/features/public-information/config.ts:VITE_PRIVACY_CONTACT_URL",
+  "frontend/src/features/public-information/config.ts:VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS",
 ];
 const productionBackendEnvironmentAccessAllowlist = [
   "backend/cmd/cleanup/main.go:os.LookupEnv:consumer=os.Exit(runCleanupCommand(ctx, os.Args[1:], os.LookupEnv, os.Stdout, dependencies))",
@@ -4095,6 +4098,9 @@ function runWorkflowValidation(overrides) {
   };
   for (const name of validationRequiredKeys) environment[name] = "fixture";
   Object.assign(environment, {
+    ACCOUNT_DELETION_BACKUP_MAX_DAYS: "30",
+    PRIVACY_CONTACT_URL: "https://support.example.test/cycle",
+    PRIVACY_OPERATOR_NAME: "Example Cycle Operator",
     PUBLIC_ORIGIN: "https://cycle.staging.fukamu.matoruru.com",
     TURNSTILE_SITE_KEY: "1x00000000000000000000BB",
     TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",

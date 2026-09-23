@@ -504,7 +504,10 @@ jobs:
       PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
       APP_REFERRAL_URL: ${{ vars.APP_REFERRAL_URL }}
+      ACCOUNT_DELETION_BACKUP_MAX_DAYS: ${{ vars.ACCOUNT_DELETION_BACKUP_MAX_DAYS }}
       GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
+      PRIVACY_CONTACT_URL: ${{ vars.PRIVACY_CONTACT_URL }}
+      PRIVACY_OPERATOR_NAME: ${{ vars.PRIVACY_OPERATOR_NAME }}
       TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
       DB_MAX_OPEN_CONNS: ${{ vars.DB_MAX_OPEN_CONNS }}
       DB_MAX_IDLE_CONNS: ${{ vars.DB_MAX_IDLE_CONNS }}
@@ -616,9 +619,12 @@ jobs:
 
       - name: Build static frontend
         env:
+          VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS: ${{ env.ACCOUNT_DELETION_BACKUP_MAX_DAYS }}
           VITE_DEPLOYMENT_ENV: staging
           VITE_APP_REFERRAL_URL: ${{ env.APP_REFERRAL_URL }}
           VITE_GOOGLE_WEB_CLIENT_ID: ${{ env.GOOGLE_WEB_CLIENT_ID }}
+          VITE_PRIVACY_CONTACT_URL: ${{ env.PRIVACY_CONTACT_URL }}
+          VITE_PRIVACY_OPERATOR_NAME: ${{ env.PRIVACY_OPERATOR_NAME }}
           VITE_TURNSTILE_SITE_KEY: ${{ env.TURNSTILE_SITE_KEY }}
         run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
 

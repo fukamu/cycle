@@ -128,6 +128,12 @@ function expectFirstUseGuidePreferencesCleared() {
 
 describe("SettingsPage", () => {
   beforeEach(() => {
+    vi.stubEnv("VITE_PRIVACY_OPERATOR_NAME", "Example Cycle Operator");
+    vi.stubEnv(
+      "VITE_PRIVACY_CONTACT_URL",
+      "https://support.example.test/cycle",
+    );
+    vi.stubEnv("VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS", "30");
     clearFirstUseGuidePreferences();
     vi.mocked(deleteAccount).mockReset();
     vi.mocked(loginGoogle).mockReset();
@@ -137,7 +143,39 @@ describe("SettingsPage", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it("explains live deletion, retained aggregates, backup expiry, and browser cleanup", async () => {
+    renderPage();
+
+    expect(
+      screen.getByRole("link", { name: "データの取扱いを確認" }),
+    ).toHaveAttribute("href", "/legal/privacy");
+    expect(screen.queryByText(/すべてのデータを削除/u)).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "アカウントを削除" }),
+    );
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(
+      "個人へ再関連付けできない月次の費用・運用集計は保持する場合があります。",
+    );
+    expect(dialog).toHaveTextContent(
+      "運用・障害調査データは、個別削除の対象ではありません。",
+    );
+    expect(dialog).toHaveTextContent(
+      "バックアップには削除前の複製が最長30日残る場合があります。",
+    );
+    expect(dialog).toHaveTextContent(
+      "別端末では24時間で利用対象外になりますが、その端末を次に開くまで物理削除されない場合があります。",
+    );
+    expect(
+      within(dialog).getByRole("link", { name: "データの取扱い" }),
+    ).toHaveAttribute("href", "/legal/privacy#account-deletion");
+    expect(deleteAccount).not.toHaveBeenCalled();
   });
 
   it("identifies the connected Google Account by its verified email", () => {
