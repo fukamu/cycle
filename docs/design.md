@@ -346,6 +346,10 @@ flowchart TD
 
 ## 6.1 初回アクセス
 
+`/legal/privacy`は§41.14の公開情報Routeであり、Session境界の外で描画する。このRouteへの直接アクセスでは`GET /api/v1/session`、`POST /api/v1/session/anonymous`、Google Identity、AIその他のApplication APIを開始しない。
+
+それ以外のApplication Routeでは、正式な運営者名、実際に受付可能なHTTPS問い合わせ窓口、Account Delete後のbackup最大保持日数からなる公開情報Configurationを、Session discoveryより先に検証する。いずれかが欠落または不正なら§41.14の未設定状態だけを描画し、Session GET、Anonymous作成、Google / Turnstile script、AI処理を開始しない。仮値、他製品の情報、example defaultへfallbackしない。完全なConfigurationがある場合だけ次へ進む。
+
 1. SPA起動後`GET /api/v1/session`。
 2. Sessionが無効/不存在なら`POST /api/v1/session/anonymous`。
 3. ServerはAbuse check後、**User + Sessionのみ**をTransactionで作成する。
@@ -467,12 +471,14 @@ Application層の責務境界は§§29–30、検証責務は§48を参照する
 | `/history` | Goal History List | Goal中心の履歴一覧、infinite scroll |
 | `/history/goals/:goalId` | Goal Timeline | Goal Version変化点 + Cycle群 |
 | `/settings` | Settings | User ID、Google連携、Account Delete |
+| `/legal/privacy` | Data handling / support | Session外で読めるCycle固有の取得情報、利用目的、外部処理、保存・削除、問い合わせ |
 
 Hamburger Menu:
 
 ```text
 目標の履歴
 設定
+データの取扱い・お問い合わせ
 ```
 
 ## 9.1 Home behavior
@@ -826,6 +832,8 @@ Route: `/settings`
 - Google Identity Servicesのbutton hostは描画前から高さと最大幅を確保し、外部Widgetの非同期初期描画が設定画面全体へはみ出さないようにする。
 - Google Identity Services scriptの読込失敗時は、失敗を説明して「Google認証を再読み込み」を表示する。自動Retryやpage reloadは要求せず、Userの明示操作ごとに新しいscript loadをsingle-flightで開始する。
 - Account Delete。
+- Session外の`/legal/privacy`へ移動する「データの取扱い・お問い合わせ」導線。
+- Account Deleteの概要と確認Dialogは、運用中DBから削除するUser関連Data、個人へ再関連付けできない集計、通常backup、現在Browser / 別端末の一時Dataを「すべてのデータ」と一括せず区別する。削除後に取り出せないこと、別端末の一時Dataは24時間で利用対象外になるが次回起動まで物理削除されない場合があること、決定済みbackup最大保持日数を実行前に示す。
 - Billing / Upgrade Plan UIは表示しない。
 
 ## 9.10 初回Guide
@@ -5935,6 +5943,8 @@ Account tombstone作成transactionは、そのUserのBrowser Draft削除に加�
 
 Backupは通常Retention経過で失効させ、削除済みUserを通常運用環境へ個別復元しない。Production前にrestore windowを運用ポリシーとして確定する。
 
+User向け表示では、User rowとcascade対象を運用中DBから削除すること、個人へ再関連付けできない月次集計を保持可能であること、§42の観測Dataは個別Account Deleteの対象ではないこと、backupの複製が§41.14の決定済み最大日数だけ残り得ること、現在Browserの一時Dataはserver `204`後に削除すること、別端末の一時Dataは最大24時間で利用対象外になるが次回起動まで物理削除されない場合があることを区別する。「すべてのデータを即時削除」と表示しない。操作前に削除後は取り出せず取り消せないことを示す。
+
 ## 41.11 Browser draft privacy
 
 IndexedDBはXSSに対する暗号化境界ではない。
@@ -5987,6 +5997,27 @@ Retirement Workerへの切替は、Product OwnerのB2承認、成功したcurren
 - `Storage.clear()`を使わず、既知のGuide keyだけを削除する。遅延callbackはcaptured identity / generationを再確認し、different-user switchまたはAccount Delete後に旧Guide stateを書き戻さない。
 
 Guide stateはTTL、cross-device同期、server backup、Browser Draft tombstoneの対象にしない。Browser site dataを利用者が削除した場合は欠落へ戻り、有効な既存Sessionでは`eligible=false`となる。これはGuideだけの表示抑止であり、Application dataやSessionを削除しない。
+
+## 41.14 Public data handling / support disclosure
+
+`/legal/privacy`はFUKAMU Cycle固有の公開情報Routeであり、§6.1のとおりSession / Anonymous bootstrapより外側へ置く。直接アクセスではCookie発行、User作成、Google / Turnstile script load、AI / Application API callを行わない。ApplicationのHamburger MenuとSettingsから同じRouteへ明示的にlinkする。
+
+本文は少なくとも次を現在形で区別する。
+
+- Anonymous利用に伴うUser / Session / bootstrap情報、request情報と、data isolation、Session維持、security、abuse防止の目的。
+- 任意のGoogle連携で扱う外部subject、Email、Googleが返すEmail verification state、login / identity追加の目的。連携時にはEmailとverification stateを保存し、Settingsではverifiedの場合だけEmailを表示すること。
+- Goal、Success Signal、P/D/C/A、Draft、Review等のUser Contentと、保存・同期・履歴・Cycle機能提供の目的。
+- 任意AI操作でOpenAIへ送る§41.8の範囲、同一Goal制約、AIを利用しない経路、Userが採否を決めること。
+- Browser Draft / Server SnapshotのIndexedDB最大24時間、認証代替ではないこと、Account Delete時の現在Browserと別端末の物理削除時点の違い。
+- §42でallowlistした運用情報と目的。User Content、token、安定した個人識別子を観測Dataへ記録しない設計であること。
+- Cloudflare、Google認証、保存時暗号化を有効にした場合のGoogle Cloud KMS、OpenAI、運営環境で採用するPostgreSQL / observabilityを機能上の役割ごとに示すこと。KMSにはUser Content本文でなくDEKとUser単位のwrap AADを送る境界を区別する。ただし契約主体、保存・access国、DPA / 再委託、外国取扱いの根拠、provider側保持をcodeから推測せず、実契約・設定の確認が終わるまで完了表示しない。
+- Account Deleteのlive Data、匿名集計、個別削除対象ではない§42の観測Data、Browser Data、backupを§41.10と一致させ、決定済みbackup最大保持日数を表示すること。観測基盤の実保持期間は確認前に推測しない。
+- Supported public environmentでBrowserからpublic originまでHTTPS / TLSを使用する方針と、Database接続を含む実際の通信経路のTLS設定は外部利用開始前に確認が必要であること。Data in transitの保護は保存時暗号化やE2EEとは異なり、Server / Provider処理を妨げないこと。Server-side Envelope Encryptionを有効にしている場合もE2EE / zero-knowledgeではなくruntimeが復号でき、AI Providerへ送る本文はその保存暗号化境界外であること。現在配信中の証明書 / 各通信経路のTLS設定、暗号化modeと既存Data migration完了をcodeから推測せず実環境で確認する必要があること。`store=false`だけから学習不使用またはzero retentionを保証しないこと。
+- Cycleには現在、User向けBilling / paid plan / 課金解約がなく、別製品の料金、trial、契約条件を適用しないこと。
+
+公開情報Configurationは、証拠資料・実運用と照合した正式な運営者名、実際に問い合わせ・本人請求を受付できるcredentialなしのHTTPS URL、運用backup / restore policyと一致する正の整数の最大保持日数を必須とする。これらはpublic build-time valueでありSecretを含めない。Staging / Productionのsupported deployは欠落、不正URL、不正日数をSession作成前かつdeploy mutation前にfail-closedとする。Frontendも欠落または不正値を検出した場合、仮値を表示せず外部利用を開始できない状態だけを描画する。
+
+本文の存在は、契約、DPA、processing / access国、外国取扱い、backup設定、encryption mode / migration、provider data controlの実確認を代替しない。これらが未確認なら公開情報Routeが描画できても一般公開完了またはPrivacy確認完了と扱わない。
 
 ---
 
@@ -6547,6 +6578,7 @@ User Content暗号化は互換release、`000010` expand＋dual-read Application�
 | Database pool | §44.6 | `docs/environment.md`、typed Backend config |
 | Observability exporter | §§42、44.2 | `docs/environment.md`、deployment contract |
 | User Content encryption / KMS | §§41.1–41.3 | `docs/environment.md`、typed Backend config、deployment contract |
+| Public data handling / support | §§6.1、9、41.10、41.14 | `docs/environment.md`、Frontend config、deployment contract |
 
 Semantic ownerがProduct上の意味と許容関係を定め、運用inventoryがexact key、source、Environment別設定を定める。両者を一つの表へ混在させない。
 
@@ -6568,6 +6600,7 @@ Processを起動しない条件は次である。
 - Session/HMAC/signing secretが用途分離・entropy要件を満たさない。
 - Production security profileでTurnstile、Provider credential、Database、observabilityの必須入力が不足。
 - Production security profileでGCP KMS provider、exact CryptoKeyVersion、KMS credentialが不足または不正。
+- Supported Staging / Production buildで§41.14の公開情報Configurationが欠落または不正。
 - Database pool、timeout、lifetimeが内部矛盾または§44.6の接続budgetを満たさない。
 
 Exact validation shapeはtyped configとdeployment contractで同一にし、`./scripts/check-config-parity.sh`でdriftを拒否する。
@@ -6735,6 +6768,8 @@ E2Eは§6のuser flowと§§20–25のpublic contractを投影し、内部module
 - Goal維持/変更、Cycle 1完了後のReview ContinueとCycle 2 Active Pでの直前A参照、terminal、History/TimelineのC/A disclosureとcanonical全文導線。
 - 複数Progressing Goalのpolicy境界とDraft保全。
 - Goal Delete、Google upgrade/login collision、Account Delete。
+- `/legal/privacy`の未ログイン直接表示ではSession / Anonymous / Google / Turnstile / AI requestが0件であること。通常Routeでは§41.14の公開情報Configurationが欠落または不正なら同じくrequest 0件で未設定表示へ停止し、完全なConfigurationがある場合だけ既存Session discoveryを開始すること。
+- SettingsとHamburger Menuから`/legal/privacy`へ到達でき、Account Delete前の表示がlive削除、匿名集計、決定済みbackup最大保持日数、現在Browser / 別端末の一時Data、取り出し不能を区別すること。PCと320px幅で本文と問い合わせ導線を読めること。
 - 同一Browser Contextの二tabによる同時Session discovery、片方のreload、その後の両tabのcommand / autosave。Advisory欠落、Google Session切替、Account Deleteでもidentity fence / revoke contractへ収束する。
 - Save/AI/provider failure、response loss、session identity transition。
 
@@ -6922,7 +6957,7 @@ Application/schema rollbackとforward-fix条件は§44.7を正本とする。Bac
 
 ## 52.2 Operational values
 
-Environment固有のDomain、capacity、provider availability/price、credential owner、retention、alert destination、on-call、backup windowは運用正本に記録する。本書は意味、許容関係、release blockerだけを所有し、live値を複製しない。未承認値を推測してProduction deployしない。
+Environment固有のDomain、capacity、provider availability/price、credential owner、retention、alert destination、on-call、backup windowは運用正本に記録する。本書は意味、許容関係、release blockerだけを所有し、live値を複製しない。未承認値を推測してProduction deployしない。正式な運営者名、実受付可能な問い合わせURL、backup最大保持日数、公開URL / Database接続の実TLS設定、契約主体・processing / access国・DPA / 外国取扱い、encryption mode / migration、provider data controlは外部利用開始のblockerであり、§41.14のFrontend入力だけを実状態確認の代替にしない。
 
 ## 52.3 Changes that require updating this document
 

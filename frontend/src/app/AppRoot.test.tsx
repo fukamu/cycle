@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PropsWithChildren } from "react";
 
@@ -165,6 +165,7 @@ vi.mock("../features/auth/SessionProvider", async () => {
 });
 
 vi.mock("./App", async () => {
+  const { Link } = await import("react-router-dom");
   const { RouteModuleLoadError } = await import("./routeModuleLoader");
   const { useAccountSwitchNotice, useAnnounceAccountSwitch } =
     await import("../features/auth/sessionTransitionNoticeContext");
@@ -202,6 +203,7 @@ vi.mock("./App", async () => {
             アカウントを切り替える
           </button>
           <p data-testid="application">{session.user.id}</p>
+          <Link to="/legal/privacy">データの取扱いへ移動</Link>
           {accountSwitchNotice && (
             <p role="status">既存のアカウントへ切り替えました。</p>
           )}
@@ -213,11 +215,126 @@ vi.mock("./App", async () => {
 
 describe("AppRoot production composition", () => {
   beforeEach(() => {
+    vi.unstubAllEnvs();
+    vi.stubEnv("VITE_PRIVACY_OPERATOR_NAME", "Example Cycle Operator");
+    vi.stubEnv(
+      "VITE_PRIVACY_CONTACT_URL",
+      "https://support.example.test/cycle",
+    );
+    vi.stubEnv("VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS", "30");
+    window.history.replaceState(null, "", "/");
     appRootMocks.appShouldThrow = false;
     appRootMocks.providerShouldThrow = false;
     appRootMocks.routeModuleShouldThrow = false;
     appRootMocks.sessionMounts = 0;
     appRootMocks.sessionUnmounts = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("renders the public information route without mounting session or request boundaries", () => {
+    window.history.replaceState(null, "", "/legal/privacy");
+    const fetchRequest = vi.spyOn(globalThis, "fetch");
+
+    try {
+      render(<AppRoot />);
+
+      expect(
+        screen.getByRole("heading", {
+          name: "データの取扱いとお問い合わせ",
+        }),
+      ).toBeInTheDocument();
+      expect(appRootMocks.sessionMounts).toBe(0);
+      expect(screen.queryByTestId("session-provider")).not.toBeInTheDocument();
+      expect(fetchRequest).not.toHaveBeenCalled();
+      expect(
+        document.querySelector(
+          'script[src*="accounts.google.com"], script[src*="challenges.cloudflare.com"]',
+        ),
+      ).toBeNull();
+    } finally {
+      fetchRequest.mockRestore();
+    }
+  });
+
+  it("keeps the public information route request-free when disclosure configuration is missing", () => {
+    vi.stubEnv("VITE_PRIVACY_OPERATOR_NAME", "");
+    vi.stubEnv("VITE_PRIVACY_CONTACT_URL", "");
+    vi.stubEnv("VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS", "");
+    window.history.replaceState(null, "", "/legal/privacy");
+    const fetchRequest = vi.spyOn(globalThis, "fetch");
+
+    try {
+      render(<AppRoot />);
+
+      expect(
+        screen.getByRole("heading", {
+          name: "公開情報の設定が完了していません",
+        }),
+      ).toBeInTheDocument();
+      expect(appRootMocks.sessionMounts).toBe(0);
+      expect(screen.queryByTestId("session-provider")).not.toBeInTheDocument();
+      expect(fetchRequest).not.toHaveBeenCalled();
+      expect(
+        document.querySelector(
+          'script[src*="accounts.google.com"], script[src*="challenges.cloudflare.com"]',
+        ),
+      ).toBeNull();
+    } finally {
+      fetchRequest.mockRestore();
+    }
+  });
+
+  it("blocks normal routes before session discovery when public information is incomplete", () => {
+    vi.stubEnv("VITE_PRIVACY_CONTACT_URL", "");
+    const fetchRequest = vi.spyOn(globalThis, "fetch");
+
+    try {
+      render(<AppRoot />);
+
+      expect(
+        screen.getByRole("heading", {
+          name: "公開情報の設定が完了していません",
+        }),
+      ).toBeInTheDocument();
+      expect(appRootMocks.sessionMounts).toBe(0);
+      expect(screen.queryByTestId("session-provider")).not.toBeInTheDocument();
+      expect(fetchRequest).not.toHaveBeenCalled();
+      expect(
+        document.querySelector(
+          'script[src*="accounts.google.com"], script[src*="challenges.cloudflare.com"]',
+        ),
+      ).toBeNull();
+    } finally {
+      fetchRequest.mockRestore();
+    }
+  });
+
+  it("mounts the existing session bootstrap only with complete public information", () => {
+    render(<AppRoot />);
+
+    expect(screen.getByTestId("session-provider")).toBeInTheDocument();
+    expect(appRootMocks.sessionMounts).toBe(1);
+  });
+
+  it("focuses the public heading after in-app navigation leaves the session boundary", async () => {
+    const user = userEvent.setup();
+    render(<AppRoot />);
+
+    await user.click(
+      screen.getByRole("link", { name: "データの取扱いへ移動" }),
+    );
+
+    const heading = await screen.findByRole("heading", {
+      level: 1,
+      name: "データの取扱いとお問い合わせ",
+    });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(heading).toHaveAttribute("tabindex", "-1");
+    expect(appRootMocks.sessionUnmounts).toBe(1);
   });
 
   it("keeps transition notices outside the identity-keyed session boundary", () => {

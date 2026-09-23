@@ -36,7 +36,10 @@ run_cycle_checks_after_security() {
       pnpm --filter fukamu-cycle-frontend --fail-if-no-match run typecheck
       pnpm --filter fukamu-cycle-frontend --fail-if-no-match test
       if [[ "${run_e2e}" == "true" ]]; then
+        export VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS="1"
         export VITE_GOOGLE_WEB_CLIENT_ID="fukamu-cycle-e2e-client"
+        export VITE_PRIVACY_CONTACT_URL="https://support.example.test/cycle"
+        export VITE_PRIVACY_OPERATOR_NAME="FUKAMU Cycle isolated E2E fixture"
       fi
       pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build
     )

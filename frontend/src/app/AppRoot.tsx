@@ -7,7 +7,7 @@ import {
   useState,
   type PropsWithChildren,
 } from "react";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { AccountDeletionProvider } from "../features/auth/AccountDeletionProvider";
 import { SessionPostCommitCleanupBoundary } from "../features/auth/SessionPostCommitCleanupBoundary";
@@ -26,13 +26,15 @@ import {
   type FirstUseGuidePersistence,
   type FirstUseGuidePersistenceOwnership,
 } from "../features/first-use-guide";
+import { readPublicInformationConfiguration } from "../features/public-information/config";
+import { PublicInformationPage } from "../pages/PublicInformationPage";
 import {
   persistFirstUseGuideSkipped,
   persistFirstUseGuideStageShown,
 } from "../shared/preferences/firstUseGuidePreference";
 import { App } from "./App";
 import { AppErrorBoundary } from "./AppErrorBoundary";
-import { RouteHeadingFocusProvider } from "./AppLayout";
+import { RouteHeadingFocusProvider } from "./RouteHeadingFocus";
 import { queryClient } from "./queryClient";
 import { SessionLocalDataBoundary } from "./SessionLocalDataBoundary";
 
@@ -51,30 +53,49 @@ export function AppRoot({
     <AppErrorBoundary onRetry={reloadApplication}>
       <QueryClientProvider client={queryClient}>
         <SessionTransitionNoticeProvider>
-          <SessionProvider reloadApplication={reloadApplication}>
-            <BrowserRouter>
-              <RouteHeadingFocusProvider>
-                <SessionPostCommitCleanupBoundary>
-                  <SessionIdentityBoundary>
-                    <SessionLocalDataBoundary>
-                      <SessionBoundFirstUseGuideProvider>
-                        <AccountDeletionProvider>
-                          <AppErrorBoundary
-                            onRouteModuleRetry={reloadApplication}
-                          >
-                            <App />
-                          </AppErrorBoundary>
-                        </AccountDeletionProvider>
-                      </SessionBoundFirstUseGuideProvider>
-                    </SessionLocalDataBoundary>
-                  </SessionIdentityBoundary>
-                </SessionPostCommitCleanupBoundary>
-              </RouteHeadingFocusProvider>
-            </BrowserRouter>
-          </SessionProvider>
+          <BrowserRouter>
+            <RouteHeadingFocusProvider>
+              <Routes>
+                <Route
+                  path="/legal/privacy"
+                  element={<PublicInformationPage />}
+                />
+                <Route
+                  path="*"
+                  element={
+                    <SessionApplication reloadApplication={reloadApplication} />
+                  }
+                />
+              </Routes>
+            </RouteHeadingFocusProvider>
+          </BrowserRouter>
         </SessionTransitionNoticeProvider>
       </QueryClientProvider>
     </AppErrorBoundary>
+  );
+}
+
+function SessionApplication({ reloadApplication }: Required<AppRootProps>) {
+  if (readPublicInformationConfiguration() === undefined) {
+    return <PublicInformationPage />;
+  }
+
+  return (
+    <SessionProvider reloadApplication={reloadApplication}>
+      <SessionPostCommitCleanupBoundary>
+        <SessionIdentityBoundary>
+          <SessionLocalDataBoundary>
+            <SessionBoundFirstUseGuideProvider>
+              <AccountDeletionProvider>
+                <AppErrorBoundary onRouteModuleRetry={reloadApplication}>
+                  <App />
+                </AppErrorBoundary>
+              </AccountDeletionProvider>
+            </SessionBoundFirstUseGuideProvider>
+          </SessionLocalDataBoundary>
+        </SessionIdentityBoundary>
+      </SessionPostCommitCleanupBoundary>
+    </SessionProvider>
   );
 }
 

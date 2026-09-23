@@ -62,9 +62,10 @@ Worker / ContainerをTerraformとWranglerの両方で管理しません。Applic
 | User Content KMS | 環境専用GCP project / location / CryptoKeyVersion、runtime / operator identity、最小IAM、key / credential owner、旧version保持・restore方針 |
 | Telemetry | OTLP collector、header credential owner、sampler / export volume受入、retention、dashboard、alert、notification、on-call |
 | App controls | AI budget、rolling / rate limit、tester、公開期間、紹介導線、post-deploy E2E用の非個人Invite owner |
+| Public information / privacy | 登記・契約・実運用と一致するCycleの正式運営者名、実際に開示・訂正・削除等を受け付ける公開HTTPS窓口、Account Delete後のbackup最大保持日数。公開URLの証明書 / TLS、Database接続TLS、契約先service entity、保存・access国、再委託先、DPA / 外国取扱いの根拠、実際の暗号化mode、OpenAIのproject設定・学習利用・保持条件も確認者と確認日を記録する |
 | Operations | Terraform Apply approver、logs / traces確認者、cost確認、teardown / 継続判断日 |
 
-Exampleやcode defaultを未決の運用承認値として使いません。特にOTLP接続先、Production retention / alert / backup、cleanup cadenceはownerが決めるまでrelease blockerです。
+Exampleやcode defaultを未決の運用承認値として使いません。特に正式運営者、公開窓口、backup最大保持日数、外部serviceの契約・国・DPA / 外国取扱い、実際の暗号化modeとprovider設定、OTLP接続先、Production retention / alert / backup、cleanup cadenceはownerが決めるまでrelease blockerです。Frontendへ公開情報を設定しただけでは、外部service側の契約・設定確認を完了した証拠にしません。
 
 ## Bootstrap・release
 
@@ -309,15 +310,16 @@ Workflow artifactは90日保持の一時checkpointであり、180日後のlegacy
 ## Post-deploy verification
 
 1. Commit SHA、Plan / Apply runとapprover、Cloudflare deployment / version、Container rollout、migration runをrelease記録へ残す。
-2. [Health check](#health-check)が継続して成功し、5xx、latency、cold start、Neon connectionがbaseline内であることを確認する。
-3. Self-cleaning critical journeyがGoal Draft autosave、Goal開始、P/D/C/A、Cycle完了、Goal Review、次Cycle、HistoryのGoal V1 / Cycle 1 / Cycle 2まで成功する。
-4. 同journeyの公開account-delete cleanupが成功し、session再確認が401へ収束する。
-5. 配信HTMLがStagingの`noindex, nofollow`を持ち、certificate / mixed-content / CSP errorがない。
-6. StagingのTurnstileが公式invisible always-pass test pairと`staging_test` profileに固定され、Siteverify success、Origin拒否、rate-limit拒否が成立することを確認する。dummy responseのhostname / actionはidentity証跡にしない。Google login / upgrade、Goal Refine、Action Generate / Refine、account deletionを検証dataで最小回数確認する。
-7. Workers Logs / TracesとOTLP payloadにsecret、PDCA本文、email、raw user ID / IP、raw Turnstile tokenがない。
-8. Backend span / metricが承認済みcollectorへ到達し、collector障害中も`/readyz`と代表Application requestが影響を受けない。
-9. Neon、Container、OpenAI usage / cost、rate-limit拒否が承認済みlimit内であり、Anonymous createのUTC hour境界やrollout直後に想定外の許可・拒否burstがない。
-10. Canonical Staging hostname以外と`workers.dev`から利用できない。
+2. Fresh Browser Contextで最初に`/legal/privacy`へ直接accessし、Session GET、匿名Session POST、Google script / request、AI requestが発生しないことをread-onlyのNetwork記録で確認する。正式運営者、公開窓口、backup最大保持日数と、Cycle固有の取得・利用目的、外部service、削除例外、有料planがない旨が承認済みinputと一致し、320px幅でも読めることを確認する。値の欠落・不一致では通常routeへ進まない。
+3. [Health check](#health-check)が継続して成功し、5xx、latency、cold start、Neon connectionがbaseline内であることを確認する。
+4. Self-cleaning critical journeyがGoal Draft autosave、Goal開始、P/D/C/A、Cycle完了、Goal Review、次Cycle、HistoryのGoal V1 / Cycle 1 / Cycle 2まで成功する。
+5. 同journeyの公開account-delete cleanupが成功し、削除前の確認表示が運用DBからの削除、匿名月次集計、backup最大保持期間、現在 / 別browserの一時dataの扱いを正しく区別し、session再確認が401へ収束する。
+6. 配信HTMLがStagingの`noindex, nofollow`を持ち、certificate / mixed-content / CSP errorがない。
+7. StagingのTurnstileが公式invisible always-pass test pairと`staging_test` profileに固定され、Siteverify success、Origin拒否、rate-limit拒否が成立することを確認する。dummy responseのhostname / actionはidentity証跡にしない。Google login / upgrade、Goal Refine、Action Generate / Refine、account deletionを検証dataで最小回数確認する。
+8. Workers Logs / TracesとOTLP payloadにsecret、PDCA本文、email、raw user ID / IP、raw Turnstile tokenがない。
+9. Backend span / metricが承認済みcollectorへ到達し、collector障害中も`/readyz`と代表Application requestが影響を受けない。
+10. Neon、Container、OpenAI usage / cost、rate-limit拒否が承認済みlimit内であり、Anonymous createのUTC hour境界やrollout直後に想定外の許可・拒否burstがない。
+11. Canonical Staging hostname以外と`workers.dev`から利用できない。
 
 Stable CSRF v1を含むreleaseは、上記に加えて[専用のdrain / multi-tab gate](#session-bound-stable-csrf-v1-release)を完了します。
 

@@ -94,9 +94,12 @@ KMS provider、runtime identity / IAM、KEKのproject / location / key ownerとe
 
 | Variable | Purpose | Exposure / source |
 |---|---|---|
+| `VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS` | Account Delete後も通常backupへ残り得る複製の承認済み最大日数。正の整数だけを許可し、実際のbackup / restore policyと一致させる | **public**、Staging `ACCOUNT_DELETION_BACKUP_MAX_DAYS`。未確定値や他製品の値を流用せず、未設定ではdeployを停止 |
 | `VITE_DEPLOYMENT_ENV` | Search engine indexing制御。`staging`ではHTMLへ`noindex, nofollow`を追加し、`production`または未設定では追加しない | **public**、Staging deploy workflowが`staging`に固定。Production deployでは`production`を明示 |
 | `VITE_APP_REFERRAL_URL` | HomeのApplication紹介導線を有効化し、共有するtop page URL。空ならComponentを非表示 | **public**、local `.env.local` / Staging `APP_REFERRAL_URL`。HTTPS absolute root URLのみ |
 | `VITE_GOOGLE_WEB_CLIENT_ID` | Google Identity JS client | **public**、local `.env.local` / Staging `GOOGLE_WEB_CLIENT_ID` |
+| `VITE_PRIVACY_CONTACT_URL` | Cycleの問い合わせ、本人からの開示・訂正・削除等の請求を実際に受け付ける公開窓口 | **public**、Staging `PRIVACY_CONTACT_URL`。credentialとfragmentを含まないHTTPS URLを必須とし、未設定ではdeployを停止 |
+| `VITE_PRIVACY_OPERATOR_NAME` | Cycleで個人情報を取り扱う正式な運営者名 | **public**、Staging `PRIVACY_OPERATOR_NAME`。登記・契約・実運用と照合した値を必須とし、未設定ではdeployを停止 |
 | `VITE_TURNSTILE_SITE_KEY` | Turnstile widget | **public**、local `.env.local` / Staging `TURNSTILE_SITE_KEY`。Staging buildはCloudflare公式invisible always-pass test sitekeyだけを受理 |
 
 Frontend public valueとBackendの対応値は同じGitHub Environment入力からbuild/deployします。Stagingの`TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`はCloudflare公式の対応するalways-pass test pairとし、headless自動E2Eだけの検証profileとして扱います。Server-side Siteverify、Origin検証、Application rate limitは維持しますが、実bot判定の証拠にはしません。Staging以外のproduction originとProduction buildは公式test credentialを拒否し、`live` profileの実credentialを使います。
@@ -230,6 +233,9 @@ Variables:
 ```text
 PUBLIC_ORIGIN
 OTEL_EXPORTER_OTLP_ENDPOINT
+ACCOUNT_DELETION_BACKUP_MAX_DAYS
+PRIVACY_CONTACT_URL
+PRIVACY_OPERATOR_NAME
 GOOGLE_WEB_CLIENT_ID
 TURNSTILE_SITE_KEY
 DB_MAX_OPEN_CONNS

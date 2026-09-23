@@ -1,84 +1,20 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PropsWithChildren,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { useFirstUseGuideControls } from "../features/first-use-guide";
 import { firstUseGuideCopy } from "../shared/copy/ja";
 import { InteractionAvailabilityProvider } from "../shared/interaction/InteractionAvailabilityProvider";
 import { forgetSelectedCycleFrameFromWorkspacePath } from "../shared/preferences/selectedFramePreference";
-
-type RouteHeadingFocusRequest = Readonly<{
-  getPendingGeneration: (pathname: string) => number | undefined;
-  complete: (pathname: string, generation: number) => void;
-}>;
-
-type PendingRouteHeadingFocus = Readonly<{
-  pathname: string;
-  generation: number;
-}>;
-
-const RouteHeadingFocusContext = createContext<
-  RouteHeadingFocusRequest | undefined
->(undefined);
-
-export function RouteHeadingFocusProvider({ children }: PropsWithChildren) {
-  const { pathname } = useLocation();
-  const previousPathname = useRef(pathname);
-  const nextGeneration = useRef(0);
-  const pendingRequest = useRef<PendingRouteHeadingFocus | undefined>(
-    undefined,
-  );
-
-  useLayoutEffect(() => {
-    if (previousPathname.current === pathname) return;
-    previousPathname.current = pathname;
-    nextGeneration.current += 1;
-    pendingRequest.current = {
-      pathname,
-      generation: nextGeneration.current,
-    };
-  }, [pathname]);
-
-  const getPendingGeneration = useCallback((candidate: string) => {
-    const pending = pendingRequest.current;
-    return pending?.pathname === candidate ? pending.generation : undefined;
-  }, []);
-  const complete = useCallback((candidate: string, generation: number) => {
-    const pending = pendingRequest.current;
-    if (pending?.pathname === candidate && pending.generation === generation)
-      pendingRequest.current = undefined;
-  }, []);
-  const request = useMemo(
-    () => ({ getPendingGeneration, complete }),
-    [complete, getPendingGeneration],
-  );
-
-  return (
-    <RouteHeadingFocusContext.Provider value={request}>
-      {children}
-    </RouteHeadingFocusContext.Provider>
-  );
-}
+import { useRouteHeadingFocusTarget } from "./RouteHeadingFocus";
 
 export function AppLayout() {
   const { pathname } = useLocation();
   const firstUseGuide = useFirstUseGuideControls();
-  const routeHeadingFocus = useContext(RouteHeadingFocusContext);
   const [open, setOpen] = useState(false);
   const mainContent = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLElement>(null);
-  const currentPathname = useRef(pathname);
-  const previousPathname = useRef(pathname);
   const trigger = useRef<HTMLButtonElement>(null);
+  useRouteHeadingFocusTarget(mainContent);
   const closeMenu = useCallback((restoreFocus: boolean) => {
     setOpen(false);
     if (restoreFocus) {
@@ -88,70 +24,6 @@ export function AppLayout() {
       );
     }
   }, []);
-
-  useLayoutEffect(() => {
-    currentPathname.current = pathname;
-  }, [pathname]);
-
-  useEffect(() => {
-    const pendingGeneration = routeHeadingFocus
-      ? routeHeadingFocus.getPendingGeneration(pathname)
-      : previousPathname.current !== pathname
-        ? 0
-        : undefined;
-    previousPathname.current = pathname;
-    if (pendingGeneration === undefined) return;
-
-    const destination = mainContent.current;
-    if (!destination) return;
-    const requestIsCurrent = () =>
-      currentPathname.current === pathname &&
-      (!routeHeadingFocus ||
-        routeHeadingFocus.getPendingGeneration(pathname) === pendingGeneration);
-
-    const focusHeading = () => {
-      if (!requestIsCurrent()) return false;
-      const heading = Array.from(
-        destination.querySelectorAll<HTMLHeadingElement>("h1"),
-      ).find(
-        (candidate) =>
-          !candidate.closest(
-            "[hidden], [inert], [aria-hidden='true'], dialog, [role='dialog'], [role='alertdialog']",
-          ),
-      );
-      if (!heading) return false;
-      if (!requestIsCurrent()) return false;
-
-      heading.tabIndex = -1;
-      heading.focus();
-      if (document.activeElement !== heading) return false;
-      routeHeadingFocus?.complete(pathname, pendingGeneration);
-      return true;
-    };
-
-    if (focusHeading()) return;
-
-    const observer = new MutationObserver(() => {
-      if (!requestIsCurrent()) {
-        observer.disconnect();
-        return;
-      }
-      if (focusHeading()) observer.disconnect();
-    });
-    const attributeFilter = ["aria-hidden", "hidden", "inert", "open", "role"];
-    observer.observe(destination, {
-      attributeFilter,
-      attributes: true,
-      childList: true,
-      subtree: true,
-    });
-    let ancestor = destination.parentElement;
-    while (ancestor) {
-      observer.observe(ancestor, { attributeFilter, attributes: true });
-      ancestor = ancestor.parentElement;
-    }
-    return () => observer.disconnect();
-  }, [pathname, routeHeadingFocus]);
 
   useEffect(() => {
     if (!open) return;
@@ -279,6 +151,15 @@ export function AppLayout() {
                 </>
               )}
             </NavLink>
+            <Link
+              to="/legal/privacy"
+              className="drawer__link"
+              onClick={() => closeMenu(false)}
+            >
+              <span className="drawer__link-label">
+                データの取扱い・お問い合わせ
+              </span>
+            </Link>
             <button
               className="drawer__action"
               type="button"

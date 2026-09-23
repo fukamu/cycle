@@ -2144,7 +2144,10 @@ validate_exact_functional_steps() {
           "      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match exec playwright install --with-deps chromium" \
           "      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run build" \
           "        env:" \
+          '          VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS: "1"' \
           "          VITE_GOOGLE_WEB_CLIENT_ID: fukamu-cycle-e2e-client" \
+          "          VITE_PRIVACY_CONTACT_URL: https://support.example.test/cycle" \
+          "          VITE_PRIVACY_OPERATOR_NAME: FUKAMU Cycle isolated E2E fixture" \
           "      - run: pnpm --filter fukamu-cycle-frontend --fail-if-no-match run test:e2e" \
           "        env:" \
           "          TEST_DATABASE_URL: postgres://fukamu_cycle:fukamu_cycle@127.0.0.1:5432/fukamu_cycle_test?sslmode=disable" || return 1

@@ -44,6 +44,24 @@ export function validateDeploymentInputs(environment) {
     addProblem("INVALID_INPUT", referralName);
   }
 
+  const contactName = contract.frontend.required.VITE_PRIVACY_CONTACT_URL;
+  const contactURL = stringValue(environment, contactName);
+  if (!missing.has(contactName) && !isPublicHTTPSURL(contactURL)) {
+    addProblem("INVALID_INPUT", contactName);
+  }
+
+  const backupMaxDaysName =
+    contract.frontend.required.VITE_ACCOUNT_DELETION_BACKUP_MAX_DAYS;
+  const backupMaxDays = stringValue(environment, backupMaxDaysName)?.trim();
+  if (
+    !missing.has(backupMaxDaysName) &&
+    (backupMaxDays === undefined ||
+      !/^[1-9][0-9]*$/u.test(backupMaxDays) ||
+      !Number.isSafeInteger(Number(backupMaxDays)))
+  ) {
+    addProblem("INVALID_INPUT", backupMaxDaysName);
+  }
+
   for (const [name, expected] of [
     ["TURNSTILE_SITE_KEY", stagingTurnstileSiteKey],
     ["TURNSTILE_SECRET_KEY", stagingTurnstileSecretKey],
@@ -73,6 +91,21 @@ function hasValue(environment, name) {
 function stringValue(environment, name) {
   const value = environment[name];
   return typeof value === "string" ? value : undefined;
+}
+
+function isPublicHTTPSURL(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value.trim());
+    return (
+      url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.hash === ""
+    );
+  } catch {
+    return false;
+  }
 }
 
 function unique(values) {

@@ -505,6 +505,9 @@ test("header drawer contains focus and deactivates the background", async ({
   await expect(menuButton).toHaveAccessibleName("メニューを閉じる");
   const history = page.getByRole("link", { name: "目標の履歴" });
   const settings = page.getByRole("link", { name: "設定", exact: true });
+  const publicInformation = page.getByRole("link", {
+    name: "データの取扱い・お問い合わせ",
+  });
   const firstUseHelp = page.getByRole("button", {
     name: "はじめてガイドを表示",
   });
@@ -528,6 +531,8 @@ test("header drawer contains focus and deactivates the background", async ({
   await expect(history).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(settings).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(publicInformation).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(firstUseHelp).toBeFocused();
   await page.keyboard.press("Tab");
@@ -613,6 +618,8 @@ test("header drawer contains focus and deactivates the background", async ({
     await expect(history).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(settings).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(publicInformation).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(firstUseHelp).toBeFocused();
     expect(

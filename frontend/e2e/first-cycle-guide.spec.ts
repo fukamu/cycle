@@ -244,6 +244,10 @@ async function replayGuideFromMenuWithKeyboard(
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "設定" })).toBeFocused();
   await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("link", { name: "データの取扱い・お問い合わせ" }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
 
   const replay = page.getByRole("button", {
     name: firstUseGuideCopy.menuLabel,
