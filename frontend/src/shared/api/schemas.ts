@@ -73,6 +73,13 @@ export const sessionSchema = z.object({
 });
 export type Session = z.infer<typeof sessionSchema>;
 
+export const launchStatusSchema = z.object({
+  publicAccessEnabled: z.boolean(),
+  userAllowed: z.boolean(),
+  canAccess: z.boolean(),
+});
+export type LaunchStatus = z.infer<typeof launchStatusSchema>;
+
 export const goalVersionSchema = z.object({
   id: uuid,
   versionNumber: z.number().int().positive(),

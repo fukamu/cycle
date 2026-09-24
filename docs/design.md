@@ -408,6 +408,16 @@ Active Cycleは、経過日数、Cycle番号、P/D/C/Aの入力有無にかか�
 
 ---
 
+## 6.7 Production Launch Gate
+
+**[プロダクトルール]** Productionへのdeployと一般公開は独立した状態である。Production Launch GateはFeature FlagではなくApplication全体の認証後認可境界であり、`APP_ENV=production`では `canAccess = public_access_enabled OR user_allowed` を満たすUserだけが業務機能を利用できる。一般公開は`public_access_enabled = TRUE`という明示操作だけで開始する。
+
+**[実装契約]** Source of TruthはPostgreSQLのsingleton `launch_config`と、`users.id`を参照する`launch_allowed_users`である。Forward migrationはflag falseをseedし、既存User / Goal / Cycle /暗号化contentを変更しない。BackendはSession Cookieから認証したUser IDだけを判定に使い、Client入力のUser IDや許可booleanを信用しない。設定欠落、不正composition、query / DB errorは`503 LAUNCH_GATE_UNAVAILABLE`、未許可Userは`403 LAUNCH_ACCESS_DENIED`としてfail closedにする。
+
+`POST /session/anonymous`、`GET /session`、`GET /launch-status`、Google接続／login、Account Delete、health / readinessは識別・再認証・退会を妨げないためgate外とする。他の`/api/v1`業務endpointはAuthentication後、CSRF / handler / Use Caseより前の共通middlewareで強制する。`GET /api/v1/launch-status`は現在Sessionの`publicAccessEnabled`、`userAllowed`、`canAccess`だけを`Cache-Control: no-store`、`Vary: Cookie`で返す。FrontendはSession確定後、local data boundaryやrouteをmountする前にこのendpointを読み、deny時は簡潔な限定公開画面だけを表示する。
+
+Development / TestはApplication serviceの単一compositionでgateをdisabledにし、handlerへ環境分岐を分散しない。Production readinessはDB接続に加えて両Launch Gate tableとsingletonを読めることを要求する。管理画面は追加せず、追加・削除・flag切替はreviewed DB operationで行う。運用手順は [`production-launch-gate.md`](production-launch-gate.md) を正本とする。
+
 # 7. Core Domain Invariants
 
 **[追跡]** Invariantの本文はそれぞれのcanonical ownerだけに置く。この節はownerと主なenforcement boundaryを対応付け、別のRuleを作らない。
@@ -2483,6 +2493,8 @@ Auth=SessionのRequest / Response identityは次の共通Contractに従う。
 | JSON decode、型、unknown field、共通形式不正 | `VALIDATION_ERROR` | Request body / path / queryを持つEndpoint。ただし、より具体的なCodeが定義されている場合はそちらを優先 |
 | Session Cookieなし | `SESSION_MISSING` | `Auth=Session`の全Endpoint |
 | Session期限切れまたはrevoke済み | `SESSION_EXPIRED` | `Auth=Session`の全Endpoint |
+| Production Launch Gateの未許可User | `LAUNCH_ACCESS_DENIED` | Gate対象の業務Endpoint |
+| Production Launch Gateの設定欠落・取得失敗 | `LAUNCH_GATE_UNAVAILABLE` | Gate対象の業務Endpointと`GET /launch-status` |
 | CSRF tokenまたはOrigin不正 | `CSRF_INVALID` | Sessionを必要とするunsafe method |
 | Expected Userと認証済みUserが不一致 | `SESSION_IDENTITY_CHANGED` | Headerを送った`Auth=Session` Endpoint。CSRF / handlerより優先 |
 | 予期しない内部失敗 | `INTERNAL_ERROR` | 専用の安定Error Codeへ安全に分類できない場合 |
@@ -2638,6 +2650,30 @@ Errors:
 - `INTERNAL_ERROR`
 
 Idempotency: 同じ`bootstrapId`はbootstrap TTL内だけ同じUserへ収束する。
+
+## 21.2.1 `GET /api/v1/launch-status`
+
+**Use Case:** GetProductionLaunchStatus
+**Auth:** Session required
+**Authorization:** Launch Gate判定そのものは免除し、認証済みUser IDについてだけ判定する
+
+Response:
+
+```json
+{
+  "publicAccessEnabled": false,
+  "userAllowed": true,
+  "canAccess": true
+}
+```
+
+`Cache-Control: no-store`と`Vary: Cookie`を返す。他Userの許可状態、allowlist全体、Client指定のUser IDは受け付けない。
+
+Errors:
+
+- `SESSION_MISSING`
+- `SESSION_EXPIRED`
+- `LAUNCH_GATE_UNAVAILABLE`
 
 ## 21.3 `GET /api/v1/home`
 
@@ -4168,6 +4204,7 @@ Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除す�
 | 401 | `SESSION_EXPIRED` | draft保持して再認証 |
 | 403 | `CSRF_INVALID` | session refresh |
 | 403 | `ANONYMOUS_CREATION_BLOCKED` | 時間を空ける案内 |
+| 403 | `LAUNCH_ACCESS_DENIED` | 限定公開中の案内。業務APIへ進まない |
 | 404 | `GOAL_DRAFT_NOT_FOUND` | owner外も同じ |
 | 404 | `GOAL_NOT_FOUND` | owner外も同じ |
 | 404 | `CYCLE_NOT_FOUND` | owner/Goal mismatchも同じ |
@@ -4201,6 +4238,7 @@ Goal Deleteと異なり、Account DeleteではAIUsageEventもすべて削除す�
 | 503 | `AI_SERVICE_BUDGET_EXCEEDED` | AI一時停止 |
 | 503 | `ANTI_ABUSE_SERVICE_UNAVAILABLE` | bootstrap再試行 |
 | 503 | `GOOGLE_IDENTITY_VERIFICATION_UNAVAILABLE` | retry |
+| 503 | `LAUNCH_GATE_UNAVAILABLE` | fail closed。アクセス状態を再取得 |
 | 504 | `AI_PROVIDER_TIMEOUT` | retry可能 |
 | 500 | `ACCOUNT_UPGRADE_FAILED` | Anonymous User維持 |
 | 500 | `GOOGLE_LOGIN_FAILED` | current Session維持 |

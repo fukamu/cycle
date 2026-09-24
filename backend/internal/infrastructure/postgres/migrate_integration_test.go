@@ -20,6 +20,11 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	pool := integrationPool(t)
 	resetDatabase(t, pool)
 	directory := filepath.Join("..", "..", "..", "migrations")
+	launchGateDown, err := os.ReadFile(filepath.Join(directory, "000011_production_launch_gate.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeMigrationScript(t, pool, launchGateDown)
 	contentEncryptionDown, err := os.ReadFile(filepath.Join(directory, "000010_user_content_encryption_expand.down.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -76,14 +81,15 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 10 {
-		t.Fatalf("applied migrations = %v, want 10", result.Applied)
+	if len(result.Applied) != 11 {
+		t.Fatalf("applied migrations = %v, want 11", result.Applied)
 	}
 	baseline, retention, exposure := result.Applied[0], result.Applied[1], result.Applied[2]
 	hashSplit, cleanupIndex, guard, reviewSchedule := result.Applied[3], result.Applied[4], result.Applied[5], result.Applied[6]
 	replanCancellation := result.Applied[7]
 	goalSuccessSignal := result.Applied[8]
 	contentEncryption := result.Applied[9]
+	launchGate := result.Applied[10]
 	if baseline.Version != 1 || baseline.Direction != "up" || baseline.File != "000001_fukamu_cycle_baseline.up.sql" ||
 		retention.Version != 2 || retention.Direction != "up" || retention.File != "000002_ai_usage_retention_margin.up.sql" ||
 		exposure.Version != 3 || exposure.Direction != "up" || exposure.File != "000003_ai_usage_settlement_exposure.up.sql" ||
@@ -93,7 +99,8 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 		reviewSchedule.Version != 7 || reviewSchedule.Direction != "up" || reviewSchedule.File != "000007_cycle_review_schedule.up.sql" ||
 		replanCancellation.Version != 8 || replanCancellation.Direction != "up" || replanCancellation.File != "000008_cycle_replan_cancellation_reason.up.sql" ||
 		goalSuccessSignal.Version != 9 || goalSuccessSignal.Direction != "up" || goalSuccessSignal.File != "000009_goal_success_signal.up.sql" ||
-		contentEncryption.Version != 10 || contentEncryption.Direction != "up" || contentEncryption.File != "000010_user_content_encryption_expand.up.sql" {
+		contentEncryption.Version != 10 || contentEncryption.Direction != "up" || contentEncryption.File != "000010_user_content_encryption_expand.up.sql" ||
+		launchGate.Version != 11 || launchGate.Direction != "up" || launchGate.File != "000011_production_launch_gate.up.sql" {
 		t.Fatalf("applied migrations = %+v", result.Applied)
 	}
 	result, err = Migrate(databaseURL, directory)
@@ -106,7 +113,7 @@ func TestMigrateIsTransactionalAndIdempotent(t *testing.T) {
 	var version, users int
 	_ = pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&version)
 	_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM users`).Scan(&users)
-	if version != 10 || users != 0 {
+	if version != 11 || users != 0 {
 		t.Fatalf("version/users = %d/%d", version, users)
 	}
 	assertTightContentConstraints(t, pool)
@@ -458,7 +465,7 @@ INSERT INTO migration_runner_shadow.schema_migrations(version, dirty) VALUES(999
 	); err != nil {
 		t.Fatal(err)
 	}
-	if publicVersion != 10 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
+	if publicVersion != 11 || publicDirty || shadowVersion != 999 || !shadowDirty || shadowTables != 1 {
 		t.Fatalf("migration schemas = public:%d/%t shadow:%d/%t tables:%d",
 			publicVersion, publicDirty, shadowVersion, shadowDirty, shadowTables)
 	}

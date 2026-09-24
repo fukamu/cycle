@@ -216,6 +216,17 @@ type GoalVersionSuccessSignal struct {
 	SuccessSignalCiphertext     []byte
 }
 
+type LaunchAllowedUser struct {
+	UserID    pgtype.UUID
+	CreatedAt pgtype.Timestamptz
+}
+
+type LaunchConfig struct {
+	Singleton           bool
+	PublicAccessEnabled bool
+	UpdatedAt           pgtype.Timestamptz
+}
+
 type PdcaCycle struct {
 	ID                                 pgtype.UUID
 	UserID                             pgtype.UUID

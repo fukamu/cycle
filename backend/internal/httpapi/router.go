@@ -10,9 +10,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/fukamu/cycle/backend/internal/application/launchgate"
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
+	"github.com/fukamu/cycle/backend/internal/domain/user"
 )
 
 const sessionCookieName = "__Host-fukamu_cycle_session"
@@ -51,6 +53,10 @@ type WorkspaceService interface {
 	RefineAction(context.Context, workspace.ActionRefineInput) (workspace.AIResponse, error)
 }
 
+type LaunchGateService interface {
+	Check(context.Context, user.ID) (launchgate.Decision, error)
+}
+
 type Metrics interface {
 	ObserveHTTP(context.Context, string, int, time.Duration)
 	ObserveAutosave(context.Context, string, string, time.Duration)
@@ -67,6 +73,7 @@ type Metrics interface {
 type Dependencies struct {
 	Sessions       SessionService
 	Workspace      WorkspaceService
+	LaunchGate     LaunchGateService
 	Account        AccountService
 	RequestIDs     ports.IDGenerator
 	PublicOrigin   string
@@ -96,39 +103,46 @@ func NewRouter(dependencies Dependencies) http.Handler {
 			v1.Group(func(protected chi.Router) {
 				protected.Use(server.authenticateMiddleware)
 				protected.Get("/session", server.getSession)
-				protected.Get("/home", server.getHome)
-				protected.Get("/goal-drafts/{draftId}", server.validatedPath(server.getGoalDraft, "draftId"))
-				protected.Get("/goals", server.listGoals)
-				protected.Get("/goals/{goalId}", server.validatedPath(server.getGoal, "goalId"))
-				protected.Get("/goals/{goalId}/review", server.validatedPath(server.getGoalReview, "goalId"))
-				protected.Get("/goals/{goalId}/cycles", server.validatedPath(server.listGoalCycles, "goalId"))
-				protected.Get("/goals/{goalId}/cycles/{cycleId}", server.validatedPath(server.getGoalCycle, "goalId", "cycleId"))
-				protected.Group(func(unsafe chi.Router) {
-					unsafe.Use(server.csrfMiddleware)
-					unsafe.Post("/goal-drafts", server.createGoalDraft)
-					unsafe.Patch("/goal-drafts/{draftId}", server.validatedPath(server.saveGoalDraft, "draftId"))
-					unsafe.Delete("/goal-drafts/{draftId}", server.validatedPath(server.abandonGoalDraft, "draftId"))
-					unsafe.Post("/goal-drafts/{draftId}/refinements", server.validatedPath(server.refineGoalDraft, "draftId"))
-					unsafe.Post("/goal-drafts/{draftId}/refinements/{generationId}/adopt", server.validatedPath(server.adoptGoalDraftSuggestion, "draftId", "generationId"))
-					unsafe.Post("/goal-drafts/{draftId}/start", server.validatedPath(server.startGoal, "draftId"))
-					unsafe.Post("/goals/{goalId}/termination", server.validatedPath(server.terminateGoal, "goalId"))
-					unsafe.Delete("/goals/{goalId}", server.validatedPath(server.deleteGoal, "goalId"))
-					unsafe.Patch("/goals/{goalId}/review", server.validatedPath(server.saveGoalReview, "goalId"))
-					unsafe.Post("/goals/{goalId}/review/refinements", server.validatedPath(server.refineGoalReview, "goalId"))
-					unsafe.Post("/goals/{goalId}/review/refinements/{generationId}/adopt", server.validatedPath(server.adoptGoalReviewSuggestion, "goalId", "generationId"))
-					unsafe.Post("/goals/{goalId}/review/continue", server.validatedPath(server.continueGoalReview, "goalId"))
-					unsafe.Patch("/goals/{goalId}/cycles/{cycleId}/frames/{frame}", server.validatedPath(server.saveGoalCycleFrame, "goalId", "cycleId"))
-					unsafe.Patch("/goals/{goalId}/cycles/{cycleId}/review-schedule", server.validatedPath(server.changeGoalCycleReviewSchedule, "goalId", "cycleId"))
-					unsafe.Post("/goals/{goalId}/cycles/{cycleId}/actions/generate", server.validatedPath(server.generateAction, "goalId", "cycleId"))
-					unsafe.Post("/goals/{goalId}/cycles/{cycleId}/actions/refine", server.validatedPath(server.refineAction, "goalId", "cycleId"))
-					unsafe.Post("/goals/{goalId}/cycles/{cycleId}/complete", server.validatedPath(server.completeGoalCycle, "goalId", "cycleId"))
-					unsafe.Post("/goals/{goalId}/cycles/{cycleId}/replan", server.validatedPath(server.replanGoalCycle, "goalId", "cycleId"))
-					if dependencies.Account != nil {
-						unsafe.Post("/auth/google/upgrade", server.upgradeGoogle)
-						unsafe.Post("/auth/google/login", server.loginGoogle)
-						unsafe.Delete("/account", server.deleteAccount)
-					}
+				protected.Get("/launch-status", server.getLaunchStatus)
+				protected.Group(func(gated chi.Router) {
+					gated.Use(server.launchGateMiddleware)
+					gated.Get("/home", server.getHome)
+					gated.Get("/goal-drafts/{draftId}", server.validatedPath(server.getGoalDraft, "draftId"))
+					gated.Get("/goals", server.listGoals)
+					gated.Get("/goals/{goalId}", server.validatedPath(server.getGoal, "goalId"))
+					gated.Get("/goals/{goalId}/review", server.validatedPath(server.getGoalReview, "goalId"))
+					gated.Get("/goals/{goalId}/cycles", server.validatedPath(server.listGoalCycles, "goalId"))
+					gated.Get("/goals/{goalId}/cycles/{cycleId}", server.validatedPath(server.getGoalCycle, "goalId", "cycleId"))
+					gated.Group(func(unsafe chi.Router) {
+						unsafe.Use(server.csrfMiddleware)
+						unsafe.Post("/goal-drafts", server.createGoalDraft)
+						unsafe.Patch("/goal-drafts/{draftId}", server.validatedPath(server.saveGoalDraft, "draftId"))
+						unsafe.Delete("/goal-drafts/{draftId}", server.validatedPath(server.abandonGoalDraft, "draftId"))
+						unsafe.Post("/goal-drafts/{draftId}/refinements", server.validatedPath(server.refineGoalDraft, "draftId"))
+						unsafe.Post("/goal-drafts/{draftId}/refinements/{generationId}/adopt", server.validatedPath(server.adoptGoalDraftSuggestion, "draftId", "generationId"))
+						unsafe.Post("/goal-drafts/{draftId}/start", server.validatedPath(server.startGoal, "draftId"))
+						unsafe.Post("/goals/{goalId}/termination", server.validatedPath(server.terminateGoal, "goalId"))
+						unsafe.Delete("/goals/{goalId}", server.validatedPath(server.deleteGoal, "goalId"))
+						unsafe.Patch("/goals/{goalId}/review", server.validatedPath(server.saveGoalReview, "goalId"))
+						unsafe.Post("/goals/{goalId}/review/refinements", server.validatedPath(server.refineGoalReview, "goalId"))
+						unsafe.Post("/goals/{goalId}/review/refinements/{generationId}/adopt", server.validatedPath(server.adoptGoalReviewSuggestion, "goalId", "generationId"))
+						unsafe.Post("/goals/{goalId}/review/continue", server.validatedPath(server.continueGoalReview, "goalId"))
+						unsafe.Patch("/goals/{goalId}/cycles/{cycleId}/frames/{frame}", server.validatedPath(server.saveGoalCycleFrame, "goalId", "cycleId"))
+						unsafe.Patch("/goals/{goalId}/cycles/{cycleId}/review-schedule", server.validatedPath(server.changeGoalCycleReviewSchedule, "goalId", "cycleId"))
+						unsafe.Post("/goals/{goalId}/cycles/{cycleId}/actions/generate", server.validatedPath(server.generateAction, "goalId", "cycleId"))
+						unsafe.Post("/goals/{goalId}/cycles/{cycleId}/actions/refine", server.validatedPath(server.refineAction, "goalId", "cycleId"))
+						unsafe.Post("/goals/{goalId}/cycles/{cycleId}/complete", server.validatedPath(server.completeGoalCycle, "goalId", "cycleId"))
+						unsafe.Post("/goals/{goalId}/cycles/{cycleId}/replan", server.validatedPath(server.replanGoalCycle, "goalId", "cycleId"))
+					})
 				})
+				if dependencies.Account != nil {
+					protected.Group(func(account chi.Router) {
+						account.Use(server.csrfMiddleware)
+						account.Post("/auth/google/upgrade", server.upgradeGoogle)
+						account.Post("/auth/google/login", server.loginGoogle)
+						account.Delete("/account", server.deleteAccount)
+					})
+				}
 			})
 		})
 	}

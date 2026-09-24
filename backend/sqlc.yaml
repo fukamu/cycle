@@ -12,6 +12,7 @@ sql:
       - "migrations/000008_cycle_replan_cancellation_reason.up.sql"
       - "migrations/000009_goal_success_signal.up.sql"
       - "migrations/000010_user_content_encryption_expand.up.sql"
+      - "migrations/000011_production_launch_gate.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:

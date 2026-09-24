@@ -21,6 +21,7 @@ import {
   SessionProvider,
 } from "../features/auth/SessionProvider";
 import { SessionTransitionNoticeProvider } from "../features/auth/SessionTransitionNoticeProvider";
+import { ProductionLaunchGate } from "../features/launch-gate";
 import {
   FirstUseGuideProvider,
   type FirstUseGuidePersistence,
@@ -56,17 +57,19 @@ export function AppRoot({
               <RouteHeadingFocusProvider>
                 <SessionPostCommitCleanupBoundary>
                   <SessionIdentityBoundary>
-                    <SessionLocalDataBoundary>
-                      <SessionBoundFirstUseGuideProvider>
-                        <AccountDeletionProvider>
-                          <AppErrorBoundary
-                            onRouteModuleRetry={reloadApplication}
-                          >
-                            <App />
-                          </AppErrorBoundary>
-                        </AccountDeletionProvider>
-                      </SessionBoundFirstUseGuideProvider>
-                    </SessionLocalDataBoundary>
+                    <ProductionLaunchGate>
+                      <SessionLocalDataBoundary>
+                        <SessionBoundFirstUseGuideProvider>
+                          <AccountDeletionProvider>
+                            <AppErrorBoundary
+                              onRouteModuleRetry={reloadApplication}
+                            >
+                              <App />
+                            </AppErrorBoundary>
+                          </AccountDeletionProvider>
+                        </SessionBoundFirstUseGuideProvider>
+                      </SessionLocalDataBoundary>
+                    </ProductionLaunchGate>
                   </SessionIdentityBoundary>
                 </SessionPostCommitCleanupBoundary>
               </RouteHeadingFocusProvider>

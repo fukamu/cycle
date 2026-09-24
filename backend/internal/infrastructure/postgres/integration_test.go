@@ -49,9 +49,10 @@ func integrationPool(t *testing.T) *pgxpool.Pool {
 func resetDatabase(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `TRUNCATE TABLE
-anonymous_rate_limit_guards,abuse_rate_buckets,goal_delete_receipts,ai_generations,ai_usage_events,goal_drafts,pdca_cycle_review_schedules,pdca_cycles,
+launch_allowed_users,anonymous_rate_limit_guards,abuse_rate_buckets,goal_delete_receipts,ai_generations,ai_usage_events,goal_drafts,pdca_cycle_review_schedules,pdca_cycles,
 goal_versions,goals,ai_budget_monthly,sessions,auth_identities,anonymous_bootstraps,users,content_encryption_jobs CASCADE;
-UPDATE content_encryption_control SET mode='legacy',generation=0,updated_at=now() WHERE singleton=TRUE`)
+UPDATE content_encryption_control SET mode='legacy',generation=0,updated_at=now() WHERE singleton=TRUE;
+UPDATE launch_config SET public_access_enabled=FALSE,updated_at=now() WHERE singleton=TRUE`)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fukamu/cycle/backend/internal/application/account"
+	"github.com/fukamu/cycle/backend/internal/application/launchgate"
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
@@ -69,6 +70,10 @@ func (server *api) writeError(writer http.ResponseWriter, request *http.Request,
 
 func classifyError(err error) (int, string, string) {
 	switch {
+	case errors.Is(err, launchgate.ErrAccessDenied):
+		return 403, "LAUNCH_ACCESS_DENIED", "現在、このサービスは限定公開中です。"
+	case errors.Is(err, launchgate.ErrUnavailable):
+		return 503, "LAUNCH_GATE_UNAVAILABLE", "現在、アクセス状態を確認できません。"
 	case errors.Is(err, errRequestValidation), errors.Is(err, workspace.ErrInvalidTerminationRequest):
 		return 400, "VALIDATION_ERROR", "入力内容を確認してください。"
 	case errors.Is(err, workspace.ErrReplanConfirmation):

@@ -68,6 +68,10 @@ const messageByCode = {
   SESSION_IDENTITY_CHANGED:
     "セッションが切り替わりました。画面を読み込み直してください。",
   CSRF_INVALID: "ページを読み込み直して、もう一度お試しください。",
+  LAUNCH_ACCESS_DENIED:
+    "現在、このサービスは限定公開中です。一般公開までしばらくお待ちください。",
+  LAUNCH_GATE_UNAVAILABLE:
+    "現在、アクセス状態を確認できません。時間をおいてお試しください。",
   ANONYMOUS_CREATION_BLOCKED:
     "現在、新しい利用を開始できません。時間をおいてお試しください。",
   GOAL_DRAFT_NOT_FOUND: notFoundMessage,
