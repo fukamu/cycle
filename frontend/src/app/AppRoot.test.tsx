@@ -37,6 +37,12 @@ vi.mock(
   },
 );
 
+vi.mock("../features/launch-gate", () => ({
+  ProductionLaunchGate({ children }: PropsWithChildren) {
+    return <section data-testid="production-launch-gate">{children}</section>;
+  },
+}));
+
 vi.mock("../features/auth/SessionProvider", async () => {
   const { createContext, useContext, useEffect, useMemo, useState } =
     await import("react");
@@ -226,13 +232,15 @@ describe("AppRoot production composition", () => {
     const noticeProvider = screen.getByTestId("notice-provider");
     const sessionProvider = screen.getByTestId("session-provider");
     const identityBoundary = screen.getByTestId("session-identity-boundary");
+    const launchGate = screen.getByTestId("production-launch-gate");
     const application = screen.getByTestId("application");
     const cleanupOwner = identityBoundary.parentElement;
     expect(cleanupOwner).not.toBeNull();
     expect(noticeProvider).toContainElement(sessionProvider);
     expect(sessionProvider).toContainElement(cleanupOwner);
     expect(cleanupOwner).toContainElement(identityBoundary);
-    expect(identityBoundary).toContainElement(application);
+    expect(identityBoundary).toContainElement(launchGate);
+    expect(launchGate).toContainElement(application);
   });
 
   it("preserves a pending notice across the identity-keyed remount", async () => {

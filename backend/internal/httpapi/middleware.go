@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/fukamu/cycle/backend/internal/application/launchgate"
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
 	"github.com/fukamu/cycle/backend/internal/identifier"
@@ -209,6 +210,35 @@ func (server *api) authenticateMiddleware(next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(request.Context(), sessionContextKey, record)
 		next.ServeHTTP(writer, request.WithContext(ctx))
+	})
+}
+
+func (server *api) launchGateMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Add("Vary", "Cookie")
+		record, ok := authenticatedSession(request.Context())
+		if !ok {
+			server.writeError(writer, request, appsession.ErrSessionMissing, nil)
+			return
+		}
+		if server.dependencies.LaunchGate == nil {
+			if server.dependencies.Production {
+				server.writeError(writer, request, launchgate.ErrUnavailable, nil)
+				return
+			}
+			next.ServeHTTP(writer, request)
+			return
+		}
+		decision, err := server.dependencies.LaunchGate.Check(request.Context(), record.UserID)
+		if err != nil {
+			server.writeError(writer, request, launchgate.ErrUnavailable, nil)
+			return
+		}
+		if !decision.CanAccess {
+			server.writeError(writer, request, launchgate.ErrAccessDenied, nil)
+			return
+		}
+		next.ServeHTTP(writer, request)
 	})
 }
 

@@ -229,7 +229,9 @@ seed scriptと固定seedデータはありません。Migration後、匿名sessi
 
 ## Staging / Production migration
 
-通常のStaging/Production migrationをdeveloper PCから実行しません。Stagingは [`deploy.yml`](../.github/workflows/deploy.yml) がGitHub `staging` EnvironmentのNeon direct URLを一時的に `DATABASE_URL`へmapし、次の順序を強制します。
+通常のStaging/Production migrationをdeveloper PCから実行しません。`000011_production_launch_gate`はsingleton flagをfalseで作成し、UUID allowlistを`users`へcascade FKで接続するadditive migrationです。Productionへの適用、allowlist追加／削除、一般公開flag切替は [`production-launch-gate.md`](production-launch-gate.md) のreviewed operationに従います。
+
+Stagingは [`deploy.yml`](../.github/workflows/deploy.yml) がGitHub `staging` EnvironmentのNeon direct URLを一時的に `DATABASE_URL`へmapし、次の順序を強制します。
 
 1. main HEADと同じSHAのCI成功を確認
 2. `go run ./cmd/migrate`をNeon direct URLに対して実行

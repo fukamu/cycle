@@ -6,6 +6,8 @@
 
 Runtimeの `APP_ENV` は `development`、`test`、`production`です。Staging Lightは `APP_ENV=production` を使いますが、ProductionとDB、secret、provider credential、GitHub Environment、Terraform stateを共有しません。
 
+`APP_ENV=production`は [Production Launch Gate](production-launch-gate.md) も強制します。公開状態は環境変数やFrontend build flagではなくPostgreSQLが所有し、Development / TestだけがApplication compositionでgateを無効化します。
+
 - Local backendはuntracked `.env`、Viteはuntracked `frontend/.env.local`を使います。Backendが`.env`を暗黙loadする前提にせず、Bashで `source ./scripts/import-env.sh` を使います。
 - `VITE_`値はbundleへ埋め込まれ、全利用者から見えます。Secretを設定しません。
 - Stagingのnon-secret configurationはGitHub `staging` Environment variablesからWrangler `--var`で登録します。

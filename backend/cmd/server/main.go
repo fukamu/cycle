@@ -13,6 +13,7 @@ import (
 
 	"github.com/fukamu/cycle/backend/internal/ai/prompts"
 	"github.com/fukamu/cycle/backend/internal/application/account"
+	"github.com/fukamu/cycle/backend/internal/application/launchgate"
 	"github.com/fukamu/cycle/backend/internal/application/ports"
 	appsession "github.com/fukamu/cycle/backend/internal/application/session"
 	"github.com/fukamu/cycle/backend/internal/application/workspace"
@@ -207,9 +208,19 @@ func run() (exitCode int) {
 			IdleTTL: settings.Session.IdleTTL, AbsoluteTTL: settings.Session.AbsoluteTTL, Observer: metrics,
 		},
 	)
+	launchGateService := launchgate.NewService(
+		postgres.NewLaunchGateRepository(pool),
+		settings.App.Environment == "production",
+	)
+	ready := func(ctx context.Context) error {
+		if readyErr := pool.Ping(ctx); readyErr != nil {
+			return readyErr
+		}
+		return launchGateService.Ready(ctx)
+	}
 	router := httpapi.NewRouter(httpapi.Dependencies{
-		Sessions: sessionService, Workspace: workspaceService, Account: accountService, RequestIDs: random,
-		PublicOrigin: settings.App.PublicOrigin.String(), Ready: pool.Ping, Logger: logger,
+		Sessions: sessionService, Workspace: workspaceService, Account: accountService, LaunchGate: launchGateService, RequestIDs: random,
+		PublicOrigin: settings.App.PublicOrigin.String(), Ready: ready, Logger: logger,
 		Production: settings.App.Environment == "production", TrustProxy: settings.App.Environment == "production",
 		StaticDir: settings.App.StaticDir, Metrics: metrics, TracerProvider: telemetryRuntime.TracerProvider(),
 	})

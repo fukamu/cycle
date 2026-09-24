@@ -184,6 +184,10 @@ Cloudflare application deploy tokenは対象account / zoneのWorker、Container�
 - Runtime pooled URLとmigration direct URLを混同せず、migration secretをWorker / Containerへ渡さない。
 - OptionalなApplication紹介導線は承認済み固定root URLだけを許可し、User Dataを共有payloadへ含めない。
 
+### Production Launch Gate promotion
+
+Production deploy、developer allowlist、Production smoke、Closed Beta、一般公開flagの順序と停止条件は [`production-launch-gate.md`](production-launch-gate.md) を正本とします。Deploy workflowやTerraformを実行しただけでは一般公開にせず、`public_access_enabled = TRUE`は別のreviewed DB operationとして扱います。
+
 ### First deployment
 
 1. Terraform repository inputsと`staging-terraform-apply` Environmentを設定する。

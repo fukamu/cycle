@@ -25,6 +25,7 @@ Ready後に`http://localhost:8080`を開き、終了時はterminalでEnterを押
 | Environment variables / scope / secret-public classification | [`docs/environment.md`](docs/environment.md) |
 | Database / Migration / User Content encryption operator / reset / data safety / DB troubleshooting | [`docs/database.md`](docs/database.md) |
 | Terraform / deployment / encryption rollout・restore / monitoring / incident / rollback / production troubleshooting | [`docs/operations.md`](docs/operations.md) |
+| Production deployと一般公開を分離するLaunch Gate運用 | [`docs/production-launch-gate.md`](docs/production-launch-gate.md) |
 | Coding-agent repository governance | [`AGENTS.md`](AGENTS.md) |
 
 通常の開発・Staging運用では上の専門文書を入口にしてください。
